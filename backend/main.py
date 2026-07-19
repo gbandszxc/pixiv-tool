@@ -103,20 +103,74 @@ def _is_port_free(port: int) -> bool:
 # -------------------------------------------------------------------
 
 
-def main() -> None:
-    """启动 FastAPI 应用。"""
+def start_app(use_window: bool = True) -> None:
+    """启动 App：探测端口 → 起 uvicorn → （prod 模式）起 pywebview 主窗。
+
+    SPEC §3.1 进程拓扑：
+        1. find_available_port() 探测 [9962, 9999]
+        2. uvicorn.Server 在独立 daemon 线程跑（用 Server 而非 uvicorn.run
+           避免 sys.exit 拖垮主进程）
+        3. 主线程 pywebview.create_window 加载 http://127.0.0.1:<port>/
+        4. webview.start() 阻塞；窗口关闭即整体退出
+
+    Args:
+        use_window: True=prod 桌面模式（起 pywebview）；False=纯 API 模式
+            （只起后端，供 dev / 无头调试 / CI 使用）。
+    """
+    import time
+    import threading
+
     import uvicorn  # noqa: WPS433 – 懒导入避免顶层副作用
 
     port = find_available_port()
     os.environ["PIXIV_TOOL_PORT"] = str(port)
     logger.info("Pixiv Tool 后端启动于 http://127.0.0.1:%d", port)
 
-    uvicorn.run(
+    config = uvicorn.Config(
         app,
         host="127.0.0.1",
         port=port,
         log_level="info",
     )
+    server = uvicorn.Server(config)
+
+    if not use_window:
+        # dev / 纯 API 模式：主线程直接跑后端
+        server.run()
+        return
+
+    # prod 模式：后端跑在 daemon 线程，主线程跑 pywebview
+    backend_thread = threading.Thread(target=server.run, daemon=True)
+    backend_thread.start()
+
+    # 等后端 ready（最多 5 秒），避免 pywebview 加载到空端口
+    for _ in range(50):
+        if server.started:
+            break
+        time.sleep(0.1)
+
+    import webview  # noqa: WPS433 – 懒导入：仅 prod 模式需要
+
+    webview.create_window(
+        "Pixiv Tool",
+        f"http://127.0.0.1:{port}/",
+        width=1200,
+        height=800,
+    )
+    webview.start()  # 阻塞，直到用户关窗
+    # 窗口关闭 → 通知 uvicorn 退出，daemon 线程随之结束
+    server.should_exit = True
+
+
+def main() -> None:
+    """默认入口：prod 桌面模式（起 pywebview 主窗）。
+
+    传 --no-window 参数切到纯 API 模式（仅起后端）。
+    """
+    import sys
+
+    use_window = "--no-window" not in sys.argv
+    start_app(use_window=use_window)
 
 
 if __name__ == "__main__":
