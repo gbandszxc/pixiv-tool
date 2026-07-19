@@ -9,7 +9,6 @@ import json
 import logging
 import threading
 from typing import Any
-from http.cookies import SimpleCookie
 
 logger = logging.getLogger(__name__)
 
@@ -58,29 +57,91 @@ new Promise(function(resolve, reject) {
 
 
 def cookies_to_dicts(cookies: Any) -> list[dict[str, Any]]:
-    """把 window.get_cookies() 返回值统一成 dict 列表。"""
+    """把 window.get_cookies() 返回值统一成 dict 列表。
+
+    pywebview 返回 list[SimpleCookie]（每个元素本身是一个 dict-like 容器，
+    可能含一个或多个 Morsel）。必须遍历每个 SimpleCookie.items() 取出
+    (name, Morsel) 对。直接读 SimpleCookie 上的属性会拿到空值。
+
+    此实现直接复用 spike/cookie_probe/probe.py（ADR 0005 复用清单）。
+    """
     flat: list[dict[str, Any]] = []
-    for cookie in cookies:
-        if isinstance(cookie, SimpleCookie):
-            for name, morsel in cookie.items():
-                flat.append(_morsel_to_dict(name, morsel))
-        elif isinstance(cookie, dict):
-            flat.append(cookie)
+    for jar in cookies:
+        # 每个 jar 可能是 SimpleCookie（dict-like）、dict、或单个 Morsel
+        items: list[tuple[str, Any]] = []
+        if hasattr(jar, "items") and callable(getattr(jar, "items")):
+            try:
+                items = list(jar.items())
+            except Exception:  # noqa: BLE001
+                items = []
+        if not items:
+            # 退化：jar 本身可能是 Morsel
+            key = getattr(jar, "key", None)
+            if key:
+                items = [(key, jar)]
+
+        for name, morsel in items:
+            flat.append(_morsel_to_dict(name, morsel))
     return flat
 
 
 def _morsel_to_dict(name: str, morsel: Any) -> dict[str, Any]:
-    """把 SimpleCookie.Morsel 转成扁平 dict。"""
-    # Morsel 继承自 dict，必须显式排除
-    if isinstance(morsel, dict) and not isinstance(morsel, SimpleCookie.Morsel):
-        return morsel
+    """把一个 SimpleCookie.Morsel（或 dict）转成扁平 dict。
+
+    关键：Morsel 继承自 dict，但 dict-view 里没有 "value" 键。
+    必须用 getattr(morsel, "value") 而非 morsel.get("value")——
+    后者永远返回空，是 ADR 0005 第 4 条警告过的 bug。
+
+    此实现直接复用 spike/cookie_probe/probe.py（ADR 0005 复用清单）。
+    """
+    from http.cookies import Morsel
+
+    if isinstance(morsel, dict) and not isinstance(morsel, Morsel):
+        return {
+            "name": name or morsel.get("name", ""),
+            "value": morsel.get("value", ""),
+            "domain": morsel.get("domain", ""),
+            "path": morsel.get("path", "/"),
+            "httponly": bool(morsel.get("httponly", False)),
+            "secure": bool(morsel.get("secure", False)),
+            "expires": morsel.get("expires"),
+        }
+
+    def _attr(key: str) -> str:
+        # 直接属性优先，然后试带下划线的内部字段
+        for k in (key, f"_{key}"):
+            try:
+                v = getattr(morsel, k, "")
+                if v:
+                    return str(v)
+            except Exception:  # noqa: BLE001
+                continue
+        return ""
+
+    value = _attr("value") or _attr("coded_value")
+
+    def _reserved_str(key: str) -> str:
+        try:
+            v = morsel[key]
+        except (KeyError, TypeError, AttributeError):
+            return ""
+        return str(v) if v is not None else ""
+
+    def _reserved_bool(key: str) -> bool:
+        v = _reserved_str(key)
+        # Morsel 里 reserved 标志可能存 "True"/"False" 字符串，也可能空
+        return v.lower() in ("true", "1", "yes", key)
+
+    expires = _reserved_str("expires") or None
+
     return {
         "name": name,
-        "value": morsel.get("value", ""),
-        "domain": morsel.get("domain", ""),
-        "path": morsel.get("path", ""),
-        "secure": morsel.get("secure", False),
-        "httponly": morsel.get("httponly", False),
+        "value": value,
+        "domain": _reserved_str("domain"),
+        "path": _reserved_str("path") or "/",
+        "httponly": _reserved_bool("httponly"),
+        "secure": _reserved_bool("secure"),
+        "expires": expires,
     }
 
 
