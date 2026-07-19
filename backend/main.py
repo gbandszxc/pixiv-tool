@@ -32,7 +32,9 @@ from backend.api.auth import router as auth_router
 from backend.api.novels import router as novels_router
 from backend.api.tasks import router as tasks_router
 from backend.api.settings import router as settings_router
+from backend.api.system import router as system_router
 
+app.include_router(system_router)
 app.include_router(auth_router)
 app.include_router(novels_router)
 app.include_router(tasks_router)

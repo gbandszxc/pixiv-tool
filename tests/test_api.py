@@ -50,10 +50,10 @@ def client(tmp_path, monkeypatch):
         lambda: settings_mod.get_settings(),
     )
 
-    # Import app AFTER patches
+    # Import app AFTER patches. All routers (auth/novels/tasks/settings/system)
+    # are already included in backend.main:app at import time, so the TestClient
+    # sees the same route table as production.
     from backend.main import app
-    from backend.api import router as api_init_router
-    app.include_router(api_init_router)
     return TestClient(app), db, stub_store, settings_mod, config_dir
 
 
