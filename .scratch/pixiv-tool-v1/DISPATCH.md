@@ -150,15 +150,29 @@ prompt:
 
 ## 提交规范
 
-完成后用 conventional commit 提交：
+完成后用 conventional commits 提交，**按"可独立 review 的一件事"拆分多个 commit**：
 
   feat(<scope>): <短描述>
+  fix(<scope>): <短描述>
+  test(<scope>): <短描述>
 
-scope 用 ticket 范围（如 auth/storage/api/frontend/scripts/build）。
-commit body 含：
-  - 实现了哪些 acceptance criteria
-  - 解锁了哪些后续 ticket（"Unblocks: NN, NN"）
-  - 任何需要主 agent 注意的点
+scope 用模块名（auth/storage/api/frontend/scripts/build/core）。
+
+**拆分要求**：
+- 每个 commit 只做一件可独立描述的事（加一个文件、加一个功能切片、加一组测试）
+- 单个 commit 的 diff 不超过 ~300 行（不含 lock 文件）
+- 禁止 "feat: implement ticket NN" 这种粗粒度 commit
+- 拆分示例见 DISPATCH.md 的"Git 工作流 > 子 agent 提交"
+
+**不要修改**：
+- `.scratch/pixiv-tool-v1/issues/<你的 ticket>.md` 的 Status 字段（主 agent 负责改）
+- `.scratch/pixiv-tool-v1/spec.md`（主 agent 负责改）
+- `docs/SPEC.md` 和 `docs/adr/*.md`（如需变更先停下报告）
+
+最后一个 commit 的 body 含：
+- 实现了哪些 acceptance criteria
+- Unblocks 哪些后续 ticket
+- 任何需要主 agent 注意的点
 
 ## 返回给主 agent
 
@@ -179,18 +193,24 @@ commit body 含：
 
 ```
 1. 检查 commit 是否存在：git log --oneline -1
-2. 检查文件变更：git diff --name-only HEAD~1 HEAD
-3. 读 ticket 文件，确认所有 [ ] 都已勾选为 [x]
-4. 跑测试：
+2. 检查本次 ticket 的所有 commit：
+   - git log --oneline HEAD~<N>..HEAD（N = 这个 ticket 的 commit 数）
+   - 每个 commit 的 diff 是否 ≤ ~300 行（git show --stat <hash>）
+   - 是否有 "feat: implement ticket NN" 这种粗粒度 commit → 有就打回重拆
+3. 检查文件变更：git diff --name-only HEAD~<N> HEAD
+4. 读 ticket 文件，确认所有 [ ] 都已勾选为 [x]
+5. 跑测试：
    - 后端：cd backend && uv run pytest tests/ -v
    - 前端：cd frontend && pnpm test（如果配了）
-5. 如果 ticket 涉及可运行的功能：
+6. 如果 ticket 涉及可运行的功能：
    - 启动 dev 服务（./scripts/dev.ps1 start）
    - 手动或用 chrome-devtools MCP 验证关键路径
    - 停止服务
-6. 检查是否误改了不该改的文件（SPEC、ADR、其他 ticket）
-7. 全部通过 → 在 ticket 文件顶部 Status 改为 done
-8. 部分失败 → 在 ticket 文件底部加 ## Comments 记录问题，重新起子 agent 修复
+7. 检查是否误改了不该改的文件：
+   - SPEC、ADR、其他 ticket 文件、自己的 ticket 的 Status 字段、spec.md
+   - 发现误改 → 打回让子 agent revert
+8. 全部通过 → 在 ticket 文件顶部 Status 改为 done，单独 commit "chore(tickets): mark <NN> as done"
+9. 部分失败 → 在 ticket 文件底部加 ## Comments 记录问题，重新起子 agent 修复
 ```
 
 ---
@@ -263,12 +283,57 @@ commit body 含：
 
 ## Git 工作流
 
+### 分支
+
 - 所有工作在 `main` 分支（V1 项目小，不引入 feature branch 复杂度）
-- 子 agent 自己 commit（每个 acceptance criteria 一组 commit，或整个 ticket 一个 commit）
-- 主 agent 只 commit 状态变更（ticket Status + spec.md 索引）
-- commit message 规范：
-  - 子 agent：`feat(<scope>): <desc>` / `fix(<scope>): <desc>` / `refactor(<scope>): <desc>`
-  - 主 agent：`chore(tickets): mark <NN> as done` / `chore(tickets): update spec.md index`
+
+### 提交粒度与时机（关键）
+
+**两类提交、两类作者，严格分离**：
+
+#### 子 agent 提交（业务代码）
+
+- 子 agent 自己 commit，**按"可独立 review 的一件事"拆分**，不要一个 ticket 攒一个大 commit
+- 拆分依据：每个 commit 应该只做一件可独立描述的事（加一个文件、加一个功能切片、加一组测试、改一处接口）
+- **硬性上限**：单个 commit 的 diff 不超过 **~300 行**（不含生成的 lock 文件、auto-formatting）；超过就拆
+- 拆分示例（ticket 01 项目骨架）：
+  ```
+  feat(scripts): add dev.ps1 with start/stop/status subcommands
+  feat(backend): bootstrap FastAPI with /api/health endpoint
+  feat(frontend): bootstrap Vue3 + Vite + Naive UI scaffold
+  feat(backend): add port finder with [9962,9999] range probing
+  test(scripts): cover dev.ps1 health check + port probing
+  docs(readme): add dev startup instructions
+  ```
+- 反例（**禁止**）：
+  ```
+  feat: implement ticket 01   ← 太粗，无法 review，无法 bisect
+  ```
+
+#### 主 agent 提交（状态变更）
+
+- **每个 ticket 验收通过后，立即单独提交一次状态变更**，不攒批
+- 这次 commit 只动两个文件：
+  - `.scratch/pixiv-tool-v1/issues/<NN>-<slug>.md`：把 `Status:` 改为 `done`
+  - `.scratch/pixiv-tool-v1/spec.md`：在对应链接前加 `[x]`
+- commit message 固定格式：
+  ```
+  chore(tickets): mark <NN> as done
+  ```
+- **绝不合进子 agent 的业务 commit**——状态变更是主 agent 验收的证据，必须独立可见
+
+### 为什么这样分
+
+1. **子 agent 拆细 commit**：单个 commit 聚焦一件事，code review 容易、`git bisect` 排查问题可用、可单独 revert
+2. **主 agent 单独 commit 状态**：保留"子 agent 写代码 / 主 agent 验收"的清晰分工。合进子 agent commit 等于让子 agent 自己给自己打分，违背调度协议
+3. **不攒批**：主 agent 崩溃或被打断时，已验收的 ticket 状态不丢
+
+### commit message 规范
+
+- 子 agent：`feat(<scope>): <desc>` / `fix(<scope>): <desc>` / `refactor(<scope>): <desc>` / `test(<scope>): <desc>` / `docs(<scope>): <desc>`
+  - scope 用模块名：`auth` / `storage` / `api` / `frontend` / `scripts` / `build` / `core`
+- 主 agent：`chore(tickets): mark <NN> as done` / `chore(tickets): mark <NN> as needs-rework`
+- 所有 commit message 用英文（conventional commits 标准），body 可以用中文说明上下文
 
 ---
 
