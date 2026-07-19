@@ -15,16 +15,29 @@ uv sync
 uv run python probe.py
 ```
 
+## 使用流程（v2 · 自动探测）
+
+1. 启动后弹出 pywebview 窗口加载 pixiv 登录页。
+2. 手动登录（输账密 / 过验证码 / 过 2FA）。
+3. 登录成功页面跳转到 `www.pixiv.net`。
+4. **自动**触发 cookie + csrf 提取，结果：
+   - 打印到终端（PowerShell 窗口里）
+   - 完整明细写入 `result.json`
+5. 窗口保持打开，手动关闭即可。
+
+> v1 用过双窗口（登录窗 + 控制面板），但 `http_server=True` 与内嵌
+> HTML 字串冲突报 404，已废弃。v2 改为单窗口 + `loaded` 事件自动探测。
+
 ## 验证矩阵
 
-| # | 验证点 | 期望 | 实测 |
-|---|---|---|---|
-| 1 | `get_cookies()` 返回类型 | `list[SimpleCookie]` | |
-| 2 | 能否拿到 `PHPSESSID` | ✅ 能（HttpOnly 也读得到） | |
-| 3 | 能否拿到 `device_token` / `privacy_policy_agreement` | ✅ 能 | |
-| 4 | `private_mode=False` 后跨会话持久化 | ✅ 能 | |
-| 5 | 重定向到 www.pixiv.net 后能读全 cookie | ✅ 能 | |
-| 6 | 提取 `x-csrf-token`（从页面 JS） | ✅ 能 | |
+| # | 验证点 | 期望 |
+|---|---|---|
+| 1 | `get_cookies()` 返回类型 | `list[SimpleCookie]` |
+| 2 | 能否拿到 `PHPSESSID` | ✅ 能（HttpOnly 也读得到） |
+| 3 | 能否拿到 `device_token` / `privacy_policy_agreement` | ✅ 能 |
+| 4 | `private_mode=False` 后跨会话持久化 | ✅ 能 |
+| 5 | 重定向到 www.pixiv.net 后能读全 cookie | ✅ 能 |
+| 6 | 提取 `x-csrf-token`（从页面 JS） | ✅ 能 |
 
 ## 备用方案
 
