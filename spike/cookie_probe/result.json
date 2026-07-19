@@ -1,250 +1,254 @@
 {
   "get_cookies_return_type": "list",
   "cookies_count": 26,
-  "phpsessid_found": false,
-  "phpsessid_is_httponly": null,
-  "phpsessid_is_secure": null,
+  "phpsessid_found": true,
+  "phpsessid_is_httponly": true,
+  "phpsessid_is_secure": true,
   "phpsessid_value_preview": "",
-  "device_token_found": false,
-  "privacy_policy_agreement_found": false,
+  "device_token_found": true,
+  "privacy_policy_agreement_found": true,
   "persisted_across_read": false,
   "current_url": "https://www.pixiv.net/",
   "csrf_token_found": false,
   "csrf_token_preview": "",
+  "is_logged_in": false,
+  "user_id": "",
+  "user_pixiv_id": "",
+  "user_name": "",
   "cookies_detail": [
     {
-      "name": "",
+      "name": "__utmz",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Mon, 18 Jan 2027 00:44:01 GMT"
     },
     {
-      "name": "",
+      "name": "p_ab_d_id",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
-      "secure": false,
-      "expires": null
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:33:05 GMT"
     },
     {
-      "name": "",
+      "name": "p_ab_id",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
-      "secure": false,
-      "expires": null
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:33:05 GMT"
     },
     {
-      "name": "",
+      "name": "cc1",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
-      "httponly": false,
-      "secure": false,
-      "expires": null
+      "httponly": true,
+      "secure": true,
+      "expires": "Mon, 20 Jul 2026 12:33:05 GMT"
     },
     {
-      "name": "",
+      "name": "_ga_MZ1NL4PHH0",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Mon, 23 Aug 2027 12:34:43 GMT"
     },
     {
-      "name": "",
+      "name": "_ga",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Mon, 23 Aug 2027 12:44:01 GMT"
     },
     {
-      "name": "",
+      "name": "__utmv",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Mon, 23 Aug 2027 12:44:01 GMT"
     },
     {
-      "name": "",
+      "name": "__cf_bm",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
-      "httponly": false,
-      "secure": false,
-      "expires": null
+      "httponly": true,
+      "secure": true,
+      "expires": "Sun, 19 Jul 2026 13:03:06 GMT"
     },
     {
-      "name": "",
+      "name": "__utmt",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Sun, 19 Jul 2026 12:44:44 GMT"
     },
     {
-      "name": "",
+      "name": "yuid_b",
       "value": "",
-      "domain": "",
+      "domain": "www.pixiv.net",
       "path": "/",
       "httponly": false,
-      "secure": false,
-      "expires": null
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:34:45 GMT"
     },
     {
-      "name": "",
+      "name": "c_type",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
-      "secure": false,
-      "expires": null
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:43:38 GMT"
     },
     {
-      "name": "",
+      "name": "b_type",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
-      "secure": false,
-      "expires": null
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:43:38 GMT"
     },
     {
-      "name": "",
+      "name": "privacy_policy_notification",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
-      "httponly": false,
-      "secure": false,
-      "expires": null
+      "httponly": true,
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:43:38 GMT"
     },
     {
-      "name": "",
+      "name": "__utma",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Mon, 23 Aug 2027 12:44:01 GMT"
     },
     {
-      "name": "",
+      "name": "cto_bundle",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Fri, 13 Aug 2027 12:35:46 GMT"
     },
     {
-      "name": "",
+      "name": "__utmc",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Mon, 01 Jan 0001 00:00:00 GMT"
     },
     {
-      "name": "",
+      "name": "PHPSESSID",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
-      "httponly": false,
-      "secure": false,
-      "expires": null
+      "httponly": true,
+      "secure": true,
+      "expires": "Tue, 18 Aug 2026 12:43:38 GMT"
     },
     {
-      "name": "",
+      "name": "first_visit_datetime_pc",
       "value": "",
-      "domain": "",
+      "domain": "www.pixiv.net",
       "path": "/",
       "httponly": false,
-      "secure": false,
-      "expires": null
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:34:43 GMT"
     },
     {
-      "name": "",
+      "name": "_ga_75BBYNYN9J",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Mon, 23 Aug 2027 12:44:01 GMT"
     },
     {
-      "name": "",
+      "name": "p_ab_id_2",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
-      "secure": false,
-      "expires": null
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:33:05 GMT"
     },
     {
-      "name": "",
+      "name": "_gcl_au",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Sat, 17 Oct 2026 12:34:45 GMT"
     },
     {
-      "name": "",
+      "name": "cf_clearance",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
-      "httponly": false,
-      "secure": false,
-      "expires": null
+      "httponly": true,
+      "secure": true,
+      "expires": "Mon, 19 Jul 2027 12:33:06 GMT"
     },
     {
-      "name": "",
+      "name": "device_token",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
-      "httponly": false,
-      "secure": false,
-      "expires": null
+      "httponly": true,
+      "secure": true,
+      "expires": "Tue, 18 Aug 2026 12:34:40 GMT"
     },
     {
-      "name": "",
+      "name": "privacy_policy_agreement",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
-      "httponly": false,
-      "secure": false,
-      "expires": null
+      "httponly": true,
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:34:40 GMT"
     },
     {
-      "name": "",
+      "name": "__utmb",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
       "secure": false,
-      "expires": null
+      "expires": "Sun, 19 Jul 2026 13:14:01 GMT"
     },
     {
-      "name": "",
+      "name": "a_type",
       "value": "",
-      "domain": "",
+      "domain": ".pixiv.net",
       "path": "/",
       "httponly": false,
-      "secure": false,
-      "expires": null
+      "secure": true,
+      "expires": "Mon, 23 Aug 2027 12:43:38 GMT"
     }
   ],
   "error": ""

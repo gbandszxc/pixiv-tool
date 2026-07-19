@@ -164,11 +164,60 @@ def cookies_to_dicts(cookies: Any) -> list[dict[str, Any]]:
     return flat
 
 
+def _dump_first_morsel(cookies: Any, target_name: str) -> str:
+    """找到第一个名为 target_name 的 cookie，dump 其 Morsel 的真实结构。
+
+    用来排查 value 总是空的问题——直接打印 repr/属性/方法。
+    """
+    for jar in cookies:
+        items: list[tuple[str, Any]] = []
+        if hasattr(jar, "items") and callable(getattr(jar, "items")):
+            try:
+                items = list(jar.items())
+            except Exception:  # noqa: BLE001
+                items = []
+        for name, morsel in items:
+            if name == target_name:
+                # 收集所有非 magic 属性
+                attrs = {}
+                for attr in dir(morsel):
+                    if attr.startswith("__"):
+                        continue
+                    try:
+                        val = getattr(morsel, attr)
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if callable(val):
+                        continue
+                    attrs[attr] = repr(val)[:80]
+                # 也试 dict-style 访问
+                dict_view = {}
+                if hasattr(morsel, "keys"):
+                    try:
+                        for k in morsel.keys():
+                            try:
+                                dict_view[k] = repr(morsel[k])[:80]
+                            except Exception:  # noqa: BLE001
+                                pass
+                    except Exception:  # noqa: BLE001
+                        pass
+                import json as _json
+                return (
+                    f"type={type(morsel).__name__}, "
+                    f"attrs={_json.dumps(attrs, ensure_ascii=False)}, "
+                    f"dict_view={_json.dumps(dict_view, ensure_ascii=False)}, "
+                    f"repr={repr(morsel)[:200]}"
+                )
+    return "(not found)"
+
+
 def _morsel_to_dict(name: str, morsel: Any) -> dict[str, Any]:
     """把一个 SimpleCookie.Morsel（或 dict）转成扁平 dict。
 
     Morsel 的属性访问规则（容易踩坑）：
         - .key / .value / .coded_value：直接属性
+          注意：.value 是 URL-decoded；如果原始 cookie 用 complex 格式，
+          .value 可能为空，要 fallback 到 .coded_value
         - httponly / secure / path / domain / expires：reserved 属性，
           用 morsel['httponly'] 访问，返回的是字符串（"" 或 "HttpOnly" 等）
     """
@@ -183,29 +232,36 @@ def _morsel_to_dict(name: str, morsel: Any) -> dict[str, Any]:
             "expires": morsel.get("expires"),
         }
 
-    # Morsel：用 .value 取值，['httponly'] 等取保留属性
+    # Morsel：value 优先 .value，空了 fallback 到 .coded_value
+    value = getattr(morsel, "value", "") or ""
+    if not value:
+        value = getattr(morsel, "coded_value", "") or ""
+
+    # reserved 属性用 morsel[key] 访问
     def _reserved(key: str) -> Any:
         try:
             val = morsel[key]
         except (KeyError, TypeError):
             return ""
-        # Morsel 保留属性常返回字符串 "HttpOnly"/"secure" 或空串
-        # 转成 bool：非空字符串视为 True
         if isinstance(val, str):
             return val.lower() not in ("", "false", "0", "no")
         return bool(val)
 
-    expires = None
-    try:
-        expires = morsel["expires"] if morsel.get("expires") else None
-    except (KeyError, AttributeError, TypeError):
-        pass
+    # domain / path 用 .get() (Morsel 支持 dict-style 默认值)
+    def _get_str(key: str, default: str = "") -> str:
+        try:
+            val = morsel.get(key, default)
+        except (KeyError, AttributeError, TypeError):
+            val = default
+        return val if isinstance(val, str) else (str(val) if val else default)
+
+    expires = _get_str("expires") or None
 
     return {
         "name": name,
-        "value": getattr(morsel, "value", "") or "",
-        "domain": _reserved("domain") if isinstance(_reserved("domain"), str) else "",
-        "path": _reserved("path") or "/",
+        "value": value,
+        "domain": _get_str("domain", ""),
+        "path": _get_str("path", "/") or "/",
         "httponly": _reserved("httponly"),
         "secure": _reserved("secure"),
         "expires": expires,
@@ -237,6 +293,11 @@ def run_probe(window: webview.Window) -> ProbeResult:
     result.get_cookies_return_type = type(raw_cookies).__name__
     result.current_url = window.get_current_url() or ""
 
+    # 诊断：dump 第一个 PHPSESSID Morsel 的真实结构（只为排查 value 空问题）
+    _diag = _dump_first_morsel(raw_cookies, "PHPSESSID")
+    if _diag:
+        result.error += f"\n[morsel diag] {_diag}"
+
     details = cookies_to_dicts(raw_cookies)
     for detail in details:
         name = detail["name"]
@@ -255,8 +316,23 @@ def run_probe(window: webview.Window) -> ProbeResult:
     result.cookies_detail = [mask_sensitive(d) for d in details]
 
     # ---- 验证点 6：csrf via JS ----
+    # 注意：loaded 事件触发时 SPA 的 react-query 可能还没注水完，
+    # dehydratedState.queries 为空，要延迟重试。
     try:
-        js_result = window.evaluate_js(EXTRACT_CSRF_JS)
+        js_result = None
+        for attempt in range(5):  # 5 次重试，每次间隔 1s
+            js_result = window.evaluate_js(EXTRACT_CSRF_JS)
+            token = (
+                (js_result or {}).get("token_from_dehydrated")
+                or (js_result or {}).get("token_from_page_props")
+                or (js_result or {}).get("token_from_meta")
+                or ""
+            ) if isinstance(js_result, dict) else ""
+            if token:
+                break
+            # 还没注水，等 1s 再试
+            import time
+            time.sleep(1)
         if isinstance(js_result, dict):
             token = (
                 js_result.get("token_from_dehydrated")
@@ -267,6 +343,14 @@ def run_probe(window: webview.Window) -> ProbeResult:
             if token:
                 result.csrf_token_found = True
                 result.csrf_token_preview = token
+            # 记录诊断信息到 error 字段（不算错误，方便排查）
+            result.error += (
+                f"\n[csrf diag] has_dehydrated={js_result.get('has_dehydrated')}, "
+                f"query_count={js_result.get('dehydrated_query_count')}, "
+                f"dehydrated='{js_result.get('token_from_dehydrated')}', "
+                f"pageProps='{js_result.get('token_from_page_props')}', "
+                f"meta='{js_result.get('token_from_meta')}'"
+            )
     except Exception as e:  # noqa: BLE001
         result.error += f"\ncsrf 提取失败: {type(e).__name__}: {e}"
 
@@ -299,16 +383,25 @@ CHECK_LOGIN_JS = """
 async () => {
     try {
         const r = await fetch('/ajax/user/self?lang=zh', { credentials: 'include' });
-        const data = await r.json();
+        const text = await r.text();
+        let data = null;
+        try { data = JSON.parse(text); } catch (e) {}
         if (data && data.userData) {
             return {
                 ok: true,
+                status: r.status,
                 user_id: data.userData.id || '',
                 pixiv_id: data.userData.pixivId || '',
                 name: data.userData.name || '',
             };
         }
-        return { ok: false, status: r.status, body_preview: JSON.stringify(data).slice(0, 200) };
+        return {
+            ok: false,
+            status: r.status,
+            body_preview: text.slice(0, 200),
+            cookie_header_visible: document.cookie.length > 0,
+            cookie_count: document.cookie.split(';').length,
+        };
     } catch (e) {
         return { ok: false, error: String(e) };
     }
@@ -324,13 +417,20 @@ def verify_login(window: webview.Window, result: ProbeResult) -> None:
         result.error += f"\nlogin 验证失败: {type(e).__name__}: {e}"
         return
 
-    if isinstance(login_info, dict) and login_info.get("ok"):
-        result.is_logged_in = True
-        result.user_id = login_info.get("user_id", "")
-        result.user_pixiv_id = login_info.get("pixiv_id", "")
-        result.user_name = login_info.get("name", "")
-    else:
-        result.is_logged_in = False
+    if isinstance(login_info, dict):
+        if login_info.get("ok"):
+            result.is_logged_in = True
+            result.user_id = login_info.get("user_id", "")
+            result.user_pixiv_id = login_info.get("pixiv_id", "")
+            result.user_name = login_info.get("name", "")
+        else:
+            result.is_logged_in = False
+            result.error += (
+                f"\n[login diag] status={login_info.get('status')}, "
+                f"body='{login_info.get('body_preview', '')[:120]}', "
+                f"js_cookie_count={login_info.get('cookie_count')}, "
+                f"err={login_info.get('error', '')}"
+            )
 
 
 # ====================================================================
