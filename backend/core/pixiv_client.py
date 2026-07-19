@@ -124,9 +124,7 @@ class PixivClient:
                         if resp.status_code == 429:
                             logger.warning("429 Rate Limit — 全队列暂停 %ds", PAUSE_ON_429)
                             self._pause_event.clear()
-                            asyncio.get_event_loop().call_later(
-                                PAUSE_ON_429, self._pause_event.set
-                            )
+                            asyncio.create_task(self._resume_after_429(PAUSE_ON_429))
                             raise PixivRateLimitError("429 Too Many Requests")
 
                         if resp.status_code >= 500:
@@ -150,6 +148,18 @@ class PixivClient:
                 # 原代码此行缩进在 async with 块外，永远不执行 → 限速失效，触发 pixiv 风控（SPEC R2）。
                 # 用 try/finally 包裹重试循环，确保即使 429 / auth / 404 等异常路径也会限速。
                 await asyncio.sleep(REQUEST_INTERVAL)
+
+    async def _resume_after_429(self, seconds: float) -> None:
+        """429 暂停结束后恢复请求队列。
+
+        替代已弃用的 ``asyncio.get_event_loop().call_later()`` —— Python 3.12+
+        中 ``get_event_loop()`` 在没有运行中事件循环时弃用/报错，而此处调用方
+        一定在事件循环内，所以用 ``asyncio.create_task`` 调度一个延时 set 的
+        协程更 Pythonic 且前向兼容。
+        """
+        await asyncio.sleep(seconds)
+        self._pause_event.set()
+        logger.info("429 暂停结束，恢复请求")
 
 
 def _mask_url(url: str) -> str:
