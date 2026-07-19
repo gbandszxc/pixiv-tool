@@ -1,9 +1,9 @@
 <template>
   <div class="tasks-view">
-    <h1>任务</h1>
+    <h1>{{ t('tasks.title') }}</h1>
 
     <n-spin :show="loading">
-      <n-empty v-if="!taskStore.tasks.length" description="暂无任务" />
+      <n-empty v-if="!taskStore.tasks.length" :description="t('tasks.empty')" />
 
       <n-list v-else bordered>
         <n-list-item v-for="task in taskStore.tasks" :key="task.task_id">
@@ -24,7 +24,7 @@
                   :status="task.status === 'done' ? 'success' : task.status === 'failed' ? 'error' : 'info'"
                 />
                 <div style="margin-top: 4px; font-size: 12px; color: #999">
-                  {{ task.done }}/{{ task.total }} · 跳过 {{ task.skipped }} · 失败 {{ failedCount(task) }}
+                  {{ t('tasks.progressDetail', { done: task.done, total: task.total, skipped: task.skipped, failed: failedCount(task) }) }}
                 </div>
               </div>
             </template>
@@ -34,24 +34,24 @@
                   v-if="task.status === 'running'"
                   size="small"
                   @click="taskStore.pauseTask(task.task_id)"
-                >暂停</n-button>
+                >{{ t('tasks.pause') }}</n-button>
                 <n-button
                   v-if="task.status === 'paused'"
                   size="small"
                   type="primary"
                   @click="taskStore.resumeTask(task.task_id)"
-                >继续</n-button>
+                >{{ t('tasks.resume') }}</n-button>
                 <n-button
                   v-if="['running', 'paused'].includes(task.status)"
                   size="small"
                   type="error"
                   @click="taskStore.cancelTask(task.task_id)"
-                >取消</n-button>
+                >{{ t('tasks.cancel') }}</n-button>
                 <n-button
                   v-if="task.status === 'done' && failedCount(task) > 0"
                   size="small"
                   @click="taskStore.retryFailed(task.task_id)"
-                >重试失败</n-button>
+                >{{ t('tasks.retryFailed') }}</n-button>
               </n-space>
             </template>
           </n-thing>
@@ -64,9 +64,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import { NList, NListItem, NThing, NTag, NProgress, NButton, NSpace, NEmpty, NSpin } from "naive-ui";
+import { useI18n } from "vue-i18n";
 import { useTaskStore } from "../stores/tasks";
 import type { Task } from "../stores/tasks";
 
+const { t } = useI18n();
 const taskStore = useTaskStore();
 const loading = ref(false);
 
@@ -83,15 +85,10 @@ function statusType(status: string) {
 }
 
 function statusLabel(status: string) {
-  const map: Record<string, string> = {
-    pending: "等待中",
-    running: "运行中",
-    paused: "已暂停",
-    done: "完成",
-    failed: "失败",
-    canceled: "已取消",
-  };
-  return map[status] || status;
+  // 未知状态回退到原始字符串（便于排查后端新增的状态）
+  return t(`tasks.status.${status}`) !== `tasks.status.${status}`
+    ? t(`tasks.status.${status}`)
+    : status;
 }
 
 function failedCount(task: Task) {

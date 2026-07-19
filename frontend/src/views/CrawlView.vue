@@ -1,18 +1,18 @@
 <template>
   <div class="crawl-view">
-    <h1>抓取</h1>
+    <h1>{{ t('crawl.title') }}</h1>
 
-    <n-card title="新建抓取任务" style="max-width: 600px">
+    <n-card :title="t('crawl.newTask')" style="max-width: 600px">
       <n-form label-placement="left" label-width="80">
-        <n-form-item label="来源类型">
+        <n-form-item :label="t('crawl.sourceType')">
           <n-radio-group v-model:value="form.sourceType">
-            <n-radio value="single">单篇</n-radio>
-            <n-radio value="series">系列</n-radio>
-            <n-radio value="user">用户</n-radio>
+            <n-radio value="single">{{ t('crawl.single') }}</n-radio>
+            <n-radio value="series">{{ t('crawl.series') }}</n-radio>
+            <n-radio value="user">{{ t('crawl.user') }}</n-radio>
           </n-radio-group>
         </n-form-item>
 
-        <n-form-item label="输入">
+        <n-form-item :label="t('crawl.input')">
           <n-input
             v-model:value="form.sourceId"
             :placeholder="inputPlaceholder"
@@ -20,7 +20,7 @@
           />
         </n-form-item>
 
-        <n-form-item label="输出格式">
+        <n-form-item :label="t('crawl.outputFormats')">
           <n-checkbox-group v-model:value="form.formats">
             <n-checkbox value="txt">TXT</n-checkbox>
             <n-checkbox value="markdown">Markdown</n-checkbox>
@@ -29,7 +29,7 @@
 
         <n-form-item>
           <n-button type="primary" :loading="submitting" @click="handleSubmit">
-            开始抓取
+            {{ t('crawl.start') }}
           </n-button>
         </n-form-item>
       </n-form>
@@ -44,8 +44,10 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import { NCard, NForm, NFormItem, NInput, NRadioGroup, NRadio, NCheckboxGroup, NCheckbox, NButton, NAlert } from "naive-ui";
+import { useI18n } from "vue-i18n";
 import { useTaskStore } from "../stores/tasks";
 
+const { t } = useI18n();
 const taskStore = useTaskStore();
 
 const form = ref({
@@ -59,12 +61,8 @@ const message = ref("");
 const messageType = ref<"success" | "error" | "info">("info");
 
 const inputPlaceholder = computed(() => {
-  const map: Record<string, string> = {
-    single: "输入小说 ID 或 URL",
-    series: "输入系列 ID 或 URL",
-    user: "输入用户 ID 或 URL",
-  };
-  return map[form.value.sourceType] || "";
+  const key = form.value.sourceType as "single" | "series" | "user";
+  return t(`crawl.inputPlaceholder.${key}`);
 });
 
 function extractId(input: string): string {
@@ -87,7 +85,7 @@ function extractId(input: string): string {
 async function handleSubmit() {
   const sourceId = extractId(form.value.sourceId);
   if (!sourceId) {
-    message.value = "请输入有效的 ID 或 URL";
+    message.value = t("crawl.invalidInput");
     messageType.value = "error";
     return;
   }
@@ -105,13 +103,13 @@ async function handleSubmit() {
       message.value = result.error;
       messageType.value = "error";
     } else {
-      message.value = `任务已创建: ${result.task_id}`;
+      message.value = t("crawl.taskCreated", { id: result.task_id });
       messageType.value = "success";
       form.value.sourceId = "";
     }
   } catch (err: unknown) {
     const error = err as { response?: { data?: { error?: string } } };
-    message.value = error.response?.data?.error || "创建任务失败";
+    message.value = error.response?.data?.error || t("crawl.createFailed");
     messageType.value = "error";
   } finally {
     submitting.value = false;
