@@ -12,20 +12,17 @@ from pathlib import Path
 
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import FileResponse
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="pixiv-tool", docs_url=None, redoc_url=None)
 
-# CORS: dev 模式允许 localhost:9961
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:9961", "http://127.0.0.1:9961"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# 注：dev 模式走 Vite proxy 同源、prod 模式走 pywebview 同源，都不触发 CORS，
+# 故不配置 CORSMiddleware。
+# 若未来需要跨域（如独立调试前端到不同端口），再加回：
+#   from fastapi.middleware.cors import CORSMiddleware
+#   app.add_middleware(CORSMiddleware, allow_origins=[...], ...)
 
 # 注册所有 API 路由
 from backend.api.auth import router as auth_router
