@@ -28,7 +28,7 @@ Spike · R1 风险验证：pywebview 能否读取 HttpOnly 的 PHPSESSID cookie
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +87,7 @@ class ProbeResult:
     csrf_token_preview: str = ""
 
     # 所有 cookie 的明细（name / domain / path / httponly / secure / expires）
-    cookies_detail: list[dict[str, Any]] = []
+    cookies_detail: list[dict[str, Any]] = field(default_factory=list)
 
     # 原始错误（若有）
     error: str = ""
