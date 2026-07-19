@@ -178,23 +178,31 @@ pixiv-tool/
       ↓
 登录成功（重定向到 www.pixiv.net）
       ↓
-调用 webview.get_cookies() 取 cookie  ← ⚠️ Spike 验证点
+调用 webview.get_cookies() 取 cookie  ← ✅ Spike 已验证（见 ADR 0005）
       ↓
-导航到任意 pixiv 页面，提取 window.__NEXT_DATA__.token（x-csrf-token）
+导航到 www.pixiv.net，提取 x-csrf-token
       ↓
 CookieStore.save({ PHPSESSID, x-csrf-token, ... })  ← DPAPI 加密
       ↓
 关闭登录窗，主界面刷新登录态
 ```
 
-**Spike 任务（必须在正式开工前完成）**：
+**Spike 已完成（2026-07-19）**：详见 [ADR 0005](adr/0005-cookie-probe-result.md)。A 方案完全成立，6 个验证点全部通过。提取 `x-csrf-token` 的正确路径是：
 
-> 验证 pywebview 4+ 在 Windows + WebView2 下，`window.get_cookies()` 能否读取 HttpOnly 的 `PHPSESSID`。
->
-> - **通过** → A 方案成立，按计划推进。
-> - **失败** → 退 C 兜底（手动粘 PHPSESSID），登录窗简化为"打开 pixiv.net 让用户登录，然后引导用户复制 cookie"。
+```
+__NEXT_DATA__.props.pageProps.dehydratedState.queries[*].meta.apiClient.token
+```
 
-**登录状态检查**：App 启动时调 `/ajax/user/self/status` 或类似接口探测 cookie 有效性；失效则清空本地 cookie，UI 显示"未登录"。
+（不是早期假设的 `pageProps.token`，也不是 react-query 刷新后的 `state.data.token`——藏在 `meta.apiClient.token` 里，pixiv apiClient 自定义注入。）
+
+**关键实现约束**（spike 调查得出）：
+
+1. **`evaluate_js` 必须用 callback 模式**：同步模式不 await Promise，async 函数返回 None。所有需要 await Promise 的 JS 调用都要用 `threading.Event` 把 callback 同步包装。
+2. **JS 写成 `new Promise(...)` 而非 `async () => {...}`**：pywebview 的 Promise 识别更可靠。
+3. **`window.get_cookies()` 返回 `list[SimpleCookie]`**：每个 SimpleCookie 是 dict-like 容器，要遍历 `.items()` 取 `(name, Morsel)` 对。`SimpleCookie.Morsel` 继承自 dict，判断 dict 路径时要显式排除 Morsel。
+4. **pywebview 必须配置 `private_mode=False` + `http_server=True` + 固定 `http_port`**：cookie 才会持久化到 WebView2 数据目录，跨会话复用。
+
+**登录状态检查**：App 启动时调 `/ajax/user/self?lang=zh` 接口探测 cookie 有效性（返回 `userData.{id, pixivId, name}`）；失效则清空本地 cookie，UI 显示"未登录"。
 
 ### 4.2 抓取任务模型（Source + Crawler + Task）
 
@@ -491,12 +499,13 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 
 | # | 风险 | 等级 | 缓解 |
 |---|---|---|---|
-| R1 | pywebview `get_cookies()` 拿不到 HttpOnly 的 PHPSESSID | **高** | Spike 首周验证；失败退 C 兜底 |
+| ~~R1~~ | ~~pywebview `get_cookies()` 拿不到 HttpOnly PHPSESSID~~ | **✅ 已解决** | Spike 验证通过，见 ADR 0005 |
 | R2 | pixiv 接口变动或加强风控 | 中 | 限速保守（2 并发 + 0.4s）；429 暂停 60s |
 | R3 | WebView2 runtime 未预装（少数 Win10） | 低 | zip 内带 WebView2 Evergreen Bootstrapper |
 | R4 | Linux pywebview 需 webkit2gtk | 中 | README 注明，无法绕过 |
 | R5 | PyInstaller hidden import 漏配 | 中 | spec 文件显式声明；CI 构建测试 |
 | R6 | 长任务断点续传数据一致性 | 中 | 每篇抓完即写库；事务包裹 |
+| R7 | csrf token 路径依赖 pixiv 内部 react-query meta 结构 | 低 | `EXTRACT_AND_VERIFY_JS` 写多路径兜底（A/B/C/D）；pixiv 改版时重新探测 |
 
 ---
 
@@ -508,6 +517,7 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 | 0002 | 嵌入式 WebView 登录主导 + 手动 cookie 兜底 | [adr/0002-login-strategy.md](adr/0002-login-strategy.md) |
 | 0003 | Source + Crawler + Task 任务模型 | [adr/0003-task-model.md](adr/0003-task-model.md) |
 | 0004 | Windows DPAPI 加密 cookie，跨平台接口预留 | [adr/0004-cookie-storage.md](adr/0004-cookie-storage.md) |
+| 0005 | Spike 结果：pywebview cookie 探测可行性（R1 已解决） | [adr/0005-cookie-probe-result.md](adr/0005-cookie-probe-result.md) |
 
 ADR 按需追加，不强制一次性写完。
 

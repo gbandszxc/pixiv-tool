@@ -18,8 +18,8 @@ Pixiv Web API 需 `PHPSESSID`（HttpOnly）+ `x-csrf-token`。候选登录方案
 流程：
 1. 主窗点"登录" → 弹 pywebview 加载 `https://accounts.pixiv.net/login`
 2. 用户正常输账密 / 过验证码 / 过 2FA
-3. 登录成功后 `webview.get_cookies()` 取 PHPSESSID
-4. 导航 pixiv 页面提取 `x-csrf-token`
+3. 登录成功后 `webview.get_cookies()` 取 PHPSESSID（✅ Spike 验证可读 HttpOnly，见 ADR 0005）
+4. 导航 pixiv 页面提取 `x-csrf-token`（正确路径：`dehydratedState.queries[*].meta.apiClient.token`）
 5. `CookieStore.save()` 加密持久化
 
 ## 后果
@@ -35,4 +35,6 @@ Pixiv Web API 需 `PHPSESSID`（HttpOnly）+ `x-csrf-token`。候选登录方案
 
 ## 备选触发条件
 
-若 spike 验证 A 失败，立即退 C：登录窗改为"打开 pixiv.net 让用户登录，引导用户复制 PHPSESSID 粘入设置"。不上 playwright（避免多依赖）。
+**Spike 已通过**（ADR 0005），A 方案不触发退路。
+
+C 兜底仍保留作为应急方案：若未来 pixiv 改版导致 pywebview 拿不到 cookie，可临时启用"用户手动粘 PHPSESSID"模式。

@@ -26,6 +26,7 @@ Spike · R1 风险验证：pywebview 能否读取 HttpOnly 的 PHPSESSID cookie
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Any
@@ -86,7 +87,7 @@ class ProbeResult:
 # 单次 JS 调用完成两件事，避免多次 evaluate_js 往返 + 时序问题。
 
 EXTRACT_AND_VERIFY_JS = """
-async () => {
+new Promise((resolve) => {
     const mask = (s) => s ? s.slice(0, 12) + '...' : '';
 
     // ---- 1. 提取 csrf token（多路径兜底）----
@@ -143,20 +144,18 @@ async () => {
         }
     }
 
-    // ---- 2. 验证登录态 ----
-    let loginInfo = { ok: false };
-    try {
-        const r = await fetch('/ajax/user/self?lang=zh', {
-            credentials: 'include',
-            headers: token ? { 'x-csrf-token': token } : {},
-        });
-        const text = await r.text();
+    // ---- 2. 验证登录态（异步 fetch）----
+    fetch('/ajax/user/self?lang=zh', {
+        credentials: 'include',
+        headers: token ? { 'x-csrf-token': token } : {},
+    }).then(r => r.text().then(text => ({ status: r.status, text }))).then(({ status, text }) => {
         let data = null;
         try { data = JSON.parse(text); } catch (e) {}
+        let loginInfo;
         if (data && data.userData) {
             loginInfo = {
                 ok: true,
-                status: r.status,
+                status: status,
                 user_id: data.userData.id || '',
                 pixiv_id: data.userData.pixivId || '',
                 name: data.userData.name || '',
@@ -164,24 +163,30 @@ async () => {
         } else {
             loginInfo = {
                 ok: false,
-                status: r.status,
+                status: status,
                 body_preview: text.slice(0, 200),
                 js_cookie_count: document.cookie ? document.cookie.split(';').length : 0,
             };
         }
-    } catch (e) {
-        loginInfo = { ok: false, error: String(e) };
-    }
-
-    return {
-        url: location.href,
-        token_preview: mask(token),
-        token_sources_tried: tokenSources,
-        has_dehydrated: Boolean(dehydrated),
-        dehydrated_query_count: dehydrated?.queries?.length || 0,
-        login: loginInfo,
-    };
-}
+        resolve({
+            url: location.href,
+            token_preview: mask(token),
+            token_sources_tried: tokenSources,
+            has_dehydrated: Boolean(dehydrated),
+            dehydrated_query_count: dehydrated?.queries?.length || 0,
+            login: loginInfo,
+        });
+    }).catch(err => {
+        resolve({
+            url: location.href,
+            token_preview: mask(token),
+            token_sources_tried: tokenSources,
+            has_dehydrated: Boolean(dehydrated),
+            dehydrated_query_count: dehydrated?.queries?.length || 0,
+            login: { ok: false, error: String(err) },
+        });
+    });
+});
 """
 
 
@@ -220,53 +225,6 @@ def cookies_to_dicts(cookies: Any) -> list[dict[str, Any]]:
         for name, morsel in items:
             flat.append(_morsel_to_dict(name, morsel))
     return flat
-
-
-def _dump_first_morsel(cookies: Any, target_name: str) -> str:
-    """找到第一个名为 target_name 的 cookie，dump 其 Morsel 的真实结构。
-
-    用来排查 value 总是空的问题——直接打印 repr/属性/方法。
-    """
-    for jar in cookies:
-        items: list[tuple[str, Any]] = []
-        if hasattr(jar, "items") and callable(getattr(jar, "items")):
-            try:
-                items = list(jar.items())
-            except Exception:  # noqa: BLE001
-                items = []
-        for name, morsel in items:
-            if name == target_name:
-                # 收集所有非 magic 属性
-                attrs = {}
-                for attr in dir(morsel):
-                    if attr.startswith("__"):
-                        continue
-                    try:
-                        val = getattr(morsel, attr)
-                    except Exception:  # noqa: BLE001
-                        continue
-                    if callable(val):
-                        continue
-                    attrs[attr] = repr(val)[:80]
-                # 也试 dict-style 访问
-                dict_view = {}
-                if hasattr(morsel, "keys"):
-                    try:
-                        for k in morsel.keys():
-                            try:
-                                dict_view[k] = repr(morsel[k])[:80]
-                            except Exception:  # noqa: BLE001
-                                pass
-                    except Exception:  # noqa: BLE001
-                        pass
-                import json as _json
-                return (
-                    f"type={type(morsel).__name__}, "
-                    f"attrs={_json.dumps(attrs, ensure_ascii=False)}, "
-                    f"dict_view={_json.dumps(dict_view, ensure_ascii=False)}, "
-                    f"repr={repr(morsel)[:200]}"
-                )
-    return "(not found)"
 
 
 def _morsel_to_dict(name: str, morsel: Any) -> dict[str, Any]:
@@ -362,14 +320,7 @@ def run_probe(window: webview.Window) -> ProbeResult:
     result.get_cookies_return_type = type(raw_cookies).__name__
     result.current_url = window.get_current_url() or ""
 
-    # 诊断：dump 第一个 PHPSESSID Morsel 的真实结构（仅在 value 为空时输出）
     details = cookies_to_dicts(raw_cookies)
-    php_detail = next((d for d in details if d["name"] == "PHPSESSID"), None)
-    if php_detail and not php_detail.get("value"):
-        _diag = _dump_first_morsel(raw_cookies, "PHPSESSID")
-        if _diag and "(not found)" not in _diag:
-            result.error += f"\n[morsel diag] {_diag}"
-
     for detail in details:
         name = detail["name"]
         if name == "PHPSESSID":
@@ -386,18 +337,36 @@ def run_probe(window: webview.Window) -> ProbeResult:
     result.cookies_count = len(details)
     result.cookies_detail = [mask_sensitive(d) for d in details]
 
-    # ---- 验证点 6+7：csrf token + 登录态（合并一次 JS 调用）----
-    # loaded 事件触发时 SPA react-query 可能还没注水，重试 5 次（每次 1s）。
+    # ---- 验证点 6+7：csrf token + 登录态（合并一次 JS 调用，callback 模式）----
+    # pywebview 的 evaluate_js 同步模式不会 await Promise，async 函数返回 None。
+    # 必须用 callback 模式：传 callback，Promise resolve 后会回调我们。
+    # 用 threading.Event 把异步回调转成同步阻塞，方便在 loaded handler 里继续处理。
     import time
 
     try:
         js_result = None
         last_diag = ""
         for attempt in range(5):
-            js_result = window.evaluate_js(EXTRACT_AND_VERIFY_JS)
-            # pywebview evaluate_js 对 async 函数可能返回 None——记录原始类型
+            done = threading.Event()
+            box: dict[str, Any] = {}
+
+            def _cb(res: Any) -> None:
+                box["result"] = res
+                done.set()
+
+            window.evaluate_js(EXTRACT_AND_VERIFY_JS, callback=_cb)
+
+            # 等待 Promise resolve，最长 8 秒（fetch + 网络可能慢）
+            if not done.wait(timeout=8):
+                last_diag = f"attempt {attempt+1}: callback 超时未触发"
+                continue
+
+            js_result = box.get("result")
             if not isinstance(js_result, dict):
-                last_diag = f"attempt {attempt+1}: evaluate_js returned {type(js_result).__name__} = {repr(js_result)[:100]}"
+                last_diag = (
+                    f"attempt {attempt+1}: callback 返回 {type(js_result).__name__}"
+                    f" = {repr(js_result)[:100]}"
+                )
                 time.sleep(1)
                 continue
 
@@ -413,8 +382,7 @@ def run_probe(window: webview.Window) -> ProbeResult:
                 f"q_count={js_result.get('dehydrated_query_count')}, "
                 f"login={js_result.get('login')}"
             )
-            if not token_preview or not login_ok:
-                time.sleep(1)
+            time.sleep(1)
 
         if isinstance(js_result, dict):
             token = js_result.get("token_preview", "")
@@ -427,9 +395,11 @@ def run_probe(window: webview.Window) -> ProbeResult:
                 result.user_id = login.get("user_id", "")
                 result.user_pixiv_id = login.get("pixiv_id", "")
                 result.user_name = login.get("name", "")
-            result.error += f"\n[csrf+login diag] {last_diag}"
+            # 仅失败时记录诊断
+            if not (token and login.get("ok")):
+                result.error += f"\n[csrf+login diag] {last_diag}"
         else:
-            result.error += f"\n[csrf+login diag] evaluate_js 非 dict: {last_diag}"
+            result.error += f"\n[csrf+login diag] js_result 非 dict: {last_diag}"
     except Exception as e:  # noqa: BLE001
         result.error += f"\ncsrf/login 提取失败: {type(e).__name__}: {e}"
 

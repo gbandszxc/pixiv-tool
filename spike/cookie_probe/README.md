@@ -1,11 +1,11 @@
 # Spike: Cookie Probe · R1 风险验证
 
-> **目标**：验证 pywebview 4+ 在 Windows + WebView2 下，能否通过 `window.get_cookies()`
+> **目标**：验证 pywebview 5+ 在 Windows + WebView2 下，能否通过 `window.get_cookies()`
 > 读取 HttpOnly 的 `PHPSESSID` cookie。
 >
 > **关联**：SPEC §4.1、ADR 0002、风险登记 R1。
 >
-> **结论**：见 [../../docs/adr/0005-cookie-probe-result.md](../../docs/adr/0005-cookie-probe-result.md)
+> **结论**：✅ **通过**（2026-07-19）。详见 [../../docs/adr/0005-cookie-probe-result.md](../../docs/adr/0005-cookie-probe-result.md)。所有 6 个验证点全绿，A 方案成立。
 
 ## 运行方式
 

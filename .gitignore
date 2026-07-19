@@ -140,6 +140,11 @@ webview_cache/
 WebView2Cache/
 EBWebView/
 
+# ===== Spike 运行产物（不入库） =====
+spike/**/result.json
+spike/**/cookie_inspect.json
+spike/**/__pycache__/
+
 
 # ===== 通用 =====
 .env
