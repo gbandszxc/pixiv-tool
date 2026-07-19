@@ -100,52 +100,56 @@ class PixivClient:
         async with self._semaphore:
             await self._pause_event.wait()  # 等 429 暂停解除
 
-            last_exc: Exception | None = None
-            for attempt in range(MAX_RETRIES):
-                start = time.monotonic()
-                try:
-                    resp = await self._client.get(url)
-                    elapsed = time.monotonic() - start
-                    logger.info("GET %s → %d (%.2fs)", _mask_url(url), resp.status_code, elapsed)
+            try:
+                last_exc: Exception | None = None
+                for attempt in range(MAX_RETRIES):
+                    start = time.monotonic()
+                    try:
+                        resp = await self._client.get(url)
+                        elapsed = time.monotonic() - start
+                        logger.info("GET %s → %d (%.2fs)", _mask_url(url), resp.status_code, elapsed)
 
-                    if resp.status_code == 200:
-                        body = resp.json()
-                        if body.get("error"):
-                            raise PixivClientError(f"API error: {body['message']}")
-                        return body.get("body", body)
+                        if resp.status_code == 200:
+                            body = resp.json()
+                            if body.get("error"):
+                                raise PixivClientError(f"API error: {body['message']}")
+                            return body.get("body", body)
 
-                    if resp.status_code in (401, 403):
-                        raise PixivAuthError(f"认证失败: HTTP {resp.status_code}")
+                        if resp.status_code in (401, 403):
+                            raise PixivAuthError(f"认证失败: HTTP {resp.status_code}")
 
-                    if resp.status_code == 404:
-                        raise PixivNotFoundError(f"资源不存在: HTTP {resp.status_code}")
+                        if resp.status_code == 404:
+                            raise PixivNotFoundError(f"资源不存在: HTTP {resp.status_code}")
 
-                    if resp.status_code == 429:
-                        logger.warning("429 Rate Limit — 全队列暂停 %ds", PAUSE_ON_429)
-                        self._pause_event.clear()
-                        asyncio.get_event_loop().call_later(
-                            PAUSE_ON_429, self._pause_event.set
-                        )
-                        raise PixivRateLimitError("429 Too Many Requests")
+                        if resp.status_code == 429:
+                            logger.warning("429 Rate Limit — 全队列暂停 %ds", PAUSE_ON_429)
+                            self._pause_event.clear()
+                            asyncio.get_event_loop().call_later(
+                                PAUSE_ON_429, self._pause_event.set
+                            )
+                            raise PixivRateLimitError("429 Too Many Requests")
 
-                    if resp.status_code >= 500:
-                        last_exc = PixivServerError(f"服务端错误: HTTP {resp.status_code}")
-                    else:
-                        last_exc = PixivClientError(f"HTTP {resp.status_code}")
+                        if resp.status_code >= 500:
+                            last_exc = PixivServerError(f"服务端错误: HTTP {resp.status_code}")
+                        else:
+                            last_exc = PixivClientError(f"HTTP {resp.status_code}")
 
-                except httpx.TimeoutException:
-                    last_exc = PixivClientError(f"请求超时: {url}")
-                except httpx.NetworkError:
-                    last_exc = PixivClientError(f"网络错误: {url}")
+                    except httpx.TimeoutException:
+                        last_exc = PixivClientError(f"请求超时: {url}")
+                    except httpx.NetworkError:
+                        last_exc = PixivClientError(f"网络错误: {url}")
 
-                if attempt < MAX_RETRIES - 1:
-                    wait = RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)]
-                    logger.info("重试 %d/%d，等待 %.1fs", attempt + 1, MAX_RETRIES, wait)
-                    await asyncio.sleep(wait)
+                    if attempt < MAX_RETRIES - 1:
+                        wait = RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)]
+                        logger.info("重试 %d/%d，等待 %.1fs", attempt + 1, MAX_RETRIES, wait)
+                        await asyncio.sleep(wait)
 
-            raise last_exc or PixivClientError("请求失败")
-
-        await asyncio.sleep(REQUEST_INTERVAL)  # 请求间隔
+                raise last_exc or PixivClientError("请求失败")
+            finally:
+                # 关键：sleep 必须在 semaphore 持有期间执行，保证每请求 0.4s 间隔真正生效。
+                # 原代码此行缩进在 async with 块外，永远不执行 → 限速失效，触发 pixiv 风控（SPEC R2）。
+                # 用 try/finally 包裹重试循环，确保即使 429 / auth / 404 等异常路径也会限速。
+                await asyncio.sleep(REQUEST_INTERVAL)
 
 
 def _mask_url(url: str) -> str:
