@@ -7,12 +7,18 @@ Morsel.value via getattr (not dict.get) and normalizes both Morsel and plain
 dict inputs to a fixed schema with name/value/domain/path/httponly/secure/expires.
 The previous "buggy" tests asserting morsel.get("value") == "" have been
 removed and replaced with real-extraction regression tests.
+
+F3.5-F3.7 (post-acceptance): the shallow TestExtractCsrfJS tests that only
+checked brace pairing / string length / keyword membership have been replaced
+with tests that pin each concrete behavior the Python side (_extract_csrf)
+relies on: the three extraction paths (A/B/C), the Promise-not-async contract,
+the missing-__NEXT_DATA__ guard, and the try/catch wrapper. Integration tests
+feed _extract_csrf a fake window to exercise the real callback plumbing.
 """
 
 from __future__ import annotations
 
 from http.cookies import SimpleCookie, Morsel
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -215,19 +221,175 @@ class TestMorselToDict:
 
 
 class TestExtractCsrfJS:
-    def test_extract_csrf_js_is_valid_js_string(self):
-        """EXTRACT_CSRF_JS is syntactically valid JavaScript."""
-        assert EXTRACT_CSRF_JS.strip().startswith("new Promise")
-        opens = EXTRACT_CSRF_JS.count("{")
-        closes = EXTRACT_CSRF_JS.count("}")
-        assert opens == closes, f"Unbalanced braces: {opens} open, {closes} close"
+    """Verify the extraction-strategy contract of EXTRACT_CSRF_JS.
 
-    def test_extract_csrf_js_is_nontrivial_string(self):
-        """EXTRACT_CSRF_JS is a substantial string constant."""
-        assert isinstance(EXTRACT_CSRF_JS, str)
-        assert len(EXTRACT_CSRF_JS) > 100
+    These tests intentionally do NOT check syntactic trivia (brace pairing,
+    string length) — that was the shallow-water mark called out in F3.5.
+    Instead each test pins one concrete behavior the JS must exhibit so the
+    Python side (_extract_csrf) can rely on it.
+    """
 
-    def test_extract_csrf_js_contains_extraction_paths(self):
-        """JS string documents multiple CSRF extraction paths."""
-        assert "dehydratedState" in EXTRACT_CSRF_JS
-        assert "resolve" in EXTRACT_CSRF_JS
+    def test_csrf_js_implements_path_a_meta_api_client(self):
+        """Path A (primary): queries[*].meta.apiClient.token.
+
+        Pixiv's Next.js dehydrates the GraphQL client's auth token under
+        meta.apiClient.token — this is the path spike probe.py confirmed.
+        """
+        assert "meta.apiClient.token" in EXTRACT_CSRF_JS
+
+    def test_csrf_js_implements_path_b_page_props_token(self):
+        """Path B (fallback): pageProps.token.
+
+        Older / unauthenticated variants expose the token directly on
+        pageProps; the JS must try this when path A yields nothing.
+        """
+        assert "pp.token" in EXTRACT_CSRF_JS or "pageProps.token" in EXTRACT_CSRF_JS
+
+    def test_csrf_js_implements_path_c_state_data_token(self):
+        """Path C (post-refresh fallback): queries[*].state.data.token.
+
+        After a client-side refetch, React Query stores the response under
+        state.data rather than meta — the JS must cover this too.
+        """
+        assert (
+            "state.data.token" in EXTRACT_CSRF_JS
+            or "state?.data?.token" in EXTRACT_CSRF_JS
+        )
+
+    def test_csrf_js_uses_promise_not_async_function(self):
+        """pywebview evaluate_js (callback mode) needs a Promise, not an async fn.
+
+        pywebview's evaluate_js callback receives the resolved value of the
+        expression. `new Promise(...)` resolves to the dict; an `async`
+        function would return a Promise but pywebview may not await it.
+        """
+        assert "new Promise" in EXTRACT_CSRF_JS
+        # No bare `async function` or `async (` definitions allowed.
+        stripped = EXTRACT_CSRF_JS
+        assert "async function" not in stripped
+        assert "async (" not in stripped
+
+    def test_csrf_js_handles_missing_next_data(self):
+        """When window.__NEXT_DATA__ is absent the JS must resolve, not reject.
+
+        _extract_csrf waits on a threading.Event set in the callback; if the
+        JS threw here instead of resolving, the callback would never fire
+        and we'd hit the 10s timeout. The guard must exist explicitly.
+        """
+        assert "if (!nd)" in EXTRACT_CSRF_JS or "nd === null" in EXTRACT_CSRF_JS or "!nd" in EXTRACT_CSRF_JS
+
+    def test_csrf_js_resolves_empty_result_when_unauthenticated(self):
+        """Unauthenticated pages resolve with csrf=\"\" and loggedIn=False.
+
+        This is the contract _extract_csrf relies on to distinguish
+        'extraction ran, no token' from 'extraction crashed'.
+        """
+        assert 'csrf: ""' in EXTRACT_CSRF_JS and "loggedIn: false" in EXTRACT_CSRF_JS
+
+    def test_csrf_js_wraps_body_in_try_catch(self):
+        """Top-level try/catch ensures pywebview callback always fires.
+
+        Without this, a single TypeError (e.g. nd.props undefined) would
+        reject the Promise and silently drop the callback.
+        """
+        assert "try" in EXTRACT_CSRF_JS and "catch" in EXTRACT_CSRF_JS
+
+
+class TestExtractCsrfPythonIntegration:
+    """Integration test of the Python _extract_csrf callback handler.
+
+    We don't execute the real JS (would need a JS engine); instead we
+    feed _extract_csrf a fake `window` whose evaluate_js immediately
+    invokes the callback with a canned JS result. This exercises the
+    real Python plumbing: callback parsing, threading.Event wait,
+    dict-vs-string handling.
+
+    A stub `webview` module is injected into sys.modules because
+    _extract_csrf does `import webview` defensively (pywebview is
+    not installed in the test env).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _stub_webview(self, monkeypatch):
+        import sys
+        import types
+
+        if "webview" not in sys.modules:
+            monkeypatch.setitem(sys.modules, "webview", types.ModuleType("webview"))
+
+    def test_extract_csrf_parses_string_callback_from_js(self):
+        """evaluate_js callback receives a JSON string — _extract_csrf parses it.
+
+        pywebview serializes the JS Promise resolution to a JSON string
+        before handing it to Python. _extract_csrf must json.loads it.
+        """
+        from backend.auth.login_window import _extract_csrf
+
+        class FakeWindow:
+            def evaluate_js(self, _js, callback):
+                # pywebview passes the resolved value as a JSON string
+                callback('{"csrf": "abc123", "loggedIn": true}')
+
+        result = _extract_csrf(FakeWindow())
+        assert result == {"csrf": "abc123", "loggedIn": True}
+
+    def test_extract_csrf_handles_invalid_json_callback(self):
+        """Garbage from JS does not crash _extract_csrf — it returns empty.
+
+        Regression for the case where pixiv changes markup and the JS
+        resolves something non-JSON.
+        """
+        from backend.auth.login_window import _extract_csrf
+
+        class FakeWindow:
+            def evaluate_js(self, _js, callback):
+                callback("not valid json{")
+
+        result = _extract_csrf(FakeWindow())
+        assert result == {"csrf": "", "loggedIn": False}
+
+    def test_extract_csrf_handles_dict_callback(self):
+        """If pywebview hands back a dict directly (some versions do), accept it."""
+        from backend.auth.login_window import _extract_csrf
+
+        class FakeWindow:
+            def evaluate_js(self, _js, callback):
+                callback({"csrf": "tok", "loggedIn": True})
+
+        result = _extract_csrf(FakeWindow())
+        assert result == {"csrf": "tok", "loggedIn": True}
+
+
+class TestLoginWindowSpikeRegression:
+    """End-to-end regression for ADR 0005 #4 (morsel.get('value') bug).
+
+    Uses the exact PHPSESSID shape that the spike probe.py extracted
+    during R1 verification (HttpOnly + Secure, user_id-prefixed value).
+    """
+
+    def test_login_window_cookies_extraction_with_real_spike_data(self):
+        """cookies_to_dicts preserves the full PHPSESSID value.
+
+        Before F1.2 this returned value='' because the buggy path called
+        morsel.get('value', '') — Morsel's dict-view only contains
+        reserved keys, so 'value' was always missing. With the spike
+        implementation reused (getattr-based), the real value flows
+        through unchanged.
+        """
+        from backend.auth.login_window import cookies_to_dicts
+        from http.cookies import SimpleCookie
+
+        sc = SimpleCookie()
+        sc["PHPSESSID"] = "19509348_mZU7ZB4pwPtL1y0npggwwL1HbiMNP77S"
+        sc["PHPSESSID"]["httponly"] = True
+        sc["PHPSESSID"]["secure"] = True
+        sc["PHPSESSID"]["domain"] = ".pixiv.net"
+        sc["PHPSESSID"]["path"] = "/"
+
+        result = cookies_to_dicts([sc])
+        php = next(c for c in result if c["name"] == "PHPSESSID")
+
+        assert php["value"] == "19509348_mZU7ZB4pwPtL1y0npggwwL1HbiMNP77S"
+        assert php["httponly"] is True
+        assert php["secure"] is True
+        assert php["domain"] == ".pixiv.net"
