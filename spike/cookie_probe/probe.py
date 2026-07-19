@@ -64,6 +64,11 @@ class ProbeResult:
     current_url: str = ""
     csrf_token_found: bool = False
     csrf_token_preview: str = ""
+    # 验证点 7：通过 /ajax/user/self 验证 cookie 是否真的有效
+    is_logged_in: bool = False
+    user_id: str = ""
+    user_pixiv_id: str = ""
+    user_name: str = ""
     cookies_detail: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
 
@@ -71,36 +76,52 @@ class ProbeResult:
 # ====================================================================
 # 浏览器端 JS：提取 x-csrf-token
 # ====================================================================
-# Pixiv 把 token 放在两处之一：
-#   1. window.__NEXT_DATA__.props.pageProps.token（新版 SPA）
-#   2. <meta name="global-data"> 的 JSON 内容（旧版）
-# 两个都试，谁非空用谁。
+# 经 chrome-devtools 实测（2026-07-19），pixiv 新版 SPA 把 csrf token 藏在：
+#   window.__NEXT_DATA__.props.pageProps.dehydratedState.queries[*]
+#     .queryKey === ["termsAgreement","status"]
+#       .state.data.token
+#
+# 旧版可能用 meta[name="global-data"]，作为兜底。
 
 EXTRACT_CSRF_JS = """
 () => {
     const mask = (s) => s ? s.slice(0, 8) + '...' : '';
 
-    const nextData = window.__NEXT_DATA__ || null;
-    const tokenA = nextData?.props?.pageProps?.token || '';
+    const np = window.__NEXT_DATA__?.props?.pageProps || {};
+    const dehydrated = np.dehydratedState;
 
+    // 路径 A：dehydratedState.queries 找 termsAgreement
+    let tokenA = '';
+    if (dehydrated?.queries) {
+        for (const q of dehydrated.queries) {
+            const key = JSON.stringify(q.queryKey || q.queryHash || '');
+            if (key.includes('termsAgreement')) {
+                tokenA = q.state?.data?.token || '';
+                if (tokenA) break;
+            }
+        }
+    }
+
+    // 路径 B：旧 pageProps.token（旧版）
+    const tokenB = np.token || '';
+
+    // 路径 C：meta global-data（更旧版）
     const meta = document.querySelector('meta[name="global-data"]');
-    let tokenB = '';
+    let tokenC = '';
     if (meta) {
         try {
             const data = JSON.parse(meta.content || '{}');
-            tokenB = data.token || '';
+            tokenC = data.token || '';
         } catch (e) {}
     }
 
-    const tokenC = (document.querySelector('meta[name="csp-token"]') || {}).content || '';
-
     return {
         url: location.href,
-        token_from_next_data: mask(tokenA),
-        token_from_meta: mask(tokenB),
-        token_from_csp_meta: mask(tokenC),
-        has_next_data: Boolean(nextData),
-        next_data_keys: nextData ? Object.keys(nextData.props?.pageProps || {}).slice(0, 10) : [],
+        token_from_dehydrated: mask(tokenA),
+        token_from_page_props: mask(tokenB),
+        token_from_meta: mask(tokenC),
+        has_dehydrated: Boolean(dehydrated),
+        dehydrated_query_count: dehydrated?.queries?.length || 0,
     };
 }
 """
@@ -111,33 +132,83 @@ EXTRACT_CSRF_JS = """
 # ====================================================================
 
 
-def cookie_to_dict(c: Any) -> dict[str, Any]:
-    """把 pywebview 返回的 cookie 对象统一成 dict。
+def cookies_to_dicts(cookies: Any) -> list[dict[str, Any]]:
+    """把 window.get_cookies() 返回值统一成 dict 列表。
 
-    SimpleCookie.Morsel 走 .key / .value + 属性；
-    pywebview 内部可能直接给 dict。两种都兼容。
+    pywebview 返回 list[SimpleCookie]（每个元素本身是一个 dict-like 容器，
+    可能含一个或多个 Morsel）。必须遍历每个 SimpleCookie.items() 取出
+    (name, Morsel) 对。直接读 SimpleCookie 上的属性会拿到空值。
+
+    参考：
+        - https://pywebview.flowrl.com/api/  window.get_cookies()
+        - https://docs.python.org/3/library/http.cookies.html  Morsel
     """
-    if isinstance(c, dict):
+    flat: list[dict[str, Any]] = []
+    for jar in cookies:
+        # 每个 jar 可能是 SimpleCookie（dict-like）、dict、或单个 Morsel
+        items: list[tuple[str, Any]] = []
+        if hasattr(jar, "items") and callable(getattr(jar, "items")):
+            # SimpleCookie 或 dict —— 拿到 (name, morsel) 对
+            try:
+                items = list(jar.items())
+            except Exception:  # noqa: BLE001
+                items = []
+        if not items:
+            # 退化：jar 本身可能是 Morsel
+            key = getattr(jar, "key", None)
+            if key:
+                items = [(key, jar)]
+
+        for name, morsel in items:
+            flat.append(_morsel_to_dict(name, morsel))
+    return flat
+
+
+def _morsel_to_dict(name: str, morsel: Any) -> dict[str, Any]:
+    """把一个 SimpleCookie.Morsel（或 dict）转成扁平 dict。
+
+    Morsel 的属性访问规则（容易踩坑）：
+        - .key / .value / .coded_value：直接属性
+        - httponly / secure / path / domain / expires：reserved 属性，
+          用 morsel['httponly'] 访问，返回的是字符串（"" 或 "HttpOnly" 等）
+    """
+    if isinstance(morsel, dict):
         return {
-            "name": c.get("name") or c.get("key", ""),
-            "value": c.get("value", ""),
-            "domain": c.get("domain", ""),
-            "path": c.get("path", "/"),
-            "httponly": bool(c.get("httponly", False)),
-            "secure": bool(c.get("secure", False)),
-            "expires": c.get("expires"),
+            "name": name or morsel.get("name", ""),
+            "value": morsel.get("value", ""),
+            "domain": morsel.get("domain", ""),
+            "path": morsel.get("path", "/"),
+            "httponly": bool(morsel.get("httponly", False)),
+            "secure": bool(morsel.get("secure", False)),
+            "expires": morsel.get("expires"),
         }
 
-    # SimpleCookie.Morsel 或类似对象
-    name = getattr(c, "key", None) or getattr(c, "name", "")
+    # Morsel：用 .value 取值，['httponly'] 等取保留属性
+    def _reserved(key: str) -> Any:
+        try:
+            val = morsel[key]
+        except (KeyError, TypeError):
+            return ""
+        # Morsel 保留属性常返回字符串 "HttpOnly"/"secure" 或空串
+        # 转成 bool：非空字符串视为 True
+        if isinstance(val, str):
+            return val.lower() not in ("", "false", "0", "no")
+        return bool(val)
+
+    expires = None
+    try:
+        expires = morsel["expires"] if morsel.get("expires") else None
+    except (KeyError, AttributeError, TypeError):
+        pass
+
     return {
-        "name": str(name),
-        "value": getattr(c, "value", "") or "",
-        "domain": getattr(c, "domain", "") or "",
-        "path": getattr(c, "path", "") or "/",
-        "httponly": bool(getattr(c, "httponly", False)),
-        "secure": bool(getattr(c, "secure", False)),
-        "expires": getattr(c, "expires", None),
+        "name": name,
+        "value": getattr(morsel, "value", "") or "",
+        "domain": _reserved("domain") if isinstance(_reserved("domain"), str) else "",
+        "path": _reserved("path") or "/",
+        "httponly": _reserved("httponly"),
+        "secure": _reserved("secure"),
+        "expires": expires,
     }
 
 
@@ -162,15 +233,12 @@ def run_probe(window: webview.Window) -> ProbeResult:
     result = ProbeResult()
 
     # ---- 验证点 1/2/3/5：cookie ----
-    cookies = window.get_cookies()
-    result.get_cookies_return_type = type(cookies).__name__
+    raw_cookies = window.get_cookies()
+    result.get_cookies_return_type = type(raw_cookies).__name__
     result.current_url = window.get_current_url() or ""
 
-    details: list[dict[str, Any]] = []
-    for c in cookies:
-        detail = cookie_to_dict(c)
-        details.append(detail)
-
+    details = cookies_to_dicts(raw_cookies)
+    for detail in details:
         name = detail["name"]
         if name == "PHPSESSID":
             result.phpsessid_found = True
@@ -191,9 +259,9 @@ def run_probe(window: webview.Window) -> ProbeResult:
         js_result = window.evaluate_js(EXTRACT_CSRF_JS)
         if isinstance(js_result, dict):
             token = (
-                js_result.get("token_from_next_data")
+                js_result.get("token_from_dehydrated")
+                or js_result.get("token_from_page_props")
                 or js_result.get("token_from_meta")
-                or js_result.get("token_from_csp_meta")
                 or ""
             )
             if token:
@@ -204,10 +272,9 @@ def run_probe(window: webview.Window) -> ProbeResult:
 
     # ---- 验证点 4：持久化（再读一次对比 PHPSESSID 前缀）----
     try:
-        cookies2 = window.get_cookies()
+        cookies2 = cookies_to_dicts(window.get_cookies())
         php2 = ""
-        for c in cookies2:
-            d = cookie_to_dict(c)
+        for d in cookies2:
             if d["name"] == "PHPSESSID":
                 php2 = d["value"]
                 break
@@ -220,6 +287,50 @@ def run_probe(window: webview.Window) -> ProbeResult:
         result.persisted_across_read = None
 
     return result
+
+
+# ====================================================================
+# 登录态验证（用真实接口）
+# ====================================================================
+# SPEC 原写的 /ajax/user/self/status 实测 404 不存在，
+# 正确接口是 /ajax/user/self，返回 { userData: { id, pixivId, name, ... } }。
+
+CHECK_LOGIN_JS = """
+async () => {
+    try {
+        const r = await fetch('/ajax/user/self?lang=zh', { credentials: 'include' });
+        const data = await r.json();
+        if (data && data.userData) {
+            return {
+                ok: true,
+                user_id: data.userData.id || '',
+                pixiv_id: data.userData.pixivId || '',
+                name: data.userData.name || '',
+            };
+        }
+        return { ok: false, status: r.status, body_preview: JSON.stringify(data).slice(0, 200) };
+    } catch (e) {
+        return { ok: false, error: String(e) };
+    }
+}
+"""
+
+
+def verify_login(window: webview.Window, result: ProbeResult) -> None:
+    """通过 /ajax/user/self 接口验证拿到的 cookie 是否真的能登录。"""
+    try:
+        login_info = window.evaluate_js(CHECK_LOGIN_JS)
+    except Exception as e:  # noqa: BLE001
+        result.error += f"\nlogin 验证失败: {type(e).__name__}: {e}"
+        return
+
+    if isinstance(login_info, dict) and login_info.get("ok"):
+        result.is_logged_in = True
+        result.user_id = login_info.get("user_id", "")
+        result.user_pixiv_id = login_info.get("pixiv_id", "")
+        result.user_name = login_info.get("name", "")
+    else:
+        result.is_logged_in = False
 
 
 # ====================================================================
@@ -255,18 +366,33 @@ def print_report(r: ProbeResult) -> None:
     print(f"    找到:        {'✅' if r.csrf_token_found else '❌'}")
     if r.csrf_token_found:
         print(f"    值前 8 位:   {r.csrf_token_preview}")
+    # 验证点 7：登录态
+    print(f"[8] /ajax/user/self 登录态:")
+    print(f"    is_logged_in: {'✅' if r.is_logged_in else '❌'}")
+    if r.is_logged_in:
+        print(f"    user_id:      {r.user_id}")
+        print(f"    pixiv_id:     {r.user_pixiv_id}")
+        print(f"    name:         {r.user_name}")
     # 验证点 4
     if r.persisted_across_read is not None:
-        print(f"[8] 持久化重读一致: {'✅' if r.persisted_across_read else '❌'}")
+        print(f"[9] 持久化重读一致: {'✅' if r.persisted_across_read else '❌'}")
     else:
-        print(f"[8] 持久化重读一致: ? (跳过)")
+        print(f"[9] 持久化重读一致: ? (跳过)")
 
     print(f"\n完整明细已写入: {RESULT_FILE}")
 
-    # R1 结论
-    passed = r.phpsessid_found and (r.phpsessid_is_httponly is not False) and r.csrf_token_found
+    # R1 结论：cookie 拿到 + 登录态确认 + csrf 拿到
+    passed = (
+        r.phpsessid_found
+        and r.phpsessid_is_httponly is True
+        and r.is_logged_in
+        and r.csrf_token_found
+    )
     print(f"\n{'=' * 60}")
-    print(f"R1 结论: {'✅ 通过 — pywebview 能读 HttpOnly PHPSESSID，A 方案成立' if passed else '❌ 失败 — 需退 C 兜底（手动粘 PHPSESSID）'}")
+    if passed:
+        print("R1 结论: ✅ 通过 — pywebview 能读 HttpOnly PHPSESSID，A 方案成立")
+    else:
+        print("R1 结论: ❌ 失败 — 见上面各项，决定是否退 C 兜底")
     print(f"{'=' * 60}\n")
 
 
@@ -297,6 +423,7 @@ def make_loaded_handler() -> Any:
 
         try:
             result = run_probe(window)
+            verify_login(window, result)
         except Exception as e:  # noqa: BLE001
             result = ProbeResult(error=f"{type(e).__name__}: {e}")
 

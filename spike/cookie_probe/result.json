@@ -1,0 +1,251 @@
+{
+  "get_cookies_return_type": "list",
+  "cookies_count": 26,
+  "phpsessid_found": false,
+  "phpsessid_is_httponly": null,
+  "phpsessid_is_secure": null,
+  "phpsessid_value_preview": "",
+  "device_token_found": false,
+  "privacy_policy_agreement_found": false,
+  "persisted_across_read": false,
+  "current_url": "https://www.pixiv.net/",
+  "csrf_token_found": false,
+  "csrf_token_preview": "",
+  "cookies_detail": [
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    },
+    {
+      "name": "",
+      "value": "",
+      "domain": "",
+      "path": "/",
+      "httponly": false,
+      "secure": false,
+      "expires": null
+    }
+  ],
+  "error": ""
+}
