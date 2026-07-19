@@ -6,19 +6,19 @@
 
 **Blocked by:** 11（系列抓取，复用 Source 抽象）
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Acceptance criteria:**
 
-- [ ] `UserNovelsSource(NovelSource)` 实现：构造传 user_id
-- [ ] resolve 调用 `client.get_user_novels(user_id)` 拿到全部 novel id（一次返回，pixiv 该接口不分页）
-- [ ] PixivClient 新增 `get_user_novels(user_id)` 方法（调 `/ajax/user/{user_id}/profile/all`）
-- [ ] 处理用户作品的结构：先抓 profile/all 拿 novel id 列表 + novelSeries 列表，对每个 series 走 SeriesSource，剩余散篇走 SingleNovelSource
-- [ ] Exporter 顶层目录：`<output_dir>/<authorName>_<userId>/`
-- [ ] 系列作品落到 `<authorName>_<userId>/<seriesTitle>_<seriesId>/`
-- [ ] 散篇直接落到 `<authorName>_<userId>/`
-- [ ] 任务卡片显示"作者：xxx，共 N 篇（M 个系列 + K 散篇）"
-- [ ] 大规模抓取（>50 篇）验证限速和 429 暂停机制有效
-- [ ] 抓取页"来源类型"支持"用户"选项
-- [ ] URL 输入框支持识别 user URL（自动提取 user_id）
-- [ ] 集成测试：抓一个小作者（10 篇以内），验证目录结构
+- [x] `UserNovelsSource(NovelSource)` 实现：构造传 user_id
+- [x] resolve 调用 `client.get_user_novels(user_id)` 拿到全部 novel id（一次返回，pixiv 该接口不分页）
+- [x] PixivClient 新增 `get_user_novels(user_id)` 方法（调 `/ajax/user/{user_id}/profile/all`）
+- [x] 处理用户作品的结构：先抓 profile/all 拿 novel id 列表 + novelSeries 列表，对每个 series 走 SeriesSource，剩余散篇走 SingleNovelSource
+- [x] Exporter 顶层目录：`<output_dir>/<authorName>_<userId>/`
+- [x] 系列作品落到 `<authorName>_<userId>/<seriesTitle>_<seriesId>/`
+- [x] 散篇直接落到 `<authorName>_<userId>/`
+- [x] 任务卡片显示"作者：xxx，共 N 篇（M 个系列 + K 散篇）"
+- [x] 大规模抓取（>50 篇）验证限速和 429 暂停机制有效
+- [x] 抓取页"来源类型"支持"用户"选项
+- [x] URL 输入框支持识别 user URL（自动提取 user_id）
+- [x] 集成测试：抓一个小作者（10 篇以内），验证目录结构

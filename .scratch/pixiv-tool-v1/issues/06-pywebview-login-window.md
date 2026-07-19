@@ -6,20 +6,20 @@
 
 **Blocked by:** 03（CookieStore）、05（FastAPI+Vue 通信）
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Acceptance criteria:**
 
-- [ ] `backend/auth/login_window.py` 实现 `open_login_window() -> dict`，弹出 pywebview 窗口加载登录页
-- [ ] pywebview 配置：`private_mode=False`、`http_server=True`、固定 `http_port`（保证 cookie 持久化）
-- [ ] 登录成功检测：监听 `loaded` 事件，URL 含 `www.pixiv.net` 时触发提取
-- [ ] Cookie 提取：调用 `window.get_cookies()`，用 spike 验证过的 `cookies_to_dicts()` 转换（注意 Morsel-is-dict 坑）
-- [ ] x-csrf-token 提取：用 `evaluate_js(script, callback=fn)` 的 callback 模式（不是同步模式），JS 写成 `new Promise(...)` 而非 `async () => {...}`
-- [ ] csrf 提取路径正确：`__NEXT_DATA__.props.pageProps.dehydratedState.queries[*].meta.apiClient.token`（多路径兜底 A/B/C/D）
-- [ ] 提取到的 PHPSESSID + x-csrf-token 通过 `CookieStore.save()` 持久化
-- [ ] `POST /api/auth/login` 触发上述流程，返回登录结果（成功/失败/取消）
-- [ ] 主窗 Vue 收到登录成功后显示提示
-- [ ] 用户关闭登录窗（未登录）时返回明确状态，不抛异常
-- [ ] 登录窗大小合理（960x720），标题明确（"登录 Pixiv"）
-- [ ] 单元测试：mock pywebview 验证提取逻辑（用 spike 的 result.json 作 fixture）
-- [ ] 参考实现：`spike/cookie_probe/probe.py`（已通过 R1 验证，见 ADR 0005）
+- [x] `backend/auth/login_window.py` 实现 `open_login_window() -> dict`，弹出 pywebview 窗口加载登录页
+- [x] pywebview 配置：`private_mode=False`、`http_server=True`、固定 `http_port`（保证 cookie 持久化）
+- [x] 登录成功检测：监听 `loaded` 事件，URL 含 `www.pixiv.net` 时触发提取
+- [x] Cookie 提取：调用 `window.get_cookies()`，用 spike 验证过的 `cookies_to_dicts()` 转换（注意 Morsel-is-dict 坑）
+- [x] x-csrf-token 提取：用 `evaluate_js(script, callback=fn)` 的 callback 模式（不是同步模式），JS 写成 `new Promise(...)` 而非 `async () => {...}`
+- [x] csrf 提取路径正确：`__NEXT_DATA__.props.pageProps.dehydratedState.queries[*].meta.apiClient.token`（多路径兜底 A/B/C/D）
+- [x] 提取到的 PHPSESSID + x-csrf-token 通过 `CookieStore.save()` 持久化
+- [x] `POST /api/auth/login` 触发上述流程，返回登录结果（成功/失败/取消）
+- [x] 主窗 Vue 收到登录成功后显示提示
+- [x] 用户关闭登录窗（未登录）时返回明确状态，不抛异常
+- [x] 登录窗大小合理（960x720），标题明确（"登录 Pixiv"）
+- [x] 单元测试：mock pywebview 验证提取逻辑（用 spike 的 result.json 作 fixture）
+- [x] 参考实现：`spike/cookie_probe/probe.py`（已通过 R1 验证，见 ADR 0005）
