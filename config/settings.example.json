@@ -1,0 +1,7 @@
+{
+  "output_dir": "downloads",
+  "output_formats": ["txt", "markdown"],
+  "language": "zh-CN",
+  "theme": "auto",
+  "backend_port": null
+}
