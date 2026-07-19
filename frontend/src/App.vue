@@ -20,7 +20,7 @@
           <div v-if="authStore.isLoggedIn" class="user-info" :title="`user_id: ${authStore.userId}`">
             <span class="user-name">{{ authStore.name || authStore.pixivId }}</span>
           </div>
-          <n-button v-else size="small" block @click="handleLogin">未登录，点此登录</n-button>
+          <n-button v-else size="small" block @click="handleLogin">{{ t('auth.notLoggedIn') }}</n-button>
         </div>
       </n-layout-sider>
       <n-layout-content style="padding: 24px">
@@ -33,6 +33,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue";
 import { useRouter, useRoute } from "vue-router";
+import { useI18n } from "vue-i18n";
 import {
   NConfigProvider,
   NLayout,
@@ -47,15 +48,17 @@ import { useAuthStore } from "./stores/auth";
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
+const { t } = useI18n();
 
 const theme = computed(() => null); // 浅色，ticket 15 实现完整主题
 
-const menuOptions: MenuOption[] = [
-  { label: "抓取", key: "/" },
-  { label: "任务", key: "/tasks" },
-  { label: "历史", key: "/history" },
-  { label: "设置", key: "/settings" },
-];
+// computed 让菜单文案随 locale 切换自动更新
+const menuOptions = computed<MenuOption[]>(() => [
+  { label: t("nav.crawl"), key: "/" },
+  { label: t("nav.tasks"), key: "/tasks" },
+  { label: t("nav.history"), key: "/history" },
+  { label: t("nav.settings"), key: "/settings" },
+]);
 
 function navigateTo(key: string) {
   router.push(key);
