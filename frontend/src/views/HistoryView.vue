@@ -18,7 +18,7 @@
       :data="historyStore.novels"
       :loading="loading"
       :pagination="pagination"
-      :row-key="(row: { novel_id: number }) => row.novel_id"
+      :row-key="rowKey"
     />
 
     <n-empty v-if="!loading && !historyStore.novels.length" description="还没有抓取记录，去抓取页试试" />
@@ -35,6 +35,8 @@ import type { Novel } from "../stores/history";
 const historyStore = useHistoryStore();
 const loading = ref(false);
 const keyword = ref("");
+
+const rowKey = (row: { novel_id: number }) => row.novel_id;
 
 const columns: DataTableColumns<Novel> = [
   { title: "标题", key: "title", ellipsis: { tooltip: true } },
