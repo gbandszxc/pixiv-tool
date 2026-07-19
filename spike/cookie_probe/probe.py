@@ -74,54 +74,112 @@ class ProbeResult:
 
 
 # ====================================================================
-# 浏览器端 JS：提取 x-csrf-token
+# 浏览器端 JS：一次性提取 csrf token + 验证登录态
 # ====================================================================
-# 经 chrome-devtools 实测（2026-07-19），pixiv 新版 SPA 把 csrf token 藏在：
-#   window.__NEXT_DATA__.props.pageProps.dehydratedState.queries[*]
-#     .queryKey === ["termsAgreement","status"]
-#       .state.data.token
+# 经 chrome-devtools 实测（2026-07-19），pixiv 新版 SPA 的 csrf token 藏在：
+#   __NEXT_DATA__.props.pageProps.dehydratedState.queries[*].meta.apiClient.token
+# 注意不是 .state.data.token——react-query 跑一会儿后 state.data 会被刷新，
+# 但 meta 字段是稳定的（pixiv apiClient 自定义塞进去的）。
 #
-# 旧版可能用 meta[name="global-data"]，作为兜底。
+# 登录态验证：fetch /ajax/user/self 带 x-csrf-token + cookie，返回 userData 即登录。
+#
+# 单次 JS 调用完成两件事，避免多次 evaluate_js 往返 + 时序问题。
 
-EXTRACT_CSRF_JS = """
-() => {
-    const mask = (s) => s ? s.slice(0, 8) + '...' : '';
+EXTRACT_AND_VERIFY_JS = """
+async () => {
+    const mask = (s) => s ? s.slice(0, 12) + '...' : '';
 
+    // ---- 1. 提取 csrf token（多路径兜底）----
     const np = window.__NEXT_DATA__?.props?.pageProps || {};
     const dehydrated = np.dehydratedState;
 
-    // 路径 A：dehydratedState.queries 找 termsAgreement
-    let tokenA = '';
+    let token = '';
+    const tokenSources = [];
+
+    // 路径 A（新版主路径）：queries[*].meta.apiClient.token
     if (dehydrated?.queries) {
         for (const q of dehydrated.queries) {
-            const key = JSON.stringify(q.queryKey || q.queryHash || '');
-            if (key.includes('termsAgreement')) {
-                tokenA = q.state?.data?.token || '';
-                if (tokenA) break;
+            const t = q.meta?.apiClient?.token;
+            if (t) {
+                token = t;
+                tokenSources.push('queries.meta.apiClient.token');
+                break;
             }
         }
     }
 
-    // 路径 B：旧 pageProps.token（旧版）
-    const tokenB = np.token || '';
+    // 路径 B：queries[*].state.data.token（旧 dehydrated 数据，刷新前）
+    if (!token && dehydrated?.queries) {
+        for (const q of dehydrated.queries) {
+            const t = q.state?.data?.token;
+            if (t) {
+                token = t;
+                tokenSources.push('queries.state.data.token');
+                break;
+            }
+        }
+    }
 
-    // 路径 C：meta global-data（更旧版）
-    const meta = document.querySelector('meta[name="global-data"]');
-    let tokenC = '';
-    if (meta) {
-        try {
-            const data = JSON.parse(meta.content || '{}');
-            tokenC = data.token || '';
-        } catch (e) {}
+    // 路径 C：旧 pageProps.token
+    if (!token) {
+        const t = np.token || '';
+        if (t) {
+            token = t;
+            tokenSources.push('pageProps.token');
+        }
+    }
+
+    // 路径 D：meta[name="global-data"]
+    if (!token) {
+        const metaEl = document.querySelector('meta[name="global-data"]');
+        if (metaEl) {
+            try {
+                const data = JSON.parse(metaEl.content || '{}');
+                if (data.token) {
+                    token = data.token;
+                    tokenSources.push('meta.global-data');
+                }
+            } catch (e) {}
+        }
+    }
+
+    // ---- 2. 验证登录态 ----
+    let loginInfo = { ok: false };
+    try {
+        const r = await fetch('/ajax/user/self?lang=zh', {
+            credentials: 'include',
+            headers: token ? { 'x-csrf-token': token } : {},
+        });
+        const text = await r.text();
+        let data = null;
+        try { data = JSON.parse(text); } catch (e) {}
+        if (data && data.userData) {
+            loginInfo = {
+                ok: true,
+                status: r.status,
+                user_id: data.userData.id || '',
+                pixiv_id: data.userData.pixivId || '',
+                name: data.userData.name || '',
+            };
+        } else {
+            loginInfo = {
+                ok: false,
+                status: r.status,
+                body_preview: text.slice(0, 200),
+                js_cookie_count: document.cookie ? document.cookie.split(';').length : 0,
+            };
+        }
+    } catch (e) {
+        loginInfo = { ok: false, error: String(e) };
     }
 
     return {
         url: location.href,
-        token_from_dehydrated: mask(tokenA),
-        token_from_page_props: mask(tokenB),
-        token_from_meta: mask(tokenC),
+        token_preview: mask(token),
+        token_sources_tried: tokenSources,
         has_dehydrated: Boolean(dehydrated),
         dehydrated_query_count: dehydrated?.queries?.length || 0,
+        login: loginInfo,
     };
 }
 """
@@ -214,14 +272,21 @@ def _dump_first_morsel(cookies: Any, target_name: str) -> str:
 def _morsel_to_dict(name: str, morsel: Any) -> dict[str, Any]:
     """把一个 SimpleCookie.Morsel（或 dict）转成扁平 dict。
 
-    Morsel 的属性访问规则（容易踩坑）：
-        - .key / .value / .coded_value：直接属性
-          注意：.value 是 URL-decoded；如果原始 cookie 用 complex 格式，
-          .value 可能为空，要 fallback 到 .coded_value
-        - httponly / secure / path / domain / expires：reserved 属性，
-          用 morsel['httponly'] 访问，返回的是字符串（"" 或 "HttpOnly" 等）
+    Morsel 的属性访问规则（实测自 pywebview 5.4 + Python 3.13）：
+        - 直接属性：.key / .value / .coded_value（_value 是底层存储）
+        - dict-style（reserved）：morsel['httponly'] / morsel['secure'] /
+          morsel['expires'] / morsel['domain'] / morsel['path']
+          返回字符串，"httponly" 键返回 "True"/"False" 字符串
+        - repr 形如：<Morsel: PHPSESSID=xxx; Domain=.pixiv.net; HttpOnly; Secure>
+
+    所有访问都包 try/except，单个失败不连累整个 dict。
     """
-    if isinstance(morsel, dict):
+    # ---- dict 路径（pywebview 偶尔返回 dict）----
+    # 注意：SimpleCookie.Morsel 继承自 dict，所以必须先排除 Morsel
+    # 否则所有 Morsel 都走 dict 路径，而 Morsel 的 dict-view 里没有 "value" 键
+    # （只有 expires/path/domain/httponly 等 reserved 键），会读出空 value。
+    from http.cookies import Morsel
+    if isinstance(morsel, dict) and not isinstance(morsel, Morsel):
         return {
             "name": name or morsel.get("name", ""),
             "value": morsel.get("value", ""),
@@ -232,38 +297,42 @@ def _morsel_to_dict(name: str, morsel: Any) -> dict[str, Any]:
             "expires": morsel.get("expires"),
         }
 
-    # Morsel：value 优先 .value，空了 fallback 到 .coded_value
-    value = getattr(morsel, "value", "") or ""
-    if not value:
-        value = getattr(morsel, "coded_value", "") or ""
+    # ---- Morsel 路径：value 取直接属性，多重 fallback ----
+    def _attr(key: str) -> str:
+        # 直接属性优先，然后试 coded_value，最后试 _value
+        for k in (key, f"_{key}"):
+            try:
+                v = getattr(morsel, k, "")
+                if v:
+                    return str(v)
+            except Exception:  # noqa: BLE001
+                continue
+        return ""
 
-    # reserved 属性用 morsel[key] 访问
-    def _reserved(key: str) -> Any:
+    value = _attr("value") or _attr("coded_value")
+
+    # ---- dict-style reserved 属性 ----
+    def _reserved_str(key: str) -> str:
         try:
-            val = morsel[key]
-        except (KeyError, TypeError):
+            v = morsel[key]
+        except (KeyError, TypeError, AttributeError):
             return ""
-        if isinstance(val, str):
-            return val.lower() not in ("", "false", "0", "no")
-        return bool(val)
+        return str(v) if v is not None else ""
 
-    # domain / path 用 .get() (Morsel 支持 dict-style 默认值)
-    def _get_str(key: str, default: str = "") -> str:
-        try:
-            val = morsel.get(key, default)
-        except (KeyError, AttributeError, TypeError):
-            val = default
-        return val if isinstance(val, str) else (str(val) if val else default)
+    def _reserved_bool(key: str) -> bool:
+        v = _reserved_str(key)
+        # Morsel 里 reserved 标志可能存 "True"/"False" 字符串，也可能空
+        return v.lower() in ("true", "1", "yes", key)
 
-    expires = _get_str("expires") or None
+    expires = _reserved_str("expires") or None
 
     return {
         "name": name,
         "value": value,
-        "domain": _get_str("domain", ""),
-        "path": _get_str("path", "/") or "/",
-        "httponly": _reserved("httponly"),
-        "secure": _reserved("secure"),
+        "domain": _reserved_str("domain"),
+        "path": _reserved_str("path") or "/",
+        "httponly": _reserved_bool("httponly"),
+        "secure": _reserved_bool("secure"),
         "expires": expires,
     }
 
@@ -293,12 +362,14 @@ def run_probe(window: webview.Window) -> ProbeResult:
     result.get_cookies_return_type = type(raw_cookies).__name__
     result.current_url = window.get_current_url() or ""
 
-    # 诊断：dump 第一个 PHPSESSID Morsel 的真实结构（只为排查 value 空问题）
-    _diag = _dump_first_morsel(raw_cookies, "PHPSESSID")
-    if _diag:
-        result.error += f"\n[morsel diag] {_diag}"
-
+    # 诊断：dump 第一个 PHPSESSID Morsel 的真实结构（仅在 value 为空时输出）
     details = cookies_to_dicts(raw_cookies)
+    php_detail = next((d for d in details if d["name"] == "PHPSESSID"), None)
+    if php_detail and not php_detail.get("value"):
+        _diag = _dump_first_morsel(raw_cookies, "PHPSESSID")
+        if _diag and "(not found)" not in _diag:
+            result.error += f"\n[morsel diag] {_diag}"
+
     for detail in details:
         name = detail["name"]
         if name == "PHPSESSID":
@@ -315,44 +386,52 @@ def run_probe(window: webview.Window) -> ProbeResult:
     result.cookies_count = len(details)
     result.cookies_detail = [mask_sensitive(d) for d in details]
 
-    # ---- 验证点 6：csrf via JS ----
-    # 注意：loaded 事件触发时 SPA 的 react-query 可能还没注水完，
-    # dehydratedState.queries 为空，要延迟重试。
+    # ---- 验证点 6+7：csrf token + 登录态（合并一次 JS 调用）----
+    # loaded 事件触发时 SPA react-query 可能还没注水，重试 5 次（每次 1s）。
+    import time
+
     try:
         js_result = None
-        for attempt in range(5):  # 5 次重试，每次间隔 1s
-            js_result = window.evaluate_js(EXTRACT_CSRF_JS)
-            token = (
-                (js_result or {}).get("token_from_dehydrated")
-                or (js_result or {}).get("token_from_page_props")
-                or (js_result or {}).get("token_from_meta")
-                or ""
-            ) if isinstance(js_result, dict) else ""
-            if token:
+        last_diag = ""
+        for attempt in range(5):
+            js_result = window.evaluate_js(EXTRACT_AND_VERIFY_JS)
+            # pywebview evaluate_js 对 async 函数可能返回 None——记录原始类型
+            if not isinstance(js_result, dict):
+                last_diag = f"attempt {attempt+1}: evaluate_js returned {type(js_result).__name__} = {repr(js_result)[:100]}"
+                time.sleep(1)
+                continue
+
+            token_preview = js_result.get("token_preview", "")
+            login_ok = js_result.get("login", {}).get("ok", False)
+            if token_preview and login_ok:
                 break
-            # 还没注水，等 1s 再试
-            import time
-            time.sleep(1)
-        if isinstance(js_result, dict):
-            token = (
-                js_result.get("token_from_dehydrated")
-                or js_result.get("token_from_page_props")
-                or js_result.get("token_from_meta")
-                or ""
+            last_diag = (
+                f"attempt {attempt+1}: token='{token_preview}', "
+                f"login_ok={login_ok}, "
+                f"sources={js_result.get('token_sources_tried')}, "
+                f"has_dehydrated={js_result.get('has_dehydrated')}, "
+                f"q_count={js_result.get('dehydrated_query_count')}, "
+                f"login={js_result.get('login')}"
             )
+            if not token_preview or not login_ok:
+                time.sleep(1)
+
+        if isinstance(js_result, dict):
+            token = js_result.get("token_preview", "")
             if token:
                 result.csrf_token_found = True
                 result.csrf_token_preview = token
-            # 记录诊断信息到 error 字段（不算错误，方便排查）
-            result.error += (
-                f"\n[csrf diag] has_dehydrated={js_result.get('has_dehydrated')}, "
-                f"query_count={js_result.get('dehydrated_query_count')}, "
-                f"dehydrated='{js_result.get('token_from_dehydrated')}', "
-                f"pageProps='{js_result.get('token_from_page_props')}', "
-                f"meta='{js_result.get('token_from_meta')}'"
-            )
+            login = js_result.get("login", {})
+            if login.get("ok"):
+                result.is_logged_in = True
+                result.user_id = login.get("user_id", "")
+                result.user_pixiv_id = login.get("pixiv_id", "")
+                result.user_name = login.get("name", "")
+            result.error += f"\n[csrf+login diag] {last_diag}"
+        else:
+            result.error += f"\n[csrf+login diag] evaluate_js 非 dict: {last_diag}"
     except Exception as e:  # noqa: BLE001
-        result.error += f"\ncsrf 提取失败: {type(e).__name__}: {e}"
+        result.error += f"\ncsrf/login 提取失败: {type(e).__name__}: {e}"
 
     # ---- 验证点 4：持久化（再读一次对比 PHPSESSID 前缀）----
     try:
@@ -374,63 +453,10 @@ def run_probe(window: webview.Window) -> ProbeResult:
 
 
 # ====================================================================
-# 登录态验证（用真实接口）
+# 登录态验证已合并到 EXTRACT_AND_VERIFY_JS（一次 JS 调用完成 token + login）
 # ====================================================================
 # SPEC 原写的 /ajax/user/self/status 实测 404 不存在，
 # 正确接口是 /ajax/user/self，返回 { userData: { id, pixivId, name, ... } }。
-
-CHECK_LOGIN_JS = """
-async () => {
-    try {
-        const r = await fetch('/ajax/user/self?lang=zh', { credentials: 'include' });
-        const text = await r.text();
-        let data = null;
-        try { data = JSON.parse(text); } catch (e) {}
-        if (data && data.userData) {
-            return {
-                ok: true,
-                status: r.status,
-                user_id: data.userData.id || '',
-                pixiv_id: data.userData.pixivId || '',
-                name: data.userData.name || '',
-            };
-        }
-        return {
-            ok: false,
-            status: r.status,
-            body_preview: text.slice(0, 200),
-            cookie_header_visible: document.cookie.length > 0,
-            cookie_count: document.cookie.split(';').length,
-        };
-    } catch (e) {
-        return { ok: false, error: String(e) };
-    }
-}
-"""
-
-
-def verify_login(window: webview.Window, result: ProbeResult) -> None:
-    """通过 /ajax/user/self 接口验证拿到的 cookie 是否真的能登录。"""
-    try:
-        login_info = window.evaluate_js(CHECK_LOGIN_JS)
-    except Exception as e:  # noqa: BLE001
-        result.error += f"\nlogin 验证失败: {type(e).__name__}: {e}"
-        return
-
-    if isinstance(login_info, dict):
-        if login_info.get("ok"):
-            result.is_logged_in = True
-            result.user_id = login_info.get("user_id", "")
-            result.user_pixiv_id = login_info.get("pixiv_id", "")
-            result.user_name = login_info.get("name", "")
-        else:
-            result.is_logged_in = False
-            result.error += (
-                f"\n[login diag] status={login_info.get('status')}, "
-                f"body='{login_info.get('body_preview', '')[:120]}', "
-                f"js_cookie_count={login_info.get('cookie_count')}, "
-                f"err={login_info.get('error', '')}"
-            )
 
 
 # ====================================================================
@@ -523,7 +549,6 @@ def make_loaded_handler() -> Any:
 
         try:
             result = run_probe(window)
-            verify_login(window, result)
         except Exception as e:  # noqa: BLE001
             result = ProbeResult(error=f"{type(e).__name__}: {e}")
 
