@@ -47,6 +47,18 @@ $BackendLogFile = Join-Path $LogDir "backend.log"
 # 工具函数
 # -------------------------------------------------------------------
 
+function Resolve-Command([string]$Name) {
+    # Windows 上 pnpm/uv 通常是 .cmd/.exe shim，Start-Process 不能直接吃 .ps1 shim。
+    # 从所有候选里优先取 .exe，其次 .cmd，最后回退 Get-Command 默认结果。
+    $candidates = Get-Command $Name -All -ErrorAction SilentlyContinue
+    if ($null -eq $candidates) { return $Name }
+    $exe = $candidates | Where-Object { $_.Source -like '*.exe' } | Select-Object -First 1
+    if ($null -ne $exe) { return $exe.Source }
+    $cmd = $candidates | Where-Object { $_.Source -like '*.cmd' } | Select-Object -First 1
+    if ($null -ne $cmd) { return $cmd.Source }
+    return $candidates[0].Source
+}
+
 function Ensure-Dirs {
     # sh: mkdir -p "$DEV_DIR" "$PID_DIR" "$LOG_DIR"
     @($DevDir, $PidDir, $LogDir) | ForEach-Object {
@@ -55,40 +67,63 @@ function Ensure-Dirs {
 }
 
 function Test-PortOpen([int]$Port) {
-    # sh: curl -sf http://127.0.0.1:$Port/ > /dev/null 2>&1
-    try {
-        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
-        return $true
-    } catch {
-        return $false
+    # sh: curl -sf http://127.0.0.1:$Port/ > /dev/null 2>&1 || curl -sf http://[::1]:$Port/
+    # Vite 默认绑 [::1]（IPv6），uvicorn 绑 127.0.0.1（IPv4），两个都试。
+    # 4xx/5xx 也算端口在响应（后端根路径返回 404 是正常的）。
+    foreach ($host_ in @('127.0.0.1', '[::1]')) {
+        try {
+            Invoke-WebRequest -Uri "http://${host_}:$Port/" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop | Out-Null
+            return $true
+        } catch {
+            if ($null -ne $_.Exception.Response) { return $true }
+        }
     }
+    return $false
 }
 
 function Get-PidFromFile([string]$PidFile) {
     if (Test-Path $PidFile) {
-        $pid = (Get-Content $PidFile -Raw).Trim()
-        if ($pid -match '^\d+$') { return [int]$pid }
+        $procId = (Get-Content $PidFile -Raw).Trim()
+        if ($procId -match '^\d+$') { return [int]$procId }
     }
     return $null
 }
 
-function Test-ProcessAlive([int]$Pid) {
+function Test-ProcessAlive([int]$ProcessId) {
     # sh: kill -0 $PID 2>/dev/null
     try {
-        Get-Process -Id $Pid -ErrorAction Stop | Out-Null
+        Get-Process -Id $ProcessId -ErrorAction Stop | Out-Null
         return $true
     } catch {
         return $false
     }
 }
 
-function Stop-ProcessByPidFile([string]$PidFile, [string]$Name) {
-    $pid = Get-PidFromFile $PidFile
-    if ($null -ne $pid -and (Test-ProcessAlive $pid)) {
-        Write-Host "停止 $Name (PID: $pid)..."
+function Stop-ProcessByPidFile([string]$PidFile, [string]$Name, [int]$Port) {
+    # PID 文件记的是 cmd.exe wrapper（Start-Process uv.CMD/pnpm.CMD 拿到的），
+    # uvicorn --reload 还会 fork worker，只杀 wrapper 会留孤儿占用端口。
+    # 保险起见：先按 PID 文件杀，再按端口反查 owning process 补杀。
+    $procId = Get-PidFromFile $PidFile
+    if ($null -ne $procId -and (Test-ProcessAlive $procId)) {
+        Write-Host "停止 $Name (PID: $procId)..."
         # sh: kill $PID
-        Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 500
+    }
+
+    # 按端口反查（双栈），杀掉仍在占用端口的孤儿进程
+    foreach ($host_ in @('127.0.0.1', '[::1]')) {
+        try {
+            $conns = Get-NetTCPConnection -LocalPort $Port -LocalAddress $host_ -State Listen -ErrorAction SilentlyContinue
+            foreach ($conn in $conns) {
+                $orphanId = $conn.OwningProcess
+                if ($null -ne $orphanId -and (Test-ProcessAlive $orphanId)) {
+                    Write-Host "  清理孤儿进程 $Name (port $Port, PID: $orphanId)..."
+                    Stop-Process -Id $orphanId -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch { }
+        Start-Sleep -Milliseconds 300
     }
     if (Test-Path $PidFile) { Remove-Item $PidFile -Force }
 }
@@ -98,15 +133,16 @@ function Stop-ProcessByPidFile([string]$PidFile, [string]$Name) {
 # -------------------------------------------------------------------
 
 function Start-Frontend {
-    $pid = Get-PidFromFile $FrontendPidFile
-    if ($null -ne $pid -and (Test-ProcessAlive $pid)) {
-        Write-Host "前端已在运行 (PID: $pid)"
+    $procId = Get-PidFromFile $FrontendPidFile
+    if ($null -ne $procId -and (Test-ProcessAlive $procId)) {
+        Write-Host "前端已在运行 (PID: $procId)"
         return
     }
     Ensure-Dirs
     Write-Host "启动前端 (Vite dev server, port $FrontendPort)..."
     # sh: cd "$REPO_ROOT/frontend" && pnpm dev > "$LOG_FILE" 2>&1 &
-    $proc = Start-Process -FilePath "pnpm" -ArgumentList "dev" `
+    $pnpmExe = Resolve-Command "pnpm"
+    $proc = Start-Process -FilePath $pnpmExe -ArgumentList "dev" `
         -WorkingDirectory (Join-Path $RepoRoot "frontend") `
         -RedirectStandardOutput $FrontendLogFile `
         -RedirectStandardError (Join-Path $LogDir "frontend.err.log") `
@@ -116,15 +152,16 @@ function Start-Frontend {
 }
 
 function Start-Backend {
-    $pid = Get-PidFromFile $BackendPidFile
-    if ($null -ne $pid -and (Test-ProcessAlive $pid)) {
-        Write-Host "后端已在运行 (PID: $pid)"
+    $procId = Get-PidFromFile $BackendPidFile
+    if ($null -ne $procId -and (Test-ProcessAlive $procId)) {
+        Write-Host "后端已在运行 (PID: $procId)"
         return
     }
     Ensure-Dirs
     Write-Host "启动后端 (uvicorn, port $BackendPort)..."
     # sh: cd "$REPO_ROOT" && uv run uvicorn backend.main:app --host 127.0.0.1 --port 9962 --reload > "$LOG_FILE" 2>&1 &
-    $proc = Start-Process -FilePath "uv" -ArgumentList "run", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "$BackendPort", "--reload" `
+    $uvExe = Resolve-Command "uv"
+    $proc = Start-Process -FilePath $uvExe -ArgumentList "run", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "$BackendPort", "--reload" `
         -WorkingDirectory $RepoRoot `
         -RedirectStandardOutput $BackendLogFile `
         -RedirectStandardError (Join-Path $LogDir "backend.err.log") `
@@ -151,9 +188,9 @@ function Invoke-Start {
 function Invoke-Stop {
     Ensure-Dirs
     switch ($Target) {
-        "all"      { Stop-ProcessByPidFile $FrontendPidFile "前端"; Stop-ProcessByPidFile $BackendPidFile "后端" }
-        "frontend" { Stop-ProcessByPidFile $FrontendPidFile "前端" }
-        "backend"  { Stop-ProcessByPidFile $BackendPidFile "后端" }
+        "all"      { Stop-ProcessByPidFile $FrontendPidFile "前端" $FrontendPort; Stop-ProcessByPidFile $BackendPidFile "后端" $BackendPort }
+        "frontend" { Stop-ProcessByPidFile $FrontendPidFile "前端" $FrontendPort }
+        "backend"  { Stop-ProcessByPidFile $BackendPidFile "后端" $BackendPort }
     }
     Write-Host "已停止。"
 }
@@ -181,17 +218,19 @@ function Invoke-Status {
     $feAlive = ($null -ne $fePid) -and (Test-ProcessAlive $fePid)
     $fePort = Test-PortOpen $FrontendPort
     $feStatus = if ($feAlive -and $fePort) { "运行中" } elseif ($feAlive) { "进程存在但端口未响应" } else { "未运行" }
-    Write-Host "前端: $feStatus (PID: $($fePid ?? 'N/A'), port: $FrontendPort)"
+    $fePidDisplay = if ($null -ne $fePid) { $fePid } else { 'N/A' }
+    Write-Host "前端: $feStatus (PID: $fePidDisplay, port: $FrontendPort)"
 
     # 后端
     $bePid = Get-PidFromFile $BackendPidFile
     $beAlive = ($null -ne $bePid) -and (Test-ProcessAlive $bePid)
     $bePort = Test-PortOpen $BackendPort
     $beStatus = if ($beAlive -and $bePort) { "运行中" } elseif ($beAlive) { "进程存在但端口未响应" } else { "未运行" }
-    Write-Host "后端: $beStatus (PID: $($bePid ?? 'N/A'), port: $BackendPort)"
+    $bePidDisplay = if ($null -ne $bePid) { $bePid } else { 'N/A' }
+    Write-Host "后端: $beStatus (PID: $bePidDisplay, port: $BackendPort)"
 
     # 健康检查
-    if ($fePort) {
+    if ($bePort) {
         try {
             $r = Invoke-WebRequest -Uri "http://127.0.0.1:$BackendPort/api/health" -TimeoutSec 2 -UseBasicParsing
             Write-Host "后端健康检查: $($r.Content)"
