@@ -99,32 +99,78 @@ function Test-ProcessAlive([int]$ProcessId) {
     }
 }
 
-function Stop-ProcessByPidFile([string]$PidFile, [string]$Name, [int]$Port) {
-    # PID 文件记的是 cmd.exe wrapper（Start-Process uv.CMD/pnpm.CMD 拿到的），
-    # uvicorn --reload 还会 fork worker，只杀 wrapper 会留孤儿占用端口。
-    # 保险起见：先按 PID 文件杀，再按端口反查 owning process 补杀。
-    $procId = Get-PidFromFile $PidFile
-    if ($null -ne $procId -and (Test-ProcessAlive $procId)) {
-        Write-Host "停止 $Name (PID: $procId)..."
-        # sh: kill $PID
-        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Milliseconds 500
-    }
+function Stop-ProcessTree([int]$RootPid) {
+    # 递归杀进程树（先杀子进程，再杀根）。
+    # 用 CIM 而非 Get-Process，因为 Get-Process 不暴露 ParentProcessId。
+    # sh: pkill -P $RootPid && kill $RootPid
+    try {
+        $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$RootPid" -ErrorAction SilentlyContinue
+        foreach ($child in $children) {
+            Stop-ProcessTree -RootPid ([int]$child.ProcessId)
+        }
+        Stop-Process -Id $RootPid -Force -ErrorAction SilentlyContinue
+    } catch { }
+}
 
-    # 按端口反查（双栈），杀掉仍在占用端口的孤儿进程
+function Stop-PortListeners([int]$Port, [string]$Name) {
+    # 按端口反查 LISTENING socket 的 owning process（双栈）。
+    # sh: fuser -k ${Port}/tcp
     foreach ($host_ in @('127.0.0.1', '[::1]')) {
         try {
             $conns = Get-NetTCPConnection -LocalPort $Port -LocalAddress $host_ -State Listen -ErrorAction SilentlyContinue
             foreach ($conn in $conns) {
-                $orphanId = $conn.OwningProcess
-                if ($null -ne $orphanId -and (Test-ProcessAlive $orphanId)) {
-                    Write-Host "  清理孤儿进程 $Name (port $Port, PID: $orphanId)..."
-                    Stop-Process -Id $orphanId -Force -ErrorAction SilentlyContinue
+                $orphanId = [int]$conn.OwningProcess
+                if ($orphanId -gt 0 -and (Test-ProcessAlive $orphanId)) {
+                    Write-Host "  清理孤儿 $Name (port $Port, PID: $orphanId + 子进程)..."
+                    Stop-ProcessTree -RootPid $orphanId
                 }
             }
         } catch { }
-        Start-Sleep -Milliseconds 300
     }
+}
+
+function Stop-OrphanWorkers([string]$Name) {
+    # 兜底：扫所有 python/node 进程，杀命令行里带 uvicorn/multiprocessing/vite
+    # 且属于本仓库的孤儿 worker。这些进程的父进程已死，无法通过进程树追到。
+    # uvicorn --reload 的 worker 用 multiprocessing.spawn，父进程死后变孤儿。
+    $repoPath = $RepoRoot.TrimEnd('\')
+    try {
+        $procs = Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='node.exe'" -ErrorAction SilentlyContinue
+        foreach ($p in $procs) {
+            $cmd = $p.CommandLine
+            if ($null -eq $cmd) { continue }
+            $isOurs = $cmd -like "*$repoPath*"
+            if (-not $isOurs) { continue }
+            $isWorker = ($cmd -like '*uvicorn*') -or
+                        ($cmd -like '*multiprocessing.spawn*') -or
+                        ($cmd -like '*vite*.js*')
+            if (-not $isWorker) { continue }
+            # 确认不是当前在跑的新进程（避免误杀刚 start 的）
+            Write-Host "  清理孤儿 worker $Name (PID: $($p.ProcessId))..."
+            Stop-ProcessTree -RootPid ([int]$p.ProcessId)
+        }
+    } catch { }
+}
+
+function Stop-ProcessByPidFile([string]$PidFile, [string]$Name, [int]$Port) {
+    # 链路：Start-Process uv.CMD → cmd.exe (PID 文件记这个)
+    #       → uv.exe → python.exe (uvicorn reloader) → python.exe (worker)
+    # 只杀 PID 文件那个 wrapper 必留孤儿。而且 uvicorn --reload 的 WatchFiles
+    # 会立即重新 spawn 一个 reloader——所以杀完要等一会儿再复查端口。
+    $procId = Get-PidFromFile $PidFile
+    if ($null -ne $procId -and (Test-ProcessAlive $procId)) {
+        Write-Host "停止 $Name (PID: $procId + 子进程)..."
+        Stop-ProcessTree -RootPid $procId
+    }
+
+    # uvicorn --reload 会在 reloader 死后立刻重启——多扫几轮，直到端口真释放。
+    # 每轮三路并行：端口 owning process + 命令行匹配的孤儿 worker。
+    for ($i = 1; $i -le 3; $i++) {
+        Start-Sleep -Milliseconds 800
+        Stop-PortListeners -Port $Port -Name $Name
+        Stop-OrphanWorkers -Name $Name
+    }
+
     if (Test-Path $PidFile) { Remove-Item $PidFile -Force }
 }
 
