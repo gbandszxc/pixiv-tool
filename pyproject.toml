@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-win = ["pywebview>=5.0"]
+win = ["pywebview>=5.0,<6.0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24.0",
