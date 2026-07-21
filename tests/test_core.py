@@ -1,4 +1,4 @@
-"""Tests for backend.core — source, exporter, task manager, pixiv client
+"""Tests for pixiv_tool.core — source, exporter, task manager, pixiv client
 (tickets 08, 09, 10, 11, 12, 13)."""
 
 from __future__ import annotations
@@ -10,17 +10,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from backend.storage.models import NovelData
-from backend.core.exporter import (
+from pixiv_tool.storage.models import NovelData
+from pixiv_tool.core.exporter import (
     TxtExporter,
     MarkdownExporter,
     sanitize_filename,
     _render_markdown,
     _make_filename,
 )
-from backend.core.source import SingleNovelSource, SeriesSource, UserNovelsSource
-from backend.core.task import TaskManager
-from backend.core.pixiv_client import (
+from pixiv_tool.core.source import SingleNovelSource, SeriesSource, UserNovelsSource
+from pixiv_tool.core.task import TaskManager
+from pixiv_tool.core.pixiv_client import (
     PixivClient,
     PixivServerError,
     PixivRateLimitError,
@@ -261,7 +261,7 @@ class TestCreateExporters:
     """
 
     def test_returns_one_exporter_per_known_format(self):
-        from backend.core.exporter import create_exporters, TxtExporter, MarkdownExporter
+        from pixiv_tool.core.exporter import create_exporters, TxtExporter, MarkdownExporter
         exporters = create_exporters(["txt", "markdown"])
         assert len(exporters) == 2
         assert isinstance(exporters[0], TxtExporter)
@@ -269,18 +269,18 @@ class TestCreateExporters:
 
     def test_unknown_formats_silently_skipped(self):
         """Unknown format strings (typos, future formats) are skipped, not raised."""
-        from backend.core.exporter import create_exporters, TxtExporter
+        from pixiv_tool.core.exporter import create_exporters, TxtExporter
         exporters = create_exporters(["txt", "epub-v3", "totally-bogus"])
         assert len(exporters) == 1
         assert isinstance(exporters[0], TxtExporter)
 
     def test_empty_format_list_returns_empty(self):
-        from backend.core.exporter import create_exporters
+        from pixiv_tool.core.exporter import create_exporters
         assert create_exporters([]) == []
 
     def test_markdown_only_works(self):
         """Single-format selection works — no implicit txt fallback."""
-        from backend.core.exporter import create_exporters, MarkdownExporter
+        from pixiv_tool.core.exporter import create_exporters, MarkdownExporter
         exporters = create_exporters(["markdown"])
         assert len(exporters) == 1
         assert isinstance(exporters[0], MarkdownExporter)
@@ -376,14 +376,14 @@ class TestPixivClient:
         mock_resp_200.status_code = 200
         mock_resp_200.json.return_value = {"body": {"id": 42}}
 
-        with patch("backend.core.pixiv_client.httpx.AsyncClient") as MockClient:
+        with patch("pixiv_tool.core.pixiv_client.httpx.AsyncClient") as MockClient:
             instance = MockClient.return_value
             instance.get = AsyncMock(side_effect=[mock_resp_500, mock_resp_200])
             instance.aclose = AsyncMock()
 
             client = PixivClient(cookies={"PHPSESSID": "abc"})
             try:
-                with patch("backend.core.pixiv_client.asyncio.sleep", new_callable=AsyncMock):
+                with patch("pixiv_tool.core.pixiv_client.asyncio.sleep", new_callable=AsyncMock):
                     result = await client._get("https://example.com/api")
                 assert result == {"id": 42}
             finally:
@@ -395,14 +395,14 @@ class TestPixivClient:
         mock_resp_429 = MagicMock()
         mock_resp_429.status_code = 429
 
-        with patch("backend.core.pixiv_client.httpx.AsyncClient") as MockClient:
+        with patch("pixiv_tool.core.pixiv_client.httpx.AsyncClient") as MockClient:
             instance = MockClient.return_value
             instance.get = AsyncMock(return_value=mock_resp_429)
             instance.aclose = AsyncMock()
 
             client = PixivClient(cookies={"PHPSESSID": "abc"})
             try:
-                with patch("backend.core.pixiv_client.asyncio.sleep", new_callable=AsyncMock):
+                with patch("pixiv_tool.core.pixiv_client.asyncio.sleep", new_callable=AsyncMock):
                     with pytest.raises(PixivRateLimitError):
                         await client._get("https://example.com/api")
                 # Pause event should be cleared after 429
@@ -416,7 +416,7 @@ class TestPixivClient:
         mock_resp = MagicMock()
         mock_resp.status_code = 401
 
-        with patch("backend.core.pixiv_client.httpx.AsyncClient") as MockClient:
+        with patch("pixiv_tool.core.pixiv_client.httpx.AsyncClient") as MockClient:
             instance = MockClient.return_value
             instance.get = AsyncMock(return_value=mock_resp)
             instance.aclose = AsyncMock()

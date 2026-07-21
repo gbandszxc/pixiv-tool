@@ -1,4 +1,4 @@
-"""Tests for backend.api — health, ping, novels, settings, auth
+"""Tests for pixiv_tool.api — health, ping, novels, settings, auth
 (tickets 01, 05, 07, 14, 15)."""
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ from fastapi.testclient import TestClient
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     """TestClient with monkeypatched module-level DB and settings."""
-    from backend.storage.db import Database
-    from backend.storage import settings as settings_mod
+    from pixiv_tool.storage.db import Database
+    from pixiv_tool.storage import settings as settings_mod
 
     # Patch settings to use tmp
     config_dir = tmp_path / "config"
@@ -28,8 +28,8 @@ def client(tmp_path, monkeypatch):
     db = Database(db_path=db_path)
 
     # Patch module-level DB instances in routers
-    import backend.api.novels as novels_mod
-    import backend.api.tasks as tasks_mod
+    import pixiv_tool.api.novels as novels_mod
+    import pixiv_tool.api.tasks as tasks_mod
     monkeypatch.setattr(novels_mod, "_db", db)
     monkeypatch.setattr(tasks_mod, "_db", db)
 
@@ -39,21 +39,21 @@ def client(tmp_path, monkeypatch):
     stub_store.clear.return_value = None
     stub_store.save.return_value = None
 
-    import backend.api.auth as auth_mod
-    import backend.api.tasks as tasks_mod2
+    import pixiv_tool.api.auth as auth_mod
+    import pixiv_tool.api.tasks as tasks_mod2
     monkeypatch.setattr(auth_mod, "_store", stub_store)
     monkeypatch.setattr(tasks_mod2, "_store", stub_store)
 
     # Patch settings get_settings
     monkeypatch.setattr(
-        "backend.api.settings.get_settings",
+        "pixiv_tool.api.settings.get_settings",
         lambda: settings_mod.get_settings(),
     )
 
     # Import app AFTER patches. All routers (auth/novels/tasks/settings/system)
-    # are already included in backend.main:app at import time, so the TestClient
+    # are already included in pixiv_tool.main:app at import time, so the TestClient
     # sees the same route table as production.
-    from backend.main import app
+    from pixiv_tool.main import app
     return TestClient(app), db, stub_store, settings_mod, config_dir
 
 

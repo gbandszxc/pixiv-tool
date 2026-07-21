@@ -9,7 +9,7 @@ import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from backend.storage.models import NovelData
+from pixiv_tool.storage.models import NovelData
 
 
 class Exporter(ABC):

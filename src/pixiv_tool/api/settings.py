@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from backend.storage.settings import get_settings
+from pixiv_tool.storage.settings import get_settings
 
 logger = logging.getLogger(__name__)
 

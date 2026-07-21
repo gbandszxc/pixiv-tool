@@ -27,7 +27,7 @@ class CookieStore(ABC):
 def create_cookie_store() -> CookieStore:
     """按平台选择实现。"""
     if sys.platform == "win32":
-        from backend.storage.cookie_dpapi import DpapiCookieStore
+        from pixiv_tool.storage.cookie_dpapi import DpapiCookieStore
         return DpapiCookieStore()
     # macOS / Linux: V2 stub
     return _StubCookieStore()

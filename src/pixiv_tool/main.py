@@ -26,11 +26,11 @@ app = FastAPI(title="pixiv-tool", docs_url=None, redoc_url=None)
 #   app.add_middleware(CORSMiddleware, allow_origins=[...], ...)
 
 # 注册所有 API 路由
-from backend.api.auth import router as auth_router
-from backend.api.novels import router as novels_router
-from backend.api.tasks import router as tasks_router
-from backend.api.settings import router as settings_router
-from backend.api.system import router as system_router
+from pixiv_tool.api.auth import router as auth_router
+from pixiv_tool.api.novels import router as novels_router
+from pixiv_tool.api.tasks import router as tasks_router
+from pixiv_tool.api.settings import router as settings_router
+from pixiv_tool.api.system import router as system_router
 
 app.include_router(system_router)
 app.include_router(auth_router)
@@ -54,12 +54,12 @@ async def health():
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
-# PyInstaller frozen 模式下,__file__ 指向 _internal/backend/main.py,
+# PyInstaller frozen 模式下,__file__ 指向 _internal/pixiv_tool/main.py,
 # 但 PyInstaller 把数据文件解压到 sys._MEIPASS(onedir 模式下 == exe 同级 _internal/)。
-# spec 里 datas=[(static_dir, "backend/static")] 把静态资源放到 _internal/backend/static,
+# spec 里 datas=[(static_dir, "pixiv_tool/static")] 把静态资源放到 _internal/pixiv_tool/static,
 # 正好和 unfrozen 模式的相对位置一致——所以 frozen 时改用 _MEIPASS 锚定即可。
 if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-    _STATIC_DIR = Path(sys._MEIPASS) / "backend" / "static"
+    _STATIC_DIR = Path(sys._MEIPASS) / "pixiv_tool" / "static"
 
 if _STATIC_DIR.is_dir():
     _index_html = _STATIC_DIR / "index.html"
@@ -211,7 +211,7 @@ def main() -> None:
         --login-window --result-file X   子入口模式:登录窗(SPEC §4.1)。
             prod(PyInstaller frozen)模式下 /api/auth/login 会 spawn 同一个
             pixiv-tool.exe 加这两个参数,走登录窗逻辑;dev 模式由 auth.py
-            改成 `python -m backend.auth.login_window`。
+            改成 `python -m pixiv_tool.auth.login_window`。
     """
     import sys
 
@@ -224,7 +224,7 @@ def main() -> None:
 
     # 子入口分发:frozen exe 在 prod 模式下作为登录窗启动器被复用。
     if "--login-window" in sys.argv:
-        from backend.auth.login_window import run_login_subprocess_main
+        from pixiv_tool.auth.login_window import run_login_subprocess_main
         argv = [a for a in sys.argv[1:] if a != "--login-window"]
         # 复用 login_window 自带 argparse(--result-file)
         exit_code = run_login_subprocess_main(_extract_result_file(argv))

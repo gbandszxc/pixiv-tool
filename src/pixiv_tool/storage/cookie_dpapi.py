@@ -11,7 +11,7 @@ import json
 import logging
 from pathlib import Path
 
-from backend.storage.cookies import CookieStore
+from pixiv_tool.storage.cookies import CookieStore
 
 logger = logging.getLogger(__name__)
 

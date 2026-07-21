@@ -10,12 +10,12 @@ import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
-from backend.core.exporter import create_exporters
-from backend.core.pixiv_client import PixivClient
-from backend.core.source import NovelSource
-from backend.core.task import TaskManager
-from backend.storage.db import Database
-from backend.storage.models import NovelData
+from pixiv_tool.core.exporter import create_exporters
+from pixiv_tool.core.pixiv_client import PixivClient
+from pixiv_tool.core.source import NovelSource
+from pixiv_tool.core.task import TaskManager
+from pixiv_tool.storage.db import Database
+from pixiv_tool.storage.models import NovelData
 
 logger = logging.getLogger(__name__)
 

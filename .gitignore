@@ -59,7 +59,7 @@ dist-ssr/
 
 # 前端构建产物：开发期不构建，prod 由 CI 执行 pnpm build 生成
 # prod 模式 FastAPI 用 StaticFiles 挂载此目录 serve SPA
-backend/static/
+src/pixiv_tool/static/
 
 
 # ===== PyInstaller 打包产物 =====
@@ -118,6 +118,9 @@ data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+# V2-03 待修:db.py 用 __file__.parent.parent.parent 锚定,src layout 后落到 src/data/。
+# 临时 ignore 避免误提交,V2-03 抽 paths.py 后统一到 <root>/data/ 或 <exe>/data/。
+src/data/
 
 # --- 用户配置（含个人输出目录路径等，每机不同） ---
 config/settings.json

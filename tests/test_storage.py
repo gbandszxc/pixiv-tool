@@ -1,12 +1,12 @@
-"""Tests for backend.storage — Database (ticket 02/03) + Settings (ticket 04)."""
+"""Tests for pixiv_tool.storage — Database (ticket 02/03) + Settings (ticket 04)."""
 
 from __future__ import annotations
 
 import json
 import pytest
 
-from backend.storage.db import Database
-from backend.storage.settings import Settings
+from pixiv_tool.storage.db import Database
+from pixiv_tool.storage.settings import Settings
 
 
 # ── Database tests (tickets 02, 03) ──────────────────────────────────────────
@@ -177,7 +177,7 @@ class TestSettings:
 
     def test_settings_backward_compat(self, tmp_path, monkeypatch):
         """Missing fields are filled with defaults on load."""
-        from backend.storage import settings as settings_mod
+        from pixiv_tool.storage import settings as settings_mod
 
         config_dir = tmp_path / "cfg"
         config_dir.mkdir()
@@ -198,7 +198,7 @@ class TestSettings:
 
     def test_settings_corrupt_recovery(self, tmp_path, monkeypatch):
         """Corrupt JSON → backup created + defaults restored."""
-        from backend.storage import settings as settings_mod
+        from pixiv_tool.storage import settings as settings_mod
 
         config_dir = tmp_path / "cfg2"
         config_dir.mkdir()

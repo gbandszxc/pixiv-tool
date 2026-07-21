@@ -3,7 +3,7 @@ pixiv-tool 一键构建脚本。
 
 步骤：
   1. 构建前端 (pnpm install + pnpm build)
-  2. 复制 frontend/dist/ → backend/static/
+  2. 复制 frontend/dist/ → src/pixiv_tool/static/
   3. PyInstaller 打包 (onedir 模式)
   4. 输出产物路径
 
@@ -26,7 +26,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = REPO_ROOT / "frontend"
-BACKEND_DIR = REPO_ROOT / "backend"
+BACKEND_DIR = REPO_ROOT / "src" / "pixiv_tool"
 STATIC_DIR = BACKEND_DIR / "static"
 DIST_DIR = FRONTEND_DIR / "dist"
 SPEC_FILE = REPO_ROOT / "pixiv-tool.spec"
@@ -60,7 +60,7 @@ def build_frontend() -> None:
 
 
 def copy_static() -> None:
-    """复制 frontend/dist/ → backend/static/。"""
+    """复制 frontend/dist/ → src/pixiv_tool/static/。"""
     print("\n[2/3] 复制静态资源...")
     if STATIC_DIR.exists():
         shutil.rmtree(STATIC_DIR)

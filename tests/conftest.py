@@ -3,20 +3,17 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-# Ensure backend package is importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
+# src layout + editable install(uv sync --editable)后 pixiv_tool 包自动可 import,
+# 不需要 sys.path.insert。
 
 @pytest.fixture()
 def tmp_db(tmp_path):
     """Temporary SQLite Database — auto-cleanup."""
-    from backend.storage.db import Database
+    from pixiv_tool.storage.db import Database
 
     db_path = tmp_path / "test.db"
     db = Database(db_path=db_path)
@@ -26,7 +23,7 @@ def tmp_db(tmp_path):
 @pytest.fixture()
 def sample_novel_data():
     """Sample NovelData for exporter tests."""
-    from backend.storage.models import NovelData
+    from pixiv_tool.storage.models import NovelData
 
     return NovelData(
         novel_id=12345,
@@ -59,7 +56,7 @@ def sample_task_data():
 @pytest.fixture()
 def tmp_settings(tmp_path, monkeypatch):
     """Temporary Settings with monkeypatched file paths."""
-    from backend.storage import settings as settings_mod
+    from pixiv_tool.storage import settings as settings_mod
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()

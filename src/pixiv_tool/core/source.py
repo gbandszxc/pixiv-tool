@@ -7,7 +7,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
-from backend.core.pixiv_client import PixivClient
+from pixiv_tool.core.pixiv_client import PixivClient
 
 
 class NovelSource(ABC):

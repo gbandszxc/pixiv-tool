@@ -14,7 +14,7 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from backend.storage.cookies import create_cookie_store
+from pixiv_tool.storage.cookies import create_cookie_store
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +96,8 @@ async def diag_version():
             "auth_has_diag_version": True,
         }
 
-    from backend.auth import login_window as lw_mod
-    from backend.api import auth as auth_mod
+    from pixiv_tool.auth import login_window as lw_mod
+    from pixiv_tool.api import auth as auth_mod
     import inspect
     lw_src = inspect.getsource(lw_mod)
     auth_src = inspect.getsource(auth_mod)
@@ -124,7 +124,7 @@ async def login():
     """
     # 诊断:确认 worker 跑的是新代码(frozen 模式没有源码可 inspect,跳过)
     if not getattr(sys, "frozen", False):
-        from backend.auth import login_window as lw_mod
+        from pixiv_tool.auth import login_window as lw_mod
         import inspect
         lw_src = inspect.getsource(lw_mod)
         has_lambda = 'lambda' in lw_src and 'webview' in lw_src
@@ -159,7 +159,7 @@ def _spawn_login_subprocess() -> dict:
             cmd = [
                 sys.executable,
                 "-m",
-                "backend.auth.login_window",
+                "pixiv_tool.auth.login_window",
                 "--result-file",
                 str(result_path),
             ]

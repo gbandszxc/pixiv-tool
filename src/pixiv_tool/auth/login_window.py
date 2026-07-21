@@ -8,7 +8,7 @@ pywebview 的 GUI 事件循环必须在主线程跑(Windows EdgeChromium/WinForm
 解法:把登录窗拆成独立 Python 子进程,在子进程的主线程跑 pywebview。
 主进程通过临时 JSON 文件接收结果。协议:
 
-    python -m backend.auth.login_window --result-file <path>
+    python -m pixiv_tool.auth.login_window --result-file <path>
 
 退出码:
     0 = 登录成功,result file 含 {"status":"success","cookies":{...}}
@@ -433,7 +433,7 @@ def run_login_subprocess_main(result_file: str) -> int:
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="backend.auth.login_window")
+    parser = argparse.ArgumentParser(prog="pixiv_tool.auth.login_window")
     parser.add_argument(
         "--result-file",
         required=True,

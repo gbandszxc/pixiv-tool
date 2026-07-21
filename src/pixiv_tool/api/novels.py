@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query
 
-from backend.storage.db import Database
+from pixiv_tool.storage.db import Database
 
 logger = logging.getLogger(__name__)
 

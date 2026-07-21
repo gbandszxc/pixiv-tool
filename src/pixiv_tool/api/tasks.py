@@ -12,13 +12,13 @@ from datetime import datetime, timezone
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from backend.core.crawler import Crawler
-from backend.core.source import SingleNovelSource, SeriesSource, UserNovelsSource
-from backend.core.task import TaskManager
-from backend.core.pixiv_client import PixivClient
-from backend.storage.db import Database
-from backend.storage.cookies import create_cookie_store
-from backend.storage.settings import get_settings
+from pixiv_tool.core.crawler import Crawler
+from pixiv_tool.core.source import SingleNovelSource, SeriesSource, UserNovelsSource
+from pixiv_tool.core.task import TaskManager
+from pixiv_tool.core.pixiv_client import PixivClient
+from pixiv_tool.storage.db import Database
+from pixiv_tool.storage.cookies import create_cookie_store
+from pixiv_tool.storage.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,7 @@ async def retry_failed(task_id: str):
     settings = get_settings()
 
     # 用 SingleNovelSource 逐个抓
-    from backend.core.source import SingleNovelSource
+    from pixiv_tool.core.source import SingleNovelSource
     source = SingleNovelSource(failed_ids[0])  # 简化：单个重试
 
     crawler = Crawler(client, _db, _task_manager)

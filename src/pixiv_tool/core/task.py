@@ -9,8 +9,8 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from backend.storage.db import Database
-from backend.storage.models import Task
+from pixiv_tool.storage.db import Database
+from pixiv_tool.storage.models import Task
 
 logger = logging.getLogger(__name__)
 

@@ -277,9 +277,9 @@ function Start-Backend {
     }
     Ensure-Dirs
     Write-Host "启动后端 (uvicorn, port $BackendPort)..."
-    # sh: cd "$REPO_ROOT" && uv run uvicorn backend.main:app --host 127.0.0.1 --port 9962 --reload > "$LOG_FILE" 2>&1 &
+    # sh: cd "$REPO_ROOT" && uv run uvicorn pixiv_tool.main:app --host 127.0.0.1 --port 9962 --reload > "$LOG_FILE" 2>&1 &
     $uvExe = Resolve-Command "uv"
-    $proc = Start-Process -FilePath $uvExe -ArgumentList "run", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "$BackendPort", "--reload" `
+    $proc = Start-Process -FilePath $uvExe -ArgumentList "run", "uvicorn", "pixiv_tool.main:app", "--host", "127.0.0.1", "--port", "$BackendPort", "--reload" `
         -WorkingDirectory $RepoRoot `
         -RedirectStandardOutput $BackendLogFile `
         -RedirectStandardError (Join-Path $LogDir "backend.err.log") `

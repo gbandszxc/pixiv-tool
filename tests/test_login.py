@@ -1,4 +1,4 @@
-"""Tests for backend.auth.login_window — cookie conversion + CSRF extraction
+"""Tests for pixiv_tool.auth.login_window — cookie conversion + CSRF extraction
 (ticket 06).
 
 F1.2 (post-acceptance): _morsel_to_dict now directly reuses the spike
@@ -22,7 +22,7 @@ from http.cookies import SimpleCookie, Morsel
 
 import pytest
 
-from backend.auth.login_window import (
+from pixiv_tool.auth.login_window import (
     cookies_to_dicts,
     _morsel_to_dict,
     EXTRACT_AND_VERIFY_JS,
@@ -320,7 +320,7 @@ class TestEvaluateJsWithRetry:
 
         The retry loop exits as soon as token + login.ok are both present.
         """
-        from backend.auth.login_window import _evaluate_js_with_retry
+        from pixiv_tool.auth.login_window import _evaluate_js_with_retry
 
         class FakeWindow:
             def evaluate_js(self, _js, callback):
@@ -341,7 +341,7 @@ class TestEvaluateJsWithRetry:
         behavior when the dehydrated state isn't yet populated on the
         first loaded event.
         """
-        from backend.auth.login_window import _evaluate_js_with_retry
+        from pixiv_tool.auth.login_window import _evaluate_js_with_retry
 
         attempts = {"n": 0}
 
@@ -366,7 +366,7 @@ class TestEvaluateJsWithRetry:
         means the session is genuinely invalid. Retrying would mask the
         real failure with a misleading 'extraction failed' error.
         """
-        from backend.auth.login_window import _evaluate_js_with_retry
+        from pixiv_tool.auth.login_window import _evaluate_js_with_retry
 
         attempts = {"n": 0}
 
@@ -385,7 +385,7 @@ class TestEvaluateJsWithRetry:
 
         extract_login_result turns this into a user-facing error.
         """
-        from backend.auth.login_window import _evaluate_js_with_retry
+        from pixiv_tool.auth.login_window import _evaluate_js_with_retry
 
         class FakeWindow:
             def evaluate_js(self, _js, callback):
@@ -396,7 +396,7 @@ class TestEvaluateJsWithRetry:
 
     def test_returns_none_on_callback_timeout(self):
         """If the callback never fires, retry exhausts and returns None."""
-        from backend.auth.login_window import _evaluate_js_with_retry
+        from pixiv_tool.auth.login_window import _evaluate_js_with_retry
 
         class FakeWindow:
             def evaluate_js(self, _js, callback):
@@ -407,7 +407,7 @@ class TestEvaluateJsWithRetry:
 
     def test_returns_none_on_non_dict_callback(self):
         """Non-dict callback (string/None) is treated as failed attempt."""
-        from backend.auth.login_window import _evaluate_js_with_retry
+        from pixiv_tool.auth.login_window import _evaluate_js_with_retry
 
         class FakeWindow:
             def evaluate_js(self, _js, callback):
@@ -423,7 +423,7 @@ class TestExtractLoginResult:
     def test_success_returns_cookies_with_phpsessid_and_csrf(self):
         """PHPSESSID cookie + verified token → success dict."""
         from http.cookies import SimpleCookie
-        from backend.auth.login_window import extract_login_result
+        from pixiv_tool.auth.login_window import extract_login_result
 
         cookie = SimpleCookie()
         cookie["PHPSESSID"] = "19509348_session"
@@ -444,7 +444,7 @@ class TestExtractLoginResult:
 
     def test_error_when_phpsessid_missing(self):
         """No PHPSESSID cookie → error, even if JS succeeded."""
-        from backend.auth.login_window import extract_login_result
+        from pixiv_tool.auth.login_window import extract_login_result
 
         class FakeWindow:
             def get_cookies(self):
@@ -459,7 +459,7 @@ class TestExtractLoginResult:
     def test_error_when_js_verification_fails(self):
         """PHPSESSID present but login.ok=False → error with diagnostic."""
         from http.cookies import SimpleCookie
-        from backend.auth.login_window import extract_login_result
+        from pixiv_tool.auth.login_window import extract_login_result
 
         cookie = SimpleCookie()
         cookie["PHPSESSID"] = "sess"
@@ -491,7 +491,7 @@ class TestLoginWindowSpikeRegression:
         implementation reused (getattr-based), the real value flows
         through unchanged.
         """
-        from backend.auth.login_window import cookies_to_dicts
+        from pixiv_tool.auth.login_window import cookies_to_dicts
         from http.cookies import SimpleCookie
 
         sc = SimpleCookie()
