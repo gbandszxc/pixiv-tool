@@ -79,13 +79,30 @@ async def auth_status():
 
 @router.get("/diag-version")
 async def diag_version():
-    """诊断端点:报告 worker 实际加载的代码版本。"""
+    """诊断端点:报告 worker 实际加载的代码版本。
+
+    frozen(PyInstaller 打包)环境下 inspect.getsource 拿不到源码——
+    代码已被编译进 PYZ 归档,没有 .py 源文件。这时直接报 frozen 标志即可。
+    """
+    import sys
+
+    frozen = getattr(sys, "frozen", False)
+    if frozen:
+        return {
+            "frozen": True,
+            "executable": sys.executable,
+            "login_window_file": "(bundled)",
+            "auth_file": "(bundled)",
+            "auth_has_diag_version": True,
+        }
+
     from backend.auth import login_window as lw_mod
     from backend.api import auth as auth_mod
     import inspect
     lw_src = inspect.getsource(lw_mod)
     auth_src = inspect.getsource(auth_mod)
     return {
+        "frozen": False,
         "login_window_file": lw_mod.__file__,
         "login_window_has_run_subprocess_main": "run_login_subprocess_main" in lw_src,
         "login_window_has_lambda_webview": "lambda: webview.start" in lw_src or "lambda: webview_thread" in lw_src,
@@ -105,14 +122,17 @@ async def login():
 
     await asyncio.to_thread 避免阻塞 event loop(否则 SSE/其他请求会卡 5 分钟)。
     """
-    # 诊断:确认 worker 跑的是新代码
-    from backend.auth import login_window as lw_mod
-    import inspect
-    lw_src = inspect.getsource(lw_mod)
-    has_lambda = 'lambda' in lw_src and 'webview' in lw_src
-    has_run_subprocess = 'run_login_subprocess_main' in lw_src
-    logger.warning("DIAG login_window: has_lambda=%s has_run_subprocess_main=%s file=%s",
-                   has_lambda, has_run_subprocess, lw_mod.__file__)
+    # 诊断:确认 worker 跑的是新代码(frozen 模式没有源码可 inspect,跳过)
+    if not getattr(sys, "frozen", False):
+        from backend.auth import login_window as lw_mod
+        import inspect
+        lw_src = inspect.getsource(lw_mod)
+        has_lambda = 'lambda' in lw_src and 'webview' in lw_src
+        has_run_subprocess = 'run_login_subprocess_main' in lw_src
+        logger.warning("DIAG login_window: has_lambda=%s has_run_subprocess_main=%s file=%s",
+                       has_lambda, has_run_subprocess, lw_mod.__file__)
+    else:
+        logger.info("login: running under frozen executable (skip source diag)")
     result = await asyncio.to_thread(_spawn_login_subprocess)
     if result["status"] == "success" and result.get("cookies"):
         _store.save(result["cookies"])
@@ -130,14 +150,21 @@ def _spawn_login_subprocess() -> dict:
         result_path = Path(tf.name)
 
     try:
-        proc = subprocess.run(
-            [
+        # frozen(prod 打包):sys.executable 就是 pixiv-tool.exe,
+        # 单入口 bootloader 不识别 -m,改用 --login-window 作为子入口分发。
+        # dev:sys.executable 是 venv 里的 python.exe,走 -m 加载模块。
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--login-window", "--result-file", str(result_path)]
+        else:
+            cmd = [
                 sys.executable,
                 "-m",
                 "backend.auth.login_window",
                 "--result-file",
                 str(result_path),
-            ],
+            ]
+        proc = subprocess.run(
+            cmd,
             timeout=_LOGIN_TIMEOUT_SEC,
             # 子进程的 stdout/stderr 直接丢弃。
             # 不能用默认(继承父进程)——当 uvicorn 的 stdout 被 dev.ps1 重定向到

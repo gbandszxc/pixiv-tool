@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import os
 import socket
+import sys
 from pathlib import Path
 
 
@@ -52,6 +53,13 @@ async def health():
 # -------------------------------------------------------------------
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+# PyInstaller frozen 模式下,__file__ 指向 _internal/backend/main.py,
+# 但 PyInstaller 把数据文件解压到 sys._MEIPASS(onedir 模式下 == exe 同级 _internal/)。
+# spec 里 datas=[(static_dir, "backend/static")] 把静态资源放到 _internal/backend/static,
+# 正好和 unfrozen 模式的相对位置一致——所以 frozen 时改用 _MEIPASS 锚定即可。
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    _STATIC_DIR = Path(sys._MEIPASS) / "backend" / "static"
 
 if _STATIC_DIR.is_dir():
     _index_html = _STATIC_DIR / "index.html"
@@ -162,12 +170,36 @@ def start_app(use_window: bool = True) -> None:
 def main() -> None:
     """默认入口：prod 桌面模式（起 pywebview 主窗）。
 
-    传 --no-window 参数切到纯 API 模式（仅起后端）。
+    支持的命令行参数：
+        (无参数)         prod 桌面模式(起 pywebview 主窗)
+        --no-window     纯 API 模式(仅起后端,dev / 无头调试用)
+        --login-window --result-file X   子入口模式:登录窗(SPEC §4.1)。
+            prod(PyInstaller frozen)模式下 /api/auth/login 会 spawn 同一个
+            pixiv-tool.exe 加这两个参数,走登录窗逻辑;dev 模式由 auth.py
+            改成 `python -m backend.auth.login_window`。
     """
     import sys
 
+    # 子入口分发:frozen exe 在 prod 模式下作为登录窗启动器被复用。
+    if "--login-window" in sys.argv:
+        from backend.auth.login_window import run_login_subprocess_main
+        argv = [a for a in sys.argv[1:] if a != "--login-window"]
+        # 复用 login_window 自带 argparse(--result-file)
+        exit_code = run_login_subprocess_main(_extract_result_file(argv))
+        sys.exit(exit_code)
+
     use_window = "--no-window" not in sys.argv
     start_app(use_window=use_window)
+
+
+def _extract_result_file(argv: list[str]) -> str:
+    """从 argv 里抽 --result-file 值(支持 --result-file X 或 --result-file=X)。"""
+    for i, a in enumerate(argv):
+        if a == "--result-file" and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--result-file="):
+            return a.split("=", 1)[1]
+    raise SystemExit("--login-window 必须配 --result-file 参数")
 
 
 if __name__ == "__main__":
