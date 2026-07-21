@@ -32,6 +32,10 @@ a = Analysis(
     datas=datas,
     hiddenimports=[
         "pywebview",
+        # pywebview 平台后端是平台判断后才动态 import 的,PyInstaller 静态分析抓不到。
+        # V1 仅 Windows,列 edgechromium(WebView2,Win11 默认)+ winforms(fallback)。
+        "webview.platforms.edgechromium",
+        "webview.platforms.winforms",
         "uvicorn",
         "uvicorn.logging",
         "uvicorn.loops",
@@ -48,6 +52,10 @@ a = Analysis(
         "httpx",
         "httpx._transports",
         "httpx._transports.default",
+        # 登录子进程入口在 prod 模式下由主 exe `--login-window` 分发调用,
+        # 必须在 bundle 里(静态分析也能找到,但显式声明更稳)。
+        "backend.auth.login_window",
+        "backend.storage.cookie_dpapi",
     ],
     hookspath=[],
     hooksconfig={},
@@ -60,9 +68,8 @@ a = Analysis(
         "tkinter",
         "unittest",
         "test",
-        "email",
-        "xml",
-        "pydoc",
+        # email/xml/pydoc 之前误排除——fastapi/starlette/pydantic 都间接依赖,
+        # 排掉后 frozen exe 一启动就 ModuleNotFoundError。
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

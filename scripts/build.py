@@ -41,6 +41,9 @@ DIST_OUTPUT = REPO_ROOT / "dist" / "pixiv-tool"
 def build_frontend() -> None:
     """构建前端：pnpm install → pnpm build。"""
     print("\n[1/3] 构建前端...")
+    # Windows 上 pnpm 是 .CMD shim，subprocess 默认不走 PATHEXT，要么 shell=True
+    # 让 cmd.exe 解析 PATHEXT，要么 shutil.which 预解析全路径。
+    # 命令是字面量无注入风险，shell=True 最简单可靠。
     for cmd in (
         ["pnpm", "install"],
         ["pnpm", "build"],
@@ -49,6 +52,7 @@ def build_frontend() -> None:
             cmd,
             cwd=FRONTEND_DIR,
             check=True,
+            shell=True,
         )
         if result.returncode != 0:
             sys.exit(f"前端构建失败: {' '.join(cmd)}")
@@ -67,8 +71,11 @@ def copy_static() -> None:
 def run_pyinstaller() -> None:
     """执行 PyInstaller 打包。"""
     print("\n[3/3] PyInstaller 打包...")
+    # .spec 文件已经定义了 onedir 模式(通过 COLLECT),不能再传 --onedir/--onefile——
+    # PyInstaller 6+ 显式拒绝 makespec 选项与 .spec 共用。
+    # --noconfirm 仍然合法(覆盖 dist/pixiv-tool/ 时不问 y/N)。
     result = subprocess.run(
-        [sys.executable, "-m", "PyInstaller", str(SPEC_FILE), "--onedir", "--noconfirm"],
+        [sys.executable, "-m", "PyInstaller", str(SPEC_FILE), "--noconfirm"],
         cwd=REPO_ROOT,
         check=True,
     )
