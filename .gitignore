@@ -156,3 +156,6 @@ temp/
 *.tmp
 *.bak
 *.orig
+
+
+downloads/
