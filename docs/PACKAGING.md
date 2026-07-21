@@ -42,7 +42,7 @@ pnpm install --dir frontend         # 前端
 | 步骤 | 动作 | 产物 |
 |---|---|---|
 | 1 | `pnpm install` + `pnpm build` | `frontend/dist/`（HTML+JS+CSS） |
-| 2 | 清空并复制 `frontend/dist/` → `backend/static/` | `backend/static/index.html` 等 |
+| 2 | 清空并复制 `frontend/dist/` → `src/pixiv_tool/static/` | `src/pixiv_tool/static/index.html` 等 |
 | 3 | `python -m PyInstaller pixiv-tool.spec --noconfirm` | `dist/pixiv-tool/`（可分发） |
 
 构建耗时参考：首次 ~60s（PyInstaller 分析依赖 + 解压 DLL），增量 ~30s。
@@ -59,7 +59,7 @@ dist/pixiv-tool/
 └── _internal/                  ← 运行时依赖(exe 同级,不可拆)
     ├── python313.dll           ← 嵌入的 Python 解释器
     ├── base_library.zip
-    ├── backend/
+    ├── pixiv_tool/
     │   └── static/             ← 前端 SPA(被打包进 _internal)
     │       ├── index.html
     │       └── assets/
@@ -91,7 +91,7 @@ Compress-Archive -Path dist\pixiv-tool -DestinationPath pixiv-tool-windows-x64.z
 
 ## 4. 运行模式
 
-`pixiv-tool.exe` 支持三种启动方式（`backend/main.py:main()` 分发）：
+`pixiv-tool.exe` 支持三种启动方式（`src/pixiv_tool/main.py:main()` 分发）：
 
 | 命令 | 用途 |
 |---|---|
@@ -128,16 +128,16 @@ pixiv-tool.exe（主进程）
 
 ### 4.3 登录子入口（内部）
 
-由 `POST /api/auth/login` 触发，不直接用。见 `backend/auth/login_window.py` + `backend/api/auth.py:_spawn_login_subprocess`。
+由 `POST /api/auth/login` 触发，不直接用。见 `src/pixiv_tool/auth/login_window.py` + `src/pixiv_tool/api/auth.py:_spawn_login_subprocess`。
 
-dev 模式：`python -m backend.auth.login_window --result-file X`
+dev 模式：`python -m pixiv_tool.auth.login_window --result-file X`
 prod 模式：`pixiv-tool.exe --login-window --result-file X`（同一个 exe 自调）
 
 ---
 
 ## 5. 数据存放
 
-运行时数据**不在 exe 同级**，而在用户目录下（避免便携版解压时丢数据）。具体看 `backend/storage/db.py` 和 `backend/storage/cookie_dpapi.py` 的路径解析逻辑。
+运行时数据**不在 exe 同级**，而在用户目录下（避免便携版解压时丢数据）。具体看 `src/pixiv_tool/storage/db.py` 和 `src/pixiv_tool/storage/cookie_dpapi.py` 的路径解析逻辑。
 
 | 数据 | 位置 | 说明 |
 |---|---|---|
@@ -180,8 +180,8 @@ prod 模式 `console=False`，启动失败时窗口闪退看不到 traceback。�
 跳过打包，直接跑源码定位是不是代码本身的问题：
 
 ```powershell
-.venv/Scripts/python.exe -m backend.main           # prod 等价（起主窗）
-.venv/Scripts/python.exe -m backend.main --no-window   # 纯 API
+.venv/Scripts/python.exe -m pixiv_tool.main           # prod 等价（起主窗）
+.venv/Scripts/python.exe -m pixiv_tool.main --no-window   # 纯 API
 ```
 
 ---
@@ -220,11 +220,11 @@ prod 模式登录走子进程（`pixiv-tool.exe --login-window`），依赖 `pyt
 
 | 配置 | 值 | 理由 |
 |---|---|---|
-| 入口 | `backend/main.py` | 主进程入口 |
+| 入口 | `src/pixiv_tool/main.py` | 主进程入口 |
 | 模式 | `onedir`（COLLECT 段） | 解压即用，启动比 onefile 快 |
 | `console` | `False` | prod 不弹 cmd 黑窗 |
-| `datas` | `backend/static` → `backend/static` | 前端 SPA 打进 `_internal/backend/static/` |
-| `hiddenimports` | `webview.platforms.edgechromium/winforms`、`backend.auth.login_window`、`backend.storage.cookie_dpapi` | pywebview 平台后端动态 import，PyInstaller 静态分析抓不到；子入口模块需要显式声明 |
+| `datas` | `src/pixiv_tool/static` → `src/pixiv_tool/static` | 前端 SPA 打进 `_internal/src/pixiv_tool/static/` |
+| `hiddenimports` | `webview.platforms.edgechromium/winforms`、`pixiv_tool.auth.login_window`、`pixiv_tool.storage.cookie_dpapi` | pywebview 平台后端动态 import，PyInstaller 静态分析抓不到；子入口模块需要显式声明 |
 | `excludes` | `numpy/scipy/pandas/matplotlib/tkinter/unittest/test` | 减体积，这些本项目不用 |
 
 > **改动陷阱**：`excludes` 千万不要加 `email`/`xml`/`pydoc`——fastapi/starlette/pydantic 间接依赖，排掉后 frozen exe 一启动就 `ModuleNotFoundError`（曾经踩过）。
@@ -237,7 +237,7 @@ prod 模式登录走子进程（`pixiv-tool.exe --login-window`），依赖 `pyt
 |---|---|
 | `scripts/build.py` | 一键构建脚本 |
 | `pixiv-tool.spec` | PyInstaller 配置 |
-| `backend/main.py` | 入口（端口探测 + uvicorn + pywebview + 子入口分发） |
-| `backend/api/auth.py` | `/api/auth/login` spawn 登录子进程 |
-| `backend/auth/login_window.py` | 登录窗子进程主循环 |
+| `src/pixiv_tool/main.py` | 入口（端口探测 + uvicorn + pywebview + 子入口分发） |
+| `src/pixiv_tool/api/auth.py` | `/api/auth/login` spawn 登录子进程 |
+| `src/pixiv_tool/auth/login_window.py` | 登录窗子进程主循环 |
 | `docs/SPEC.md §3.1, §8.3` | 架构与构建规格 |

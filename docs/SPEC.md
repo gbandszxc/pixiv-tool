@@ -112,31 +112,31 @@ dev 端口固定便于 Vite proxy、浏览器收藏；prod 动态端口写入 `o
 
 ```
 pixiv-tool/
-├─ backend/                     # Python 后端
-│  ├─ main.py                   # 入口：探测端口 + 起 uvicorn + 起 pywebview
-│  ├─ api/                      # FastAPI 路由
-│  │  ├─ auth.py                # 登录、cookie 管理
-│  │  ├─ novels.py              # 单篇、系列、用户
-│  │  ├─ tasks.py               # 任务 + SSE
-│  │  └─ health.py              # /api/health 健康检查
-│  ├─ core/                     # 业务核心
-│  │  ├─ pixiv_client.py        # httpx + 限速 + 重试
-│  │  ├─ crawler.py             # Crawler 编排（id 流 → 抓取）
-│  │  ├─ source.py              # NovelSource 抽象 + 3 实现
-│  │  ├─ task.py                # Task 状态机
-│  │  └─ exporter.py            # Exporter 接口 + txt/md 实现
-│  ├─ auth/                     # 登录窗
-│  │  └─ login_window.py        # pywebview 登录窗 + cookie 提取
-│  ├─ storage/                  # 持久化
-│  │  ├─ db.py                  # SQLite + schema 初始化
-│  │  ├─ models.py              # peewee / dataclass 模型
-│  │  ├─ cookies.py             # CookieStore 接口 + 工厂
-│  │  ├─ cookie_dpapi.py        # Windows DPAPI（V1 实现）
-│  │  ├─ cookie_keychain.py     # macOS keychain（V2 stub）
-│  │  ├─ cookie_secretstorage.py# Linux secretstorage（V2 stub）
-│  │  └─ settings.py            # JSON 配置
-│  ├─ logging_config.py         # logging 配置
-│  └─ pyproject.toml
+├─ src/
+│  └─ pixiv_tool/               # Python 后端包（snake_case,PEP 8）
+│     ├─ main.py                # 入口：探测端口 + 起 uvicorn + 起 pywebview
+│     ├─ api/                   # FastAPI 路由
+│     │  ├─ auth.py             # 登录、cookie 管理
+│     │  ├─ novels.py           # 单篇、系列、用户
+│     │  ├─ tasks.py            # 任务 + SSE
+│     │  └─ system.py           # /api/health + /api/ping + /api/test/events
+│     ├─ core/                  # 业务核心
+│     │  ├─ pixiv_client.py     # httpx + 限速 + 重试
+│     │  ├─ crawler.py          # Crawler 编排（id 流 → 抓取）
+│     │  ├─ source.py           # NovelSource 抽象 + 3 实现
+│     │  ├─ task.py             # Task 状态机
+│     │  └─ exporter.py         # Exporter 接口 + txt/md 实现
+│     ├─ auth/                  # 登录窗
+│     │  └─ login_window.py     # pywebview 登录窗 + cookie 提取
+│     ├─ storage/               # 持久化
+│     │  ├─ db.py               # SQLite + schema 初始化
+│     │  ├─ models.py           # dataclass 模型
+│     │  ├─ cookies.py          # CookieStore 接口 + 工厂
+│     │  ├─ cookie_dpapi.py     # Windows DPAPI（V1 实现）
+│     │  └─ settings.py         # JSON 配置
+│     ├─ logging_config.py      # logging 配置
+│     └─ static/                # 前端构建产物（pnpm build 复制,.gitignore）
+├─ tests/                       # pytest 测试（src layout 下保留 root）
 ├─ frontend/                    # Vue3 + TS + Vite
 │  ├─ src/
 │  │  ├─ views/                 # CrawlView / TasksView / HistoryView / SettingsView
@@ -154,6 +154,8 @@ pixiv-tool/
 │  ├─ dev.sh                    # macOS/Linux 版（V2 由 dev.ps1 转换）
 │  ├─ build.py                  # pnpm build + pyinstaller
 │  └─ find_port.py              # 独立端口探测工具（供 spike 与 prod 复用）
+├─ pyproject.toml               # 项目配置（hatchling + uv + pytest）
+├─ pixiv-tool.spec              # PyInstaller 打包配置
 ├─ .github/workflows/release.yml# 三平台 CI
 ├─ docs/                        # 本文档与 ADR
 └─ README.md
@@ -457,8 +459,8 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 
 ### 8.3 构建
 
-1. 前端 `pnpm build` → 产物输出到 `backend/static/`
-2. FastAPI 用 `StaticFiles` 挂载 `backend/static/`，SPA fallback 到 `index.html`
+1. 前端 `pnpm build` → 产物输出到 `src/pixiv_tool/static/`
+2. FastAPI 用 `StaticFiles` 挂载 `src/pixiv_tool/static/`，SPA fallback 到 `index.html`
 3. `pyinstaller pixiv-tool.spec --onedir` 打包
 4. 产物：`dist/pixiv-tool/`（解压即用）
 
