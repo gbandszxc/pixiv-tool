@@ -137,16 +137,20 @@ prod 模式：`pixiv-tool.exe --login-window --result-file X`（同一个 exe �
 
 ## 5. 数据存放
 
-运行时数据**不在 exe 同级**，而在用户目录下（避免便携版解压时丢数据）。具体看 `src/pixiv_tool/storage/db.py` 和 `src/pixiv_tool/storage/cookie_dpapi.py` 的路径解析逻辑。
+数据目录锚定由 `src/pixiv_tool/storage/paths.py` 统一管理：
 
-| 数据 | 位置 | 说明 |
+- **dev 模式**（venv python 跑源码）：锚定 `<repo>/data`、`<repo>/config`。
+- **frozen 模式**（PyInstaller 打包的 exe）：锚定 `<exe_dir>/data`、`<exe_dir>/config`（exe 同级，portable 模式）。
+  这与 `main._redirect_stdio_if_needed` 的 `stdout.log` 锚定一致——升级（重打包）时只要不删 `data/` 目录，用户数据就保留。
+
+| 数据 | dev 模式位置 | frozen 模式位置 |
 |---|---|---|
-| 任务/已抓小说 | `data/app.db`（SQLite） | **绝不入库** |
-| 登录 cookie | `config/cookies.dat`（Windows DPAPI 加密） | **绝不入库**，含 PHPSESSID |
-| 用户设置 | `config/settings.json` | 含输出目录等 |
-| 运行日志 | `data/logs/app.log` | |
+| 任务/已抓小说 (app.db) | `<repo>/data/app.db` | `<exe_dir>/data/app.db` |
+| 登录 cookie (cookies.dat) | `<repo>/config/cookies.dat` | `<exe_dir>/config/cookies.dat` |
+| 用户设置 (settings.json) | `<repo>/config/settings.json` | `<exe_dir>/config/settings.json` |
+| 运行日志 | `<repo>/data/logs/` | `<exe_dir>/data/logs/` |
 
-> **DPAPI 绑定用户账户**：`cookies.dat` 只能在加密时的同一 Windows 用户账户下解密。换机器/换用户需重新登录。
+> **DPAPI 绑定用户账户**：`cookies.dat` 是 Windows DPAPI 加密，只能在加密时的同一 Windows 用户账户下解密。换机器/换用户需重新登录。
 
 ---
 

@@ -10,7 +10,9 @@ import logging
 import sys
 from pathlib import Path
 
-_LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs"
+from pixiv_tool.storage.paths import LOGS_DIR
+
+_LOG_DIR = LOGS_DIR
 _LOG_FILE = _LOG_DIR / "app.log"
 
 # 敏感字段脱敏 filter

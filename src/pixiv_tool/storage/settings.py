@@ -12,9 +12,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from threading import Lock
 
+from .paths import CONFIG_DIR
+
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
 _DEFAULTS: dict = {

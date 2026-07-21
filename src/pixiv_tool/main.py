@@ -122,9 +122,9 @@ def _redirect_stdio_if_needed() -> None:
         # console=True 或从终端 spawn,stdout 有效,不覆盖
         return
 
-    # 日志目录锚定到 exe 同级(和 db.py/cookie_dpapi.py 的 data/ 同位置)
-    exe_dir = Path(sys.executable).resolve().parent
-    log_dir = exe_dir / "data" / "logs"
+    # 日志目录统一走 paths.py（和 db.py/cookie_dpapi.py 的 data/ 同位置）
+    from pixiv_tool.storage.paths import LOGS_DIR
+    log_dir = LOGS_DIR
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
     except OSError:

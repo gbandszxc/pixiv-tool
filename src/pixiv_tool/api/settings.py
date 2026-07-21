@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter
 
+from pixiv_tool.storage.paths import LOGS_DIR
 from pixiv_tool.storage.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ async def update_config(body: dict):
 @router.post("/clear-logs")
 async def clear_logs():
     """清空 app.log。"""
-    log_path = Path(__file__).resolve().parent.parent.parent / "data" / "logs" / "app.log"
+    log_path = LOGS_DIR / "app.log"
     if log_path.exists():
         log_path.write_text("", encoding="utf-8")
     return {"status": "success"}

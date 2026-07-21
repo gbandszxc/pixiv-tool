@@ -12,9 +12,11 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
+from .paths import DATA_DIR
+
 logger = logging.getLogger(__name__)
 
-DB_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "app.db"
 
 _SCHEMA_SQL = """

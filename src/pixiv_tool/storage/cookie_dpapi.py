@@ -13,9 +13,11 @@ from pathlib import Path
 
 from pixiv_tool.storage.cookies import CookieStore
 
+from .paths import CONFIG_DIR
+
 logger = logging.getLogger(__name__)
 
-COOKIE_FILE = Path(__file__).resolve().parent.parent.parent / "config" / "cookies.dat"
+COOKIE_FILE = CONFIG_DIR / "cookies.dat"
 
 # crypt32.dll 常量
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
