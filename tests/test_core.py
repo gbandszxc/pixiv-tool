@@ -18,7 +18,7 @@ from backend.core.exporter import (
     _render_markdown,
     _make_filename,
 )
-from backend.core.source import SingleNovelSource, SeriesSource
+from backend.core.source import SingleNovelSource, SeriesSource, UserNovelsSource
 from backend.core.task import TaskManager
 from backend.core.pixiv_client import (
     PixivClient,
@@ -53,32 +53,135 @@ class TestSingleNovelSource:
 
 
 class TestSeriesSource:
+    """SeriesSource parses body.page.seriesContents (real pixiv API shape).
+
+    Verified via chrome-devtools on /ajax/novel/series_content/{id}
+    (2026-07-21). The previous implementation looked for non-existent
+    keys (seriesMapping / novels / ids) and matched nothing.
+    """
+
     @pytest.mark.asyncio
-    async def test_series_source_resolves_ids_dict(self):
-        """SeriesSource resolves IDs from dict response."""
+    async def test_series_source_resolves_from_page_series_contents(self):
+        """Real shape: body.page.seriesContents[] with id + series.contentOrder."""
+        src = SeriesSource(series_id=16220226)
+        mock_client = AsyncMock()
+        mock_client.get_series_content.return_value = {
+            "page": {
+                "seriesContents": [
+                    {"id": "27466576", "series": {"contentOrder": 1}, "title": "相対性理論"},
+                    {"id": "28625793", "series": {"contentOrder": 2}, "title": "事象の地平線"},
+                ]
+            },
+            "thumbnails": {"novel": []},
+        }
+        results = []
+        async for nid, order in src.resolve(mock_client):
+            results.append((nid, order))
+        assert results == [(27466576, 1), (28625793, 2)]
+
+    @pytest.mark.asyncio
+    async def test_series_source_handles_missing_content_order(self):
+        """Missing series.contentOrder yields None order (not a crash)."""
         src = SeriesSource(series_id=100)
         mock_client = AsyncMock()
         mock_client.get_series_content.return_value = {
-            "seriesMapping": {"2": 2001, "1": 2002}
+            "page": {
+                "seriesContents": [
+                    {"id": "1001"},  # no series.contentOrder
+                    {"id": "1002", "series": {}},
+                ]
+            }
         }
         results = []
         async for nid, order in src.resolve(mock_client):
             results.append((nid, order))
-        # sorted by key: "1"→2002 order=1, "2"→2001 order=2
-        assert results == [(2002, 1), (2001, 2)]
+        assert results == [(1001, None), (1002, None)]
 
     @pytest.mark.asyncio
-    async def test_series_source_resolves_ids_list(self):
-        """SeriesSource resolves IDs from list response."""
-        src = SeriesSource(series_id=200)
+    async def test_series_source_empty(self):
+        """Empty series yields nothing."""
+        src = SeriesSource(series_id=999)
         mock_client = AsyncMock()
+        mock_client.get_series_content.return_value = {"page": {"seriesContents": []}}
+        results = [r async for r in src.resolve(mock_client)]
+        assert results == []
+
+
+class TestUserNovelsSource:
+    """UserNovelsSource: expand profile/all into series novels + standalone.
+
+    Real shape (2026-07-21 chrome-devtools):
+      body.novels = {"id_str": null, ...}  (dict, values all null)
+      body.novelSeries = [{"id":..., "title":...}, ...]  (list, not dict)
+    """
+
+    @pytest.mark.asyncio
+    async def test_user_novels_standalone_only(self):
+        """User with no series: all novels yielded as standalone (order=None)."""
+        src = UserNovelsSource(user_id=1001)
+        mock_client = AsyncMock()
+        mock_client.get_user_novels.return_value = {
+            "novels": {"100": None, "200": None, "300": None},
+            "novelSeries": [],
+        }
+        results = {(nid, order) async for nid, order in src.resolve(mock_client)}
+        assert results == {(100, None), (200, None), (300, None)}
+
+    @pytest.mark.asyncio
+    async def test_user_novels_series_expansion(self):
+        """Series novels yielded first (with order), standalones after."""
+        src = UserNovelsSource(user_id=1002)
+        mock_client = AsyncMock()
+
+        # profile/all: 4 novels, 1 of which belongs to series 555
+        mock_client.get_user_novels.return_value = {
+            "novels": {"100": None, "200": None, "300": None, "400": None},
+            "novelSeries": [{"id": "555", "title": "Test Series"}],
+        }
+        # series_content for 555 returns novel 200 + 300
         mock_client.get_series_content.return_value = {
-            "novels": [{"id": 3001}, {"id": 3002}]
+            "page": {
+                "seriesContents": [
+                    {"id": "200", "series": {"contentOrder": 1}},
+                    {"id": "300", "series": {"contentOrder": 2}},
+                ]
+            }
+        }
+
+        results = [(nid, order) async for nid, order in src.resolve(mock_client)]
+        # series novels first (in series order), then standalones (any order)
+        series_part = results[:2]
+        standalone_part = results[2:]
+
+        assert series_part == [(200, 1), (300, 2)]
+        assert sorted(standalone_part) == [(100, None), (400, None)]
+
+    @pytest.mark.asyncio
+    async def test_user_novels_skips_invalid_ids(self):
+        """Non-numeric novel ids in profile/all are skipped (not crashed on)."""
+        src = UserNovelsSource(user_id=1003)
+        mock_client = AsyncMock()
+        mock_client.get_user_novels.return_value = {
+            "novels": {"100": None, "not-a-number": None, "200": None},
+            "novelSeries": [],
         }
         results = []
-        async for nid, order in src.resolve(mock_client):
-            results.append((nid, order))
-        assert results == [(3001, 1), (3002, 2)]
+        async for nid, _ in src.resolve(mock_client):
+            results.append(nid)
+        assert sorted(results) == [100, 200]
+
+    @pytest.mark.asyncio
+    async def test_user_novels_handles_novelseries_list_shape(self):
+        """novelSeries is a list of dicts (not a dict) — must not raise."""
+        src = UserNovelsSource(user_id=1004)
+        mock_client = AsyncMock()
+        mock_client.get_user_novels.return_value = {
+            "novels": {},
+            "novelSeries": [{"id": "1"}, {"id": "2"}],  # list, not dict
+        }
+        mock_client.get_series_content.return_value = {"page": {"seriesContents": []}}
+        results = [r async for r in src.resolve(mock_client)]
+        assert results == []
 
 
 # ── Exporter tests (tickets 09, 10, 11, 12) ──────────────────────────────────
