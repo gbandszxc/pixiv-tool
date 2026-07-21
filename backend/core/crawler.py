@@ -136,9 +136,9 @@ class Crawler:
             paths = exp.export(novel, target_dir, order)
             for p in paths:
                 if str(p).endswith(".txt"):
-                    self.db.update_task(novel_id=novel_id, txt_path=str(p))
+                    self.db.update_novel_paths(novel_id=novel_id, txt_path=str(p))
                 elif str(p).endswith(".md"):
-                    self.db.update_task(novel_id=novel_id, md_path=str(p))
+                    self.db.update_novel_paths(novel_id=novel_id, md_path=str(p))
 
 
 def _extract_content(data: dict) -> str:
