@@ -52,7 +52,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, h, onMounted } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import {
@@ -67,6 +67,7 @@ import {
 } from "naive-ui";
 import type { GlobalThemeOverrides, MenuOption } from "naive-ui";
 import { useAuthStore } from "./stores/auth";
+import SidebarIcon, { type SidebarIconName } from "./components/navigation/SidebarIcon.vue";
 
 const router = useRouter();
 const route = useRoute();
@@ -92,12 +93,16 @@ const accountMenuOptions = computed<MenuOption[]>(() => [
   { label: t("auth.logout"), key: "logout" },
 ]);
 
+function renderNavigationIcon(name: SidebarIconName) {
+  return () => h(SidebarIcon, { name });
+}
+
 // computed 让菜单文案随 locale 切换自动更新
 const menuOptions = computed<MenuOption[]>(() => [
-  { label: t("nav.crawl"), key: "/" },
-  { label: t("nav.tasks"), key: "/tasks" },
-  { label: t("nav.history"), key: "/history" },
-  { label: t("nav.settings"), key: "/settings" },
+  { label: t("nav.crawl"), key: "/", icon: renderNavigationIcon("crawl") },
+  { label: t("nav.tasks"), key: "/tasks", icon: renderNavigationIcon("tasks") },
+  { label: t("nav.history"), key: "/history", icon: renderNavigationIcon("history") },
+  { label: t("nav.settings"), key: "/settings", icon: renderNavigationIcon("settings") },
 ]);
 
 function navigateTo(key: string) {
