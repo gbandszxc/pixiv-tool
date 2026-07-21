@@ -102,6 +102,41 @@ def _is_port_free(port: int) -> bool:
             return False
 
 
+def _redirect_stdio_if_needed() -> None:
+    """frozen 模式下把 sys.stdout/stderr 重定向到日志文件。
+
+    PyInstaller 的 console=False 模式下 sys.stdout/stderr 是 None。uvicorn 的
+    DefaultFormatter.__init__ 会调 sys.stdout.isatty() 判断要不要彩色,
+    None.isatty() 抛 AttributeError → uvicorn.Config() 直接崩在
+    "Unable to configure formatter 'default'"。pywebview / 其他库也可能
+    对 stdout 做假设。
+
+    双击 exe 走 console=False 路径,必须重定向。frozen 但 console=True
+    (调试用,终端可见 stdout) 时不重定向——终端输出对调试更直接。
+
+    重定向到 data/logs/stdout.log(和 app.log 同目录,SPEC §8.2 日志位置)。
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    if sys.stdout is not None:
+        # console=True 或从终端 spawn,stdout 有效,不覆盖
+        return
+
+    # 日志目录锚定到 exe 同级(和 db.py/cookie_dpapi.py 的 data/ 同位置)
+    exe_dir = Path(sys.executable).resolve().parent
+    log_dir = exe_dir / "data" / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return  # 锚定失败就算了,别让 logging 崩主进程
+
+    # stdout 和 stderr 都重定向到同一个文件,保留完整启动诊断
+    log_file = open(log_dir / "stdout.log", "a", encoding="utf-8")
+    sys.stdout = log_file
+    if sys.stderr is None:
+        sys.stderr = log_file
+
+
 
 # -------------------------------------------------------------------
 # 入口
@@ -179,6 +214,13 @@ def main() -> None:
             改成 `python -m backend.auth.login_window`。
     """
     import sys
+
+    # frozen + console=False(PyInstaller)模式下 sys.stdout/stderr 是 None,
+    # uvicorn DefaultFormatter.__init__ 调 sys.stdout.isatty() 会崩
+    # (AttributeError: 'NoneType' object has no attribute 'isatty')。
+    # 双击 exe 启动走这条路,必须把 stdio 重定向到日志文件。
+    # console=True 或非 frozen(venv python)时 stdout 正常,不重定向。
+    _redirect_stdio_if_needed()
 
     # 子入口分发:frozen exe 在 prod 模式下作为登录窗启动器被复用。
     if "--login-window" in sys.argv:
