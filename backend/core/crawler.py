@@ -100,8 +100,11 @@ class Crawler:
         data = await self.client.get_novel(novel_id)
         title = data.get("title", str(novel_id))
         content = _extract_content(data)
-        series_id = data.get("seriesId")
-        series_title = data.get("seriesTitle")
+        # series 信息在 data.seriesNavData 里(实测 2026-07-21),
+        # 不是顶层 seriesId/seriesTitle(那是旧字段,已不存在)。
+        series_nav = data.get("seriesNavData") or {}
+        series_id = series_nav.get("seriesId")
+        series_title = series_nav.get("title")
 
         novel = NovelData(
             novel_id=novel_id,
