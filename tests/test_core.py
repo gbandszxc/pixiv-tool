@@ -149,6 +149,40 @@ class TestExportDirCreation:
         assert paths[0].parent == target
 
 
+class TestCreateExporters:
+    """create_exporters: registry-based factory.
+
+    Regression: when called with ['txt', 'markdown'], must return TWO
+    exporters. This is what crawler uses — missing one means the user's
+    selected format silently produces no file.
+    """
+
+    def test_returns_one_exporter_per_known_format(self):
+        from backend.core.exporter import create_exporters, TxtExporter, MarkdownExporter
+        exporters = create_exporters(["txt", "markdown"])
+        assert len(exporters) == 2
+        assert isinstance(exporters[0], TxtExporter)
+        assert isinstance(exporters[1], MarkdownExporter)
+
+    def test_unknown_formats_silently_skipped(self):
+        """Unknown format strings (typos, future formats) are skipped, not raised."""
+        from backend.core.exporter import create_exporters, TxtExporter
+        exporters = create_exporters(["txt", "epub-v3", "totally-bogus"])
+        assert len(exporters) == 1
+        assert isinstance(exporters[0], TxtExporter)
+
+    def test_empty_format_list_returns_empty(self):
+        from backend.core.exporter import create_exporters
+        assert create_exporters([]) == []
+
+    def test_markdown_only_works(self):
+        """Single-format selection works — no implicit txt fallback."""
+        from backend.core.exporter import create_exporters, MarkdownExporter
+        exporters = create_exporters(["markdown"])
+        assert len(exporters) == 1
+        assert isinstance(exporters[0], MarkdownExporter)
+
+
 class TestMakeFilename:
     def test_make_filename_single(self):
         """Single novel: title_id.ext."""

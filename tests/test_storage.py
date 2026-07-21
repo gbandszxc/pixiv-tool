@@ -96,6 +96,42 @@ class TestNovelCRUD:
         assert row["title"] == "New"
         assert row["author_id"] == 2
 
+    def test_update_novel_paths_writes_txt_and_md(self, tmp_db):
+        """update_novel_paths writes txt_path / md_path independently.
+
+        Regression: crawler previously called db.update_task(novel_id=...)
+        which targets the tasks table (and missed the required task_id arg),
+        so the call raised and only the first exporter's file survived.
+        """
+        tmp_db.insert_novel(
+            novel_id=5000, title="Paths", series_id=None, series_order=None,
+            author_id=1, captured_at="2025-01-01",
+        )
+        # 初始为 None
+        row = tmp_db.get_novel(5000)
+        assert row["txt_path"] is None
+        assert row["md_path"] is None
+
+        # 模拟 crawler 的两次调用(每个 exporter 一次)
+        tmp_db.update_novel_paths(novel_id=5000, txt_path="/dl/novel.txt")
+        tmp_db.update_novel_paths(novel_id=5000, md_path="/dl/novel.md")
+
+        row2 = tmp_db.get_novel(5000)
+        assert row2["txt_path"] == "/dl/novel.txt"
+        assert row2["md_path"] == "/dl/novel.md"
+
+    def test_update_novel_paths_noop_when_both_none(self, tmp_db):
+        """No-op when called with no fields — avoids empty UPDATE."""
+        tmp_db.insert_novel(
+            novel_id=5001, title="Noop", series_id=None, series_order=None,
+            author_id=1, captured_at="2025-01-01",
+        )
+        # 不应抛异常
+        tmp_db.update_novel_paths(novel_id=5001)
+        row = tmp_db.get_novel(5001)
+        assert row["txt_path"] is None
+        assert row["md_path"] is None
+
 
 class TestTaskCRUD:
     def test_insert_task_and_update(self, tmp_db):
