@@ -60,14 +60,21 @@ install `httpx2` instead.
 
 **根因**：FastAPI/Starlette 的 TestClient 在新版开始推荐 httpx2（httpx 的异步分支）。但 httpx2 API 和 httpx 不完全兼容，主动换会破坏现有测试。
 
+**版本组合（2026-07-22 记录，来源 `.venv` 里的 `python -c "import ...; print(...)"`）**：
+- fastapi 0.139.2
+- starlette 1.3.1
+- httpx 0.28.1
+
 **修法**：**不主动改**。只做两件事：
-1. 在本 ticket 记录该警告来自哪个 starlette/fastapi/httpx 版本组合
+1. 在本 ticket 记录该警告来自哪个 starlette/fastapi/httpx 版本组合（见上）
 2. 留 TODO：未来 fastapi/starlette 主版本升级时，检查 httpx2 是否成熟，再统一迁移
 
+TODO 已写入 `pyproject.toml`（`[project]` 段后的注释块，`TODO(V2-02)`），指向本 ticket。
+
 **验收**：
-- [ ] ticket 里记录当前 fastapi/starlette/httpx 版本号（`pip show` 或 `uv pip list`）
-- [ ] 在 `pyproject.toml` 或某个 README/CHANGELOG 里留个 TODO 注释指向本 ticket
-- [ ] 不改任何测试代码
+- [x] ticket 里记录当前 fastapi/starlette/httpx 版本号（`pip show` 或 `uv pip list`）
+- [x] 在 `pyproject.toml` 或某个 README/CHANGELOG 里留个 TODO 注释指向本 ticket
+- [x] 不改任何测试代码
 
 ## Acceptance criteria（整 ticket）
 
