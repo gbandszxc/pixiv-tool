@@ -6,7 +6,7 @@
 
 **Blocked by:** None — 独立。但建议在 V2-01（src layout 重构）之后做，避免重构期两摊改动混在一起。
 
-**Status:** ready-for-agent
+**Status:** done（2026-07-22 实施，commit `af6aa75`）
 
 ## 子项 1：`frontend/pnpm-lock.yaml` 入库
 

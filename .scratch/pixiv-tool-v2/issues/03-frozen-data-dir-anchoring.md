@@ -6,7 +6,7 @@
 
 **Blocked by:** 建议在 V2-01（src layout 重构）之后做——抽出来的 `paths.py` 要放在新位置 `src/pixiv_tool/storage/paths.py`。独立可做，但路径常量会跟随 V2-01 改。
 
-**Status:** ready-for-agent
+**Status:** done（2026-07-22 实施，commit `d6d94b5`）
 
 ## 问题
 
