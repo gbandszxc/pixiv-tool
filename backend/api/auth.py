@@ -70,6 +70,7 @@ async def auth_status():
                 "user_id": str(user_data.get("id", "")),
                 "pixiv_id": user_data.get("pixivId", ""),
                 "name": user_data.get("name", ""),
+                "profile_img": user_data.get("profileImg", ""),
             }
     except Exception as exc:
         logger.warning("登录态验证失败: %s", exc)

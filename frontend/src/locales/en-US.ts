@@ -18,6 +18,7 @@ export default {
   auth: {
     notLoggedIn: "Not logged in, click to login",
     loggedInAs: "Logged in: {name}",
+    accountMenu: "Pixiv account {id} menu",
     login: "Login",
     logout: "Logout",
   },

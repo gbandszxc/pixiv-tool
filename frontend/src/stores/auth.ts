@@ -7,6 +7,7 @@ export interface AuthState {
   userId: string;
   pixivId: string;
   name: string;
+  profileImg: string;
 }
 
 export const useAuthStore = defineStore("auth", () => {
@@ -14,6 +15,7 @@ export const useAuthStore = defineStore("auth", () => {
   const userId = ref("");
   const pixivId = ref("");
   const name = ref("");
+  const profileImg = ref("");
 
   async function checkStatus() {
     try {
@@ -23,6 +25,7 @@ export const useAuthStore = defineStore("auth", () => {
       userId.value = data.user_id || "";
       pixivId.value = data.pixiv_id || "";
       name.value = data.name || "";
+      profileImg.value = data.profile_img || "";
     } catch {
       isLoggedIn.value = false;
     }
@@ -43,7 +46,8 @@ export const useAuthStore = defineStore("auth", () => {
     userId.value = "";
     pixivId.value = "";
     name.value = "";
+    profileImg.value = "";
   }
 
-  return { isLoggedIn, userId, pixivId, name, checkStatus, login, logout, clearAuth };
+  return { isLoggedIn, userId, pixivId, name, profileImg, checkStatus, login, logout, clearAuth };
 });

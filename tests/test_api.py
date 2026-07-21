@@ -168,6 +168,52 @@ class TestAuthAPI:
         resp = tc.get("/api/auth/status")
         assert resp.json()["is_logged_in"] is False
 
+    def test_auth_status_returns_profile_image(self, client, monkeypatch):
+        """GET /api/auth/status maps Pixiv userData.profileImg for the sidebar."""
+        tc, db, stub_store, *_ = client
+        stub_store.load.return_value = {"PHPSESSID": "session", "x-csrf-token": "csrf"}
+
+        class FakeResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "userData": {
+                        "id": "19509348",
+                        "pixivId": "gbandszxc",
+                        "name": "用户名称",
+                        "profileImg": "https://i.pximg.net/user-profile/img.png",
+                    }
+                }
+
+        class FakeAsyncClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            @staticmethod
+            async def get(*_args, **_kwargs):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.AsyncClient", FakeAsyncClient)
+
+        resp = tc.get("/api/auth/status")
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "is_logged_in": True,
+            "user_id": "19509348",
+            "pixiv_id": "gbandszxc",
+            "name": "用户名称",
+            "profile_img": "https://i.pximg.net/user-profile/img.png",
+        }
+
     def test_auth_logout(self, client):
         """POST /api/auth/logout clears store."""
         tc, db, stub_store, *_ = client

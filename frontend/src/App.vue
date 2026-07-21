@@ -17,9 +17,30 @@
           @update:value="navigateTo"
         />
         <div class="sider-footer">
-          <div v-if="authStore.isLoggedIn" class="user-info" :title="`user_id: ${authStore.userId}`">
-            <span class="user-name">{{ authStore.name || authStore.pixivId }}</span>
-          </div>
+          <n-dropdown
+            v-if="authStore.isLoggedIn"
+            trigger="click"
+            :options="accountMenuOptions"
+            @select="handleAccountMenuSelect"
+          >
+            <button
+              class="account-trigger"
+              type="button"
+              :title="`user_id: ${authStore.userId}`"
+              :aria-label="t('auth.accountMenu', { id: authStore.pixivId || authStore.name })"
+            >
+              <n-avatar
+                round
+                :size="32"
+                :src="authStore.profileImg || undefined"
+                :fallback-src="undefined"
+              >
+                {{ accountInitial }}
+              </n-avatar>
+              <span class="account-id">{{ authStore.pixivId || authStore.name }}</span>
+              <span class="account-chevron" aria-hidden="true">⌄</span>
+            </button>
+          </n-dropdown>
           <n-button v-else size="small" block @click="handleLogin">{{ t('auth.notLoggedIn') }}</n-button>
         </div>
       </n-layout-sider>
@@ -41,6 +62,8 @@ import {
   NLayoutContent,
   NMenu,
   NButton,
+  NAvatar,
+  NDropdown,
 } from "naive-ui";
 import type { MenuOption } from "naive-ui";
 import { useAuthStore } from "./stores/auth";
@@ -51,6 +74,12 @@ const authStore = useAuthStore();
 const { t } = useI18n();
 
 const theme = computed(() => null); // 浅色，ticket 15 实现完整主题
+
+const accountInitial = computed(() => (authStore.name || authStore.pixivId || "P").charAt(0).toUpperCase());
+
+const accountMenuOptions = computed<MenuOption[]>(() => [
+  { label: t("auth.logout"), key: "logout" },
+]);
 
 // computed 让菜单文案随 locale 切换自动更新
 const menuOptions = computed<MenuOption[]>(() => [
@@ -66,6 +95,12 @@ function navigateTo(key: string) {
 
 async function handleLogin() {
   await authStore.login();
+}
+
+async function handleAccountMenuSelect(key: string) {
+  if (key === "logout") {
+    await authStore.logout();
+  }
 }
 
 onMounted(() => {
@@ -101,14 +136,49 @@ body {
   border-top: 1px solid var(--n-border-color, #e0e0e6);
 }
 
-.user-info {
-  text-align: center;
-  font-size: 13px;
-  color: #666;
-  cursor: default;
+.account-trigger {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  gap: 8px;
+  padding: 6px;
+  color: #333;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 180ms ease-out;
 }
 
-.user-name {
+.account-trigger:hover {
+  background: rgba(24, 160, 88, 0.1);
+}
+
+.account-trigger:focus-visible {
+  outline: 2px solid #18a058;
+  outline-offset: 2px;
+}
+
+.account-id {
+  overflow: hidden;
+  flex: 1;
+  color: #444;
   font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-chevron {
+  color: #777;
+  font-size: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .account-trigger {
+    transition: none;
+  }
 }
 </style>

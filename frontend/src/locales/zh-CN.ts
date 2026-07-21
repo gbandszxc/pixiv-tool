@@ -18,6 +18,7 @@ export default {
   auth: {
     notLoggedIn: "未登录，点此登录",
     loggedInAs: "已登录：{name}",
+    accountMenu: "Pixiv 账号 {id} 菜单",
     login: "登录",
     logout: "退出登录",
   },
