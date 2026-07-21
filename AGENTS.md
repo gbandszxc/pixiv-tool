@@ -32,6 +32,7 @@
 2. `docs/adr/0001` ~ `0005` —— 关键架构决策
 3. 你要动的 ticket（`.scratch/pixiv-tool-v1/issues/<NN>-xxx.md`）
 4. 涉及前端界面、组件、样式或交互时，必须先读根目录 `DESIGN.md`。
+5. 涉及打包/PyInstaller/分发时，先读 `docs/PACKAGING.md`。
 
 ### 设计系统维护
 
@@ -69,9 +70,8 @@
 
 ### Git 约定
 
-- 提交信息用 conventional commits（`feat:` / `fix:` / `docs:` / `refactor:` / `chore:` / `spike:`）
+- 提交信息格式：`<类型>([<范围>]): <中文改动说明>`。英文前缀（如 `feat`、`fix`、`refactor`、`docs`、`style`、`chore`、`perf`、`test`）表示改动大类，范围可选，中文部分写明改动内容和原因，避免过于简略。示例：`feat: 增加图片全屏预览`。
 - 每完成一个 ticket 至少一次提交
-- 不要直接改 `docs/SPEC.md` —— 先对齐或新增 ADR
 
 ### 安全边界
 
