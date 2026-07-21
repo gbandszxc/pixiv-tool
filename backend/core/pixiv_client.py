@@ -82,13 +82,33 @@ class PixivClient:
         return data
 
     async def get_series_content(self, series_id: int) -> dict[str, Any]:
-        """获取系列小说内容列表。"""
-        data = await self._get(f"{AJAX_URL}/novel/series/{series_id}")
+        """获取系列小说内容列表。
+
+        实测接口路径(2026-07-21 chrome-devtools):
+            /ajax/novel/series_content/{id}?limit=30&last_order=0&order_by=asc
+        返回 body.page.seriesContents[] —— 含 id + series.contentOrder。
+        注意不是 /ajax/novel/series/{id}(那个是系列元信息,无小说列表)。
+        limit=30 是单次返回上限,系列超过 30 话需要分页(last_order 增量)。
+        V1 假设系列 ≤ 30 话,V2 加分页。
+        """
+        data = await self._get(
+            f"{AJAX_URL}/novel/series_content/{series_id}"
+            f"?limit=30&last_order=0&order_by=asc&lang=zh"
+        )
         return data
 
     async def get_user_novels(self, user_id: int) -> dict[str, Any]:
-        """获取用户全部小说列表。"""
-        data = await self._get(f"{AJAX_URL}/user/{user_id}/profile/all")
+        """获取用户全部小说列表(novel id + novelSeries 元信息)。
+
+        实测接口(2026-07-21 chrome-devtools):
+            /ajax/user/{id}/profile/all?sensitiveFilterMode=userSetting&lang=zh
+        返回 body.novels = {"novel_id_str": null, ...}(只有 id,value 全 null)
+              body.novelSeries = [{"id":..., "title":...}, ...](list,不是 dict)
+        """
+        data = await self._get(
+            f"{AJAX_URL}/user/{user_id}/profile/all"
+            f"?sensitiveFilterMode=userSetting&lang=zh"
+        )
         return data
 
     # ------------------------------------------------------------------
