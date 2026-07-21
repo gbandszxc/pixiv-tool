@@ -4,7 +4,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 from fastapi import APIRouter
 
@@ -15,6 +21,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth")
 
 _store = create_cookie_store()
+
+# 登录子进程最长允许跑 5 分钟(用户可能慢慢输密码)
+_LOGIN_TIMEOUT_SEC = 300
 
 
 @router.get("/status")
@@ -49,7 +58,9 @@ async def auth_status():
                 return {"is_logged_in": False}
 
             body = resp.json()
-            user_data = body.get("body", {}).get("userData", {})
+            # /ajax/user/self 返回顶层就是 {userData: {...}}(spike probe.py 实测),
+            # 不是 {body: {userData: ...}}。
+            user_data = body.get("userData", {})
             if not user_data:
                 _store.clear()
                 return {"is_logged_in": False}
@@ -65,19 +76,99 @@ async def auth_status():
         return {"is_logged_in": False}
 
 
+@router.get("/diag-version")
+async def diag_version():
+    """诊断端点:报告 worker 实际加载的代码版本。"""
+    from backend.auth import login_window as lw_mod
+    from backend.api import auth as auth_mod
+    import inspect
+    lw_src = inspect.getsource(lw_mod)
+    auth_src = inspect.getsource(auth_mod)
+    return {
+        "login_window_file": lw_mod.__file__,
+        "login_window_has_run_subprocess_main": "run_login_subprocess_main" in lw_src,
+        "login_window_has_lambda_webview": "lambda: webview.start" in lw_src or "lambda: webview_thread" in lw_src,
+        "auth_file": auth_mod.__file__,
+        "auth_has_asyncio_to_thread": "asyncio.to_thread" in auth_src,
+        "auth_has_diag_version": True,
+    }
+
+
 @router.post("/login")
 async def login():
-    """打开 pywebview 登录窗。"""
+    """打开 pywebview 登录窗(子进程模式)。
+
+    pywebview 必须在主线程跑,但本 endpoint 跑在 uvicorn asyncio loop 线程,
+    不能直接调 webview.start()。改用子进程:在独立 Python 解释器的主线程
+    跑 pywebview,通过临时 JSON 文件传回 cookie。
+
+    await asyncio.to_thread 避免阻塞 event loop(否则 SSE/其他请求会卡 5 分钟)。
+    """
+    # 诊断:确认 worker 跑的是新代码
+    from backend.auth import login_window as lw_mod
+    import inspect
+    lw_src = inspect.getsource(lw_mod)
+    has_lambda = 'lambda' in lw_src and 'webview' in lw_src
+    has_run_subprocess = 'run_login_subprocess_main' in lw_src
+    logger.warning("DIAG login_window: has_lambda=%s has_run_subprocess_main=%s file=%s",
+                   has_lambda, has_run_subprocess, lw_mod.__file__)
+    result = await asyncio.to_thread(_spawn_login_subprocess)
+    if result["status"] == "success" and result.get("cookies"):
+        _store.save(result["cookies"])
+        return {"status": "success", "message": "登录成功"}
+    return {"status": result["status"], "message": result.get("error", "登录取消")}
+
+
+def _spawn_login_subprocess() -> dict:
+    """spawn 登录子进程,等结束,读 result file 返回 dict。"""
+    # 临时文件让子进程写结果。NamedTemporaryFile 在 Windows 上 delete=True
+    # 时不能被另一个进程打开,所以 delete=False,主进程读完手动删。
+    with tempfile.NamedTemporaryFile(
+        suffix=".json", prefix="pixiv-login-", delete=False
+    ) as tf:
+        result_path = Path(tf.name)
+
     try:
-        from backend.auth.login_window import open_login_window
-        result = open_login_window()
-        if result["status"] == "success" and result["cookies"]:
-            _store.save(result["cookies"])
-            return {"status": "success", "message": "登录成功"}
-        return {"status": result["status"], "message": result.get("error", "登录取消")}
-    except Exception as exc:
-        logger.error("登录异常: %s", exc)
-        return {"status": "error", "message": str(exc)}
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "backend.auth.login_window",
+                "--result-file",
+                str(result_path),
+            ],
+            timeout=_LOGIN_TIMEOUT_SEC,
+            # 子进程的 stdout/stderr 直接丢弃。
+            # 不能用默认(继承父进程)——当 uvicorn 的 stdout 被 dev.ps1 重定向到
+            # 日志文件时,子进程继承的也是 pipe,而 subprocess.run 不读 pipe,
+            # pywebview 大量 libpng warning 把 pipe 写满就死锁。
+            # 也不能用 PIPE(必须主动读);DEVNULL 最干净。
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        logger.info("登录子进程退出码: %d", proc.returncode)
+    except subprocess.TimeoutExpired:
+        return {"status": "timeout", "error": f"登录超时({_LOGIN_TIMEOUT_SEC}s)"}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("spawn 登录子进程失败: %s", exc)
+        return {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+    # 读 result file(子进程无论成功失败都会写)
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.error("读取登录结果失败(r=%s): %s", proc.returncode, exc)
+        return {
+            "status": "error",
+            "error": f"子进程退出码 {proc.returncode},结果文件解析失败",
+        }
+    finally:
+        try:
+            result_path.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+
+    return payload
 
 
 @router.post("/login/manual")
