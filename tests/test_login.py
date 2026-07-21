@@ -25,7 +25,7 @@ import pytest
 from backend.auth.login_window import (
     cookies_to_dicts,
     _morsel_to_dict,
-    EXTRACT_CSRF_JS,
+    EXTRACT_AND_VERIFY_JS,
 )
 
 
@@ -221,12 +221,12 @@ class TestMorselToDict:
 
 
 class TestExtractCsrfJS:
-    """Verify the extraction-strategy contract of EXTRACT_CSRF_JS.
+    """Verify the extraction-strategy contract of EXTRACT_AND_VERIFY_JS.
 
     These tests intentionally do NOT check syntactic trivia (brace pairing,
     string length) — that was the shallow-water mark called out in F3.5.
     Instead each test pins one concrete behavior the JS must exhibit so the
-    Python side (_extract_csrf) can rely on it.
+    Python side (extract_login_result + _evaluate_js_with_retry) can rely on it.
     """
 
     def test_csrf_js_implements_path_a_meta_api_client(self):
@@ -235,26 +235,31 @@ class TestExtractCsrfJS:
         Pixiv's Next.js dehydrates the GraphQL client's auth token under
         meta.apiClient.token — this is the path spike probe.py confirmed.
         """
-        assert "meta.apiClient.token" in EXTRACT_CSRF_JS
+        assert "meta.apiClient.token" in EXTRACT_AND_VERIFY_JS
 
-    def test_csrf_js_implements_path_b_page_props_token(self):
-        """Path B (fallback): pageProps.token.
-
-        Older / unauthenticated variants expose the token directly on
-        pageProps; the JS must try this when path A yields nothing.
-        """
-        assert "pp.token" in EXTRACT_CSRF_JS or "pageProps.token" in EXTRACT_CSRF_JS
-
-    def test_csrf_js_implements_path_c_state_data_token(self):
-        """Path C (post-refresh fallback): queries[*].state.data.token.
+    def test_csrf_js_implements_path_b_state_data_token(self):
+        """Path B: queries[*].state.data.token.
 
         After a client-side refetch, React Query stores the response under
         state.data rather than meta — the JS must cover this too.
         """
-        assert (
-            "state.data.token" in EXTRACT_CSRF_JS
-            or "state?.data?.token" in EXTRACT_CSRF_JS
-        )
+        assert "state.data.token" in EXTRACT_AND_VERIFY_JS or "state?.data?.token" in EXTRACT_AND_VERIFY_JS
+
+    def test_csrf_js_implements_path_c_page_props_token(self):
+        """Path C (fallback): pageProps.token.
+
+        Older / unauthenticated variants expose the token directly on
+        pageProps; the JS must try this when path A yields nothing.
+        """
+        assert "np.token" in EXTRACT_AND_VERIFY_JS or "pageProps.token" in EXTRACT_AND_VERIFY_JS
+
+    def test_csrf_js_implements_path_d_global_data_meta(self):
+        """Path D (last-resort fallback): meta[name='global-data'].
+
+        Some pixiv page variants inject the token into a <meta> element.
+        spike probe.py's EXTRACT_AND_VERIFY_JS confirms this path is needed.
+        """
+        assert 'global-data' in EXTRACT_AND_VERIFY_JS
 
     def test_csrf_js_uses_promise_not_async_function(self):
         """pywebview evaluate_js (callback mode) needs a Promise, not an async fn.
@@ -263,101 +268,211 @@ class TestExtractCsrfJS:
         expression. `new Promise(...)` resolves to the dict; an `async`
         function would return a Promise but pywebview may not await it.
         """
-        assert "new Promise" in EXTRACT_CSRF_JS
+        assert "new Promise" in EXTRACT_AND_VERIFY_JS
         # No bare `async function` or `async (` definitions allowed.
-        stripped = EXTRACT_CSRF_JS
+        stripped = EXTRACT_AND_VERIFY_JS
         assert "async function" not in stripped
         assert "async (" not in stripped
 
-    def test_csrf_js_handles_missing_next_data(self):
-        """When window.__NEXT_DATA__ is absent the JS must resolve, not reject.
+    def test_csrf_js_uses_optional_chaining_for_next_data(self):
+        """window.__NEXT_DATA__ access uses optional chaining.
 
-        _extract_csrf waits on a threading.Event set in the callback; if the
-        JS threw here instead of resolving, the callback would never fire
-        and we'd hit the 10s timeout. The guard must exist explicitly.
+        When __NEXT_DATA__ is absent, optional chaining (?.) yields undefined
+        silently instead of throwing. Combined with the .catch() handler,
+        this guarantees the callback always fires (ADR 0005 bug #5).
         """
-        assert "if (!nd)" in EXTRACT_CSRF_JS or "nd === null" in EXTRACT_CSRF_JS or "!nd" in EXTRACT_CSRF_JS
+        assert "?." in EXTRACT_AND_VERIFY_JS
+        assert "__NEXT_DATA__" in EXTRACT_AND_VERIFY_JS
 
-    def test_csrf_js_resolves_empty_result_when_unauthenticated(self):
-        """Unauthenticated pages resolve with csrf=\"\" and loggedIn=False.
+    def test_csrf_js_calls_ajax_user_self_for_login_verification(self):
+        """Login state is verified via fetch('/ajax/user/self').
 
-        This is the contract _extract_csrf relies on to distinguish
-        'extraction ran, no token' from 'extraction crashed'.
+        The csrf token alone proves nothing — the JS must actually call
+        /ajax/user/self with the token + cookies to confirm the session is
+        live. This is what distinguishes 'token present' from 'logged in'.
         """
-        assert 'csrf: ""' in EXTRACT_CSRF_JS and "loggedIn: false" in EXTRACT_CSRF_JS
+        assert "/ajax/user/self" in EXTRACT_AND_VERIFY_JS
+        assert "x-csrf-token" in EXTRACT_AND_VERIFY_JS
 
-    def test_csrf_js_wraps_body_in_try_catch(self):
-        """Top-level try/catch ensures pywebview callback always fires.
+    def test_csrf_js_always_resolves_never_rejects(self):
+        """Both the success path and error path call resolve().
 
-        Without this, a single TypeError (e.g. nd.props undefined) would
-        reject the Promise and silently drop the callback.
+        _evaluate_js_with_retry waits on a threading.Event fired by the
+        callback. If the JS rejected, the callback would never fire and
+        we'd hit the per-attempt timeout. The .catch() must resolve().
         """
-        assert "try" in EXTRACT_CSRF_JS and "catch" in EXTRACT_CSRF_JS
+        # success path
+        assert "resolve({" in EXTRACT_AND_VERIFY_JS
+        # error path (.catch resolves with diagnostic)
+        assert ".catch" in EXTRACT_AND_VERIFY_JS
 
 
-class TestExtractCsrfPythonIntegration:
-    """Integration test of the Python _extract_csrf callback handler.
+class TestEvaluateJsWithRetry:
+    """Integration test of _evaluate_js_with_retry callback handling.
 
-    We don't execute the real JS (would need a JS engine); instead we
-    feed _extract_csrf a fake `window` whose evaluate_js immediately
-    invokes the callback with a canned JS result. This exercises the
-    real Python plumbing: callback parsing, threading.Event wait,
-    dict-vs-string handling.
-
-    A stub `webview` module is injected into sys.modules because
-    _extract_csrf does `import webview` defensively (pywebview is
-    not installed in the test env).
+    Feeds the function a fake `window` whose evaluate_js immediately invokes
+    the callback. Exercises the real Python plumbing: callback parsing,
+    threading.Event wait, dict-vs-string handling, retry loop.
     """
 
-    @pytest.fixture(autouse=True)
-    def _stub_webview(self, monkeypatch):
-        import sys
-        import types
+    def test_returns_dict_when_callback_fires_with_token_and_login(self):
+        """Successful extraction returns the full JS result dict.
 
-        if "webview" not in sys.modules:
-            monkeypatch.setitem(sys.modules, "webview", types.ModuleType("webview"))
-
-    def test_extract_csrf_parses_string_callback_from_js(self):
-        """evaluate_js callback receives a JSON string — _extract_csrf parses it.
-
-        pywebview serializes the JS Promise resolution to a JSON string
-        before handing it to Python. _extract_csrf must json.loads it.
+        The retry loop exits as soon as token + login.ok are both present.
         """
-        from backend.auth.login_window import _extract_csrf
+        from backend.auth.login_window import _evaluate_js_with_retry
 
         class FakeWindow:
             def evaluate_js(self, _js, callback):
-                # pywebview passes the resolved value as a JSON string
-                callback('{"csrf": "abc123", "loggedIn": true}')
+                callback({
+                    "token": "abc123",
+                    "login": {"ok": True, "user_id": "19509348"},
+                })
 
-        result = _extract_csrf(FakeWindow())
-        assert result == {"csrf": "abc123", "loggedIn": True}
+        result = _evaluate_js_with_retry(FakeWindow(), "/* js */")
+        assert result is not None
+        assert result["token"] == "abc123"
+        assert result["login"]["ok"] is True
 
-    def test_extract_csrf_handles_invalid_json_callback(self):
-        """Garbage from JS does not crash _extract_csrf — it returns empty.
+    def test_retries_when_token_not_yet_hydrated(self):
+        """First attempt's token='' triggers retry (react-query not hydrated yet).
 
-        Regression for the case where pixiv changes markup and the JS
-        resolves something non-JSON.
+        Second attempt returns a real token → success. Mirrors spike's
+        behavior when the dehydrated state isn't yet populated on the
+        first loaded event.
         """
-        from backend.auth.login_window import _extract_csrf
+        from backend.auth.login_window import _evaluate_js_with_retry
+
+        attempts = {"n": 0}
 
         class FakeWindow:
             def evaluate_js(self, _js, callback):
-                callback("not valid json{")
+                attempts["n"] += 1
+                if attempts["n"] == 1:
+                    # token not yet hydrated
+                    callback({"token": "", "login": {"ok": False}})
+                else:
+                    callback({"token": "tok", "login": {"ok": True}})
 
-        result = _extract_csrf(FakeWindow())
-        assert result == {"csrf": "", "loggedIn": False}
+        result = _evaluate_js_with_retry(FakeWindow(), "/* js */", attempts=5, per_attempt_timeout=2.0)
+        assert result is not None
+        assert attempts["n"] == 2
+        assert result["token"] == "tok"
 
-    def test_extract_csrf_handles_dict_callback(self):
-        """If pywebview hands back a dict directly (some versions do), accept it."""
-        from backend.auth.login_window import _extract_csrf
+    def test_no_retry_when_token_present_but_login_failed(self):
+        """token present + login.ok=False returns immediately (no retry).
+
+        Rationale: token present means extraction succeeded; login.ok=False
+        means the session is genuinely invalid. Retrying would mask the
+        real failure with a misleading 'extraction failed' error.
+        """
+        from backend.auth.login_window import _evaluate_js_with_retry
+
+        attempts = {"n": 0}
 
         class FakeWindow:
             def evaluate_js(self, _js, callback):
-                callback({"csrf": "tok", "loggedIn": True})
+                attempts["n"] += 1
+                callback({"token": "tok", "login": {"ok": False, "status": 401}})
 
-        result = _extract_csrf(FakeWindow())
-        assert result == {"csrf": "tok", "loggedIn": True}
+        result = _evaluate_js_with_retry(FakeWindow(), "/* js */", attempts=5, per_attempt_timeout=2.0)
+        assert result is not None
+        assert attempts["n"] == 1  # returned immediately, no retry
+        assert result["login"]["ok"] is False
+
+    def test_returns_none_when_all_attempts_fail(self):
+        """No token + login after all retries returns None.
+
+        extract_login_result turns this into a user-facing error.
+        """
+        from backend.auth.login_window import _evaluate_js_with_retry
+
+        class FakeWindow:
+            def evaluate_js(self, _js, callback):
+                callback({"token": "", "login": {"ok": False}})
+
+        result = _evaluate_js_with_retry(FakeWindow(), "/* js */", attempts=2, per_attempt_timeout=1.0)
+        assert result is None
+
+    def test_returns_none_on_callback_timeout(self):
+        """If the callback never fires, retry exhausts and returns None."""
+        from backend.auth.login_window import _evaluate_js_with_retry
+
+        class FakeWindow:
+            def evaluate_js(self, _js, callback):
+                pass  # never invoke callback
+
+        result = _evaluate_js_with_retry(FakeWindow(), "/* js */", attempts=2, per_attempt_timeout=0.2)
+        assert result is None
+
+    def test_returns_none_on_non_dict_callback(self):
+        """Non-dict callback (string/None) is treated as failed attempt."""
+        from backend.auth.login_window import _evaluate_js_with_retry
+
+        class FakeWindow:
+            def evaluate_js(self, _js, callback):
+                callback("garbage string")
+
+        result = _evaluate_js_with_retry(FakeWindow(), "/* js */", attempts=2, per_attempt_timeout=1.0)
+        assert result is None
+
+
+class TestExtractLoginResult:
+    """extract_login_result combines cookie extraction + JS verification."""
+
+    def test_success_returns_cookies_with_phpsessid_and_csrf(self):
+        """PHPSESSID cookie + verified token → success dict."""
+        from http.cookies import SimpleCookie
+        from backend.auth.login_window import extract_login_result
+
+        cookie = SimpleCookie()
+        cookie["PHPSESSID"] = "19509348_session"
+
+        class FakeWindow:
+            def get_cookies(self):
+                return [cookie]
+            def evaluate_js(self, _js, callback):
+                callback({
+                    "token": "csrf_tok_123",
+                    "login": {"ok": True, "user_id": "19509348"},
+                })
+
+        result = extract_login_result(FakeWindow())
+        assert result["status"] == "success"
+        assert result["cookies"]["PHPSESSID"] == "19509348_session"
+        assert result["cookies"]["x-csrf-token"] == "csrf_tok_123"
+
+    def test_error_when_phpsessid_missing(self):
+        """No PHPSESSID cookie → error, even if JS succeeded."""
+        from backend.auth.login_window import extract_login_result
+
+        class FakeWindow:
+            def get_cookies(self):
+                return []
+            def evaluate_js(self, _js, callback):
+                callback({"token": "tok", "login": {"ok": True}})
+
+        result = extract_login_result(FakeWindow())
+        assert result["status"] == "error"
+        assert "PHPSESSID" in result["error"]
+
+    def test_error_when_js_verification_fails(self):
+        """PHPSESSID present but login.ok=False → error with diagnostic."""
+        from http.cookies import SimpleCookie
+        from backend.auth.login_window import extract_login_result
+
+        cookie = SimpleCookie()
+        cookie["PHPSESSID"] = "sess"
+
+        class FakeWindow:
+            def get_cookies(self):
+                return [cookie]
+            def evaluate_js(self, _js, callback):
+                callback({"token": "tok", "login": {"ok": False, "status": 401}})
+
+        result = extract_login_result(FakeWindow())
+        assert result["status"] == "error"
+        assert "401" in result["error"] or "登录态验证失败" in result["error"]
 
 
 class TestLoginWindowSpikeRegression:
