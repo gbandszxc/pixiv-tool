@@ -97,7 +97,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    # console=False:prod 桌面模式,不弹 cmd 黑窗(SPEC §8 dev 同时输出 console 是另一回事)。
+    # 调试期可临时改成 True 看启动 traceback。
+    console=False,
     icon=str(ROOT / "backend" / "icon.ico") if (ROOT / "backend" / "icon.ico").exists() else None,
 )
 
