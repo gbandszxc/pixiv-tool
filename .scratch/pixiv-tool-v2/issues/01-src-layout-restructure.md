@@ -1,5 +1,7 @@
 # V2-01 — src layout 重构（F2.3 + F2.4 合并）
 
+**Status:** done（2026-07-22 实施，commit `7c01908` + `acf9a54`）
+
 **What to build:**
 
 把 `backend/` 整体迁到 `src/pixiv_tool/`（snake_case 包名），采用 PEP 470 标准 src layout。同步改 66 处 import + 7 处连锁配置（pyproject/spec/dev.ps1/build.py/conftest/venv/docs）。
@@ -117,16 +119,16 @@ pyproject.toml (root)              pyproject.toml (root)
 
 ## Acceptance criteria
 
-- [ ] 90 个测试全过（`pytest tests/`）
-- [ ] `grep -rn "from backend\|import backend" --include="*.py" .` 在仓库内（排除 `.venv/`、`.scratch/`、`spike/`、`build/`、`dist/`）零命中
-- [ ] `grep -rn "backend\.main:app\|backend\.auth\|backend\.storage\|backend\.api\|backend\.core" scripts/ pixiv-tool.spec docs/` 零命中
-- [ ] `./scripts/dev.ps1 restart` → `curl http://127.0.0.1:9962/api/health` 200
-- [ ] 浏览器打开 `http://localhost:9961/` 前端渲染完整（菜单/抓取表单/路由）
-- [ ] `.venv/Scripts/python.exe scripts/build.py` 打包成功
-- [ ] `dist/pixiv-tool/pixiv-tool.exe --no-window` → `/api/health` 200 + `/api/auth/diag-version` 返回 `{"frozen":true,...}`
-- [ ] frozen exe 双击启动（用 `DETACHED_PROCESS | CREATE_NO_WINDOW` 模拟）→ SPA 200 + pywebview 主窗加载前端
-- [ ] `docs/SPEC.md §3.4` + `docs/PACKAGING.md` 目录图已同步更新
-- [ ] 一次原子 commit（或拆成 move + edit 两个 commit 也行，但必须连续）
+- [x] 90 个测试全过（`pytest tests/`）
+- [x] `grep -rn "from backend\|import backend" --include="*.py" .` 在仓库内（排除 `.venv/`、`.scratch/`、`spike/`、`build/`、`dist/`）零命中
+- [x] `grep -rn "backend\.main:app\|backend\.auth\|backend\.storage\|backend\.api\|backend\.core" scripts/ pixiv-tool.spec docs/` 零命中
+- [x] `./scripts/dev.ps1 restart` → `curl http://127.0.0.1:9962/api/health` 200
+- [x] 浏览器打开 `http://localhost:9961/` 前端渲染完整（菜单/抓取表单/路由）
+- [x] `.venv/Scripts/python.exe scripts/build.py` 打包成功
+- [x] `dist/pixiv-tool/pixiv-tool.exe --no-window` → `/api/health` 200 + `/api/auth/diag-version` 返回 `{"frozen":true,...}`
+- [x] frozen exe 双击启动（用 `DETACHED_PROCESS | CREATE_NO_WINDOW` 模拟）→ SPA 200 + pywebview 主窗加载前端
+- [x] `docs/SPEC.md §3.4` + `docs/PACKAGING.md` 目录图已同步更新
+- [x] 一次原子 commit（或拆成 move + edit 两个 commit 也行，但必须连续）—— 拆成 refactor + docs 两个连续 commit
 
 ## 实施建议
 
