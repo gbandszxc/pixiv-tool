@@ -107,6 +107,27 @@ class Database:
                  page_count, text_length, captured_at, modification_date, txt_path, md_path, status),
             )
 
+    def update_novel_paths(self, novel_id: int,
+                           txt_path: str | None = None,
+                           md_path: str | None = None) -> None:
+        """更新 novels 表的 txt_path / md_path。
+
+        crawler 每导出一个文件就调一次,记录输出路径。只更新非 None 的字段。
+        """
+        fields: dict[str, str] = {}
+        if txt_path is not None:
+            fields["txt_path"] = txt_path
+        if md_path is not None:
+            fields["md_path"] = md_path
+        if not fields:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [novel_id]
+        with self._transaction() as conn:
+            conn.execute(
+                f"UPDATE novels SET {set_clause} WHERE novel_id = ?", values
+            )
+
     def get_novel(self, novel_id: int) -> dict | None:
         row = self._get_conn().execute(
             "SELECT * FROM novels WHERE novel_id = ?", (novel_id,)
