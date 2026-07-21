@@ -31,6 +31,15 @@
 1. `docs/SPEC.md` —— 完整规格 + 风险登记
 2. `docs/adr/0001` ~ `0005` —— 关键架构决策
 3. 你要动的 ticket（`.scratch/pixiv-tool-v1/issues/<NN>-xxx.md`）
+4. 涉及前端界面、组件、样式或交互时，必须先读根目录 `DESIGN.md`。
+
+### 设计系统维护
+
+- `DESIGN.md` 是前端视觉与交互规范的真相源；其中的色彩、字号、间距、圆角、层级、动效与组件约束优先于临时页面样式。
+- 做前端样式或组件改动时，优先复用 `DESIGN.md` 已定义的 token 和 Naive UI 主题配置；不要在页面中新增无来源的颜色、圆角、阴影或动效字面值。
+- 如果实现需要新增或调整设计 token、组件规则或视觉方向，必须在同一变更中同步更新 `DESIGN.md` 和 `.impeccable/design.json`；二者应保持一致。
+- 需要重新提炼或大幅刷新设计规范时，使用 `$impeccable:impeccable document`；已有 `DESIGN.md` 不得静默覆盖，先与用户确认合并或刷新范围。
+- 前端视觉验收应至少覆盖默认、hover、focus、disabled、loading、error 状态，并检查长文本、窄窗口与“减少动态效果”偏好。
 
 ### 技术栈
 

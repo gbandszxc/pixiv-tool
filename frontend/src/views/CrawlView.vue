@@ -1,8 +1,8 @@
 <template>
-  <div class="crawl-view">
-    <h1>{{ t('crawl.title') }}</h1>
+  <div class="page-view">
+    <h1 class="page-title">{{ t('crawl.title') }}</h1>
 
-    <n-card :title="t('crawl.newTask')" style="max-width: 600px">
+    <n-card :title="t('crawl.newTask')" class="form-card">
       <n-form label-placement="left" label-width="80">
         <n-form-item :label="t('crawl.sourceType')">
           <n-radio-group v-model:value="form.sourceType">
@@ -35,7 +35,7 @@
       </n-form>
     </n-card>
 
-    <n-alert v-if="message" :type="messageType" style="margin-top: 16px; max-width: 600px">
+    <n-alert v-if="message" :type="messageType" class="page-alert">
       {{ message }}
     </n-alert>
   </div>
@@ -116,9 +116,3 @@ async function handleSubmit() {
   }
 }
 </script>
-
-<style scoped>
-.crawl-view {
-  padding: 0;
-}
-</style>

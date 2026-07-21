@@ -1,6 +1,6 @@
 <template>
-  <div class="tasks-view">
-    <h1>{{ t('tasks.title') }}</h1>
+  <div class="page-view">
+    <h1 class="page-title">{{ t('tasks.title') }}</h1>
 
     <n-spin :show="loading">
       <n-empty v-if="!taskStore.tasks.length" :description="t('tasks.empty')" />
@@ -17,13 +17,13 @@
               </n-tag>
             </template>
             <template #description>
-              <div style="margin-top: 8px">
+              <div class="task-progress">
                 <n-progress
                   type="line"
                   :percentage="task.total ? Math.round((task.done / task.total) * 100) : 0"
                   :status="task.status === 'done' ? 'success' : task.status === 'failed' ? 'error' : 'info'"
                 />
-                <div style="margin-top: 4px; font-size: 12px; color: #999">
+                <div class="task-progress-meta">
                   {{ t('tasks.progressDetail', { done: task.done, total: task.total, skipped: task.skipped, failed: failedCount(task) }) }}
                 </div>
               </div>

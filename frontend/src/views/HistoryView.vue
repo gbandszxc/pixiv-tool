@@ -1,13 +1,13 @@
 <template>
-  <div class="history-view">
-    <h1>{{ t('history.title') }}</h1>
+  <div class="page-view">
+    <h1 class="page-title">{{ t('history.title') }}</h1>
 
-    <n-space style="margin-bottom: 16px">
+    <n-space class="history-toolbar">
       <n-input
         v-model:value="keyword"
         :placeholder="t('history.searchPlaceholder')"
         clearable
-        style="width: 240px"
+        class="history-search"
         @keyup.enter="handleSearch"
       />
       <n-button @click="handleSearch">{{ t('common.search') }}</n-button>

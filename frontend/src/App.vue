@@ -1,6 +1,6 @@
 <template>
-  <n-config-provider :theme="theme">
-    <n-layout has-sider style="height: 100vh">
+  <n-config-provider :theme="theme" :theme-overrides="themeOverrides">
+    <n-layout has-sider class="app-shell">
       <n-layout-sider
         bordered
         :collapsed-width="64"
@@ -44,7 +44,7 @@
           <n-button v-else size="small" block @click="handleLogin">{{ t('auth.notLoggedIn') }}</n-button>
         </div>
       </n-layout-sider>
-      <n-layout-content style="padding: 24px">
+      <n-layout-content class="app-content">
         <router-view />
       </n-layout-content>
     </n-layout>
@@ -65,7 +65,7 @@ import {
   NAvatar,
   NDropdown,
 } from "naive-ui";
-import type { MenuOption } from "naive-ui";
+import type { GlobalThemeOverrides, MenuOption } from "naive-ui";
 import { useAuthStore } from "./stores/auth";
 
 const router = useRouter();
@@ -74,6 +74,17 @@ const authStore = useAuthStore();
 const { t } = useI18n();
 
 const theme = computed(() => null); // 浅色，ticket 15 实现完整主题
+
+const themeOverrides: GlobalThemeOverrides = {
+  common: {
+    primaryColor: "#0096FA",
+    primaryColorHover: "#0077D1",
+    primaryColorPressed: "#005A9E",
+    primaryColorSuppl: "#0096FA",
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    borderRadius: "6px",
+  },
+};
 
 const accountInitial = computed(() => (authStore.name || authStore.pixivId || "P").charAt(0).toUpperCase());
 
@@ -108,15 +119,9 @@ onMounted(() => {
 });
 </script>
 
-<style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+<style scoped>
+.app-shell {
+  height: 100vh;
 }
 
 .sider-title {
@@ -124,7 +129,7 @@ body {
   font-weight: bold;
   font-size: 16px;
   text-align: center;
-  border-bottom: 1px solid var(--n-border-color, #e0e0e6);
+  border-bottom: 1px solid var(--divider);
 }
 
 .sider-footer {
@@ -133,7 +138,7 @@ body {
   left: 0;
   right: 0;
   padding: 12px;
-  border-top: 1px solid var(--n-border-color, #e0e0e6);
+  border-top: 1px solid var(--divider);
 }
 
 .account-trigger {
@@ -143,42 +148,37 @@ body {
   min-width: 0;
   gap: 8px;
   padding: 6px;
-  color: #333;
+  color: var(--ink);
   font: inherit;
   text-align: left;
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   cursor: pointer;
   transition: background-color 180ms ease-out;
 }
 
 .account-trigger:hover {
-  background: rgba(24, 160, 88, 0.1);
+  background: #e5f5ff;
 }
 
 .account-trigger:focus-visible {
-  outline: 2px solid #18a058;
+  outline: 2px solid var(--pixiv-blue);
   outline-offset: 2px;
 }
 
 .account-id {
   overflow: hidden;
   flex: 1;
-  color: #444;
+  color: var(--ink-strong);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .account-chevron {
-  color: #777;
+  color: var(--ink-muted);
   font-size: 16px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .account-trigger {
-    transition: none;
-  }
-}
 </style>

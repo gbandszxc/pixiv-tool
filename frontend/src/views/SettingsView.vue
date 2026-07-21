@@ -1,8 +1,8 @@
 <template>
-  <div class="settings-view">
-    <h1>{{ t('settings.title') }}</h1>
+  <div class="page-view">
+    <h1 class="page-title">{{ t('settings.title') }}</h1>
 
-    <n-card style="max-width: 600px">
+    <n-card class="form-card">
       <n-form label-placement="left" label-width="100">
         <n-form-item :label="t('settings.outputDir')">
           <n-input v-model:value="form.output_dir" placeholder="downloads" />
@@ -47,7 +47,7 @@
       </n-form>
     </n-card>
 
-    <n-alert v-if="message" :type="messageType" style="margin-top: 16px; max-width: 600px">
+    <n-alert v-if="message" :type="messageType" class="page-alert">
       {{ message }}
     </n-alert>
   </div>

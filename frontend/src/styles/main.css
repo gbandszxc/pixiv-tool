@@ -1,0 +1,109 @@
+:root {
+  --pixiv-blue: #0096fa;
+  --pixiv-blue-hover: #0077d1;
+  --surface: #ffffff;
+  --ink: #333333;
+  --ink-strong: #444444;
+  --ink-muted: #777777;
+  --ink-subtle: #999999;
+  --divider: #e0e0e6;
+  --radius-control: 6px;
+  --space-xxs: 4px;
+  --space-xs: 6px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-width: 0;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--surface);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.app-content {
+  padding: var(--space-xl);
+}
+
+.page-view {
+  width: min(100%, 1120px);
+}
+
+.page-title {
+  margin: 0 0 var(--space-lg);
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.form-card {
+  width: min(100%, 600px);
+}
+
+.page-alert {
+  width: min(100%, 600px);
+  margin-top: var(--space-lg);
+}
+
+.history-toolbar {
+  margin-bottom: var(--space-lg);
+}
+
+.history-search {
+  width: 240px;
+}
+
+.task-progress {
+  margin-top: var(--space-sm);
+}
+
+.task-progress-meta {
+  margin-top: var(--space-xxs);
+  color: var(--ink-subtle);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .app-content {
+    padding: var(--space-lg);
+  }
+
+  .history-search {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
