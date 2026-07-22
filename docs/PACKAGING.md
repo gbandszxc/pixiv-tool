@@ -14,27 +14,53 @@
 | uv | 最新 | 后端依赖管理 |
 | pnpm | 10+ | 前端依赖管理 |
 | Node.js | 20+（fnm/nvm 管理） | 前端构建 |
-| Windows | 10/11 x64 | V1 仅 Windows 全功能；WebView2 运行时 Win11 自带 |
+| Windows | 10/11 x64 | **全功能**（登录/抓取/导出）；WebView2 运行时 Win11 自带 |
+| macOS | 12+（arm64/x86_64） | 能构建、能启动、能浏览；**登录不可用**（cookie 走 Windows DPAPI，mac keychain 是 V2） |
+| Linux | webkit2gtk（见 README） | 能构建、能启动、能浏览；登录同样不可用 |
+
+### 平台依赖组
+
+`pyproject.toml` 的 `[project.optional-dependencies]` 按平台拆了三个 extra（各装对应的 pywebview 后端）：
+
+| extra | 平台 | 内容 |
+|---|---|---|
+| `win` | Windows | pywebview（WebView2 后端） |
+| `macos` | macOS | pywebview（WebKit 后端） |
+| `linux` | Linux | pywebview（WebKitGTK 后端，需系统预装 `webkit2gtk`） |
+| `dev` | 全平台 | pyinstaller（打包工具，不进运行时） |
 
 首次拉代码后先同步依赖：
 
 ```powershell
+# Windows
 uv sync --extra win --extra dev     # 后端(含 pywebview + pyinstaller)
 pnpm install --dir frontend         # 前端
 ```
 
-> `pyinstaller` 在 `pyproject.toml` 的 `dev` extra 里，**不装就打不了包**（默认 sync 不带 `--extra dev` 会缺）。
+```bash
+# macOS / Linux
+uv sync --extra macos --extra dev   # linux 机器把 macos 换成 linux
+pnpm install --dir frontend
+```
+
+> `pyinstaller` 在 `dev` extra 里，**不装就打不了包**（默认 `uv sync` 不带 `--extra dev` 会缺）。**必须同时带平台 extra**，否则 mac/linux 上连 `pywebview` 都没有，打包出来的产物一启动就 `ModuleNotFoundError`。
 
 ---
 
 ## 2. 一键打包
 
 ```powershell
-# 完整构建（前端 + 复制静态 + PyInstaller）
+# Windows（完整构建：前端 + 复制静态 + PyInstaller）
 .venv/Scripts/python.exe scripts/build.py
 
-# 跳过前端（只改了后端代码时，复用已有的 frontend/dist）
+# Windows（跳过前端，只改了后端代码时，复用已有的 frontend/dist）
 .venv/Scripts/python.exe scripts/build.py --skip-fe
+```
+
+```bash
+# macOS / Linux（venv 解释器路径不同，其余等价）
+.venv/bin/python scripts/build.py
+.venv/bin/python scripts/build.py --skip-fe
 ```
 
 `build.py` 三个步骤：
@@ -89,7 +115,79 @@ Compress-Archive -Path dist\pixiv-tool -DestinationPath pixiv-tool-windows-x64.z
 
 ---
 
-## 4. 运行模式
+## 4. macOS / Linux 打包
+
+Windows 之外两个平台的打包链路与 Windows 基本一致（同一份 `pixiv-tool.spec` + `scripts/build.py`），区别只在：依赖 extra、产物形态、压缩工具、数据目录。
+
+### 4.1 依赖
+
+```bash
+# macOS
+uv sync --extra macos --extra dev
+# Linux（需先 sudo apt install libwebkit2gtk-4.1-dev，见 README）
+uv sync --extra linux --extra dev
+
+pnpm install --dir frontend
+```
+
+> mac 装完 pywebview 后第一次 `build.py` 会自动拉 WebKit 后端；Linux 没预装 `webkit2gtk` 会在 **运行**（不是打包）时崩，报 `Gtk cannot be initialized` 之类。
+
+### 4.2 产物：`.app`（mac） vs onedir 目录（linux）
+
+- **mac**：`pixiv-tool.spec` 若声明了 `BUNDLE`，PyInstaller 会产出 `dist/Pixiv Tool.app`（注意名字里有空格），双击进 Dock 运行；没声明 BUNDLE 时回退到 `dist/pixiv-tool/`（和 Windows 一样的 onedir 目录，靠 `dist/pixiv-tool/pixiv-tool` 命令行启动）。
+- **Linux**：无 `.app` 概念，产物恒为 `dist/pixiv-tool/`，运行 `./dist/pixiv-tool/pixiv-tool`。
+
+### 4.3 压缩（必须用 `ditto` 打 `.app`）
+
+mac 上打包 `.app` **不能用 `zip`/`tar`**——它们会丢掉 bundle 内的符号链接和可执行权限位，解压后双击没反应。用系统自带的 `ditto`：
+
+```bash
+# mac：有 .app 时
+cd dist && ditto -c -k --keepParent "Pixiv Tool.app" ../pixiv-tool-macos-x64.zip
+# mac：无 .app（回退到 onedir 目录）/ Linux
+tar -czf pixiv-tool-macos-x64.zip -C dist/pixiv-tool .     # mac 回退
+tar -czf pixiv-tool-linux-x64.tar.gz -C dist/pixiv-tool .  # linux
+```
+
+`--keepParent` 保留 `.app` 这一层目录结构。CI（`release.yml`）已按「优先 `.app`、找不到回退 onedir」写好。
+
+### 4.4 数据目录（frozen 模式）
+
+`src/pixiv_tool/storage/paths.py` 按平台锚定用户数据（与 Windows 的 portable exe 同级目录不同，mac/linux frozen 用各平台标准位置）：
+
+| 数据 | macOS frozen | Linux frozen |
+|---|---|---|
+| app.db / 日志 | `~/Library/Application Support/pixiv-tool/data/` | `~/.local/share/pixiv-tool/data/` |
+| cookies / settings | `~/Library/Application Support/pixiv-tool/config/` | `~/.config/pixiv-tool/config/` |
+
+> dev 模式（venv python 跑源码）三平台都锚定 `<repo>/data`、`<repo>/config`，和 Windows 一致。
+
+### 4.5 代码签名与公证（可选）
+
+mac 产物默认 **不签名**。不签名的 `.app` 首次双击会被 Gatekeeper 拦，用户需右键→打开，或 `xattr -dr com.apple.quarantine /path/to.app` 去隔离属性。要正式分发需 **Apple Developer 证书**：
+
+```bash
+# 1) 导入证书到临时 keychain（证书 base64 存 CI secret）
+echo "$MACOS_CERTIFICATE" | base64 --decode > cert.p12
+security create-keychain -p build build.keychain
+security import cert.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+security set-key-partition-list -S apple-tool:,apple: -s -k build build.keychain
+
+# 2) ad-hoc 或 Developer ID 签名（--options runtime 才能过公证）
+codesign --force --deep --options runtime \
+  --sign "Developer ID Application: <名字>" "dist/Pixiv Tool.app"
+
+# 3) 公证 + 装订票据（需 Apple ID app-specific password，存 secret）
+xcrun notarytool submit pixiv-tool-macos-x64.zip \
+  --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_ID_PWD" --wait
+xcrun stapler staple "dist/Pixiv Tool.app"
+```
+
+`release.yml` 里已预留一个 `Codesign (macOS, optional)` step，默认不跑：手动触发 workflow（`workflow_dispatch`）勾 `enable_macos_sign` 且配好 `MACOS_CERTIFICATE` / `MACOS_CERTIFICATE_PWD` / `MACOS_CERTIFICATE_NAME` 三个 secret 才执行。**公证（notarytool）未接入**——那还需 Apple ID secrets，按需再加。
+
+---
+
+## 5. 运行模式
 
 `pixiv-tool.exe` 支持三种启动方式（`src/pixiv_tool/main.py:main()` 分发）：
 
@@ -124,7 +222,7 @@ pixiv-tool.exe（主进程）
 
 不弹窗，直接在终端打印 uvicorn 日志。可以用 curl/浏览器直连 `http://127.0.0.1:9962/` 验证。
 
-> `console=False`（见 `pixiv-tool.spec`）时这个模式没有终端输出。调试启动崩溃请见下面第 6 节。
+> `console=False`（见 `pixiv-tool.spec`）时这个模式没有终端输出。调试启动崩溃请见下面第 7 节。
 
 ### 4.3 登录子入口（内部）
 
@@ -135,7 +233,7 @@ prod 模式：`pixiv-tool.exe --login-window --result-file X`（同一个 exe �
 
 ---
 
-## 5. 数据存放
+## 6. 数据存放
 
 数据目录锚定由 `src/pixiv_tool/storage/paths.py` 统一管理：
 
@@ -154,7 +252,7 @@ prod 模式：`pixiv-tool.exe --login-window --result-file X`（同一个 exe �
 
 ---
 
-## 6. 调试启动崩溃
+## 7. 调试启动崩溃
 
 prod 模式 `console=False`，启动失败时窗口闪退看不到 traceback。三种排查方式：
 
@@ -190,11 +288,11 @@ prod 模式 `console=False`，启动失败时窗口闪退看不到 traceback。�
 
 ---
 
-## 7. 常见问题
+## 8. 常见问题
 
 ### Q1: 双击 exe 闪退，没报错
 
-默认 `console=False` 看不到 traceback。按第 6 节"调试启动崩溃"排查。
+默认 `console=False` 看不到 traceback。按第 7 节"调试启动崩溃"排查。
 
 ### Q2: `Failed to load Python DLL`
 
@@ -218,7 +316,7 @@ prod 模式登录走子进程（`pixiv-tool.exe --login-window`），依赖 `pyt
 
 ---
 
-## 8. PyInstaller spec 关键配置
+## 9. PyInstaller spec 关键配置
 
 `pixiv-tool.spec` 要点（修改后必须重新打包）：
 
@@ -235,7 +333,7 @@ prod 模式登录走子进程（`pixiv-tool.exe --login-window`），依赖 `pyt
 
 ---
 
-## 9. 相关文件
+## 10. 相关文件
 
 | 文件 | 作用 |
 |---|---|

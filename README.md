@@ -88,6 +88,8 @@ cd frontend && pnpm install
   sudo dnf install webkit2gtk4.1-devel
   ```
 
+  mac/linux 本地构建打包用对应平台 extra：`uv sync --extra macos --extra dev`（linux 把 `macos` 换成 `linux`），再 `.venv/bin/python scripts/build.py`，产出 `dist/pixiv-tool/`（mac 若 spec 声明了 BUNDLE 则是 `dist/Pixiv Tool.app`）。详见 `docs/PACKAGING.md` §4。
+
 ## 目录结构
 
 ```
