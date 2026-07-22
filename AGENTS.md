@@ -55,6 +55,8 @@
 
 ### 开发命令
 
+Windows (PowerShell)：
+
 ```powershell
 # 启动 dev 服务（前后端统一管理）
 ./scripts/dev.ps1 start           # 启动所有
@@ -63,6 +65,14 @@
 ./scripts/dev.ps1 status          # 查看状态
 ./scripts/dev.ps1 logs            # 查看日志
 ./scripts/dev.ps1 stop            # 停止所有
+```
+
+macOS / Linux (bash)：
+
+```bash
+./scripts/dev.sh start           # 启动所有（子命令与 dev.ps1 一致）
+./scripts/dev.sh status          # 查看状态
+./scripts/dev.sh stop            # 停止所有
 ```
 
 - dev 端口：前端 9961、后端 9962

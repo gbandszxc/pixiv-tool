@@ -28,8 +28,8 @@
 │   └── agents/                    ← skills 配置（本目录）
 ├── spike/                         ← 风险验证脚本
 │   └── cookie_probe/
-├── backend/                       ← （待建）Python FastAPI
-└── frontend/                      ← （待建）Vue3 + Vite
+├── src/pixiv_tool/                ← Python FastAPI 后端
+└── frontend/                      ← Vue3 + Vite
 ```
 
 ## 用 SPEC 的术语

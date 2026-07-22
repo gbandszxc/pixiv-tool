@@ -23,6 +23,8 @@
 
 ### 启动开发服务
 
+**Windows (PowerShell)**
+
 ```powershell
 # 一键启动前后端
 ./scripts/dev.ps1 start
@@ -43,13 +45,31 @@
 ./scripts/dev.ps1 stop
 ```
 
+**macOS / Linux (bash)**
+
+```bash
+# 一键启动前后端
+./scripts/dev.sh start
+
+# 仅启动前端 / 后端
+./scripts/dev.sh start frontend
+./scripts/dev.sh start backend
+
+# 查看状态 / 日志 / 停止
+./scripts/dev.sh status
+./scripts/dev.sh logs
+./scripts/dev.sh stop
+```
+
+`dev.sh` 与 `dev.ps1` 行为一致：stop 按进程组强杀（连 uvicorn `--reload` 子进程一起清理），start 轮询 `/api/health` 与端口确认就绪。
+
 启动后访问 `http://localhost:9961`。
 
 ### 安装依赖
 
-```powershell
-# 后端
-cd backend && uv sync
+```bash
+# 后端（在仓库根目录）
+uv sync
 
 # 前端
 cd frontend && pnpm install
@@ -72,9 +92,9 @@ cd frontend && pnpm install
 
 ```
 pixiv-tool/
-├─ backend/          # Python 后端
+├─ src/pixiv_tool/   # Python 后端（FastAPI + uvicorn）
 ├─ frontend/         # Vue3 + TS + Vite
-├─ scripts/          # 开发与构建脚本
+├─ scripts/          # 开发与构建脚本（dev.ps1 / dev.sh / build.py）
 ├─ docs/             # SPEC + ADR
 └─ spike/            # 探索性验证代码
 ```

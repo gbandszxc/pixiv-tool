@@ -151,7 +151,7 @@ pixiv-tool/
 │  └─ package.json
 ├─ scripts/
 │  ├─ dev.ps1                   # Windows dev 服务管理（start/stop/restart/logs/status）
-│  ├─ dev.sh                    # macOS/Linux 版（V2 由 dev.ps1 转换）
+│  ├─ dev.sh                    # macOS/Linux 版（与 dev.ps1 行为一致）
 │  ├─ build.py                  # pnpm build + pyinstaller
 │  └─ find_port.py              # 独立端口探测工具（供 spike 与 prod 复用）
 ├─ pyproject.toml               # 项目配置（hatchling + uv + pytest）
@@ -445,10 +445,10 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 ### 8.1 开发模式
 
 - **dev 端口固定**：前端 9961、后端 9962
-- **统一脚本**：`scripts/dev.ps1`，子命令 `start|stop|restart|logs|status`，支持 `[all|frontend|backend]` 参数
+- **统一脚本**：Windows 用 `scripts/dev.ps1`，macOS/Linux 用 `scripts/dev.sh`（两者行为一致）。子命令 `start|stop|restart|logs|status`，支持 `[all|frontend|backend]` 参数
 - **PID/日志**：`.dev/pids/{frontend,backend}.pid` + `.dev/logs/{frontend,backend}.log`
 - **健康检查**：frontend → `GET 127.0.0.1:9961/`；backend → `GET 127.0.0.1:9962/api/health`
-- **注释规范**：所有平台特定命令在注释里标注 sh 等价物，方便 V2 转 `dev.sh`
+- **进程清理**：stop 按进程组强杀（连 uvicorn `--reload` 子进程一起清理），不依赖 PID 文件、不按端口盲目杀
 - **后端热重载**：uvicorn `reload=True`
 - **前端热重载**：Vite HMR
 
