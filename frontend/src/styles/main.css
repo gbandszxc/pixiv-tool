@@ -80,6 +80,18 @@ textarea {
   margin-top: var(--space-sm);
 }
 
+.tasks-header {
+  margin-bottom: var(--space-lg);
+}
+
+.tasks-header .page-title {
+  margin-bottom: 0;
+}
+
+.tasks-toolbar {
+  margin-bottom: var(--space-md);
+}
+
 .task-progress-meta {
   margin-top: var(--space-xxs);
   color: var(--ink-subtle);

@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from pixiv_tool.core.crawler import Crawler
@@ -81,6 +81,40 @@ async def create_task(body: dict):
 async def list_tasks():
     """任务列表。"""
     return {"items": _db.list_tasks()}
+
+
+def _delete_terminal_task_ids(task_ids: list[str]) -> dict[str, int]:
+    """删除终态任务，并把存储层结果转换成一致的 HTTP 语义。"""
+    if not task_ids:
+        raise HTTPException(status_code=422, detail="task_ids 不能为空")
+
+    deleted, missing_ids, non_terminal_ids = _db.delete_terminal_tasks(task_ids)
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if non_terminal_ids:
+        raise HTTPException(status_code=409, detail="只能删除已结束的任务")
+    return {"deleted": deleted}
+
+
+@router.delete("")
+async def delete_tasks(body: dict):
+    """原子批量删除终态任务记录。"""
+    task_ids = body.get("task_ids", [])
+    if not isinstance(task_ids, list) or not all(isinstance(task_id, str) for task_id in task_ids):
+        raise HTTPException(status_code=422, detail="task_ids 必须是字符串数组")
+    return _delete_terminal_task_ids(task_ids)
+
+
+@router.delete("/completed")
+async def delete_completed_tasks():
+    """清除全部已完成任务记录。"""
+    return {"deleted": _db.delete_completed_tasks()}
+
+
+@router.delete("/{task_id}")
+async def delete_task(task_id: str):
+    """删除单个终态任务记录。"""
+    return _delete_terminal_task_ids([task_id])
 
 
 @router.get("/{task_id}")

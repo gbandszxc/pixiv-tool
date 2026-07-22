@@ -53,5 +53,28 @@ export const useTaskStore = defineStore("tasks", () => {
     await fetchTasks();
   }
 
-  return { tasks, fetchTasks, createTask, pauseTask, resumeTask, cancelTask, retryFailed };
+  async function deleteTask(taskId: string) {
+    return (await api.delete(`/api/tasks/${taskId}`)).data as { deleted: number };
+  }
+
+  async function deleteTasks(taskIds: string[]) {
+    return (await api.delete("/api/tasks", { data: { task_ids: taskIds } })).data as { deleted: number };
+  }
+
+  async function deleteCompletedTasks() {
+    return (await api.delete("/api/tasks/completed")).data as { deleted: number };
+  }
+
+  return {
+    tasks,
+    fetchTasks,
+    createTask,
+    pauseTask,
+    resumeTask,
+    cancelTask,
+    retryFailed,
+    deleteTask,
+    deleteTasks,
+    deleteCompletedTasks,
+  };
 });

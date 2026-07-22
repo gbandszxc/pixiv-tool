@@ -39,10 +39,9 @@
                 {{ accountInitial }}
               </n-avatar>
               <span class="account-id">{{ authStore.pixivId || authStore.name }}</span>
-              <span class="account-chevron" aria-hidden="true">⌄</span>
             </button>
           </n-dropdown>
-          <n-button v-else size="small" block @click="handleLogin">{{ t('auth.notLoggedIn') }}</n-button>
+          <n-button v-else size="small" block @click="handleLogin">{{ t('auth.login') }}</n-button>
         </div>
       </n-layout-sider>
       <n-layout-content class="app-content">
@@ -182,11 +181,6 @@ onMounted(() => {
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.account-chevron {
-  color: var(--ink-muted);
-  font-size: 16px;
 }
 
 </style>

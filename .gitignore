@@ -161,3 +161,4 @@ temp/
 
 
 downloads/
+.scratch/build-*

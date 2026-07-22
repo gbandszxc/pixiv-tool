@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -214,9 +215,175 @@ class TestAuthAPI:
             "profile_img": "https://i.pximg.net/user-profile/img.png",
         }
 
+    def test_auth_status_accepts_nested_user_data_and_large_avatar(self, client, monkeypatch):
+        """兼容 Pixiv 响应变体，并在小头像缺失时回退大头像。"""
+        tc, db, stub_store, *_ = client
+        stub_store.load.return_value = {"PHPSESSID": "session"}
+
+        class FakeResponse:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return {
+                    "body": {
+                        "userData": {
+                            "id": "1",
+                            "pixivId": "pixiv-user",
+                            "name": "Pixiv User",
+                            "profileImgBig": "https://i.pximg.net/user-profile/large.png",
+                        }
+                    }
+                }
+
+        class FakeAsyncClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            @staticmethod
+            async def get(*_args, **_kwargs):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.AsyncClient", FakeAsyncClient)
+
+        resp = tc.get("/api/auth/status")
+
+        assert resp.status_code == 200
+        assert resp.json()["profile_img"] == "https://i.pximg.net/user-profile/large.png"
+
+    def test_auth_status_timeout_keeps_saved_cookies(self, client, monkeypatch):
+        """网络超时只快速显示未登录，不应丢失可供后续重试的本地 Cookie。"""
+        tc, db, stub_store, *_ = client
+        stub_store.load.return_value = {"PHPSESSID": "session"}
+
+        class SlowAsyncClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            @staticmethod
+            async def get(*_args, **_kwargs):
+                await asyncio.sleep(0.05)
+
+        import pixiv_tool.api.auth as auth_mod
+        monkeypatch.setattr("httpx.AsyncClient", SlowAsyncClient)
+        monkeypatch.setattr(auth_mod, "_AUTH_STATUS_TIMEOUT_SEC", 0.01)
+
+        resp = tc.get("/api/auth/status")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"is_logged_in": False}
+        stub_store.clear.assert_not_called()
+
+    def test_auth_status_unauthorized_clears_saved_cookies(self, client, monkeypatch):
+        """仅明确的 401/403 认证失败会清理本地 Cookie。"""
+        tc, db, stub_store, *_ = client
+        stub_store.load.return_value = {"PHPSESSID": "session"}
+
+        class FakeResponse:
+            status_code = 401
+
+        class FakeAsyncClient:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            @staticmethod
+            async def get(*_args, **_kwargs):
+                return FakeResponse()
+
+        monkeypatch.setattr("httpx.AsyncClient", FakeAsyncClient)
+
+        resp = tc.get("/api/auth/status")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"is_logged_in": False}
+        stub_store.clear.assert_called_once()
+
     def test_auth_logout(self, client):
         """POST /api/auth/logout clears store."""
         tc, db, stub_store, *_ = client
         resp = tc.post("/api/auth/logout")
         assert resp.status_code == 200
         stub_store.clear.assert_called_once()
+
+
+# ── Tasks API (任务删除) ─────────────────────────────────────────────────────
+
+
+class TestTasksAPI:
+    @staticmethod
+    def _insert_task(db, task_id: str, status: str) -> None:
+        db.insert_task(
+            task_id=task_id,
+            source_type="single",
+            source_id="123",
+            status=status,
+            created_at="2025-01-01",
+            updated_at="2025-01-01",
+        )
+
+    def test_delete_single_terminal_task(self, client):
+        tc, db, *_ = client
+        self._insert_task(db, "done-task", "done")
+
+        resp = tc.delete("/api/tasks/done-task")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 1}
+        assert db.get_task("done-task") is None
+
+    def test_delete_task_not_found(self, client):
+        tc, *_ = client
+
+        resp = tc.delete("/api/tasks/missing")
+
+        assert resp.status_code == 404
+
+    def test_batch_delete_rejects_non_terminal_tasks_atomically(self, client):
+        tc, db, *_ = client
+        self._insert_task(db, "done-task", "done")
+        self._insert_task(db, "running-task", "running")
+
+        resp = tc.request("DELETE", "/api/tasks", json={"task_ids": ["done-task", "running-task"]})
+
+        assert resp.status_code == 409
+        assert db.get_task("done-task") is not None
+        assert db.get_task("running-task") is not None
+
+    def test_batch_delete_rejects_empty_selection(self, client):
+        tc, *_ = client
+
+        resp = tc.request("DELETE", "/api/tasks", json={"task_ids": []})
+
+        assert resp.status_code == 422
+
+    def test_clear_completed_tasks_keeps_other_terminal_states(self, client):
+        tc, db, *_ = client
+        self._insert_task(db, "done-task", "done")
+        self._insert_task(db, "failed-task", "failed")
+        self._insert_task(db, "canceled-task", "canceled")
+
+        resp = tc.delete("/api/tasks/completed")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 1}
+        assert db.get_task("done-task") is None
+        assert db.get_task("failed-task") is not None
+        assert db.get_task("canceled-task") is not None

@@ -16,6 +16,8 @@ from .paths import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
+TERMINAL_TASK_STATUSES = frozenset({"done", "failed", "canceled"})
+
 DB_DIR = DATA_DIR
 DB_PATH = DB_DIR / "app.db"
 
@@ -230,3 +232,43 @@ class Database:
             "SELECT * FROM tasks ORDER BY created_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+    def delete_terminal_tasks(
+        self, task_ids: list[str]
+    ) -> tuple[int, set[str], set[str]]:
+        """原子删除终态任务。
+
+        返回 ``(deleted, missing_ids, non_terminal_ids)``。只要有不存在或
+        非终态任务，整个批次都不会删除，调用方可安全地向用户报告冲突。
+        """
+        unique_ids = list(dict.fromkeys(task_ids))
+        if not unique_ids:
+            return 0, set(), set()
+
+        placeholders = ",".join("?" * len(unique_ids))
+        with self._transaction() as conn:
+            rows = conn.execute(
+                f"SELECT task_id, status FROM tasks WHERE task_id IN ({placeholders})",
+                unique_ids,
+            ).fetchall()
+            statuses = {row["task_id"]: row["status"] for row in rows}
+            missing_ids = set(unique_ids) - set(statuses)
+            non_terminal_ids = {
+                task_id
+                for task_id, status in statuses.items()
+                if status not in TERMINAL_TASK_STATUSES
+            }
+            if missing_ids or non_terminal_ids:
+                return 0, missing_ids, non_terminal_ids
+
+            cursor = conn.execute(
+                f"DELETE FROM tasks WHERE task_id IN ({placeholders})",
+                unique_ids,
+            )
+            return cursor.rowcount or 0, set(), set()
+
+    def delete_completed_tasks(self) -> int:
+        """删除全部已完成任务记录，不影响已导出的文件。"""
+        with self._transaction() as conn:
+            cursor = conn.execute("DELETE FROM tasks WHERE status = ?", ("done",))
+            return cursor.rowcount or 0

@@ -24,6 +24,8 @@ _store = create_cookie_store()
 
 # 登录子进程最长允许跑 5 分钟(用户可能慢慢输密码)
 _LOGIN_TIMEOUT_SEC = 300
+# 启动阶段只允许一次短暂的远程登录态验证，避免失效 Cookie 或网络异常拖慢 UI。
+_AUTH_STATUS_TIMEOUT_SEC = 2.0
 
 
 @router.get("/status")
@@ -43,26 +45,29 @@ async def auth_status():
     # 验证 cookie 有效性：调 /ajax/user/self
     try:
         import httpx
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                "https://www.pixiv.net/ajax/user/self?lang=zh",
-                headers={
-                    "x-csrf-token": cookies.get("x-csrf-token", ""),
-                    "User-Agent": "Mozilla/5.0",
-                    "Referer": "https://www.pixiv.net/",
-                },
-                cookies={k: v for k, v in cookies.items() if k != "x-csrf-token"},
-            )
-            if resp.status_code != 200:
+        async with httpx.AsyncClient(timeout=_AUTH_STATUS_TIMEOUT_SEC) as client:
+            async with asyncio.timeout(_AUTH_STATUS_TIMEOUT_SEC):
+                resp = await client.get(
+                    "https://www.pixiv.net/ajax/user/self?lang=zh",
+                    headers={
+                        "x-csrf-token": cookies.get("x-csrf-token", ""),
+                        "User-Agent": "Mozilla/5.0",
+                        "Referer": "https://www.pixiv.net/",
+                    },
+                    cookies={k: v for k, v in cookies.items() if k != "x-csrf-token"},
+                )
+            if resp.status_code in (401, 403):
                 _store.clear()
+                return {"is_logged_in": False}
+            if resp.status_code != 200:
+                logger.warning("登录态验证返回非认证错误: status=%s", resp.status_code)
                 return {"is_logged_in": False}
 
             body = resp.json()
-            # /ajax/user/self 返回顶层就是 {userData: {...}}(spike probe.py 实测),
-            # 不是 {body: {userData: ...}}。
-            user_data = body.get("userData", {})
+            # Pixiv 当前返回顶层 userData；保留旧结构兼容以应对页面/API 变体。
+            user_data = body.get("userData") or body.get("body", {}).get("userData") or {}
             if not user_data:
-                _store.clear()
+                logger.warning("登录态验证响应缺少 userData")
                 return {"is_logged_in": False}
 
             return {
@@ -70,8 +75,11 @@ async def auth_status():
                 "user_id": str(user_data.get("id", "")),
                 "pixiv_id": user_data.get("pixivId", ""),
                 "name": user_data.get("name", ""),
-                "profile_img": user_data.get("profileImg", ""),
+                "profile_img": user_data.get("profileImg") or user_data.get("profileImgBig", ""),
             }
+    except TimeoutError:
+        logger.warning("登录态验证超时（%.1fs）", _AUTH_STATUS_TIMEOUT_SEC)
+        return {"is_logged_in": False}
     except Exception as exc:
         logger.warning("登录态验证失败: %s", exc)
         return {"is_logged_in": False}

@@ -161,6 +161,45 @@ class TestTaskCRUD:
         tasks = tmp_db.list_tasks()
         assert len(tasks) == 2
 
+    def test_delete_terminal_tasks_is_atomic(self, tmp_db):
+        """终态任务可删除；混入进行中任务时整个批次不产生副作用。"""
+        for task_id, status in (("done", "done"), ("running", "running")):
+            tmp_db.insert_task(
+                task_id=task_id,
+                source_type="single",
+                source_id="1",
+                status=status,
+                created_at="2025-01-01",
+                updated_at="2025-01-01",
+            )
+
+        deleted, missing, non_terminal = tmp_db.delete_terminal_tasks(["done", "running"])
+
+        assert deleted == 0
+        assert missing == set()
+        assert non_terminal == {"running"}
+        assert tmp_db.get_task("done") is not None
+        assert tmp_db.get_task("running") is not None
+
+    def test_delete_terminal_tasks_and_completed_tasks(self, tmp_db):
+        """单批删除所有终态，清理完成任务只影响 done。"""
+        for task_id, status in (("done", "done"), ("failed", "failed"), ("canceled", "canceled")):
+            tmp_db.insert_task(
+                task_id=task_id,
+                source_type="single",
+                source_id="1",
+                status=status,
+                created_at="2025-01-01",
+                updated_at="2025-01-01",
+            )
+
+        deleted, missing, non_terminal = tmp_db.delete_terminal_tasks(["failed", "canceled"])
+        assert (deleted, missing, non_terminal) == (2, set(), set())
+        assert tmp_db.get_task("failed") is None
+        assert tmp_db.get_task("canceled") is None
+        assert tmp_db.delete_completed_tasks() == 1
+        assert tmp_db.get_task("done") is None
+
 
 # ── Settings tests (ticket 04) ───────────────────────────────────────────────
 
