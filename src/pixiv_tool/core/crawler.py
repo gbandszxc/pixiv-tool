@@ -9,6 +9,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from pathlib import Path
 
 from pixiv_tool.core.exporter import create_exporters
 from pixiv_tool.core.pixiv_client import PixivClient
@@ -16,6 +17,7 @@ from pixiv_tool.core.source import NovelSource
 from pixiv_tool.core.task import TaskManager
 from pixiv_tool.storage.db import Database
 from pixiv_tool.storage.models import NovelData
+from pixiv_tool.storage.paths import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +45,13 @@ class Crawler:
         done = 0
         skipped = 0
         failed_ids: list[int] = []
-        from pathlib import Path
-        target_dir = Path(output_dir)
+        # 锚定相对 output_dir 到 DATA_DIR（不是 cwd）。
+        # frozen + 双击 .app 启动时 cwd 常是 / 或 $HOME,
+        # 相对路径会写到不可预期位置。绝对路径（用户在设置里填的）原样使用。
+        out = Path(output_dir)
+        if not out.is_absolute():
+            out = DATA_DIR / out
+        target_dir = out
 
         try:
             self.task_manager.update_progress(task_id, status="running")
