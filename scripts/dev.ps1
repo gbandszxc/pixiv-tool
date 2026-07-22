@@ -6,7 +6,7 @@
     设计原则:
       - stop = 强杀。扫所有命令行含本仓库路径的 python.exe/node.exe 进程,
         taskkill /F /T 连子进程树一起杀。不依赖 PID 文件、不依赖端口反查。
-      - start = 启动后轮询 /api/health 直到通(最多 10s),不靠 sleep 赌时序。
+      - start = 启动进程并输出访问地址后立即返回；就绪状态由 status 查询。
       - restart = stop + start,无中间状态。
     所有平台特定命令在注释里标注 sh 等价物,方便后续转 dev.sh。
 .PARAMETER Command
@@ -50,8 +50,9 @@ $BackendPidFile = Join-Path $PidDir "backend.pid"
 $FrontendLogFile = Join-Path $LogDir "frontend.log"
 $BackendLogFile = Join-Path $LogDir "backend.log"
 
-# start 后等 /api/health 200 的最长秒数(本机冷启动实测 10s 够)
-$StartTimeoutSec = 10
+# 已发出强杀后，等待 Windows 回收进程树的最长秒数。
+# 仅 stop 使用；start 不等待服务就绪。
+$StopVerificationTimeoutSec = 2
 
 # -------------------------------------------------------------------
 # 工具函数
@@ -84,15 +85,6 @@ function Get-PidFromFile([string]$PidFile) {
     return $null
 }
 
-function Set-ManagedPidFile([string]$PidFile, [string]$Target) {
-    # pnpm/uv 的 shim 进程可能会立刻退出；就绪后记录真正的服务根进程，
-    # 使 PID 文件可用于人工排查，停止逻辑仍以命令行匹配为准。
-    $managed = @(Find-PixivProcesses -Target $Target)
-    if ($managed.Count -gt 0) {
-        $managed[0].ProcessId | Out-File -FilePath $PidFile -Encoding ascii -NoNewline
-    }
-}
-
 function Find-PixivProcesses([string]$Target) {
     # 扫所有 cmdline 含本仓库路径的 Vite / uvicorn 进程。
     # $Target="frontend" 只返回 vite(node); "backend" 只返回 uvicorn(python);
@@ -103,7 +95,9 @@ function Find-PixivProcesses([string]$Target) {
     $repoPath = $RepoRoot.TrimEnd('\').ToLower()
     $found = @()
     try {
-        $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+        # 让 WMI 先过滤可管理的可执行文件，避免每次命令都枚举全系统进程。
+        # 仓库路径和 vite/uvicorn 的二次匹配仍在下面完成，不会影响其它服务。
+        $procs = Get-CimInstance Win32_Process -Filter "Name = 'node.exe' OR Name = 'python.exe' OR Name = 'uvicorn.exe'" -ErrorAction SilentlyContinue
         foreach ($p in $procs) {
             $cmd = $p.CommandLine
             if (-not $cmd) { continue }
@@ -131,6 +125,18 @@ function Get-PortListenerPids([int]$Port) {
     }
 }
 
+function Test-PortListening([int]$Port) {
+    # Get-NetTCPConnection 在部分 Windows 机器上查询空闲端口也需要数秒。
+    # start 的常规路径只需知道端口是否空闲，.NET 监听表足够且不需要启动外部命令。
+    try {
+        $listeners = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+        return @($listeners | Where-Object { $_.Port -eq $Port }).Count -gt 0
+    } catch {
+        # 极少数平台 API 失败时保守回退，仍保持原有安全行为。
+        return @(Get-PortListenerPids -Port $Port).Count -gt 0
+    }
+}
+
 function Test-PortOpen([int]$Port) {
     # sh: curl -sf http://127.0.0.1:$Port/ > /dev/null 2>&1 || curl -sf http://[::1]:$Port/
     # Vite 默认绑 [::1](IPv6),uvicorn 绑 127.0.0.1(IPv4),两个都试。
@@ -146,22 +152,13 @@ function Test-PortOpen([int]$Port) {
     return $false
 }
 
-function Wait-PortReady([int]$Port, [string]$HealthPath, [int]$TimeoutSec) {
-    # 轮询端口直到健康检查通过或超时。
-    # 用于 start 后等服务真的就绪,不靠 sleep 赌时序。
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        if ($HealthPath) {
-            try {
-                $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/$HealthPath" -TimeoutSec 1 -UseBasicParsing -ErrorAction Stop
-                if ($r.StatusCode -eq 200) { return $true }
-            } catch { }
-        } else {
-            if (Test-PortOpen -Port $Port) { return $true }
-        }
-        Start-Sleep -Milliseconds 300
+function Get-ProcessTreeRoots([object[]]$Processes) {
+    # 同一棵树只需 taskkill /T 一次；没有受管父进程的项可能是服务根或孤儿进程。
+    $managedIds = @{}
+    foreach ($process in $Processes) {
+        $managedIds[[int]$process.ProcessId] = $true
     }
-    return $false
+    return @($Processes | Where-Object { -not $managedIds.ContainsKey([int]$_.ParentProcessId) })
 }
 
 # -------------------------------------------------------------------
@@ -181,20 +178,23 @@ function Stop-Target([string]$TargetName, [string]$Target) {
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = 'SilentlyContinue'
     try {
-        foreach ($p in $procs) {
+        foreach ($p in @(Get-ProcessTreeRoots -Processes $procs)) {
             Write-Host "$TargetName : 杀 PID $($p.ProcessId) ($($p.Name)) + 子进程树"
             & taskkill.exe /F /T /PID $p.ProcessId 2>&1 | Out-Null
         }
-        # 杀完一轮后再扫一次,确认没残留(uvicorn --reload 偶尔留 multiprocessing worker)
-        $deadline = (Get-Date).AddSeconds(5)
-        do {
-            Start-Sleep -Milliseconds 300
+        # 只在已经杀过进程时确认残留，避免“无进程的 stop”固定等待。
+        # --reload 的 worker 由 taskkill /T 一并终止；若 Windows 尚未回收，短暂重试补杀。
+        $deadline = (Get-Date).AddSeconds($StopVerificationTimeoutSec)
+        $leftover = @(Find-PixivProcesses -Target $Target)
+        while ($leftover.Count -gt 0 -and (Get-Date) -lt $deadline) {
             $leftover = @(Find-PixivProcesses -Target $Target)
-            foreach ($p in $leftover) {
+            foreach ($p in @(Get-ProcessTreeRoots -Processes $leftover)) {
                 Write-Host "$TargetName : 补杀 PID $($p.ProcessId) ($($p.Name))"
                 & taskkill.exe /F /T /PID $p.ProcessId 2>&1 | Out-Null
             }
-        } while ($leftover.Count -gt 0 -and (Get-Date) -lt $deadline)
+            if ($leftover.Count -gt 0) { Start-Sleep -Milliseconds 100 }
+            $leftover = @(Find-PixivProcesses -Target $Target)
+        }
 
         if ($leftover.Count -gt 0) {
             $pids = $leftover.ProcessId -join ','
@@ -226,17 +226,14 @@ function Invoke-Stop {
 # -------------------------------------------------------------------
 
 function Start-Frontend {
-    $existing = @(Find-PixivProcesses -Target "frontend")
-    if ($existing.Count -gt 0) {
-        if (Wait-PortReady -Port $FrontendPort -HealthPath "" -TimeoutSec $StartTimeoutSec) {
-            Write-Host "前端已在运行 (PID: $($existing[0].ProcessId))"
+    if (Test-PortListening -Port $FrontendPort) {
+        # 正常启动时端口空闲，不做耗时的命令行扫描。只有端口已占用时才确认归属。
+        $listeners = @(Get-PortListenerPids -Port $FrontendPort)
+        $existing = @(Find-PixivProcesses -Target "frontend")
+        if (@($existing | Where-Object { $listeners -contains $_.ProcessId }).Count -gt 0) {
+            Write-Host "前端已启动 (PID: $($existing[0].ProcessId))"
             return $true
         }
-        Write-Host "前端进程未就绪，先清理后重启。"
-        Stop-Target "前端" "frontend"
-    }
-    $listeners = @(Get-PortListenerPids -Port $FrontendPort)
-    if ($listeners.Count -gt 0) {
         throw "前端端口 $FrontendPort 已被非 pixiv-tool 进程占用 (PID: $($listeners -join ','))"
     }
     Ensure-Dirs
@@ -250,29 +247,19 @@ function Start-Frontend {
         -NoNewWindow -PassThru
     $proc.Id | Out-File -FilePath $FrontendPidFile -Encoding ascii -Nonewline
 
-    # 轮询端口(Vite 没健康检查端点,只用端口探测)
-    if (Wait-PortReady -Port $FrontendPort -HealthPath "" -TimeoutSec $StartTimeoutSec) {
-        Set-ManagedPidFile -PidFile $FrontendPidFile -Target 'frontend'
-        Write-Host "  ✓ 前端就绪 (PID: $($proc.Id), port $FrontendPort)"
-        return $true
-    }
-    Write-Host "  ✗ 前端在 ${StartTimeoutSec}s 内未就绪,见日志: $FrontendLogFile"
-    Stop-Target "前端" "frontend"
-    return $false
+    Write-Host "  ✓ 前端已启动 (PID: $($proc.Id), port $FrontendPort)"
+    return $true
 }
 
 function Start-Backend {
-    $existing = @(Find-PixivProcesses -Target "backend")
-    if ($existing.Count -gt 0) {
-        if (Wait-PortReady -Port $BackendPort -HealthPath "api/health" -TimeoutSec $StartTimeoutSec) {
-            Write-Host "后端已在运行 (PID: $($existing[0].ProcessId))"
+    if (Test-PortListening -Port $BackendPort) {
+        # 正常启动时端口空闲，不做耗时的命令行扫描。只有端口已占用时才确认归属。
+        $listeners = @(Get-PortListenerPids -Port $BackendPort)
+        $existing = @(Find-PixivProcesses -Target "backend")
+        if (@($existing | Where-Object { $listeners -contains $_.ProcessId }).Count -gt 0) {
+            Write-Host "后端已启动 (PID: $($existing[0].ProcessId))"
             return $true
         }
-        Write-Host "后端进程未就绪，先清理后重启。"
-        Stop-Target "后端" "backend"
-    }
-    $listeners = @(Get-PortListenerPids -Port $BackendPort)
-    if ($listeners.Count -gt 0) {
         throw "后端端口 $BackendPort 已被非 pixiv-tool 进程占用 (PID: $($listeners -join ','))"
     }
     Ensure-Dirs
@@ -286,15 +273,8 @@ function Start-Backend {
         -NoNewWindow -PassThru
     $proc.Id | Out-File -FilePath $BackendPidFile -Encoding ascii -NoNewline
 
-    # 轮询 /api/health(确认不仅是端口开,而且 FastAPI 应用已 ready)
-    if (Wait-PortReady -Port $BackendPort -HealthPath "api/health" -TimeoutSec $StartTimeoutSec) {
-        Set-ManagedPidFile -PidFile $BackendPidFile -Target 'backend'
-        Write-Host "  ✓ 后端就绪 (PID: $($proc.Id), port $BackendPort)"
-        return $true
-    }
-    Write-Host "  ✗ 后端在 ${StartTimeoutSec}s 内未就绪,见日志: $BackendLogFile"
-    Stop-Target "后端" "backend"
-    return $false
+    Write-Host "  ✓ 后端已启动 (PID: $($proc.Id), port $BackendPort)"
+    return $true
 }
 
 function Invoke-Start {
