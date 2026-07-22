@@ -291,6 +291,12 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
+linux = [
+    { name = "pywebview" },
+]
+macos = [
+    { name = "pywebview" },
+]
 win = [
     { name = "pywebview" },
 ]
@@ -302,10 +308,12 @@ requires-dist = [
     { name = "pyinstaller", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0" },
+    { name = "pywebview", marker = "extra == 'linux'", specifier = ">=5.0,<6.0" },
+    { name = "pywebview", marker = "extra == 'macos'", specifier = ">=5.0,<6.0" },
     { name = "pywebview", marker = "extra == 'win'", specifier = ">=5.0,<6.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
-provides-extras = ["win", "dev"]
+provides-extras = ["win", "macos", "linux", "dev"]
 
 [[package]]
 name = "pluggy"

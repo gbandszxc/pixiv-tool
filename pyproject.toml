@@ -28,7 +28,13 @@ dependencies = [
 # ---------------------------------------------------------------------------
 
 [project.optional-dependencies]
+# pywebview 平台后端按平台拉不同原生依赖:Windows 拉 pythonnet(WebView2),
+# macOS/Linux 拉 PyObjC / GTK。pywebview 在各平台声明即可,依赖会自动解析
+# (pip/uv 装 pywebview 会自动带 pyobjc-framework-Cocoa 等子依赖)。
+# 不要手动加 pyobjc——由 pywebview 自己拉,版本冲突时再单独锁。
 win = ["pywebview>=5.0,<6.0"]
+macos = ["pywebview>=5.0,<6.0"]
+linux = ["pywebview>=5.0,<6.0"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24.0",

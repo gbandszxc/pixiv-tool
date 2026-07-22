@@ -41,9 +41,11 @@ DIST_OUTPUT = REPO_ROOT / "dist" / "pixiv-tool"
 def build_frontend() -> None:
     """构建前端：pnpm install → pnpm build。"""
     print("\n[1/3] 构建前端...")
-    # Windows 上 pnpm 是 .CMD shim，subprocess 默认不走 PATHEXT，要么 shell=True
-    # 让 cmd.exe 解析 PATHEXT，要么 shutil.which 预解析全路径。
-    # 命令是字面量无注入风险，shell=True 最简单可靠。
+    # Windows 上 pnpm 是 .CMD shim，subprocess 默认不走 PATHEXT，要让 cmd.exe
+    # 解析 PATHEXT 必须传 shell=True。命令是字面量无注入风险。
+    # POSIX(macOS/Linux)下 pnpm 是普通可执行文件,直接 exec 即可;强制 shell=True
+    # 会走 /bin/sh 解析,引号/变量展开语义不同,没必要也不安全。
+    use_shell = sys.platform == "win32"
     for cmd in (
         ["pnpm", "install"],
         ["pnpm", "build"],
@@ -52,7 +54,7 @@ def build_frontend() -> None:
             cmd,
             cwd=FRONTEND_DIR,
             check=True,
-            shell=True,
+            shell=use_shell,
         )
         if result.returncode != 0:
             sys.exit(f"前端构建失败: {' '.join(cmd)}")

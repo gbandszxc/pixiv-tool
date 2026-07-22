@@ -8,9 +8,40 @@ pixiv-tool PyInstaller spec 文件。
 """
 
 from pathlib import Path
+import sys
 
 block_cipher = None
 ROOT = Path(SPECPATH)
+
+# -------------------------------------------------------------------
+# 平台相关 hiddenimports
+#
+# pywebview 平台后端是 sys.platform 判断后才动态 import 的,PyInstaller 静态
+# 分析抓不到,必须显式声明。但**平台后端是平台专属的**:
+#   - webview.platforms.edgechromium / winforms 仅 Windows 存在
+#   - webview.platforms.cocoa 仅 macOS 存在(依赖 PyObjC)
+#   - webview.platforms.webkitgtk / gtk 仅 Linux 存在(依赖 GTK)
+# 把别平台的后端声明进 hiddenimports,PyInstaller 编译该模块时会因 import
+# 平台专属符号(如 mac 上 webview.platforms.winforms 引 clr/pythonnet)而崩。
+#
+# pixiv_tool.storage.cookie_dpapi 同理:模块顶层 `import ctypes.wintypes` +
+# `ctypes.windll`(mac/linux 的 ctypes 没有 windll 属性),只能 Windows 编译。
+# 运行期 cookies.py 的 create_cookie_store() 已经按 sys.platform 惰性 import,
+# 所以 mac/linux 不需要这个模块在 bundle 里。
+# -------------------------------------------------------------------
+
+if sys.platform == "win32":
+    pywebview_backends = [
+        "webview.platforms.edgechromium",
+        "webview.platforms.winforms",
+    ]
+    platform_hidden = ["pixiv_tool.storage.cookie_dpapi"]
+elif sys.platform == "darwin":
+    pywebview_backends = ["webview.platforms.cocoa"]
+    platform_hidden = []  # mac cookie 存储是 stub,不需要 dpapi 模块
+else:  # linux
+    pywebview_backends = ["webview.platforms.webkitgtk", "webview.platforms.gtk"]
+    platform_hidden = []
 
 # -------------------------------------------------------------------
 # 数据文件：前端构建产物
@@ -32,10 +63,9 @@ a = Analysis(
     datas=datas,
     hiddenimports=[
         "pywebview",
-        # pywebview 平台后端是平台判断后才动态 import 的,PyInstaller 静态分析抓不到。
-        # V1 仅 Windows,列 edgechromium(WebView2,Win11 默认)+ winforms(fallback)。
-        "webview.platforms.edgechromium",
-        "webview.platforms.winforms",
+        # pywebview 平台后端 + 平台专属模块按 sys.platform 展开(见文件顶部条件)。
+        *pywebview_backends,
+        *platform_hidden,
         "uvicorn",
         "uvicorn.logging",
         "uvicorn.loops",
@@ -55,7 +85,6 @@ a = Analysis(
         # 登录子进程入口在 prod 模式下由主 exe `--login-window` 分发调用,
         # 必须在 bundle 里(静态分析也能找到,但显式声明更稳)。
         "pixiv_tool.auth.login_window",
-        "pixiv_tool.storage.cookie_dpapi",
     ],
     hookspath=[],
     hooksconfig={},
@@ -117,3 +146,29 @@ coll = COLLECT(
     upx_exclude=[],
     name="pixiv-tool",
 )
+
+# -------------------------------------------------------------------
+# BUNDLE（macOS .app,仅 darwin）
+#
+# Windows 上 EXE(onedir) 就是最终产物;macOS 上要让 Finder 把它识别为可双击
+# 的 .app bundle,必须再加一层 BUNDLE。COLLECT 产物是 pixiv-tool/ 目录,BUNDLE
+# 把它打包成 Pixiv Tool.app/。
+#
+# 图标:mac 用 .icns(Windows 的 .ico 在 mac 上不被 BUNDLE 接受)。src/pixiv_tool/
+# 下当前 icon.ico / icon.icns 都可能不存在(美术资源未就绪),统一 .exists() 守卫,
+# 不存在就传 None(PyInstaller 用默认图标)。**不要**在这里生成图标资源。
+# -------------------------------------------------------------------
+
+if sys.platform == "darwin":
+    _icns_path = ROOT / "src" / "pixiv_tool" / "icon.icns"
+    app = BUNDLE(
+        coll,
+        name="Pixiv Tool.app",
+        icon=str(_icns_path) if _icns_path.exists() else None,
+        bundle_identifier="com.pixivtool.app",
+        info_plist={
+            "CFBundleDisplayName": "Pixiv Tool",
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "10.13",
+        },
+    )
