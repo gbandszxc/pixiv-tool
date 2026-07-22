@@ -1,5 +1,6 @@
 <template>
   <n-config-provider :theme="theme" :theme-overrides="themeOverrides">
+    <n-message-provider>
     <n-layout has-sider class="app-shell">
       <n-layout-sider
         bordered
@@ -48,6 +49,7 @@
         <router-view />
       </n-layout-content>
     </n-layout>
+    </n-message-provider>
   </n-config-provider>
 </template>
 
@@ -64,6 +66,7 @@ import {
   NButton,
   NAvatar,
   NDropdown,
+  NMessageProvider,
 } from "naive-ui";
 import type { GlobalThemeOverrides, MenuOption } from "naive-ui";
 import { useAuthStore } from "./stores/auth";

@@ -178,6 +178,25 @@ class Database:
         with self._transaction() as conn:
             conn.execute("DELETE FROM novels WHERE novel_id = ?", (novel_id,))
 
+    def delete_novels_batch(self, novel_ids: list[int]) -> int:
+        """批量删除 novel 记录,返回删除条数。"""
+        if not novel_ids:
+            return 0
+        placeholders = ",".join("?" * len(novel_ids))
+        with self._transaction() as conn:
+            cur = conn.execute(
+                f"DELETE FROM novels WHERE novel_id IN ({placeholders})",
+                novel_ids,
+            )
+            return cur.rowcount or 0
+
+    def delete_all_novels(self) -> int:
+        """清空 novels 表,返回删除条数。"""
+        with self._transaction() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM novels").fetchone()[0]
+            conn.execute("DELETE FROM novels")
+            return count
+
     # ------------------------------------------------------------------
     # Task CRUD
     # ------------------------------------------------------------------

@@ -45,9 +45,19 @@ export const useHistoryStore = defineStore("history", () => {
     await fetchNovels();
   }
 
+  async function deleteNovelsBatch(novelIds: number[], deleteFile = false) {
+    await api.post("/api/novels/batch-delete", { novel_ids: novelIds, delete_file: deleteFile });
+    await fetchNovels();
+  }
+
+  async function deleteAllNovels(deleteFile = false) {
+    await api.delete("/api/novels", { params: { delete_file: deleteFile } });
+    await fetchNovels();
+  }
+
   async function openNovelFile(novelId: number) {
     await api.post(`/api/novels/${novelId}/open`);
   }
 
-  return { novels, total, page, pageSize, fetchNovels, deleteNovel, openNovelFile };
+  return { novels, total, page, pageSize, fetchNovels, deleteNovel, deleteNovelsBatch, deleteAllNovels, openNovelFile };
 });

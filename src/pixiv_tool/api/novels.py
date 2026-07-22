@@ -10,7 +10,8 @@ import platform
 import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Body, Query
+from pydantic import BaseModel, Field
 
 from pixiv_tool.storage.db import Database
 
@@ -19,6 +20,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 _db = Database()
+
+
+def _unlink_novel_files(novel: dict) -> None:
+    """删除单条 novel 记录对应的 txt/md 文件(忽略已不存在)。"""
+    for key in ("txt_path", "md_path"):
+        p = novel.get(key)
+        if p and Path(p).exists():
+            try:
+                Path(p).unlink()
+            except OSError as exc:
+                logger.warning("删除文件失败 %s: %s", p, exc)
+
+
+class BatchDeleteRequest(BaseModel):
+    novel_ids: list[int] = Field(default_factory=list)
+    delete_file: bool = False
 
 
 @router.get("/novels")
@@ -72,10 +89,41 @@ async def delete_novel(novel_id: int, delete_file: bool = False):
         return {"error": "小说不存在"}
 
     if delete_file:
-        for key in ("txt_path", "md_path"):
-            p = novel.get(key)
-            if p and Path(p).exists():
-                Path(p).unlink()
+        _unlink_novel_files(novel)
 
     _db.delete_novel(novel_id)
     return {"status": "success"}
+
+
+@router.post("/novels/batch-delete")
+async def delete_novels_batch(req: BatchDeleteRequest):
+    """批量删除小说记录（可选删文件）。"""
+    if not req.novel_ids:
+        return {"error": "novel_ids 不能为空"}
+
+    # 先查出要删文件的全部记录(避免删 DB 后丢失 path)
+    rows: list[dict] = []
+    if req.delete_file:
+        for nid in req.novel_ids:
+            novel = _db.get_novel(nid)
+            if novel:
+                rows.append(novel)
+        for novel in rows:
+            _unlink_novel_files(novel)
+
+    deleted = _db.delete_novels_batch(req.novel_ids)
+    logger.info("批量删除 %d 条 novel 记录", deleted)
+    return {"status": "success", "deleted": deleted}
+
+
+@router.delete("/novels")
+async def delete_all_novels(delete_file: bool = False):
+    """清空全部 novel 记录（可选删文件）。"""
+    if delete_file:
+        rows = _db.list_novels(page=1, page_size=10000).get("items", [])
+        for novel in rows:
+            _unlink_novel_files(novel)
+
+    deleted = _db.delete_all_novels()
+    logger.info("清空 %d 条 novel 记录", deleted)
+    return {"status": "success", "deleted": deleted}
