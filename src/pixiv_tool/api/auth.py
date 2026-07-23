@@ -144,7 +144,11 @@ async def login():
     result = await asyncio.to_thread(_spawn_login_subprocess)
     if result["status"] == "success" and result.get("cookies"):
         _store.save(result["cookies"])
-        return {"status": "success", "message": "登录成功"}
+        return {
+            "status": "success",
+            "message": "登录成功",
+            "user": result.get("user", {}),
+        }
     return {"status": result["status"], "message": result.get("error", "登录取消")}
 
 

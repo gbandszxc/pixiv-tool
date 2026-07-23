@@ -54,7 +54,7 @@ new Promise((resolve) => {
 
     // ---- 1. 提取 csrf token(5 路径兜底)----
     // react-query hydrate 是异步的,loaded 事件触发时数据可能还没就绪。
-    // 用 polling 等到 token 出现或 5s 超时,避免 Python 端反复 evaluate_js。
+    // 用短 polling 等到 token 出现，避免登录成功后仍被 CSRF 兜底长时间阻塞。
     //
     // 路径优先级(2026-07-21 chrome-devtools 实测):
     //   E(当前主路径):serverSerializedPreloadedState 的 JSON 字符串里 .api.token
@@ -108,8 +108,8 @@ new Promise((resolve) => {
     const tokenSources = [];
     let token = '';
     const pollingStart = Date.now();
-    const POLLING_TIMEOUT_MS = 5000;
-    const POLLING_INTERVAL_MS = 200;
+    const POLLING_TIMEOUT_MS = 1500;
+    const POLLING_INTERVAL_MS = 100;
 
     function pollToken() {
         const found = extractToken();
@@ -145,6 +145,7 @@ new Promise((resolve) => {
                     user_id: data.userData.id || '',
                     pixiv_id: data.userData.pixivId || '',
                     name: data.userData.name || '',
+                    profile_img: data.userData.profileImg || data.userData.profileImgBig || '',
                 };
             } else {
                 loginInfo = {
@@ -266,12 +267,12 @@ def _morsel_to_dict(name: str, morsel: Any) -> dict[str, Any]:
 # ====================================================================
 
 
-def _evaluate_js_with_retry(window: Any, script: str, attempts: int = 5, per_attempt_timeout: float = 8.0) -> dict | None:
+def _evaluate_js_with_retry(window: Any, script: str, attempts: int = 2, per_attempt_timeout: float = 3.0) -> dict | None:
     """evaluate_js callback 模式 + threading.Event 同步包装。
 
     pywebview 同步 evaluate_js 不 await Promise(ADR 0005 bug #5),
-    必须 callback 模式。spike 实测网络慢时 react-query 可能还没 hydrate,
-    token 暂时取不到——所以多次重试(spike 用 5 次)。
+    必须 callback 模式。当前 Pixiv 页面会在 JS 内短轮询 token；Python 端
+    仅补两次短尝试，避免登录成功后的信息回显被 CSRF 兜底长时间阻塞。
 
     重试规则:
         - callback 超时/非 dict 返回 → 重试(可能是网络或 pywebview 内部时序问题)
@@ -359,7 +360,16 @@ def extract_login_result(window: Any) -> dict[str, Any]:
         "x-csrf-token": csrf_token,
         **{k: v for k, v in cookie_map.items() if k != "PHPSESSID"},
     }
-    return {"status": "success", "cookies": cookies}
+    return {
+        "status": "success",
+        "cookies": cookies,
+        "user": {
+            "user_id": str(login.get("user_id", "")),
+            "pixiv_id": login.get("pixiv_id", ""),
+            "name": login.get("name", ""),
+            "profile_img": login.get("profile_img", ""),
+        },
+    }
 
 
 # ====================================================================

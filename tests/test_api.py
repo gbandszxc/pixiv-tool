@@ -323,6 +323,30 @@ class TestAuthAPI:
         assert resp.status_code == 200
         stub_store.clear.assert_called_once()
 
+    def test_login_returns_verified_user_without_second_status_request(self, client, monkeypatch):
+        """登录窗已验证的用户资料直接回传，前端无需再走一次远程状态校验。"""
+        tc, db, stub_store, *_ = client
+        monkeypatch.setattr(
+            "pixiv_tool.api.auth._spawn_login_subprocess",
+            lambda: {
+                "status": "success",
+                "cookies": {"PHPSESSID": "session", "x-csrf-token": "csrf"},
+                "user": {
+                    "user_id": "19509348",
+                    "pixiv_id": "gbandszxc",
+                    "name": "测试用户",
+                    "profile_img": "https://i.pximg.net/user-profile/avatar.png",
+                },
+            },
+        )
+
+        resp = tc.post("/api/auth/login")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "success"
+        assert resp.json()["user"]["pixiv_id"] == "gbandszxc"
+        stub_store.save.assert_called_once_with({"PHPSESSID": "session", "x-csrf-token": "csrf"})
+
 
 # ── Tasks API (任务删除) ─────────────────────────────────────────────────────
 

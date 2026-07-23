@@ -41,7 +41,16 @@
               <span class="account-id">{{ authStore.pixivId || authStore.name }}</span>
             </button>
           </n-dropdown>
-          <n-button v-else size="small" block @click="handleLogin">{{ t('auth.login') }}</n-button>
+          <n-button
+            v-else
+            size="small"
+            block
+            :loading="authStore.isLoggingIn"
+            :disabled="authStore.isLoggingIn"
+            @click="handleLogin"
+          >
+            {{ authStore.isLoggingIn ? t('auth.loggingIn') : t('auth.login') }}
+          </n-button>
         </div>
       </n-layout-sider>
       <n-layout-content class="app-content">

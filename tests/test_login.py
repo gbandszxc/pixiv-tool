@@ -334,6 +334,15 @@ class TestEvaluateJsWithRetry:
         assert result["token"] == "abc123"
         assert result["login"]["ok"] is True
 
+    def test_default_retry_budget_is_short_for_login_feedback(self):
+        """默认重试预算不能拖慢已登录用户的回显。"""
+        import inspect
+        from pixiv_tool.auth.login_window import _evaluate_js_with_retry
+
+        signature = inspect.signature(_evaluate_js_with_retry)
+        assert signature.parameters["attempts"].default == 2
+        assert signature.parameters["per_attempt_timeout"].default == 3.0
+
     def test_retries_when_token_not_yet_hydrated(self):
         """First attempt's token='' triggers retry (react-query not hydrated yet).
 
@@ -434,13 +443,25 @@ class TestExtractLoginResult:
             def evaluate_js(self, _js, callback):
                 callback({
                     "token": "csrf_tok_123",
-                    "login": {"ok": True, "user_id": "19509348"},
+                    "login": {
+                        "ok": True,
+                        "user_id": "19509348",
+                        "pixiv_id": "gbandszxc",
+                        "name": "测试用户",
+                        "profile_img": "https://i.pximg.net/user-profile/avatar.png",
+                    },
                 })
 
         result = extract_login_result(FakeWindow())
         assert result["status"] == "success"
         assert result["cookies"]["PHPSESSID"] == "19509348_session"
         assert result["cookies"]["x-csrf-token"] == "csrf_tok_123"
+        assert result["user"] == {
+            "user_id": "19509348",
+            "pixiv_id": "gbandszxc",
+            "name": "测试用户",
+            "profile_img": "https://i.pximg.net/user-profile/avatar.png",
+        }
 
     def test_error_when_phpsessid_missing(self):
         """No PHPSESSID cookie → error, even if JS succeeded."""

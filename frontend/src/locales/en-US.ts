@@ -21,6 +21,7 @@ export default {
     loggedInAs: "Logged in: {name}",
     accountMenu: "Pixiv account {id} menu",
     login: "Log in",
+    loggingIn: "Logging in",
     logout: "Logout",
   },
   crawl: {

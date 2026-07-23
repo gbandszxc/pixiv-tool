@@ -21,6 +21,7 @@ export default {
     loggedInAs: "已登录：{name}",
     accountMenu: "Pixiv 账号 {id} 菜单",
     login: "登录",
+    loggingIn: "登录中",
     logout: "退出登录",
   },
   crawl: {
