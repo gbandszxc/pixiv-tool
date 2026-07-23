@@ -23,6 +23,25 @@ export default {
     login: "Log in",
     loggingIn: "Logging in",
     logout: "Logout",
+    loginDialogTitle: "Log in to Pixiv",
+    cookieLoginTab: "Import from browser",
+    builtinLoginTab: "Built-in window",
+    cookieLoginDesc:
+      "Log in via a real browser and import the session. Fully bypasses the built-in window's captcha loop (recommended).",
+    cookieLoginSteps:
+      "1. Open pixiv.net in your browser and sign in normally\n2. Press F12 → Application → Cookies → www.pixiv.net\n3. Find PHPSESSID, copy its Value and paste below",
+    phpsessidLabel: "PHPSESSID",
+    phpsessidPlaceholder: "Paste the PHPSESSID value copied from the browser",
+    csrfAutoFillHint: "The csrf token is fetched automatically — no need to fill it in.",
+    importAndLogin: "Import and log in",
+    cookieLoginSuccess: "Cookie imported, logged in successfully",
+    cookieLoginFailed: "Import failed, please check the PHPSESSID value",
+    builtinLoginDesc:
+      "Open the built-in login window. If the captcha keeps looping (correct answers rejected), the environment is flagged as automated — use “Import from browser” instead.",
+    openBuiltinLogin: "Open built-in login window",
+    builtinLoginNoResult: "No login detected — may have been cancelled or failed",
+    loginSuccess: "Logged in successfully",
+    loginFailed: "Login failed",
   },
   crawl: {
     title: "Crawl",

@@ -39,6 +39,11 @@ DEV_DIR="$REPO_ROOT/.dev"
 PID_DIR="$DEV_DIR/pids"
 LOG_DIR="$DEV_DIR/logs"
 
+# 依赖就绪门控信号:前端看 node_modules,后端看 .venv(首次拉代码两者都不存在)。
+# 等价 dev.ps1 $VenvDir / $FrontendNodeModules。
+VENV_DIR="$REPO_ROOT/.venv"
+FRONTEND_NODE_MODULES="$REPO_ROOT/frontend/node_modules"
+
 FRONTEND_PORT=9961
 BACKEND_PORT=9962
 
@@ -85,6 +90,79 @@ esac
 ensure_dirs() {
     # 等价 dev.ps1 Ensure-Dirs:mkdir -p "$DEV_DIR" "$PID_DIR" "$LOG_DIR"
     mkdir -p "$DEV_DIR" "$PID_DIR" "$LOG_DIR"
+}
+
+# -------------------------------------------------------------------
+# 依赖自动安装(仅 start 触发,已就绪则跳过)
+# -------------------------------------------------------------------
+
+# 等价 dev.ps1 Test-CommandAvailable:command -v "$1" >/dev/null 2>&1
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# 装前端依赖:pnpm 缺失报错+链接;node_modules 已存在跳过;否则 pnpm install。
+# 等价 dev.ps1 Sync-FrontendDeps。返回 0=就绪/装好,1=失败。
+sync_frontend_deps() {
+    if ! command_exists pnpm; then
+        echo "错误:未找到 pnpm,请先安装: https://pnpm.io/installation (可用 npm i -g pnpm)" >&2
+        return 1
+    fi
+    if [ -d "$FRONTEND_NODE_MODULES" ]; then
+        echo "前端依赖已就绪,跳过安装。"
+        return 0
+    fi
+    echo "首次运行:安装前端依赖 (pnpm install)..."
+    if ! (cd "$REPO_ROOT/frontend" && pnpm install); then
+        echo "错误:前端依赖安装失败 (pnpm install)" >&2
+        return 1
+    fi
+    echo "  ✓ 前端依赖安装完成"
+    return 0
+}
+
+# 装后端依赖:uv 缺失报错+链接;.venv 已存在跳过;否则 uv sync --extra <平台>。
+# 等价 dev.ps1 Sync-BackendDeps。dev 模式不需要 pyinstaller(打包工具),不带 --extra dev。
+# 平台:uname -s 映射,Darwin->macos,Linux->linux。
+sync_backend_deps() {
+    if ! command_exists uv; then
+        echo "错误:未找到 uv,请先安装: https://docs.astral.sh/uv/getting-started/installation/" >&2
+        return 1
+    fi
+    if [ -d "$VENV_DIR" ]; then
+        echo "后端依赖已就绪,跳过安装。"
+        return 0
+    fi
+    local extra=""
+    case "$(uname -s)" in
+        Darwin) extra="macos" ;;
+        Linux)  extra="linux" ;;
+        *)
+            echo "错误:不支持的平台 '$(uname -s)',无法确定 pywebview extra(应为 macos/linux)" >&2
+            return 1
+            ;;
+    esac
+    echo "首次运行:安装后端依赖 (uv sync --extra $extra)..."
+    if ! (cd "$REPO_ROOT" && uv sync --extra "$extra"); then
+        echo "错误:后端依赖安装失败 (uv sync)" >&2
+        return 1
+    fi
+    echo "  ✓ 后端依赖安装完成"
+    return 0
+}
+
+# 按 target 分发:all 装两边,frontend/backend 只装对应一边。
+# 等价 dev.ps1 Ensure-Dependencies。任一失败返回非零。
+ensure_dependencies() {
+    case "$TARGET" in
+        all)
+            sync_frontend_deps || return 1
+            sync_backend_deps || return 1
+            ;;
+        frontend) sync_frontend_deps || return 1 ;;
+        backend)  sync_backend_deps  || return 1 ;;
+    esac
+    return 0
 }
 
 # 输出匹配目标的服务进程 PID 列表(每行一个,去重),供 stop/status 使用。
@@ -381,6 +459,8 @@ start_backend() {
 
 invoke_start() {
     ensure_dirs
+    # start 前确保依赖就绪(已装则秒跳过);缺失工具或安装失败则终止。
+    ensure_dependencies || exit 1
     local ok=0
     case "$TARGET" in
         all)

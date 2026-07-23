@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     pixiv-tool 开发服务管理脚本(Windows PowerShell)。
 .DESCRIPTION
@@ -43,6 +43,12 @@ $DevDir = Join-Path $RepoRoot ".dev"
 $PidDir = Join-Path $DevDir "pids"
 $LogDir = Join-Path $DevDir "logs"
 
+# 依赖就绪门控信号:前端看 node_modules,后端看 .venv(首次拉代码两者都不存在)。
+# 注意:Windows PowerShell 5.1 的 Join-Path 只吃两个参数(无 -AdditionalChildPath),
+# 多段路径必须嵌套调用。
+$VenvDir = Join-Path $RepoRoot ".venv"
+$FrontendNodeModules = Join-Path (Join-Path $RepoRoot "frontend") "node_modules"
+
 $FrontendPort = 9961
 $BackendPort = 9962
 $FrontendPidFile = Join-Path $PidDir "frontend.pid"
@@ -62,6 +68,65 @@ function Ensure-Dirs {
     # sh: mkdir -p "$DEV_DIR" "$PID_DIR" "$LOG_DIR"
     @($DevDir, $PidDir, $LogDir) | ForEach-Object {
         if (-not (Test-Path $_)) { New-Item -ItemType Directory -Path $_ -Force | Out-Null }
+    }
+}
+
+# -------------------------------------------------------------------
+# 依赖自动安装(仅 start 触发,已就绪则跳过)
+# -------------------------------------------------------------------
+
+# sh: command -v "$name" >/dev/null 2>&1
+function Test-CommandAvailable([string]$Name) {
+    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+# 装前端依赖:pnpm 缺失报错+链接;node_modules 已存在跳过;否则 pnpm install。
+function Sync-FrontendDeps {
+    if (-not (Test-CommandAvailable "pnpm")) {
+        throw "未找到 pnpm,请先安装: https://pnpm.io/installation (可用 `npm i -g pnpm`)"
+    }
+    if (Test-Path $FrontendNodeModules) {
+        Write-Host "前端依赖已就绪,跳过安装。"
+        return
+    }
+    Write-Host "首次运行:安装前端依赖 (pnpm install)..."
+    $pnpmExe = Resolve-Command "pnpm"
+    # -Wait 同步等待安装完成;失败时 ExitCode 非 0。
+    $proc = Start-Process -FilePath $pnpmExe -ArgumentList "install" `
+        -WorkingDirectory (Join-Path $RepoRoot "frontend") -NoNewWindow -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+        throw "前端依赖安装失败 (pnpm install 退出码 $($proc.ExitCode))"
+    }
+    Write-Host "  ✓ 前端依赖安装完成"
+}
+
+# 装后端依赖:uv 缺失报错+链接;.venv 已存在跳过;否则 uv sync --extra win。
+# dev 模式不需要 pyinstaller(那是打包工具),所以不带 --extra dev。
+# 平台 extra 固定 win(本脚本只在 Windows 跑);mac/linux 用 dev.sh。
+function Sync-BackendDeps {
+    if (-not (Test-CommandAvailable "uv")) {
+        throw "未找到 uv,请先安装: https://docs.astral.sh/uv/getting-started/installation/"
+    }
+    if (Test-Path $VenvDir) {
+        Write-Host "后端依赖已就绪,跳过安装。"
+        return
+    }
+    Write-Host "首次运行:安装后端依赖 (uv sync --extra win)..."
+    $uvExe = Resolve-Command "uv"
+    $proc = Start-Process -FilePath $uvExe -ArgumentList "sync", "--extra", "win" `
+        -WorkingDirectory $RepoRoot -NoNewWindow -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+        throw "后端依赖安装失败 (uv sync 退出码 $($proc.ExitCode))"
+    }
+    Write-Host "  ✓ 后端依赖安装完成"
+}
+
+# 按 target 分发:all 装两边,frontend/backend 只装对应一边。
+function Ensure-Dependencies([string]$Target) {
+    switch ($Target) {
+        "all"      { Sync-FrontendDeps; Sync-BackendDeps }
+        "frontend" { Sync-FrontendDeps }
+        "backend"  { Sync-BackendDeps }
     }
 }
 
@@ -279,6 +344,8 @@ function Start-Backend {
 
 function Invoke-Start {
     Ensure-Dirs
+    # start 前确保依赖就绪(已装则秒跳过);缺失工具或安装失败会抛错终止。
+    Ensure-Dependencies $Target
     $ok = $true
     switch ($Target) {
         "all"      {

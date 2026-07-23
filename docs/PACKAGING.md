@@ -31,6 +31,8 @@
 
 首次拉代码后先同步依赖：
 
+> `scripts/build.py` 会在打包前自动检测后端环境（`.venv` 是否存在、是否装了 `PyInstaller`），缺失时自动跑 `uv sync --extra <平台> --extra dev`；前端则始终执行 `pnpm install`。下面手动命令仅用于想提前装好、或排查依赖问题。
+
 ```powershell
 # Windows
 uv sync --extra win --extra dev     # 后端(含 pywebview + pyinstaller)
@@ -43,7 +45,7 @@ uv sync --extra macos --extra dev   # linux 机器把 macos 换成 linux
 pnpm install --dir frontend
 ```
 
-> `pyinstaller` 在 `dev` extra 里，**不装就打不了包**（默认 `uv sync` 不带 `--extra dev` 会缺）。**必须同时带平台 extra**，否则 mac/linux 上连 `pywebview` 都没有，打包出来的产物一启动就 `ModuleNotFoundError`。
+> `pyinstaller` 在 `dev` extra 里，**不装就打不了包**（默认 `uv sync` 不带 `--extra dev` 会缺）。**必须同时带平台 extra**，否则 mac/linux 上连 `pywebview` 都没有，打包出来的产物一启动就 `ModuleNotFoundError`。`build.py` 的自动安装已默认带齐这两个 extra。
 
 ---
 
@@ -314,6 +316,19 @@ prod 模式登录走子进程（`pixiv-tool.exe --login-window`），依赖 `pyt
 
 是的。后端代码在打包时编进了 `_internal/base_library.zip` + PYZ 归档。改完代码必须重跑 `scripts/build.py --skip-fe`（~30s）。
 
+### Q7: 打包后登录/抓取又触发 Pixiv 风控（dev 不会）
+
+**根因**：登录后业务请求之前走裸 httpx，TLS 指纹（CPython OpenSSL）和残缺 UA（断在 `AppleWebKit/537.36`）全方位不像浏览器，容易被 Pixiv 风控识别。现已改为 `curl_cffi`（`impersonate="chrome124"`）做 TLS 指纹伪装（JA3/JA4 + HTTP/2 + 浏览器 header 顺序一次性解决）。
+
+**验证伪装是否生效**：打包后启动 frozen exe，访问 `http://127.0.0.1:9962/api/auth/diag-version`，或看启动日志里 `PixivClient 使用 HTTP 后端:` 这行——应是 `curl_cffi`。如果是 `httpx`，说明 curl_cffi 动态库没打进去，已静默降级（风控会重新触发）。
+
+**排查动态库缺失**：curl_cffi 的 `libcurl-impersonate`（Win: `.dll`、mac: `.dylib`、linux: `.so`）必须随包分发，由 `pyinstaller-hooks/hook-curl_cffi.py` 用 `collect_dynamic_libs` 自动收集。检查 `dist/pixiv-tool/_internal/` 下有没有 `libcurl-impersonate*` 文件。没有的话：
+- 确认打包机上 `curl_cffi` 真的装了（`python -c "import curl_cffi; print(curl_cffi.__file__)"`）
+- 确认 `pixiv-tool.spec` 的 `hookspath=[HOOKS_DIR]` 指向了 `pyinstaller-hooks`
+- 打包时看日志有没有 `Analyzing ... hook-curl_cffi` 行
+
+curl_cffi issue #5、#455 记录过类似 PyInstaller 打包问题，根因都是动态库没收集。
+
 ---
 
 ## 9. PyInstaller spec 关键配置
@@ -326,7 +341,8 @@ prod 模式登录走子进程（`pixiv-tool.exe --login-window`），依赖 `pyt
 | 模式 | `onedir`（COLLECT 段） | 解压即用，启动比 onefile 快 |
 | `console` | `False` | prod 不弹 cmd 黑窗 |
 | `datas` | `src/pixiv_tool/static` → `src/pixiv_tool/static` | 前端 SPA 打进 `_internal/src/pixiv_tool/static/` |
-| `hiddenimports` | `webview.platforms.edgechromium/winforms`、`pixiv_tool.auth.login_window`、`pixiv_tool.storage.cookie_dpapi` | pywebview 平台后端动态 import，PyInstaller 静态分析抓不到；子入口模块需要显式声明 |
+| `hiddenimports` | `webview.platforms.edgechromium/winforms`、`pixiv_tool.auth.login_window`、`pixiv_tool.storage.cookie_dpapi`、`curl_cffi.*`、`pixiv_tool.core.http_factory` | pywebview 平台后端动态 import，PyInstaller 静态分析抓不到；子入口 + curl_cffi 指纹伪装后端需要显式声明 |
+| `hookspath` | `pyinstaller-hooks/` | 指向自定义 hook 目录，`hook-curl_cffi.py` 负责收集 `libcurl-impersonate` 动态库（TLS 指纹伪装依赖，漏打会静默降级到 httpx 重新触发风控） |
 | `excludes` | `numpy/scipy/pandas/matplotlib/tkinter/unittest/test` | 减体积，这些本项目不用 |
 
 > **改动陷阱**：`excludes` 千万不要加 `email`/`xml`/`pydoc`——fastapi/starlette/pydantic 间接依赖，排掉后 frozen exe 一启动就 `ModuleNotFoundError`（曾经踩过）。

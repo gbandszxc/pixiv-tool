@@ -188,21 +188,23 @@ class TestAuthAPI:
                     }
                 }
 
-        class FakeAsyncClient:
-            def __init__(self, **_kwargs):
+        # auth_status 现在走 http_factory.create_client(返回 HTTPClient,非 async with)。
+        # 伪 client 需提供 async get + async close。
+        class FakeHTTPClient:
+            backend = "test"
+
+            def __init__(self, *_args, **_kwargs):
                 pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_args):
-                return False
 
             @staticmethod
             async def get(*_args, **_kwargs):
                 return FakeResponse()
 
-        monkeypatch.setattr("httpx.AsyncClient", FakeAsyncClient)
+            @staticmethod
+            async def close():
+                pass
+
+        monkeypatch.setattr("pixiv_tool.core.http_factory.create_client", lambda _c: FakeHTTPClient())
 
         resp = tc.get("/api/auth/status")
 
@@ -236,21 +238,21 @@ class TestAuthAPI:
                     }
                 }
 
-        class FakeAsyncClient:
-            def __init__(self, **_kwargs):
+        class FakeHTTPClient:
+            backend = "test"
+
+            def __init__(self, *_args, **_kwargs):
                 pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_args):
-                return False
 
             @staticmethod
             async def get(*_args, **_kwargs):
                 return FakeResponse()
 
-        monkeypatch.setattr("httpx.AsyncClient", FakeAsyncClient)
+            @staticmethod
+            async def close():
+                pass
+
+        monkeypatch.setattr("pixiv_tool.core.http_factory.create_client", lambda _c: FakeHTTPClient())
 
         resp = tc.get("/api/auth/status")
 
@@ -262,22 +264,22 @@ class TestAuthAPI:
         tc, db, stub_store, *_ = client
         stub_store.load.return_value = {"PHPSESSID": "session"}
 
-        class SlowAsyncClient:
-            def __init__(self, **_kwargs):
+        class FakeHTTPClient:
+            backend = "test"
+
+            def __init__(self, *_args, **_kwargs):
                 pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_args):
-                return False
 
             @staticmethod
             async def get(*_args, **_kwargs):
                 await asyncio.sleep(0.05)
 
+            @staticmethod
+            async def close():
+                pass
+
         import pixiv_tool.api.auth as auth_mod
-        monkeypatch.setattr("httpx.AsyncClient", SlowAsyncClient)
+        monkeypatch.setattr("pixiv_tool.core.http_factory.create_client", lambda _c: FakeHTTPClient())
         monkeypatch.setattr(auth_mod, "_AUTH_STATUS_TIMEOUT_SEC", 0.01)
 
         resp = tc.get("/api/auth/status")
@@ -294,21 +296,21 @@ class TestAuthAPI:
         class FakeResponse:
             status_code = 401
 
-        class FakeAsyncClient:
-            def __init__(self, **_kwargs):
+        class FakeHTTPClient:
+            backend = "test"
+
+            def __init__(self, *_args, **_kwargs):
                 pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_args):
-                return False
 
             @staticmethod
             async def get(*_args, **_kwargs):
                 return FakeResponse()
 
-        monkeypatch.setattr("httpx.AsyncClient", FakeAsyncClient)
+            @staticmethod
+            async def close():
+                pass
+
+        monkeypatch.setattr("pixiv_tool.core.http_factory.create_client", lambda _c: FakeHTTPClient())
 
         resp = tc.get("/api/auth/status")
 
@@ -346,6 +348,100 @@ class TestAuthAPI:
         assert resp.json()["status"] == "success"
         assert resp.json()["user"]["pixiv_id"] == "gbandszxc"
         stub_store.save.assert_called_once_with({"PHPSESSID": "session", "x-csrf-token": "csrf"})
+
+
+# ── 手动导入 Cookie 登录 (绕开 WebView2 验证码循环) ──────────────────────────
+
+
+class TestManualLoginAPI:
+    def test_manual_login_rejects_empty_phpsessid(self, client):
+        """空 PHPSESSID → 400。"""
+        tc, *_ = client
+        resp = tc.post("/api/auth/login/manual", data={"PHPSESSID": "  "})
+        assert resp.status_code == 400
+
+    def test_manual_login_auto_fills_csrf_from_probe(self, client, monkeypatch):
+        """不传 csrf_token 时,后端用 PHPSESSID 抓首页自动补全 token。"""
+        tc, db, stub_store, *_ = client
+
+        # auth.py 在函数内 `from pixiv_tool.core.csrf import fetch_session_probe`,
+        # 所以 patch csrf 模块属性即可影响每次调用(每次请求重新 import)。
+        import pixiv_tool.core.csrf as csrf_real
+
+        async def fake_probe(php):
+            assert php == "session_xyz"
+            return csrf_real.SessionProbe(csrf_token="auto_filled_csrf", is_logged_in=True)
+
+        monkeypatch.setattr(csrf_real, "fetch_session_probe", fake_probe)
+
+        resp = tc.post("/api/auth/login/manual", data={"PHPSESSID": "session_xyz"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "success"
+        assert body["csrf_auto_filled"] is True
+        assert body["logged_in_hint"] is True
+        # 存进 store 的 cookies 含自动补的 csrf
+        stub_store.save.assert_called_once_with(
+            {"PHPSESSID": "session_xyz", "x-csrf-token": "auto_filled_csrf"}
+        )
+
+    def test_manual_login_uses_user_supplied_csrf_skipping_probe(self, client, monkeypatch):
+        """用户自带 csrf_token 时跳过网络探测,直接存(信任用户输入)。"""
+        tc, db, stub_store, *_ = client
+
+        # fetch_session_probe 不应被调用
+        import pixiv_tool.core.csrf as csrf_real
+
+        called = {"n": 0}
+
+        async def fake_probe(php):
+            called["n"] += 1
+            return csrf_real.SessionProbe(csrf_token="should_not_reach", is_logged_in=True)
+
+        monkeypatch.setattr(csrf_real, "fetch_session_probe", fake_probe)
+
+        resp = tc.post(
+            "/api/auth/login/manual",
+            data={"PHPSESSID": "session_abc", "csrf_token": "user_csrf_tok"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["csrf_auto_filled"] is False
+        assert called["n"] == 0  # 未探测
+        stub_store.save.assert_called_once_with(
+            {"PHPSESSID": "session_abc", "x-csrf-token": "user_csrf_tok"}
+        )
+
+    def test_manual_login_invalid_session_returns_400(self, client, monkeypatch):
+        """无效 PHPSESSID(重定向循环) → 400 + 明确错误。"""
+        tc, *_ = client
+        import pixiv_tool.core.csrf as csrf_real
+
+        async def fake_probe(php):
+            raise csrf_real.InvalidSessionError("PHPSESSID 无效或已过期")
+
+        monkeypatch.setattr(csrf_real, "fetch_session_probe", fake_probe)
+
+        resp = tc.post("/api/auth/login/manual", data={"PHPSESSID": "bad"})
+
+        assert resp.status_code == 400
+        assert "无效或已过期" in resp.json()["detail"]
+
+    def test_manual_login_csrf_extraction_failure_returns_502(self, client, monkeypatch):
+        """首页能访问但解析不出 csrf(Pixiv 改版) → 502。"""
+        tc, *_ = client
+        import pixiv_tool.core.csrf as csrf_real
+
+        async def fake_probe(php):
+            raise csrf_real.CsrfExtractionError("未找到 csrf token")
+
+        monkeypatch.setattr(csrf_real, "fetch_session_probe", fake_probe)
+
+        resp = tc.post("/api/auth/login/manual", data={"PHPSESSID": "ok_session"})
+
+        assert resp.status_code == 502
+        assert "csrf token" in resp.json()["detail"]
 
 
 # ── Tasks API (任务删除) ─────────────────────────────────────────────────────
