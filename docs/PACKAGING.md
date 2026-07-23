@@ -31,6 +31,8 @@
 
 首次拉代码后先同步依赖：
 
+> `scripts/build.py` 会在打包前自动检测后端环境（`.venv` 是否存在、是否装了 `PyInstaller`），缺失时自动跑 `uv sync --extra <平台> --extra dev`；前端则始终执行 `pnpm install`。下面手动命令仅用于想提前装好、或排查依赖问题。
+
 ```powershell
 # Windows
 uv sync --extra win --extra dev     # 后端(含 pywebview + pyinstaller)
@@ -43,7 +45,7 @@ uv sync --extra macos --extra dev   # linux 机器把 macos 换成 linux
 pnpm install --dir frontend
 ```
 
-> `pyinstaller` 在 `dev` extra 里，**不装就打不了包**（默认 `uv sync` 不带 `--extra dev` 会缺）。**必须同时带平台 extra**，否则 mac/linux 上连 `pywebview` 都没有，打包出来的产物一启动就 `ModuleNotFoundError`。
+> `pyinstaller` 在 `dev` extra 里，**不装就打不了包**（默认 `uv sync` 不带 `--extra dev` 会缺）。**必须同时带平台 extra**，否则 mac/linux 上连 `pywebview` 都没有，打包出来的产物一启动就 `ModuleNotFoundError`。`build.py` 的自动安装已默认带齐这两个 extra。
 
 ---
 
