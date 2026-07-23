@@ -14,6 +14,17 @@ block_cipher = None
 ROOT = Path(SPECPATH)
 
 # -------------------------------------------------------------------
+# curl_cffi 的 PyInstaller hook 目录。
+#
+# curl_cffi 依赖 libcurl-impersonate 原生库(TLS 指纹伪装),wheel 放在
+# curl_cffi/lib/ 下,PyInstaller 静态分析抓不到运行期 dlopen 的动态库,
+# 必须用 hook 里的 collect_dynamic_libs 显式收集。漏打后 frozen exe 发请求
+# 会静默降级到 httpx(无 TLS 伪装),风控重新触发。详见
+# pyinstaller-hooks/hook-curl_cffi.py。
+# -------------------------------------------------------------------
+HOOKS_DIR = str(ROOT / "pyinstaller-hooks")
+
+# -------------------------------------------------------------------
 # 平台相关 hiddenimports
 #
 # pywebview 平台后端是 sys.platform 判断后才动态 import 的,PyInstaller 静态
@@ -82,11 +93,19 @@ a = Analysis(
         "httpx",
         "httpx._transports",
         "httpx._transports.default",
+        # curl_cffi:浏览器 TLS 指纹伪装后端。动态库由 hook-curl_cffi.py 收集,
+        # 这里声明纯 Python 模块确保运行期 import 成功。core.http_factory 在
+        # curl_cffi 不可用时会降级到 httpx,但正常打包应该都能进 bundle。
+        "curl_cffi",
+        "curl_cffi.requests",
+        "curl_cffi.requests.async_session",
+        "curl_cffi.requests.exceptions",
         # 登录子进程入口在 prod 模式下由主 exe `--login-window` 分发调用,
         # 必须在 bundle 里(静态分析也能找到,但显式声明更稳)。
         "pixiv_tool.auth.login_window",
+        "pixiv_tool.core.http_factory",
     ],
-    hookspath=[],
+    hookspath=[HOOKS_DIR],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[

@@ -7,6 +7,13 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
     "httpx>=0.27.0",
+    # curl_cffi:浏览器 TLS 指纹伪装(JA3/JA4 + HTTP/2 + 浏览器 header)。
+    # 登录后业务请求之前走裸 httpx,CPython OpenSSL 指纹容易被 Pixiv 风控识别。
+    # wheel 自带 libcurl-impersonate 动态库,打包时需 collect_dynamic_libs(见 spec)。
+    "curl_cffi>=0.7.0",
+    # python-multipart:FastAPI Form() 解析 form data 必需依赖。
+    # login_manual 端点用 Form 接收 PHPSESSID(放 body 而非 query,避免 URL 泄露 cookie)。
+    "python-multipart>=0.0.9",
 ]
 
 # ---------------------------------------------------------------------------

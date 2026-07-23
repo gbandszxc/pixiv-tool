@@ -376,11 +376,14 @@ class TestPixivClient:
         mock_resp_200.status_code = 200
         mock_resp_200.json.return_value = {"body": {"id": 42}}
 
-        with patch("pixiv_tool.core.pixiv_client.httpx.AsyncClient") as MockClient:
-            instance = MockClient.return_value
-            instance.get = AsyncMock(side_effect=[mock_resp_500, mock_resp_200])
-            instance.aclose = AsyncMock()
+        # mock create_client:返回伪 HTTPClient,其 get 按序返回 500→200。
+        # PixivClient 只用 client.get / client.close / client.backend,不感知后端。
+        fake_client = MagicMock()
+        fake_client.get = AsyncMock(side_effect=[mock_resp_500, mock_resp_200])
+        fake_client.close = AsyncMock()
+        fake_client.backend = "test"
 
+        with patch("pixiv_tool.core.pixiv_client.create_client", return_value=fake_client):
             client = PixivClient(cookies={"PHPSESSID": "abc"})
             try:
                 with patch("pixiv_tool.core.pixiv_client.asyncio.sleep", new_callable=AsyncMock):
@@ -395,11 +398,12 @@ class TestPixivClient:
         mock_resp_429 = MagicMock()
         mock_resp_429.status_code = 429
 
-        with patch("pixiv_tool.core.pixiv_client.httpx.AsyncClient") as MockClient:
-            instance = MockClient.return_value
-            instance.get = AsyncMock(return_value=mock_resp_429)
-            instance.aclose = AsyncMock()
+        fake_client = MagicMock()
+        fake_client.get = AsyncMock(return_value=mock_resp_429)
+        fake_client.close = AsyncMock()
+        fake_client.backend = "test"
 
+        with patch("pixiv_tool.core.pixiv_client.create_client", return_value=fake_client):
             client = PixivClient(cookies={"PHPSESSID": "abc"})
             try:
                 with patch("pixiv_tool.core.pixiv_client.asyncio.sleep", new_callable=AsyncMock):
@@ -416,11 +420,12 @@ class TestPixivClient:
         mock_resp = MagicMock()
         mock_resp.status_code = 401
 
-        with patch("pixiv_tool.core.pixiv_client.httpx.AsyncClient") as MockClient:
-            instance = MockClient.return_value
-            instance.get = AsyncMock(return_value=mock_resp)
-            instance.aclose = AsyncMock()
+        fake_client = MagicMock()
+        fake_client.get = AsyncMock(return_value=mock_resp)
+        fake_client.close = AsyncMock()
+        fake_client.backend = "test"
 
+        with patch("pixiv_tool.core.pixiv_client.create_client", return_value=fake_client):
             client = PixivClient(cookies={})
             try:
                 with pytest.raises(Exception):  # PixivAuthError
