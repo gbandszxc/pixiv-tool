@@ -41,19 +41,22 @@
               <span class="account-id">{{ authStore.pixivId || authStore.name }}</span>
             </button>
           </n-dropdown>
-          <n-button v-else size="small" block @click="handleLogin">{{ t('auth.login') }}</n-button>
+          <n-button v-else size="small" block @click="showLoginDialog = true">{{ t('auth.login') }}</n-button>
         </div>
       </n-layout-sider>
       <n-layout-content class="app-content">
         <router-view />
       </n-layout-content>
     </n-layout>
+
+    <!-- 登录弹窗:内置窗口 / 浏览器导入两条路。后者绕开 WebView2 验证码循环。 -->
+    <LoginDialog v-model:show="showLoginDialog" />
     </n-message-provider>
   </n-config-provider>
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted } from "vue";
+import { computed, h, onMounted, ref } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import {
@@ -68,6 +71,7 @@ import {
   NMessageProvider,
 } from "naive-ui";
 import type { GlobalThemeOverrides, MenuOption } from "naive-ui";
+import LoginDialog from "./components/auth/LoginDialog.vue";
 import { useAuthStore } from "./stores/auth";
 import SidebarIcon, { type SidebarIconName } from "./components/navigation/SidebarIcon.vue";
 
@@ -75,6 +79,9 @@ const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const { t } = useI18n();
+
+// 登录弹窗显隐:点"登录"打开,让用户在内置窗口 / 浏览器导入两条路里选。
+const showLoginDialog = ref(false);
 
 const theme = computed(() => null); // 浅色，ticket 15 实现完整主题
 
@@ -109,10 +116,6 @@ const menuOptions = computed<MenuOption[]>(() => [
 
 function navigateTo(key: string) {
   router.push(key);
-}
-
-async function handleLogin() {
-  await authStore.login();
 }
 
 async function handleAccountMenuSelect(key: string) {

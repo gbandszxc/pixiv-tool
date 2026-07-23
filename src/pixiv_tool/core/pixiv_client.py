@@ -1,6 +1,10 @@
 """
-PixivClient — httpx 异步 HTTP 客户端 + 限速 + 重试 + 429 暂停。
+PixivClient — 异步 HTTP 客户端 + 限速 + 重试 + 429 暂停。
 所有 Pixiv API 请求统一走这里。
+
+底层 HTTP 后端(TLS 指纹伪装)由 core.http_factory 统一管理:优先 curl_cffi
+(impersonate=chrome,解决 JA3/JA4 + HTTP/2 + 浏览器 header),降级 httpx。
+本类只关心限速/重试/错误分类,不感知后端实现。
 """
 
 from __future__ import annotations
@@ -10,9 +14,21 @@ import logging
 import time
 from typing import Any
 
-import httpx
+from pixiv_tool.core.http_factory import create_client
 
 logger = logging.getLogger(__name__)
+
+# 网络层异常元组:_get 用 `except _NETWORK_ERRORS` 统一捕获超时/连接错误,
+# 与后端解耦。优先用 curl_cffi 的 RequestException(超时/网络都是它的子类);
+# 降级到 httpx 时用它的 TimeoutException + TransportError(NetworkError 的基类)。
+try:
+    from curl_cffi.requests.exceptions import RequestException as _CurlRequestError
+
+    _NETWORK_ERRORS: tuple[type[BaseException], ...] = (_CurlRequestError,)
+except ImportError:
+    import httpx as _httpx
+
+    _NETWORK_ERRORS = (_httpx.TimeoutException, _httpx.TransportError)
 
 # V1 写死常量（不暴露给用户）
 CONCURRENCY = 2
@@ -54,18 +70,18 @@ class PixivClient:
         self._semaphore = asyncio.Semaphore(CONCURRENCY)
         self._pause_event = asyncio.Event()
         self._pause_event.set()  # 初始不暂停
-        self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(REQUEST_TIMEOUT),
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Referer": "https://www.pixiv.net/",
-                "x-csrf-token": cookies.get("x-csrf-token", ""),
-            },
-            cookies={k: v for k, v in cookies.items() if k != "x-csrf-token"},
-        )
+        # 客户端创建统一走 http_factory:TLS 指纹伪装 + cookie 分离 + 浏览器 header
+        # 都在那里做。这里只持有引用用于限速/重试。
+        self._client = create_client(cookies)
+        logger.debug("PixivClient 使用 HTTP 后端: %s", self._client.backend)
+
+    @property
+    def backend(self) -> str:
+        """当前 HTTP 后端(curl_cffi / httpx),供诊断确认伪装是否生效。"""
+        return self._client.backend
 
     async def close(self) -> None:
-        await self._client.aclose()
+        await self._client.close()
 
     # ------------------------------------------------------------------
     # API 方法
@@ -152,10 +168,10 @@ class PixivClient:
                         else:
                             last_exc = PixivClientError(f"HTTP {resp.status_code}")
 
-                    except httpx.TimeoutException:
-                        last_exc = PixivClientError(f"请求超时: {url}")
-                    except httpx.NetworkError:
-                        last_exc = PixivClientError(f"网络错误: {url}")
+                    except _NETWORK_ERRORS as exc:
+                        # curl_cffi 的 RequestException 或 httpx 的 Timeout/NetworkError。
+                        # 超时和连接错误都归到这里统一重试,不再区分(两者都属"可重试的网络抖动")。
+                        last_exc = PixivClientError(f"网络错误: {exc}: {url}")
 
                     if attempt < MAX_RETRIES - 1:
                         wait = RETRY_BACKOFF[min(attempt, len(RETRY_BACKOFF) - 1)]

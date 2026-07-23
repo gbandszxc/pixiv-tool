@@ -12,7 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Form
 
 from pixiv_tool.storage.cookies import create_cookie_store
 
@@ -42,20 +42,24 @@ async def auth_status():
     if not cookies:
         return {"is_logged_in": False}
 
-    # 验证 cookie 有效性：调 /ajax/user/self
+    # 验证 cookie 有效性：调 /ajax/user/self。
+    # 走 http_factory.create_client —— 和抓取共用同一套 TLS 指纹伪装(curl_cffi)
+    # + 完整浏览器 header。之前这里每次新建裸 httpx client(UA 只有 "Mozilla/5.0"),
+    # 是高频裸请求入口,打包后启动即触发,容易撞 Pixiv 风控阈值。
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=_AUTH_STATUS_TIMEOUT_SEC) as client:
-            async with asyncio.timeout(_AUTH_STATUS_TIMEOUT_SEC):
+        from pixiv_tool.core.http_factory import create_client
+
+        async with asyncio.timeout(_AUTH_STATUS_TIMEOUT_SEC):
+            client = create_client(cookies)
+            try:
+                # timeout 透传给后端(curl_cffi 的 connect+read 都限制在 2s 内),
+                # 与外层 asyncio.timeout 双保险。
                 resp = await client.get(
                     "https://www.pixiv.net/ajax/user/self?lang=zh",
-                    headers={
-                        "x-csrf-token": cookies.get("x-csrf-token", ""),
-                        "User-Agent": "Mozilla/5.0",
-                        "Referer": "https://www.pixiv.net/",
-                    },
-                    cookies={k: v for k, v in cookies.items() if k != "x-csrf-token"},
+                    timeout=_AUTH_STATUS_TIMEOUT_SEC,
                 )
+            finally:
+                await client.close()
             if resp.status_code in (401, 403):
                 _store.clear()
                 return {"is_logged_in": False}
@@ -208,11 +212,61 @@ def _spawn_login_subprocess() -> dict:
 
 
 @router.post("/login/manual")
-async def login_manual(PHPSESSID: str, csrf_token: str = ""):
-    """手动提交 PHPSESSID（C 兜底）。"""
-    cookies = {"PHPSESSID": PHPSESSID, "x-csrf-token": csrf_token}
+async def login_manual(
+    PHPSESSID: str = Form(...),
+    csrf_token: str = Form(""),
+):
+    """手动提交 PHPSESSID 导入登录态（绕开 pywebview 登录窗的验证码循环）。
+
+    为什么需要这条路:pywebview 内嵌的 WebView2 缺少真实浏览器指纹,容易被
+    Pixiv 验证码服务商判定为自动化环境,导致验证码无限循环(选对了也不让继续)。
+    用户在真实浏览器里正常登录后,把 PHPSESSID 复制到这里即可,彻底绕开登录窗。
+
+    用 Form(...) 显式声明 form body 参数(而非裸参数的默认 query 解析),
+    与前端 stores/auth.ts 的 application/x-www-form-urlencoded 契约一致。
+    PHPSESSID 放 body 也避免出现在 URL/访问日志里。
+
+    csrf_token 可选:留空时后端用 PHPSESSID 自动请求 pixiv 首页解析出来
+    (token 是公开的,藏在首页 meta global-data 里),用户无需手动找。
+    """
+    from pixiv_tool.core.csrf import (
+        CsrfExtractionError,
+        InvalidSessionError,
+        fetch_session_probe,
+    )
+    from fastapi import HTTPException
+
+    php = (PHPSESSID or "").strip()
+    if not php:
+        raise HTTPException(status_code=400, detail="PHPSESSID 不能为空")
+
+    try:
+        if csrf_token and csrf_token.strip():
+            # 用户自带 csrf,跳过探测直接存(信任用户输入)。
+            resolved_csrf = csrf_token.strip()
+            is_logged_in = None  # 未探测,未知
+        else:
+            probe = await fetch_session_probe(php)
+            resolved_csrf = probe.csrf_token
+            is_logged_in = probe.is_logged_in
+    except InvalidSessionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except CsrfExtractionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("手动登录探测失败: %s", exc)
+        raise HTTPException(status_code=502, detail=f"校验失败: {exc}") from exc
+
+    cookies = {"PHPSESSID": php, "x-csrf-token": resolved_csrf}
     _store.save(cookies)
-    return {"status": "success", "message": "Cookie 已保存"}
+    return {
+        "status": "success",
+        "message": "Cookie 已保存",
+        "csrf_auto_filled": not (csrf_token and csrf_token.strip()),
+        "logged_in_hint": is_logged_in,
+    }
 
 
 @router.post("/logout")
