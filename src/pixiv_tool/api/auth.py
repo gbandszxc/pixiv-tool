@@ -34,7 +34,7 @@ async def auth_status():
     try:
         cookies = _store.load()
     except NotImplementedError:
-        # macOS/Linux: stub
+        # Linux: Secret Service 尚未实现。
         return {"is_logged_in": False}
     except Exception:
         return {"is_logged_in": False}
@@ -126,26 +126,23 @@ async def diag_version():
 
 @router.post("/login")
 async def login():
-    """打开 pywebview 登录窗(子进程模式)。
+    """优先打开真实 Chromium 浏览器，缺失时回退 pywebview 登录窗。
 
-    pywebview 必须在主线程跑,但本 endpoint 跑在 uvicorn asyncio loop 线程,
-    不能直接调 webview.start()。改用子进程:在独立 Python 解释器的主线程
-    跑 pywebview,通过临时 JSON 文件传回 cookie。
-
-    await asyncio.to_thread 避免阻塞 event loop(否则 SSE/其他请求会卡 5 分钟)。
+    真实浏览器使用独立 profile，不读取用户日常浏览器数据；登录完成后通过
+    Chrome DevTools Protocol 读取 Pixiv Cookie，避开 WKWebView/WebView2
+    容易触发的 reCAPTCHA 图片循环。
     """
-    # 诊断:确认 worker 跑的是新代码(frozen 模式没有源码可 inspect,跳过)
-    if not getattr(sys, "frozen", False):
-        from pixiv_tool.auth import login_window as lw_mod
-        import inspect
-        lw_src = inspect.getsource(lw_mod)
-        has_lambda = 'lambda' in lw_src and 'webview' in lw_src
-        has_run_subprocess = 'run_login_subprocess_main' in lw_src
-        logger.warning("DIAG login_window: has_lambda=%s has_run_subprocess_main=%s file=%s",
-                       has_lambda, has_run_subprocess, lw_mod.__file__)
-    else:
-        logger.info("login: running under frozen executable (skip source diag)")
-    result = await asyncio.to_thread(_spawn_login_subprocess)
+    from pixiv_tool.auth.browser_login import (
+        BrowserNotFoundError,
+        open_browser_login,
+    )
+
+    try:
+        result = await open_browser_login()
+    except BrowserNotFoundError:
+        logger.info("未找到 Chromium 浏览器，回退 pywebview 登录窗")
+        result = await asyncio.to_thread(_spawn_login_subprocess)
+
     if result["status"] == "success" and result.get("cookies"):
         _store.save(result["cookies"])
         return {
@@ -218,41 +215,19 @@ def _spawn_login_subprocess() -> dict:
 @router.post("/login/manual")
 async def login_manual(
     PHPSESSID: str = Form(...),
-    csrf_token: str = Form(""),
 ):
-    """手动提交 PHPSESSID 导入登录态（绕开 pywebview 登录窗的验证码循环）。
-
-    为什么需要这条路:pywebview 内嵌的 WebView2 缺少真实浏览器指纹,容易被
-    Pixiv 验证码服务商判定为自动化环境,导致验证码无限循环(选对了也不让继续)。
-    用户在真实浏览器里正常登录后,把 PHPSESSID 复制到这里即可,彻底绕开登录窗。
-
-    用 Form(...) 显式声明 form body 参数(而非裸参数的默认 query 解析),
-    与前端 stores/auth.ts 的 application/x-www-form-urlencoded 契约一致。
-    PHPSESSID 放 body 也避免出现在 URL/访问日志里。
-
-    csrf_token 可选:留空时后端用 PHPSESSID 自动请求 pixiv 首页解析出来
-    (token 是公开的,藏在首页 meta global-data 里),用户无需手动找。
-    """
+    """手动提交 PHPSESSID，并用 Pixiv 当前用户接口验证后保存。"""
     from pixiv_tool.core.csrf import (
         CsrfExtractionError,
         InvalidSessionError,
         fetch_session_probe,
+        normalize_phpsessid,
     )
     from fastapi import HTTPException
 
-    php = (PHPSESSID or "").strip()
-    if not php:
-        raise HTTPException(status_code=400, detail="PHPSESSID 不能为空")
-
     try:
-        if csrf_token and csrf_token.strip():
-            # 用户自带 csrf,跳过探测直接存(信任用户输入)。
-            resolved_csrf = csrf_token.strip()
-            is_logged_in = None  # 未探测,未知
-        else:
-            probe = await fetch_session_probe(php)
-            resolved_csrf = probe.csrf_token
-            is_logged_in = probe.is_logged_in
+        php = normalize_phpsessid(PHPSESSID)
+        probe = await fetch_session_probe(php)
     except InvalidSessionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except CsrfExtractionError as exc:
@@ -263,13 +238,12 @@ async def login_manual(
         logger.warning("手动登录探测失败: %s", exc)
         raise HTTPException(status_code=502, detail=f"校验失败: {exc}") from exc
 
-    cookies = {"PHPSESSID": php, "x-csrf-token": resolved_csrf}
+    cookies = {"PHPSESSID": php, "x-csrf-token": probe.csrf_token}
     _store.save(cookies)
     return {
         "status": "success",
         "message": "Cookie 已保存",
-        "csrf_auto_filled": not (csrf_token and csrf_token.strip()),
-        "logged_in_hint": is_logged_in,
+        "user": probe.user or {},
     }
 
 

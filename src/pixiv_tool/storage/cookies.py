@@ -1,7 +1,4 @@
-"""
-CookieStore 抽象基类 + 工厂函数。
-V1 仅 Windows DPAPI 实现，macOS/Linux 抛 NotImplementedError。
-"""
+"""CookieStore 抽象基类 + 平台工厂。"""
 
 from __future__ import annotations
 
@@ -29,17 +26,20 @@ def create_cookie_store() -> CookieStore:
     if sys.platform == "win32":
         from pixiv_tool.storage.cookie_dpapi import DpapiCookieStore
         return DpapiCookieStore()
-    # macOS / Linux: V2 stub
+    if sys.platform == "darwin":
+        from pixiv_tool.storage.cookie_keychain import KeychainCookieStore
+        return KeychainCookieStore()
+    # Linux 暂无 Secret Service 实现。
     return _StubCookieStore()
 
 
 class _StubCookieStore(CookieStore):
-    """macOS/Linux 临时 stub，V2 实现 keychain / secretstorage。"""
+    """Linux 临时 stub，后续接 Secret Service。"""
 
     def save(self, cookies: dict) -> None:
-        raise NotImplementedError("V2 实现 keychain/secretstorage")
+        raise NotImplementedError("Linux Secret Service 尚未实现")
 
     def load(self) -> dict | None:
-        raise NotImplementedError("V2 实现 keychain/secretstorage")
+        raise NotImplementedError("Linux Secret Service 尚未实现")
     def clear(self) -> None:
         pass  # stub: no-op

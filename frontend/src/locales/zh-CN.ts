@@ -24,10 +24,10 @@ export default {
     loggingIn: "登录中",
     logout: "退出登录",
     loginDialogTitle: "登录 Pixiv",
-    cookieLoginTab: "浏览器导入",
-    builtinLoginTab: "内置窗口",
+    cookieLoginTab: "粘贴 Session",
+    builtinLoginTab: "浏览器登录",
     cookieLoginDesc:
-      "用真实浏览器登录后导入登录态，可彻底绕开内置窗口的验证码循环（推荐）。",
+      "浏览器登录不可用时，可手动粘贴 PHPSESSID 作为兜底。",
     // 步骤用 \n 分行，配合 white-space: pre-line 渲染。
     cookieLoginSteps:
       "1. 在浏览器打开 pixiv.net 并正常登录\n2. 按 F12 → Application/应用 → Cookies → www.pixiv.net\n3. 找到 PHPSESSID，复制它的 Value 粘到下方",
@@ -38,8 +38,8 @@ export default {
     cookieLoginSuccess: "Cookie 已导入，登录成功",
     cookieLoginFailed: "导入失败，请检查 PHPSESSID 是否正确",
     builtinLoginDesc:
-      "打开内置登录窗口。若遇到验证码反复循环（选对了也不让继续），说明被风控判定为自动化环境，请改用「浏览器导入」。",
-    openBuiltinLogin: "打开内置登录窗口",
+      "将在独立的 Chrome、Edge 或 Chromium 窗口中登录。应用不会读取你的日常浏览器资料。",
+    openBuiltinLogin: "打开浏览器登录",
     builtinLoginNoResult: "未检测到登录，可能已取消或登录失败",
     loginSuccess: "登录成功",
     loginFailed: "登录失败",

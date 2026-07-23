@@ -19,7 +19,7 @@ pywebview 调用模式直接复用 spike/cookie_probe/probe.py(ADR 0005 复用�
     - 主线程 webview.start(private_mode=False, http_server=True, http_port=17729)
     - loaded 事件防重入(state["extracted"] 闭包标志)
     - EXTRACT_AND_VERIFY_JS 一次完成 csrf + /ajax/user/self 登录验证
-    - evaluate_js callback 模式 + threading.Event 同步包装,5 次重试
+    - evaluate_js callback 模式 + threading.Event 同步包装,短重试
 """
 
 from __future__ import annotations
@@ -340,7 +340,7 @@ def extract_login_result(window: Any) -> dict[str, Any]:
 
     js_result = _evaluate_js_with_retry(window, EXTRACT_AND_VERIFY_JS)
     if not js_result:
-        return {"status": "error", "error": "csrf token 提取失败(重试 5 次均未拿到 token,react-query 可能未 hydrate)"}
+        return {"status": "error", "error": "csrf token 提取失败（页面数据可能尚未就绪）"}
 
     csrf_token = js_result.get("token", "")
     login = js_result.get("login", {})

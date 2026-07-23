@@ -1,6 +1,9 @@
 # ADR 0002 · 登录策略：WebView 嵌入主导 + 手动 cookie 兜底
 
-**状态**：已接受 · **日期**：2026-07-19 · **关联 SPEC**：§4.1
+**状态**：被 ADR 0006 取代 · **日期**：2026-07-19 · **关联 SPEC**：§4.1
+
+> 2026-07-23：Pixiv 的 reCAPTCHA Enterprise 在 macOS WKWebView 中出现图片
+> 验证循环，登录主路径改为真实 Chromium；本 ADR 的 pywebview 实现仅保留为回退。
 
 ## 背景
 

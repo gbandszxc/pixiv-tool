@@ -49,7 +49,10 @@ if sys.platform == "win32":
     platform_hidden = ["pixiv_tool.storage.cookie_dpapi"]
 elif sys.platform == "darwin":
     pywebview_backends = ["webview.platforms.cocoa"]
-    platform_hidden = []  # mac cookie 存储是 stub,不需要 dpapi 模块
+    platform_hidden = [
+        "pixiv_tool.storage.cookie_keychain",
+        "keyring.backends.macOS",
+    ]
 else:  # linux
     pywebview_backends = ["webview.platforms.webkitgtk", "webview.platforms.gtk"]
     platform_hidden = []
@@ -73,7 +76,7 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=[
-        "pywebview",
+        "webview",
         # pywebview 平台后端 + 平台专属模块按 sys.platform 展开(见文件顶部条件)。
         *pywebview_backends,
         *platform_hidden,
@@ -93,16 +96,18 @@ a = Analysis(
         "httpx",
         "httpx._transports",
         "httpx._transports.default",
+        "websockets",
+        "websockets.asyncio.client",
         # curl_cffi:浏览器 TLS 指纹伪装后端。动态库由 hook-curl_cffi.py 收集,
         # 这里声明纯 Python 模块确保运行期 import 成功。core.http_factory 在
         # curl_cffi 不可用时会降级到 httpx,但正常打包应该都能进 bundle。
         "curl_cffi",
         "curl_cffi.requests",
-        "curl_cffi.requests.async_session",
         "curl_cffi.requests.exceptions",
         # 登录子进程入口在 prod 模式下由主 exe `--login-window` 分发调用,
         # 必须在 bundle 里(静态分析也能找到,但显式声明更稳)。
         "pixiv_tool.auth.login_window",
+        "pixiv_tool.auth.browser_login",
         "pixiv_tool.core.http_factory",
     ],
     hookspath=[HOOKS_DIR],

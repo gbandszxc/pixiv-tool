@@ -14,8 +14,8 @@
 | uv | 最新 | 后端依赖管理 |
 | pnpm | 10+ | 前端依赖管理 |
 | Node.js | 20+（fnm/nvm 管理） | 前端构建 |
-| Windows | 10/11 x64 | **全功能**（登录/抓取/导出）；WebView2 运行时 Win11 自带 |
-| macOS | 12+（arm64/x86_64） | 能构建、能启动、能浏览；**登录不可用**（cookie 走 Windows DPAPI，mac keychain 是 V2） |
+| Windows | 10/11 x64 | **全功能**（登录/抓取/导出）；登录优先使用 Chrome/Edge |
+| macOS | 12+（arm64/x86_64） | **全功能**；登录使用 Chrome/Edge/Chromium，Cookie 存系统 Keychain |
 | Linux | webkit2gtk（见 README） | 能构建、能启动、能浏览；登录同样不可用 |
 
 ### 平台依赖组
@@ -228,7 +228,8 @@ pixiv-tool.exe（主进程）
 
 ### 4.3 登录子入口（内部）
 
-由 `POST /api/auth/login` 触发，不直接用。见 `src/pixiv_tool/auth/login_window.py` + `src/pixiv_tool/api/auth.py:_spawn_login_subprocess`。
+`POST /api/auth/login` 优先走 `src/pixiv_tool/auth/browser_login.py` 的真实
+Chromium 登录。下面的子入口仅在未安装 Chromium 浏览器时作为 pywebview 回退。
 
 dev 模式：`python -m pixiv_tool.auth.login_window --result-file X`
 prod 模式：`pixiv-tool.exe --login-window --result-file X`（同一个 exe 自调）
@@ -246,11 +247,15 @@ prod 模式：`pixiv-tool.exe --login-window --result-file X`（同一个 exe �
 | 数据 | dev 模式位置 | frozen 模式位置 |
 |---|---|---|
 | 任务/已抓小说 (app.db) | `<repo>/data/app.db` | `<exe_dir>/data/app.db` |
-| 登录 cookie (cookies.dat) | `<repo>/config/cookies.dat` | `<exe_dir>/config/cookies.dat` |
+| 登录 cookie | `<repo>/config/cookies.dat` | Windows：`<exe_dir>/config/cookies.dat`；macOS：系统 Keychain |
+| 登录浏览器 profile | `<repo>/config/login-browser-profile/` | Windows：`<exe_dir>/config/login-browser-profile/`；macOS：`~/Library/Application Support/pixiv-tool/config/login-browser-profile/` |
 | 用户设置 (settings.json) | `<repo>/config/settings.json` | `<exe_dir>/config/settings.json` |
 | 运行日志 | `<repo>/data/logs/` | `<exe_dir>/data/logs/` |
 
 > **DPAPI 绑定用户账户**：`cookies.dat` 是 Windows DPAPI 加密，只能在加密时的同一 Windows 用户账户下解密。换机器/换用户需重新登录。
+>
+> macOS 登录态由系统 Keychain 加密保存。独立浏览器 profile 不读取用户日常
+> Chrome/Edge 资料。
 
 ---
 
@@ -328,6 +333,21 @@ prod 模式登录走子进程（`pixiv-tool.exe --login-window`），依赖 `pyt
 - 打包时看日志有没有 `Analyzing ... hook-curl_cffi` 行
 
 curl_cffi issue #5、#455 记录过类似 PyInstaller 打包问题，根因都是动态库没收集。
+
+### Q8: 如何清理登录浏览器缓存做复测
+
+先完全退出 Pixiv Tool，再删除应用专属登录 profile：
+
+- dev：`<repo>/config/login-browser-profile/`
+- Windows 打包：`<exe_dir>/config/login-browser-profile/`
+- macOS 打包：`~/Library/Application Support/pixiv-tool/config/login-browser-profile/`
+
+这不会影响用户日常 Chrome/Edge profile。若要完全回到未登录状态，还需在应用
+设置中执行“清除登录”（Windows 清 DPAPI Cookie；macOS 清 Keychain）。
+
+旧版 pywebview 登录窗在 macOS 的网站数据位于
+`~/Library/WebKit/com.pixivtool.app/`，HTTP 缓存位于
+`~/Library/Caches/com.pixivtool.app/`；仅复测旧回退链路时才需要删除。
 
 ---
 

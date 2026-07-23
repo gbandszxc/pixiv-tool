@@ -26,7 +26,7 @@
 - EPUB 输出（架构预留接口，不实现）
 - 自适应限速（V1 用固定并发 + 429 暂停）
 - 任务断点启动弹窗恢复
-- macOS / Linux 登录功能（仅 Windows 全功能；Mac/Linux 仅可启动与浏览 UI）
+- Linux 登录功能（Windows / macOS 支持登录；Linux Secret Service 延后）
 - 自动更新、安装器（V1 解压即用）
 - 错误上报（Sentry 等）
 
@@ -126,8 +126,9 @@ pixiv-tool/
 │     │  ├─ source.py           # NovelSource 抽象 + 3 实现
 │     │  ├─ task.py             # Task 状态机
 │     │  └─ exporter.py         # Exporter 接口 + txt/md 实现
-│     ├─ auth/                  # 登录窗
-│     │  └─ login_window.py     # pywebview 登录窗 + cookie 提取
+│     ├─ auth/                  # 登录
+│     │  ├─ browser_login.py    # 真实 Chromium 登录 + CDP Cookie 提取
+│     │  └─ login_window.py     # pywebview 缺浏览器时的回退登录窗
 │     ├─ storage/               # 持久化
 │     │  ├─ db.py               # SQLite + schema 初始化
 │     │  ├─ models.py           # dataclass 模型
@@ -167,22 +168,23 @@ pixiv-tool/
 
 ### 4.1 登录与 Cookie（V1 最高风险点）
 
-**方案**：D —— WebView2 嵌入登录主导（A）+ 手动粘 PHPSESSID 兜底（C）。
+**方案**：真实 Chromium 独立 profile 主导 + 手动粘 PHPSESSID 兜底；未安装
+Chromium 浏览器时回退 pywebview 登录窗。
 
 **登录流程**：
 
 ```
 [用户点"登录"]
       ↓
-弹 pywebview 窗口加载 https://accounts.pixiv.net/login
+启动 Chrome / Edge / Chromium 独立 profile 加载 https://accounts.pixiv.net/login
       ↓
 用户输账号密码 / 过验证码 / 过 2FA
       ↓
 登录成功（重定向到 www.pixiv.net）
       ↓
-调用 webview.get_cookies() 取 cookie  ← ✅ Spike 已验证（见 ADR 0005）
+通过 Chrome DevTools Protocol Storage.getCookies 取 HttpOnly cookie
       ↓
-导航到 www.pixiv.net，提取 x-csrf-token
+调用 /ajax/user/self 同时验证 userData 并取得 x-csrf-token
       ↓
 CookieStore.save({ PHPSESSID, x-csrf-token, ... })  ← DPAPI 加密
       ↓
@@ -197,12 +199,13 @@ __NEXT_DATA__.props.pageProps.dehydratedState.queries[*].meta.apiClient.token
 
 （不是早期假设的 `pageProps.token`，也不是 react-query 刷新后的 `state.data.token`——藏在 `meta.apiClient.token` 里，pixiv apiClient 自定义注入。）
 
-**关键实现约束**（spike 调查得出）：
+**关键实现约束**：
 
-1. **`evaluate_js` 必须用 callback 模式**：同步模式不 await Promise，async 函数返回 None。所有需要 await Promise 的 JS 调用都要用 `threading.Event` 把 callback 同步包装。
-2. **JS 写成 `new Promise(...)` 而非 `async () => {...}`**：pywebview 的 Promise 识别更可靠。
-3. **`window.get_cookies()` 返回 `list[SimpleCookie]`**：每个 SimpleCookie 是 dict-like 容器，要遍历 `.items()` 取 `(name, Morsel)` 对。`SimpleCookie.Morsel` 继承自 dict，判断 dict 路径时要显式排除 Morsel。
-4. **pywebview 必须配置 `private_mode=False` + `http_server=True` + 固定 `http_port`**：cookie 才会持久化到 WebView2 数据目录，跨会话复用。
+1. Chrome / Edge 必须使用应用专属 `user-data-dir`，不得连接用户日常 profile。
+2. CDP 只绑定随机 `127.0.0.1` 端口，拿到 Cookie 后立即关闭浏览器。
+3. 匿名 `/ajax/user/self` 也会返回 HTTP 200 与 token；必须以非空 `userData.id`
+   作为 Session 有效的权威判据。
+4. pywebview 回退路径继续遵循 ADR 0005 的 callback / Morsel 提取约束。
 
 **登录状态检查**：App 启动时调 `/ajax/user/self?lang=zh` 接口探测 cookie 有效性（返回 `userData.{id, pixivId, name}`）；失效则清空本地 cookie，UI 显示"未登录"。
 
@@ -344,10 +347,10 @@ CREATE TABLE tasks (
 
 ### 5.3 Cookie 存储
 
-- 位置：`config/cookies.dat`
-- 加密：**Windows DPAPI**（`win32crypt.CryptProtectData`，纯 ctypes 调 `crypt32.dll`）
+- Windows 位置：`config/cookies.dat`，使用 **DPAPI** 加密
+- macOS 位置：系统 **Keychain**（service `pixiv-tool.cookies`）
 - 接口：`CookieStore` 抽象，按 `sys.platform` 工厂选择实现
-- V1：仅 Windows 完整实现；macOS（keychain）/ Linux（secretstorage）为 stub，抛 `NotImplementedError`
+- Linux（Secret Service）仍为 stub，抛 `NotImplementedError`
 
 ---
 
@@ -508,6 +511,7 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 | R5 | PyInstaller hidden import 漏配 | 中 | spec 文件显式声明；CI 构建测试 |
 | R6 | 长任务断点续传数据一致性 | 中 | 每篇抓完即写库；事务包裹 |
 | R7 | csrf token 路径依赖 pixiv 内部 react-query meta 结构 | 低 | `EXTRACT_AND_VERIFY_JS` 写多路径兜底（A/B/C/D）；pixiv 改版时重新探测 |
+| R8 | Chromium CDP 登录依赖本机浏览器 | 低 | 支持 Chrome/Edge/Chromium；缺失时回退 pywebview |
 
 ---
 
@@ -520,6 +524,7 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 | 0003 | Source + Crawler + Task 任务模型 | [adr/0003-task-model.md](adr/0003-task-model.md) |
 | 0004 | Windows DPAPI 加密 cookie，跨平台接口预留 | [adr/0004-cookie-storage.md](adr/0004-cookie-storage.md) |
 | 0005 | Spike 结果：pywebview cookie 探测可行性（R1 已解决） | [adr/0005-cookie-probe-result.md](adr/0005-cookie-probe-result.md) |
+| 0006 | 真实 Chromium 登录 + macOS Keychain | [adr/0006-browser-login-keychain.md](adr/0006-browser-login-keychain.md) |
 
 ADR 按需追加，不强制一次性写完。
 
@@ -527,7 +532,7 @@ ADR 按需追加，不强制一次性写完。
 
 ## 13. 开放问题（V2 待定）
 
-- macOS keychain / Linux secretstorage cookie 实现
+- Linux Secret Service cookie 实现
 - EPUB exporter 实现
 - 自适应限速（基于响应延迟与 429 频率）
 - 任务启动弹窗恢复（"上次任务进行到 80/200，是否继续"）

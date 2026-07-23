@@ -24,10 +24,10 @@ export default {
     loggingIn: "Logging in",
     logout: "Logout",
     loginDialogTitle: "Log in to Pixiv",
-    cookieLoginTab: "Import from browser",
-    builtinLoginTab: "Built-in window",
+    cookieLoginTab: "Paste session",
+    builtinLoginTab: "Browser login",
     cookieLoginDesc:
-      "Log in via a real browser and import the session. Fully bypasses the built-in window's captcha loop (recommended).",
+      "If browser login is unavailable, paste PHPSESSID as a fallback.",
     cookieLoginSteps:
       "1. Open pixiv.net in your browser and sign in normally\n2. Press F12 → Application → Cookies → www.pixiv.net\n3. Find PHPSESSID, copy its Value and paste below",
     phpsessidLabel: "PHPSESSID",
@@ -37,8 +37,8 @@ export default {
     cookieLoginSuccess: "Cookie imported, logged in successfully",
     cookieLoginFailed: "Import failed, please check the PHPSESSID value",
     builtinLoginDesc:
-      "Open the built-in login window. If the captcha keeps looping (correct answers rejected), the environment is flagged as automated — use “Import from browser” instead.",
-    openBuiltinLogin: "Open built-in login window",
+      "Sign in using an isolated Chrome, Edge, or Chromium window. The app does not read your everyday browser profile.",
+    openBuiltinLogin: "Open browser login",
     builtinLoginNoResult: "No login detected — may have been cancelled or failed",
     loginSuccess: "Logged in successfully",
     loginFailed: "Login failed",

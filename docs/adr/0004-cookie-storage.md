@@ -1,6 +1,9 @@
 # ADR 0004 · Cookie 存储：Windows DPAPI + 跨平台接口
 
-**状态**：已接受 · **日期**：2026-07-19 · **关联 SPEC**：§5.3
+**状态**：部分被 ADR 0006 补充 · **日期**：2026-07-19 · **关联 SPEC**：§5.3
+
+> 2026-07-23：Windows DPAPI 决策不变；macOS Keychain 已由 ADR 0006 实现，
+> 不再是 stub。
 
 ## 背景
 
@@ -26,7 +29,9 @@ def create_cookie_store() -> CookieStore:
     if sys.platform == 'linux':    return SecretStorageCookieStore()  # V2
 ```
 
-V1 仅实现 `DpapiCookieStore`（纯 ctypes 调 `crypt32.dll`，无 pywin32 依赖）；macOS / Linux stub 抛 `NotImplementedError`。
+Windows 实现 `DpapiCookieStore`（纯 ctypes 调 `crypt32.dll`，无 pywin32
+依赖）；macOS 使用系统 Keychain（见 ADR 0006）；Linux stub 抛
+`NotImplementedError`。
 
 ## 理由
 
@@ -42,5 +47,5 @@ V1 仅实现 `DpapiCookieStore`（纯 ctypes 调 `crypt32.dll`，无 pywin32 依
 - Mac/Linux 实现可在 V2 平滑加入。
 
 **负面**
-- V1 Mac/Linux 构建能启动但登录抛 `NotImplementedError`。
+- Linux 构建能启动但登录存储仍抛 `NotImplementedError`。
 - DPAPI 绑定 Windows 用户账号，换机需重新登录（可接受）。

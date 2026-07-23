@@ -326,11 +326,13 @@ class TestAuthAPI:
         stub_store.clear.assert_called_once()
 
     def test_login_returns_verified_user_without_second_status_request(self, client, monkeypatch):
-        """登录窗已验证的用户资料直接回传，前端无需再走一次远程状态校验。"""
+        """真实浏览器已验证的用户资料直接回传。"""
         tc, db, stub_store, *_ = client
+        from unittest.mock import AsyncMock
+
         monkeypatch.setattr(
-            "pixiv_tool.api.auth._spawn_login_subprocess",
-            lambda: {
+            "pixiv_tool.auth.browser_login.open_browser_login",
+            AsyncMock(return_value={
                 "status": "success",
                 "cookies": {"PHPSESSID": "session", "x-csrf-token": "csrf"},
                 "user": {
@@ -339,7 +341,7 @@ class TestAuthAPI:
                     "name": "测试用户",
                     "profile_img": "https://i.pximg.net/user-profile/avatar.png",
                 },
-            },
+            }),
         )
 
         resp = tc.post("/api/auth/login")
@@ -350,7 +352,7 @@ class TestAuthAPI:
         stub_store.save.assert_called_once_with({"PHPSESSID": "session", "x-csrf-token": "csrf"})
 
 
-# ── 手动导入 Cookie 登录 (绕开 WebView2 验证码循环) ──────────────────────────
+# ── 手动 Session 登录 ───────────────────────────────────────────────────────
 
 
 class TestManualLoginAPI:
@@ -361,7 +363,7 @@ class TestManualLoginAPI:
         assert resp.status_code == 400
 
     def test_manual_login_auto_fills_csrf_from_probe(self, client, monkeypatch):
-        """不传 csrf_token 时,后端用 PHPSESSID 抓首页自动补全 token。"""
+        """后端用 PHPSESSID 调 self 接口校验并获取 token。"""
         tc, db, stub_store, *_ = client
 
         # auth.py 在函数内 `from pixiv_tool.core.csrf import fetch_session_probe`,
@@ -370,7 +372,11 @@ class TestManualLoginAPI:
 
         async def fake_probe(php):
             assert php == "session_xyz"
-            return csrf_real.SessionProbe(csrf_token="auto_filled_csrf", is_logged_in=True)
+            return csrf_real.SessionProbe(
+                csrf_token="auto_filled_csrf",
+                is_logged_in=True,
+                user={"user_id": "1", "pixiv_id": "tester", "name": "Tester"},
+            )
 
         monkeypatch.setattr(csrf_real, "fetch_session_probe", fake_probe)
 
@@ -379,38 +385,29 @@ class TestManualLoginAPI:
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "success"
-        assert body["csrf_auto_filled"] is True
-        assert body["logged_in_hint"] is True
+        assert body["user"]["pixiv_id"] == "tester"
         # 存进 store 的 cookies 含自动补的 csrf
         stub_store.save.assert_called_once_with(
             {"PHPSESSID": "session_xyz", "x-csrf-token": "auto_filled_csrf"}
         )
 
-    def test_manual_login_uses_user_supplied_csrf_skipping_probe(self, client, monkeypatch):
-        """用户自带 csrf_token 时跳过网络探测,直接存(信任用户输入)。"""
+    def test_manual_login_accepts_cookie_header_format(self, client, monkeypatch):
         tc, db, stub_store, *_ = client
-
-        # fetch_session_probe 不应被调用
         import pixiv_tool.core.csrf as csrf_real
 
-        called = {"n": 0}
-
         async def fake_probe(php):
-            called["n"] += 1
-            return csrf_real.SessionProbe(csrf_token="should_not_reach", is_logged_in=True)
+            assert php == "session_abc"
+            return csrf_real.SessionProbe("csrf", True)
 
         monkeypatch.setattr(csrf_real, "fetch_session_probe", fake_probe)
-
         resp = tc.post(
             "/api/auth/login/manual",
-            data={"PHPSESSID": "session_abc", "csrf_token": "user_csrf_tok"},
+            data={"PHPSESSID": "foo=bar; PHPSESSID=session_abc; baz=qux"},
         )
 
         assert resp.status_code == 200
-        assert resp.json()["csrf_auto_filled"] is False
-        assert called["n"] == 0  # 未探测
         stub_store.save.assert_called_once_with(
-            {"PHPSESSID": "session_abc", "x-csrf-token": "user_csrf_tok"}
+            {"PHPSESSID": "session_abc", "x-csrf-token": "csrf"}
         )
 
     def test_manual_login_invalid_session_returns_400(self, client, monkeypatch):

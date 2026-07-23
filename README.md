@@ -19,7 +19,7 @@
 - Python 3.11+（推荐用 pyenv 管理）
 - [uv](https://docs.astral.sh/uv/)（Python 依赖管理）
 - Node.js 18+ + [pnpm](https://pnpm.io/)
-- Windows 10+（macOS/Linux 部分功能受限，见下方说明）
+- Windows 10+ 或 macOS 12+（Linux 部分功能受限，见下方说明）
 
 ### 启动开发服务
 
@@ -79,8 +79,9 @@ cd frontend && pnpm install
 
 ## 跨平台说明
 
-- **Windows**：全功能支持（登录、抓取、导出）
-- **macOS / Linux**：可启动 UI 和浏览，但**登录功能不可用**（cookie 存储依赖 Windows DPAPI，macOS keychain / Linux secretstorage 留 V2 实现）。Linux 用户需预装 `webkit2gtk`：
+- **Windows / macOS**：全功能支持（登录、抓取、导出）。登录优先使用独立
+  Chrome / Edge / Chromium 窗口；Windows Cookie 使用 DPAPI，macOS 使用 Keychain。
+- **Linux**：可启动 UI 和浏览，但登录存储暂不可用。Linux 用户需预装 `webkit2gtk`：
 
   ```bash
   # Ubuntu/Debian

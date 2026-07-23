@@ -8,8 +8,8 @@
     size="huge"
     @update:show="onUpdateShow"
   >
-    <n-tabs type="line" default-value="cookie">
-      <!-- 浏览器导入 Cookie(推荐,绕开 WebView2 验证码循环) -->
+    <n-tabs type="line" default-value="builtin">
+      <!-- 手动 Session 兜底 -->
       <n-tab-pane name="cookie" :tab="t('auth.cookieLoginTab')">
         <n-space vertical :size="12">
           <n-alert type="info" :show-icon="true" :bordered="false">
@@ -38,7 +38,7 @@
         </n-space>
       </n-tab-pane>
 
-      <!-- 内置窗口登录(可能触发验证码循环,作为备选) -->
+      <!-- 真实 Chromium 浏览器登录 -->
       <n-tab-pane name="builtin" :tab="t('auth.builtinLoginTab')">
         <n-space vertical :size="12">
           <n-text depth="3">{{ t('auth.builtinLoginDesc') }}</n-text>

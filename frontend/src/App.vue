@@ -49,7 +49,7 @@
       </n-layout-content>
     </n-layout>
 
-    <!-- 登录弹窗:内置窗口 / 浏览器导入两条路。后者绕开 WebView2 验证码循环。 -->
+    <!-- 登录弹窗：真实浏览器主路径 + 手动 Session 兜底。 -->
     <LoginDialog v-model:show="showLoginDialog" />
     </n-message-provider>
   </n-config-provider>
@@ -80,7 +80,7 @@ const route = useRoute();
 const authStore = useAuthStore();
 const { t } = useI18n();
 
-// 登录弹窗显隐:点"登录"打开,让用户在内置窗口 / 浏览器导入两条路里选。
+// 登录弹窗显隐：点“登录”打开，在浏览器登录 / 手动 Session 间选择。
 const showLoginDialog = ref(false);
 
 const theme = computed(() => null); // 浅色，ticket 15 实现完整主题

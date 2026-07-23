@@ -108,6 +108,7 @@ Icon?
 config/cookies.dat
 config/cookies.json
 config/cookies.tmp
+config/login-browser-profile/
 
 # --- SQLite 数据库（任务进度、已抓小说去重表、运行时数据） ---
 data/app.db

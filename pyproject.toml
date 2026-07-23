@@ -14,6 +14,9 @@ dependencies = [
     # python-multipart:FastAPI Form() 解析 form data 必需依赖。
     # login_manual 端点用 Form 接收 PHPSESSID(放 body 而非 query,避免 URL 泄露 cookie)。
     "python-multipart>=0.0.9",
+    # 真实浏览器登录通过 Chrome DevTools Protocol 读取 HttpOnly Cookie。
+    # uvicorn[standard] 也依赖它；这里直接声明，避免依赖传递关系成为隐式契约。
+    "websockets>=14.0",
 ]
 
 # ---------------------------------------------------------------------------
@@ -40,7 +43,7 @@ dependencies = [
 # (pip/uv 装 pywebview 会自动带 pyobjc-framework-Cocoa 等子依赖)。
 # 不要手动加 pyobjc——由 pywebview 自己拉,版本冲突时再单独锁。
 win = ["pywebview>=5.0,<6.0"]
-macos = ["pywebview>=5.0,<6.0"]
+macos = ["pywebview>=5.0,<6.0", "keyring>=25.0,<26.0"]
 linux = ["pywebview>=5.0,<6.0"]
 dev = [
     "pytest>=8.0",
