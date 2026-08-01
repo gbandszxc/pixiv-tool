@@ -112,6 +112,8 @@ export default {
   settings: {
     title: "设置",
     outputDir: "输出目录",
+    browse: "浏览…",
+    pickFailed: "无法打开目录选择器",
     outputFormats: "输出格式",
     language: "语言",
     theme: "主题",

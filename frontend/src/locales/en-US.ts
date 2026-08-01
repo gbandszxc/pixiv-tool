@@ -111,6 +111,8 @@ export default {
   settings: {
     title: "Settings",
     outputDir: "Output Directory",
+    browse: "Browse…",
+    pickFailed: "Failed to open directory picker",
     outputFormats: "Output Formats",
     language: "Language",
     theme: "Theme",

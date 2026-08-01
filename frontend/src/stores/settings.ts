@@ -33,5 +33,10 @@ export const useSettingsStore = defineStore("settings", () => {
     await api.post("/api/settings/clear-logs");
   }
 
-  return { settings, fetchSettings, saveSettings, clearLogs };
+  async function selectDirectory(): Promise<string | null> {
+    const resp = await api.post("/api/settings/select-directory");
+    return resp.data?.path ?? null;
+  }
+
+  return { settings, fetchSettings, saveSettings, clearLogs, selectDirectory };
 });

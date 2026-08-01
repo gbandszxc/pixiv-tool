@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -148,6 +149,82 @@ class TestSettingsAPI:
         tc.put("/api/settings", json={"theme": "dark"})
         resp = tc.get("/api/settings")
         assert resp.json()["theme"] == "dark"
+
+    def test_put_output_dir_non_str_rejected(self, client):
+        """非字符串 output_dir → 400。"""
+        tc, *_ = client
+        resp = tc.put("/api/settings", json={"output_dir": 123})
+        assert resp.status_code == 400
+        assert "detail" in resp.json()
+
+    def test_put_output_dir_empty_rejected(self, client):
+        """空/纯空白 output_dir → 400。"""
+        tc, *_ = client
+        resp = tc.put("/api/settings", json={"output_dir": "   "})
+        assert resp.status_code == 400
+        assert "detail" in resp.json()
+
+    def test_put_output_dir_control_char_rejected(self, client):
+        """含控制字符的 output_dir → 400。"""
+        tc, *_ = client
+        resp = tc.put("/api/settings", json={"output_dir": "dl\x01dir"})
+        assert resp.status_code == 400
+        assert "detail" in resp.json()
+
+    @pytest.mark.skipif(os.name != "nt", reason="非法字符校验仅 Windows 生效")
+    def test_put_output_dir_illegal_char_rejected(self, client):
+        """Windows 下含 ? 的 output_dir → 400。"""
+        tc, *_ = client
+        resp = tc.put("/api/settings", json={"output_dir": "dl?dir"})
+        assert resp.status_code == 400
+        assert "detail" in resp.json()
+
+    def test_put_output_dir_existing_file_rejected(self, client, tmp_path):
+        """output_dir 指向已有文件 → 400。"""
+        tc, *_ = client
+        existing = tmp_path / "a_file"
+        existing.write_text("x", encoding="utf-8")
+        resp = tc.put("/api/settings", json={"output_dir": str(existing)})
+        assert resp.status_code == 400
+        assert "detail" in resp.json()
+
+    def test_put_output_dir_uncreatable_rejected(self, client, tmp_path):
+        """父路径是文件导致无法创建 → 400。"""
+        tc, *_ = client
+        blocker = tmp_path / "a_file"
+        blocker.write_text("x", encoding="utf-8")
+        resp = tc.put("/api/settings", json={"output_dir": str(blocker / "sub")})
+        assert resp.status_code == 400
+        assert "detail" in resp.json()
+
+    def test_put_output_dir_valid_creates_dir(self, client, tmp_path):
+        """合法绝对路径 → 200，目录被创建且设置持久化。"""
+        tc, db, _, settings_mod, config_dir = client
+        target = tmp_path / "new_downloads"
+        resp = tc.put("/api/settings", json={"output_dir": str(target)})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "success"
+        assert target.is_dir()
+        settings_mod._instance = None
+        assert settings_mod.get_settings().output_dir == str(target)
+
+    def test_select_directory_picked(self, client, monkeypatch):
+        """select-directory 返回选中路径。"""
+        tc, *_ = client
+        monkeypatch.setattr(
+            "pixiv_tool.api.settings._pick_directory", lambda: "/tmp/picked"
+        )
+        resp = tc.post("/api/settings/select-directory")
+        assert resp.status_code == 200
+        assert resp.json() == {"path": "/tmp/picked"}
+
+    def test_select_directory_cancelled(self, client, monkeypatch):
+        """select-directory 取消时返回 null。"""
+        tc, *_ = client
+        monkeypatch.setattr("pixiv_tool.api.settings._pick_directory", lambda: None)
+        resp = tc.post("/api/settings/select-directory")
+        assert resp.status_code == 200
+        assert resp.json() == {"path": None}
 
 
 # ── Auth API (ticket 15) ─────────────────────────────────────────────────────

@@ -5,7 +5,10 @@
     <n-card class="form-card">
       <n-form label-placement="left" label-width="100">
         <n-form-item :label="t('settings.outputDir')">
-          <n-input v-model:value="form.output_dir" placeholder="downloads" />
+          <n-input-group>
+            <n-input v-model:value="form.output_dir" placeholder="downloads" />
+            <n-button :loading="browsing" @click="handleBrowse">{{ t('settings.browse') }}</n-button>
+          </n-input-group>
         </n-form-item>
 
         <n-form-item :label="t('settings.outputFormats')">
@@ -55,7 +58,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { NCard, NForm, NFormItem, NInput, NSelect, NCheckboxGroup, NCheckbox, NButton, NSpace, NAlert, NPopconfirm } from "naive-ui";
+import { NCard, NForm, NFormItem, NInput, NInputGroup, NSelect, NCheckboxGroup, NCheckbox, NButton, NSpace, NAlert, NPopconfirm, useMessage } from "naive-ui";
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../stores/settings";
 import { useAuthStore } from "../stores/auth";
@@ -73,6 +76,8 @@ const form = ref({
 
 const message = ref("");
 const messageType = ref<"success" | "error">("success");
+const browseMessage = useMessage();
+const browsing = ref(false);
 
 // 切换语言时整个 UI 立即更新（locale 是响应式 ref，computed 自动追踪）
 const langOptions = computed(() => [
@@ -102,13 +107,26 @@ onMounted(async () => {
   }
 });
 
+async function handleBrowse() {
+  browsing.value = true;
+  try {
+    const p = await settingsStore.selectDirectory();
+    if (p) form.value.output_dir = p;
+  } catch {
+    browseMessage.error(t("settings.pickFailed"));
+  } finally {
+    browsing.value = false;
+  }
+}
+
 async function handleSave() {
   try {
     await settingsStore.saveSettings(form.value);
     message.value = t("settings.saved");
     messageType.value = "success";
-  } catch {
-    message.value = t("settings.saveFailed");
+  } catch (err) {
+    const detail = (err as any)?.response?.data?.detail;
+    message.value = typeof detail === "string" && detail ? detail : t("settings.saveFailed");
     messageType.value = "error";
   }
 }
