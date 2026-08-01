@@ -178,9 +178,9 @@ coll = COLLECT(
 # 的 .app bundle,必须再加一层 BUNDLE。COLLECT 产物是 pixiv-tool/ 目录,BUNDLE
 # 把它打包成 Pixiv Tool.app/。
 #
-# 图标:mac 用 .icns(Windows 的 .ico 在 mac 上不被 BUNDLE 接受)。src/pixiv_tool/
-# 下当前 icon.ico / icon.icns 都可能不存在(美术资源未就绪),统一 .exists() 守卫,
-# 不存在就传 None(PyInstaller 用默认图标)。**不要**在这里生成图标资源。
+# 图标:mac 用 .icns(Windows 的 .ico 在 mac 上不被 BUNDLE 接受)。
+# src/pixiv_tool/ 下的 icon.ico / icon.icns 由 scripts/gen_icons.py 从
+# docs/icon/raw_icon.png 生成。.exists() 守卫仅用于图标缺失时降级为默认图标。
 # -------------------------------------------------------------------
 
 if sys.platform == "darwin":
