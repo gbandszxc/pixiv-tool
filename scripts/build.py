@@ -194,6 +194,8 @@ def force_icon_rebuild_if_changed() -> None:
     digest = hasher.hexdigest()
 
     build_dir = REPO_ROOT / "build" / "pixiv-tool"
+    # 首次打包时 build/ 目录还不存在(PyInstaller 还没跑),先建好再写 marker。
+    build_dir.mkdir(parents=True, exist_ok=True)
     marker = build_dir / "icon.contenthash"
     toc_names = ["EXE-00.toc"] if sys.platform == "win32" else ["BUNDLE-00.toc"]
     if marker.exists() and marker.read_text() == digest:
