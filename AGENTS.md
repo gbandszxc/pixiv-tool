@@ -83,6 +83,16 @@ macOS / Linux (bash)：
 - 提交信息格式：`<类型>([<范围>]): <中文改动说明>`。英文前缀（如 `feat`、`fix`、`refactor`、`docs`、`style`、`chore`、`perf`、`test`）表示改动大类，范围可选，中文部分写明改动内容和原因，避免过于简略。示例：`feat: 增加图片全屏预览`。
 - 每完成一个 ticket 至少一次提交
 
+### 应用图标
+
+换应用图标三步：
+
+1. 替换源图 `docs/icon/raw_icon.png`（正方形最佳；非正方形会被中心裁剪）
+2. 重新生成：`uv run --with pillow python scripts/gen_icons.py`（产出 `src/pixiv_tool/icon.ico` Windows 7 尺寸 + `icon.icns` macOS 10 块）
+3. 重新打包 `scripts/build.py` 后生效（`pixiv-tool.spec` 按 `.exists()` 自动拾取）
+
+平台覆盖：Windows exe 内嵌 `icon.ico`；macOS `.app` 用 `icon.icns`。**Linux 无二进制内嵌图标**（PyInstaller 不支持，桌面集成需另配 `.desktop` + PNG）。
+
 ### 安全边界
 
 - `config/cookies.dat` 是 DPAPI 加密的登录态，**绝不入库**（已在 `.gitignore`）
