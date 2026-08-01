@@ -15,6 +15,7 @@ pixiv-tool 一键构建脚本。
 from __future__ import annotations
 
 import argparse
+import hashlib
 import platform
 import shutil
 import subprocess
@@ -174,9 +175,39 @@ def copy_static() -> None:
     print(f"  ✓ 已复制到 {STATIC_DIR}")
 
 
+def force_icon_rebuild_if_changed() -> None:
+    """PyInstaller 的 EXE/BUNDLE 增量判断只比较图标路径、不比较内容
+    (api.py 的 ('icon', _check_guts_eq)),换图后路径不变就不会重嵌图标。
+    这里对平台图标内容做 sha256,与 build 目录标记比对,内容变了就删对应
+    toc 强制重建,否则保持增量。"""
+    icon_files = {
+        "win32": ["icon.ico"],
+        "darwin": ["icon.icns"],
+    }.get(sys.platform, [])
+    if not icon_files:
+        return
+    hasher = hashlib.sha256()
+    for name in icon_files:
+        path = BACKEND_DIR / name
+        if path.exists():
+            hasher.update(path.read_bytes())
+    digest = hasher.hexdigest()
+
+    build_dir = REPO_ROOT / "build" / "pixiv-tool"
+    marker = build_dir / "icon.contenthash"
+    toc_names = ["EXE-00.toc"] if sys.platform == "win32" else ["BUNDLE-00.toc"]
+    if marker.exists() and marker.read_text() == digest:
+        return
+    for toc in toc_names:
+        (build_dir / toc).unlink(missing_ok=True)
+    marker.write_text(digest)
+    print("  ⚠ 图标内容有变化,强制重建 EXE 图标资源")
+
+
 def run_pyinstaller() -> None:
     """执行 PyInstaller 打包。"""
     print("\n[3/3] PyInstaller 打包...")
+    force_icon_rebuild_if_changed()
     # .spec 文件已经定义了 onedir 模式(通过 COLLECT),不能再传 --onedir/--onefile——
     # PyInstaller 6+ 显式拒绝 makespec 选项与 .spec 共用。
     # --noconfirm 仍然合法(覆盖 dist/pixiv-tool/ 时不问 y/N)。
