@@ -119,7 +119,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import {
   NButton,
   NCheckbox,
@@ -139,6 +139,26 @@ import { useTaskStore } from "../stores/tasks";
 import type { Task } from "../stores/tasks";
 
 const TERMINAL_STATUSES = new Set(["done", "failed", "canceled"]);
+const ACTIVE_STATUSES = new Set(["pending", "running"]);
+
+let timer: ReturnType<typeof setInterval> | null = null;
+
+function ensurePolling() {
+  const hasActive = taskStore.tasks.some((task) => ACTIVE_STATUSES.has(task.status));
+  if (hasActive && !timer) {
+    timer = setInterval(async () => {
+      try {
+        await taskStore.fetchTasks();
+      } catch {
+        // 静默:轮询失败不打扰
+      }
+      ensurePolling();
+    }, 2000);
+  } else if (!hasActive && timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+}
 
 const { t } = useI18n();
 const message = useMessage();
@@ -202,6 +222,7 @@ async function refreshTasks() {
   await taskStore.fetchTasks();
   const validIds = new Set(deletableTasks.value.map((task) => task.task_id));
   selectedTaskIds.value = selectedTaskIds.value.filter((id) => validIds.has(id));
+  ensurePolling();
 }
 
 async function handleDeleteTask(taskId: string) {
@@ -254,5 +275,9 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
+});
+
+onUnmounted(() => {
+  if (timer) clearInterval(timer);
 });
 </script>
