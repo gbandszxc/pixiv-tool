@@ -12,6 +12,8 @@ export default {
   },
   nav: {
     crawl: "抓取",
+    crawlNovel: "小说",
+    crawlIllustration: "插画",
     tasks: "任务",
     history: "历史",
     settings: "设置",
@@ -62,6 +64,7 @@ export default {
     taskCreated: "任务已创建：{id}",
     invalidInput: "请输入有效的 ID 或 URL",
     createFailed: "创建任务失败",
+    illustrationComingSoon: "插画抓取功能开发中，敬请期待。",
   },
   tasks: {
     title: "任务",

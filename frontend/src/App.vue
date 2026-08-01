@@ -15,6 +15,7 @@
           :collapsed-icon-size="22"
           :options="menuOptions"
           :value="route.path"
+          :default-expanded-keys="['crawl']"
           @update:value="navigateTo"
         />
         <div class="sider-footer">
@@ -108,7 +109,15 @@ function renderNavigationIcon(name: SidebarIconName) {
 
 // computed 让菜单文案随 locale 切换自动更新
 const menuOptions = computed<MenuOption[]>(() => [
-  { label: t("nav.crawl"), key: "/", icon: renderNavigationIcon("crawl") },
+  {
+    label: t("nav.crawl"),
+    key: "crawl",
+    icon: renderNavigationIcon("crawl"),
+    children: [
+      { label: t("nav.crawlNovel"), key: "/" },
+      { label: t("nav.crawlIllustration"), key: "/illustration" },
+    ],
+  },
   { label: t("nav.tasks"), key: "/tasks", icon: renderNavigationIcon("tasks") },
   { label: t("nav.history"), key: "/history", icon: renderNavigationIcon("history") },
   { label: t("nav.settings"), key: "/settings", icon: renderNavigationIcon("settings") },

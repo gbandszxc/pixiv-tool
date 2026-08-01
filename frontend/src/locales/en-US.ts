@@ -12,6 +12,8 @@ export default {
   },
   nav: {
     crawl: "Crawl",
+    crawlNovel: "Novel",
+    crawlIllustration: "Illustration",
     tasks: "Tasks",
     history: "History",
     settings: "Settings",
@@ -61,6 +63,7 @@ export default {
     taskCreated: "Task created: {id}",
     invalidInput: "Please enter a valid ID or URL",
     createFailed: "Failed to create task",
+    illustrationComingSoon: "Illustration crawling is under development — coming soon.",
   },
   tasks: {
     title: "Tasks",
