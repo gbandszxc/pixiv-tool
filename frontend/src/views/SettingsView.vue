@@ -7,7 +7,7 @@
         <n-form-item :label="t('settings.outputDir')">
           <n-input-group>
             <n-input v-model:value="form.output_dir" placeholder="downloads" />
-            <n-button :loading="browsing" @click="handleBrowse">{{ t('settings.browse') }}</n-button>
+            <n-button @click="handleBrowse">{{ t('settings.browse') }}</n-button>
           </n-input-group>
         </n-form-item>
 
@@ -77,7 +77,6 @@ const form = ref({
 const message = ref("");
 const messageType = ref<"success" | "error">("success");
 const browseMessage = useMessage();
-const browsing = ref(false);
 
 // 切换语言时整个 UI 立即更新（locale 是响应式 ref，computed 自动追踪）
 const langOptions = computed(() => [
@@ -108,14 +107,11 @@ onMounted(async () => {
 });
 
 async function handleBrowse() {
-  browsing.value = true;
   try {
     const p = await settingsStore.selectDirectory();
     if (p) form.value.output_dir = p;
   } catch {
     browseMessage.error(t("settings.pickFailed"));
-  } finally {
-    browsing.value = false;
   }
 }
 
