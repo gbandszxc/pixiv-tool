@@ -31,6 +31,7 @@ from pixiv_tool.api.novels import router as novels_router
 from pixiv_tool.api.tasks import router as tasks_router
 from pixiv_tool.api.settings import router as settings_router
 from pixiv_tool.api.system import router as system_router
+from pixiv_tool.storage.settings import get_settings
 
 app.include_router(system_router)
 app.include_router(auth_router)
@@ -191,11 +192,19 @@ def start_app(use_window: bool = True) -> None:
 
     import webview  # noqa: WPS433 – 懒导入：仅 prod 模式需要
 
+    # 关窗时弹原生确认框；文案跟随界面语言（settings.json 的 language）
+    quit_msg = (
+        "确定退出 Pixiv Tool 吗？"
+        if get_settings().language != "en-US"
+        else "Do you really want to quit Pixiv Tool?"
+    )
     webview.create_window(
         "Pixiv Tool",
         f"http://127.0.0.1:{port}/",
         width=1200,
         height=800,
+        confirm_close=True,
+        localization={"global.quitConfirmation": quit_msg},
     )
     webview.start()  # 阻塞，直到用户关窗
     # 窗口关闭 → 通知 uvicorn 退出，daemon 线程随之结束
