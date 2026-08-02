@@ -6,7 +6,7 @@
       <n-form label-placement="left" label-width="100">
         <n-form-item :label="t('settings.outputDir')">
           <n-input-group>
-            <n-input v-model:value="form.output_dir" placeholder="downloads" />
+            <n-input v-model:value="form.output_dir" :placeholder="t('settings.outputDirPlaceholder')" />
             <n-button @click="handleBrowse">{{ t('settings.browse') }}</n-button>
           </n-input-group>
         </n-form-item>

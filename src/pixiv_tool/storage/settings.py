@@ -12,14 +12,15 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from threading import Lock
 
-from .paths import CONFIG_DIR
+from .paths import CONFIG_DIR, default_output_dir
 
 logger = logging.getLogger(__name__)
 
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
 
 _DEFAULTS: dict = {
-    "output_dir": "downloads",
+    # 默认输出目录：系统下载目录/pixiv-tool（区分平台，见 paths.default_output_dir）。
+    "output_dir": default_output_dir,
     "output_formats": ["txt", "markdown"],
     "language": "zh-CN",
     "theme": "auto",
@@ -31,7 +32,7 @@ _DEFAULTS: dict = {
 
 @dataclass
 class Settings:
-    output_dir: str = "downloads"
+    output_dir: str = field(default_factory=lambda: str(default_output_dir()))
     output_formats: list[str] = field(default_factory=lambda: ["txt", "markdown"])
     language: str = "zh-CN"
     theme: str = "auto"
@@ -84,9 +85,15 @@ def _load_or_create() -> Settings:
         s.save()
         return s
 
-    # 默认值填充（向后兼容）
+    # 旧默认值迁移：早期默认是相对路径 "downloads"（锚定 data 目录），
+    # 2026-08 起默认改为系统下载目录/pixiv-tool。存了旧默认字面量的
+    # 配置直接迁移；用户显式改过的路径不动。
+    if data.get("output_dir") == "downloads":
+        data["output_dir"] = str(default_output_dir())
+
+    # 默认值填充（向后兼容；output_dir 的默认是 callable，惰性求值）
     for key, default in _DEFAULTS.items():
         if key not in data:
-            data[key] = default
+            data[key] = default() if callable(default) else default
 
     return Settings(**{k: data[k] for k in _DEFAULTS if k in data})

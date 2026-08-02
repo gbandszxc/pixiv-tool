@@ -93,6 +93,15 @@ def logs_dir() -> Path:
     return data_dir() / "logs"
 
 
+def default_output_dir() -> Path:
+    """默认输出目录：系统下载目录/pixiv-tool（区分平台）。
+
+    Windows/macOS/Linux 统一为 ~/Downloads/pixiv-tool（Linux 不追 XDG 下载
+    目录,保持跨平台行为一致;用户可在设置页自改）。
+    """
+    return Path.home() / "Downloads" / _APP_NAME
+
+
 # 模块级常量(向后兼容现有 import)
 DATA_DIR = data_dir()
 CONFIG_DIR = config_dir()

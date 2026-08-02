@@ -135,6 +135,7 @@ export default {
   settings: {
     title: "Settings",
     outputDir: "Output Directory",
+    outputDirPlaceholder: "Default: system Downloads/pixiv-tool",
     browse: "Browse…",
     pickFailed: "Failed to open directory picker",
     outputFormats: "Output Formats",

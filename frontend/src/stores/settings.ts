@@ -13,7 +13,7 @@ export interface Settings {
 
 export const useSettingsStore = defineStore("settings", () => {
   const settings = ref<Settings>({
-    output_dir: "downloads",
+    output_dir: "",  // 实际值由后端 GET /api/settings 提供（系统下载目录/pixiv-tool）
     output_formats: ["txt", "markdown"],
     language: "zh-CN",
     theme: "auto",
