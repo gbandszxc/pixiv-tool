@@ -127,12 +127,75 @@ class PixivClient:
         )
         return data
 
+    async def get_illust(self, illust_id: int) -> dict[str, Any]:
+        """获取单幅插画元数据(含各页原图 URL)。
+
+        实测接口(2026-08-02 浏览器):
+            GET /ajax/illust/{id}
+        登录态返回 body.urls.original(p0 原图直链) + body.meta.pages[]
+        (每项含 image_urls.original, 多图作品各页原图);illustType 2(ugoira)
+        的原始文件是 zip,另走 get_ugoira_meta。匿名访问时 meta 被掩码,
+        只有 urls.original,所以多图/用户全集抓取必须携带有效登录态。
+        """
+        return await self._get(f"{AJAX_URL}/illust/{illust_id}")
+
+    async def get_user_info(self, user_id: int) -> dict[str, Any]:
+        """获取用户公开信息(用于插画用户全集目录命名)。
+
+        GET /ajax/user/{id} 返回 body.name / body.account 等。匿名可读,
+        拿不到时调用方回退用 userId。
+        """
+        return await self._get(f"{AJAX_URL}/user/{user_id}")
+
+    async def get_ugoira_meta(self, illust_id: int) -> dict[str, Any]:
+        """获取 ugoira(动图)元数据:帧列表 + 原图 zip 直链。
+
+        实测接口:GET /ajax/illust/{id}/ugoira_meta
+        返回 body.zip_urls.original = img-zip-ugoira 的 zip 原图。
+        需登录态;匿名不可见。
+        """
+        return await self._get(f"{AJAX_URL}/illust/{illust_id}/ugoira_meta")
+
+    async def get_user_profile_all(self, user_id: int) -> dict[str, Any]:
+        """获取用户主页全部作品 id(插画 + 漫画 + 小说)。
+
+        与 get_user_novels 同一接口。body.illusts / body.manga 是
+        {illust_id_str: null} 映射(插画/漫画作品);body.novels 是小说。
+        匿名访问时内容为空(noLoginData 掩码),需登录态。
+        """
+        return await self._get(
+            f"{AJAX_URL}/user/{user_id}/profile/all"
+            f"?sensitiveFilterMode=userSetting&lang=zh"
+        )
+
+    async def download_bytes(self, url: str) -> bytes:
+        """下载二进制内容(插画原图 / ugoira zip)。
+
+        与 _get 共用限速/重试/429 暂停,额外带 Referer 头:
+        i.pximg.net 防盗链校验 Referer 必须是 www.pixiv.net(实测 2026-08-02)。
+        """
+        resp = await self._request(
+            url, headers={"Referer": "https://www.pixiv.net/"}
+        )
+        content = getattr(resp, "content", None)
+        if content is None:
+            raise PixivClientError(f"响应无内容: {_mask_url(url)}")
+        return content
+
     # ------------------------------------------------------------------
     # 限速 + 重试核心
     # ------------------------------------------------------------------
 
     async def _get(self, url: str) -> dict[str, Any]:
-        """带限速 + 重试的 GET 请求。"""
+        """带限速 + 重试的 JSON GET 请求。"""
+        resp = await self._request(url)
+        body = resp.json()
+        if body.get("error"):
+            raise PixivClientError(f"API error: {body['message']}")
+        return body.get("body", body)
+
+    async def _request(self, url: str, *, headers: dict[str, str] | None = None):
+        """带限速 + 重试的 GET,返回响应对象(JSON 与二进制共用)。"""
         async with self._semaphore:
             await self._pause_event.wait()  # 等 429 暂停解除
 
@@ -141,15 +204,12 @@ class PixivClient:
                 for attempt in range(MAX_RETRIES):
                     start = time.monotonic()
                     try:
-                        resp = await self._client.get(url)
+                        resp = await self._client.get(url, headers=headers or {})
                         elapsed = time.monotonic() - start
                         logger.info("GET %s → %d (%.2fs)", _mask_url(url), resp.status_code, elapsed)
 
                         if resp.status_code == 200:
-                            body = resp.json()
-                            if body.get("error"):
-                                raise PixivClientError(f"API error: {body['message']}")
-                            return body.get("body", body)
+                            return resp
 
                         if resp.status_code in (401, 403):
                             raise PixivAuthError(f"认证失败: HTTP {resp.status_code}")

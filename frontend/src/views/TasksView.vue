@@ -21,6 +21,11 @@
 
       <template v-else>
         <n-space class="tasks-toolbar" align="center">
+          <n-radio-group v-model:value="categoryFilter" size="small">
+            <n-radio-button value="all">{{ t('tasks.category.all') }}</n-radio-button>
+            <n-radio-button value="novel">{{ t('tasks.category.novel') }}</n-radio-button>
+            <n-radio-button value="illustration">{{ t('tasks.category.illustration') }}</n-radio-button>
+          </n-radio-group>
           <n-checkbox
             :checked="allDeletableSelected"
             :indeterminate="someDeletableSelected"
@@ -44,7 +49,7 @@
         </n-space>
 
         <n-list bordered>
-          <n-list-item v-for="task in taskStore.tasks" :key="task.task_id">
+          <n-list-item v-for="task in filteredTasks" :key="task.task_id">
             <template #prefix>
               <n-checkbox
                 v-if="isDeletable(task)"
@@ -55,7 +60,10 @@
             </template>
             <n-thing>
               <template #header>
-                <span>{{ task.source_type }} — {{ task.source_id }}</span>
+                <n-space align="center" size="small">
+                  <n-tag size="small" type="info">{{ categoryLabel(task) }}</n-tag>
+                  <span>{{ sourceLabel(task) }} — {{ task.source_id }}</span>
+                </n-space>
               </template>
               <template #header-extra>
                 <n-tag :type="statusType(task.status)" size="small">
@@ -128,6 +136,8 @@ import {
   NListItem,
   NPopconfirm,
   NProgress,
+  NRadioButton,
+  NRadioGroup,
   NSpace,
   NSpin,
   NTag,
@@ -169,8 +179,32 @@ const clearingCompleted = ref(false);
 const selectedTaskIds = ref<string[]>([]);
 const deletingTaskIds = ref(new Set<string>());
 
-const deletableTasks = computed(() => taskStore.tasks.filter(isDeletable));
+const categoryFilter = ref<"all" | "novel" | "illustration">("all");
+
+const filteredTasks = computed(() => {
+  if (categoryFilter.value === "all") return taskStore.tasks;
+  return taskStore.tasks.filter((task) => (task.category || "novel") === categoryFilter.value);
+});
+const deletableTasks = computed(() => filteredTasks.value.filter(isDeletable));
 const completedTaskCount = computed(() => taskStore.tasks.filter((task) => task.status === "done").length);
+
+function categoryLabel(task: Task) {
+  return task.category === "illustration"
+    ? t("tasks.category.illustration")
+    : t("tasks.category.novel");
+}
+
+function sourceLabel(task: Task) {
+  if (task.category === "illustration") {
+    return task.source_type === "user" ? t("illust.user") : t("illust.single");
+  }
+  const map: Record<string, string> = {
+    single: "crawl.single",
+    series: "crawl.series",
+    user: "crawl.user",
+  };
+  return t(map[task.source_type] || "crawl.single");
+}
 const allDeletableSelected = computed(
   () => deletableTasks.value.length > 0 && deletableTasks.value.every((task) => selectedTaskIds.value.includes(task.task_id)),
 );

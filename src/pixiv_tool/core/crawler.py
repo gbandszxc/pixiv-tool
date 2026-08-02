@@ -51,7 +51,8 @@ class Crawler:
         out = Path(output_dir)
         if not out.is_absolute():
             out = DATA_DIR / out
-        target_dir = out
+        # 小说统一输出到输出目录下的 novel 子目录（插画在 pic/，见 illust_crawler）。
+        target_dir = out / "novel"
 
         try:
             self.task_manager.update_progress(task_id, status="running")

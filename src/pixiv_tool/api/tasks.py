@@ -13,7 +13,9 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from pixiv_tool.core.crawler import Crawler
+from pixiv_tool.core.illust_crawler import IllustCrawler
 from pixiv_tool.core.source import SingleNovelSource, SeriesSource, UserNovelsSource
+from pixiv_tool.core.illust_source import SingleIllustSource, UserIllustsSource
 from pixiv_tool.core.task import TaskManager
 from pixiv_tool.core.pixiv_client import PixivClient
 from pixiv_tool.storage.db import Database
@@ -28,15 +30,33 @@ _db = Database()
 _task_manager = TaskManager(_db)
 _store = create_cookie_store()
 
+NOVEL_SOURCE_MAP = {
+    "single": lambda sid: SingleNovelSource(int(sid)),
+    "series": lambda sid: SeriesSource(int(sid)),
+    "user": lambda sid: UserNovelsSource(int(sid)),
+}
+ILLUST_SOURCE_MAP = {
+    "single": lambda sid: SingleIllustSource(int(sid)),
+    "user": lambda sid: UserIllustsSource(int(sid)),
+}
+
 
 @router.post("")
 async def create_task(body: dict):
-    """创建抓取任务。"""
+    """创建抓取任务。category: 'novel'(默认) | 'illustration'。"""
     source_type = body.get("source_type", "single")
     source_id = body.get("source_id", "")
     formats = body.get("formats", ["txt", "markdown"])
+    category = body.get("category", "novel")
 
-    task = _task_manager.create_task(source_type, source_id)
+    if category not in ("novel", "illustration"):
+        return {"error": f"未知任务分类: {category}"}
+    source_map = NOVEL_SOURCE_MAP if category == "novel" else ILLUST_SOURCE_MAP
+    source_fn = source_map.get(source_type)
+    if not source_fn:
+        return {"error": f"未知来源类型: {source_type}"}
+
+    task = _task_manager.create_task(source_type, source_id, category=category)
 
     # 获取登录 cookie
     try:
@@ -50,26 +70,29 @@ async def create_task(body: dict):
     client = PixivClient(cookies)
     settings = get_settings()
 
-    # 选择 Source
-    source_map = {
-        "single": lambda: SingleNovelSource(int(source_id)),
-        "series": lambda: SeriesSource(int(source_id)),
-        "user": lambda: UserNovelsSource(int(source_id)),
-    }
-    source_fn = source_map.get(source_type)
-    if not source_fn:
-        return {"error": f"未知来源类型: {source_type}"}
-
     # 后台执行抓取
-    crawler = Crawler(client, _db, _task_manager)
+    if category == "novel":
+        crawler = Crawler(client, _db, _task_manager)
+    else:
+        crawler = IllustCrawler(client, _db, _task_manager)
+
+    user_id = int(source_id) if (source_type == "user" and category == "illustration") else None
 
     async def _run():
         try:
-            await crawler.run(
-                source_fn(), task.task_id, formats,
-                output_dir=settings.output_dir,
-                event_callback=lambda *a: None,  # SSE 推送通过事件流
-            )
+            if category == "novel":
+                await crawler.run(
+                    source_fn(source_id), task.task_id, formats,
+                    output_dir=settings.output_dir,
+                    event_callback=lambda *a: None,  # SSE 推送通过事件流
+                )
+            else:
+                await crawler.run(
+                    source_fn(source_id), task.task_id,
+                    output_dir=settings.output_dir,
+                    user_id=user_id,
+                    event_callback=lambda *a: None,
+                )
         finally:
             await client.close()
 
@@ -78,9 +101,11 @@ async def create_task(body: dict):
 
 
 @router.get("")
-async def list_tasks():
-    """任务列表。"""
-    return {"items": _db.list_tasks()}
+async def list_tasks(category: str | None = None):
+    """任务列表，可按 category(novel/illustration) 过滤。"""
+    if category is not None and category not in ("novel", "illustration"):
+        return {"error": f"未知任务分类: {category}"}
+    return {"items": _db.list_tasks(category=category)}
 
 
 def _delete_terminal_task_ids(task_ids: list[str]) -> dict[str, int]:
@@ -189,7 +214,7 @@ async def cancel_task(task_id: str):
 
 @router.post("/{task_id}/retry-failed")
 async def retry_failed(task_id: str):
-    """重试失败的篇目。"""
+    """重试失败的篇目/作品。"""
     task = _db.get_task(task_id)
     if not task:
         return {"error": "任务不存在"}
@@ -198,8 +223,10 @@ async def retry_failed(task_id: str):
     if not failed_ids:
         return {"error": "没有失败项"}
 
+    category = task.get("category", "novel")
     # 创建新任务只抓失败的
-    new_task = _task_manager.create_task(task["source_type"], ",".join(str(i) for i in failed_ids))
+    new_task = _task_manager.create_task(
+        task["source_type"], ",".join(str(i) for i in failed_ids), category=category)
 
     try:
         cookies = _store.load() or {}
@@ -209,19 +236,28 @@ async def retry_failed(task_id: str):
     client = PixivClient(cookies)
     settings = get_settings()
 
-    # 用 SingleNovelSource 逐个抓
-    from pixiv_tool.core.source import SingleNovelSource
-    source = SingleNovelSource(failed_ids[0])  # 简化：单个重试
+    if category == "novel":
+        from pixiv_tool.core.source import SingleNovelSource
+        crawler: object = Crawler(client, _db, _task_manager)
 
-    crawler = Crawler(client, _db, _task_manager)
+        async def _run():
+            try:
+                for nid in failed_ids:
+                    await crawler.run(SingleNovelSource(nid), new_task.task_id,
+                                      output_dir=settings.output_dir)
+            finally:
+                await client.close()
+    else:
+        from pixiv_tool.core.illust_source import SingleIllustSource
+        crawler = IllustCrawler(client, _db, _task_manager)
 
-    async def _run():
-        try:
-            for nid in failed_ids:
-                s = SingleNovelSource(nid)
-                await crawler.run(s, new_task.task_id, output_dir=settings.output_dir)
-        finally:
-            await client.close()
+        async def _run():
+            try:
+                for nid in failed_ids:
+                    await crawler.run(SingleIllustSource(nid), new_task.task_id,
+                                      output_dir=settings.output_dir)
+            finally:
+                await client.close()
 
     asyncio.create_task(_run())
     return {"task_id": new_task.task_id, "status": "pending"}

@@ -23,7 +23,8 @@ class TaskManager:
         self._events: dict[str, asyncio.Event] = {}  # task_id → pause event
         self._cancel_flags: dict[str, asyncio.Event] = {}
 
-    def create_task(self, source_type: str, source_id: str) -> Task:
+    def create_task(self, source_type: str, source_id: str,
+                    category: str = "novel") -> Task:
         import uuid
         now = datetime.now(timezone.utc).isoformat()
         task_id = str(uuid.uuid4())
@@ -31,6 +32,7 @@ class TaskManager:
             task_id=task_id,
             source_type=source_type,
             source_id=source_id,
+            category=category,
             status="pending",
             created_at=now,
             updated_at=now,
@@ -45,6 +47,7 @@ class TaskManager:
             task_id=task_id,
             source_type=source_type,
             source_id=source_id,
+            category=category,
             created_at=now,
             updated_at=now,
         )

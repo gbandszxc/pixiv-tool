@@ -6,6 +6,7 @@ export interface Task {
   task_id: string;
   source_type: string;
   source_id: string;
+  category: string;
   status: string;
   total: number;
   done: number;
@@ -24,11 +25,12 @@ export const useTaskStore = defineStore("tasks", () => {
     tasks.value = resp.data.items || [];
   }
 
-  async function createTask(sourceType: string, sourceId: string, formats: string[]) {
+  async function createTask(sourceType: string, sourceId: string, formats: string[], category = "novel") {
     const resp = await api.post("/api/tasks", {
       source_type: sourceType,
       source_id: sourceId,
       formats,
+      category,
     });
     return resp.data;
   }

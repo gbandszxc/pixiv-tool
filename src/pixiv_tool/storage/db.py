@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     task_id     TEXT PRIMARY KEY,
     source_type TEXT NOT NULL,
     source_id   TEXT NOT NULL,
+    category    TEXT NOT NULL DEFAULT 'novel',
     status      TEXT NOT NULL DEFAULT 'pending',
     total       INTEGER DEFAULT 0,
     done        INTEGER DEFAULT 0,
@@ -53,6 +54,19 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at  TEXT NOT NULL,
     error       TEXT
 );
+
+CREATE TABLE IF NOT EXISTS illustrations (
+    artwork_id  INTEGER PRIMARY KEY,
+    title       TEXT NOT NULL,
+    author_id   INTEGER NOT NULL,
+    author_name TEXT,
+    illust_type INTEGER DEFAULT 0,
+    page_count  INTEGER DEFAULT 1,
+    saved_paths TEXT DEFAULT '[]',
+    captured_at TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'ok'
+);
+CREATE INDEX IF NOT EXISTS idx_illustrations_author ON illustrations(author_id);
 """
 
 
@@ -88,6 +102,12 @@ class Database:
     def _init_schema(self) -> None:
         conn = self._get_conn()
         conn.executescript(_SCHEMA_SQL)
+        # 轻量迁移：旧库的 tasks 表没有 category 列。CREATE TABLE IF NOT EXISTS
+        # 不会补列，需要显式 ALTER。
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(tasks)")]
+        if "category" not in cols:
+            conn.execute("ALTER TABLE tasks ADD COLUMN category TEXT NOT NULL DEFAULT 'novel'")
+            conn.commit()
         logger.info("数据库 schema 初始化完成: %s", self._db_path)
 
     # ------------------------------------------------------------------
@@ -200,17 +220,85 @@ class Database:
             return count
 
     # ------------------------------------------------------------------
+    # Illustration CRUD
+    # ------------------------------------------------------------------
+
+    def insert_illustration(self, artwork_id: int, title: str, author_id: int,
+                            author_name: str | None = None,
+                            illust_type: int = 0, page_count: int = 1,
+                            saved_paths: str = "[]", captured_at: str = "",
+                            status: str = "ok") -> None:
+        with self._transaction() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO illustrations
+                   (artwork_id, title, author_id, author_name, illust_type,
+                    page_count, saved_paths, captured_at, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (artwork_id, title, author_id, author_name, illust_type,
+                 page_count, saved_paths, captured_at, status),
+            )
+
+    def is_illust_downloaded(self, artwork_id: int) -> bool:
+        row = self._get_conn().execute(
+            "SELECT 1 FROM illustrations WHERE artwork_id = ?", (artwork_id,)
+        ).fetchone()
+        return row is not None
+
+    def get_illustration(self, artwork_id: int) -> dict | None:
+        row = self._get_conn().execute(
+            "SELECT * FROM illustrations WHERE artwork_id = ?", (artwork_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def list_illustrations(self, page: int = 1, page_size: int = 50,
+                           author_id: int | None = None) -> dict:
+        conditions: list[str] = []
+        params: list = []
+        if author_id is not None:
+            conditions.append("author_id = ?")
+            params.append(author_id)
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
+        conn = self._get_conn()
+        total = conn.execute(f"SELECT COUNT(*) FROM illustrations{where}", params).fetchone()[0]
+        offset = (page - 1) * page_size
+        rows = conn.execute(
+            f"SELECT * FROM illustrations{where} ORDER BY captured_at DESC LIMIT ? OFFSET ?",
+            params + [page_size, offset],
+        ).fetchall()
+        return {
+            "items": [dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+
+    def delete_illustration(self, artwork_id: int) -> None:
+        with self._transaction() as conn:
+            conn.execute("DELETE FROM illustrations WHERE artwork_id = ?", (artwork_id,))
+
+    def delete_illustrations_batch(self, artwork_ids: list[int]) -> int:
+        if not artwork_ids:
+            return 0
+        placeholders = ",".join("?" * len(artwork_ids))
+        with self._transaction() as conn:
+            cur = conn.execute(
+                f"DELETE FROM illustrations WHERE artwork_id IN ({placeholders})",
+                artwork_ids,
+            )
+            return cur.rowcount or 0
+
+    # ------------------------------------------------------------------
     # Task CRUD
     # ------------------------------------------------------------------
 
     def insert_task(self, task_id: str, source_type: str, source_id: str,
-                    status: str = "pending", created_at: str = "",
-                    updated_at: str = "") -> None:
+                    category: str = "novel", status: str = "pending",
+                    created_at: str = "", updated_at: str = "") -> None:
         with self._transaction() as conn:
             conn.execute(
-                """INSERT INTO tasks (task_id, source_type, source_id, status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (task_id, source_type, source_id, status, created_at, updated_at),
+                """INSERT INTO tasks (task_id, source_type, source_id, category, status, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (task_id, source_type, source_id, category, status, created_at, updated_at),
             )
 
     def update_task(self, task_id: str, **fields) -> None:
@@ -227,10 +315,17 @@ class Database:
         ).fetchone()
         return dict(row) if row else None
 
-    def list_tasks(self) -> list[dict]:
-        rows = self._get_conn().execute(
-            "SELECT * FROM tasks ORDER BY created_at DESC"
-        ).fetchall()
+    def list_tasks(self, category: str | None = None) -> list[dict]:
+        """任务列表，可按 category(novel/illustration) 过滤。"""
+        if category:
+            rows = self._get_conn().execute(
+                "SELECT * FROM tasks WHERE category = ? ORDER BY created_at DESC",
+                (category,),
+            ).fetchall()
+        else:
+            rows = self._get_conn().execute(
+                "SELECT * FROM tasks ORDER BY created_at DESC"
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def delete_terminal_tasks(

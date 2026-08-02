@@ -16,11 +16,13 @@
 | 单篇小说 | 含多页小说（`pageCount > 1`） |
 | 系列小说 | 系列内多篇独立保存，按系列顺序编号；**不合并**为单文件 |
 | 指定用户的全部小说 | 用户名下所有作品，按系列分目录 + 散篇 |
+| 单幅插画 | 单张/多页作品，**一律按原图**（`img-original` 直链）下载 |
+| 指定用户的全部插画 | 用户全部插画+漫画作品（`profile/all` 的 illusts+manga），ugoira 动图存原始 zip |
 
 ### 1.2 V1 明确不做（延后 V2+）
 
 - 搜索小说
-- 用户收藏夹 / 用户主页作品列表浏览
+- 用户收藏夹 / 插画作品列表页浏览（下载已支持，见 ADR 0007）
 - 按 tag 批量抓取
 - 小说内嵌图片下载（`[pixivimage:...]` / `[uploadedimage:...]` 标记）
 - EPUB 输出（架构预留接口，不实现）
@@ -122,8 +124,10 @@ pixiv-tool/
 │     │  └─ system.py           # /api/health + /api/ping + /api/test/events
 │     ├─ core/                  # 业务核心
 │     │  ├─ pixiv_client.py     # httpx + 限速 + 重试
-│     │  ├─ crawler.py          # Crawler 编排（id 流 → 抓取）
+│     │  ├─ crawler.py          # 小说 Crawler 编排（id 流 → 抓取）
 │     │  ├─ source.py           # NovelSource 抽象 + 3 实现
+│     │  ├─ illust_crawler.py   # 插画 Crawler（原图/多页/ugoira zip）
+│     │  ├─ illust_source.py    # IllustSource 抽象 + 2 实现
 │     │  ├─ task.py             # Task 状态机
 │     │  └─ exporter.py         # Exporter 接口 + txt/md 实现
 │     ├─ auth/                  # 登录
@@ -283,6 +287,12 @@ class EpubExporter(Exporter): ...       # V2 stub，仅注册名不实现
 | 系列内 | `[NN]_<episode>_<title>.txt/.md`（padded 2-3 位） |
 | 系列目录 | `<seriesTitle>_<seriesId>/` + 轻量 `series.json` |
 | 用户集 | `<author>_<userId>/` 顶层，下按系列分目录 + 散篇 |
+| 插画单作品 | `<title>_<artworkId>_p{N}.<ext>`（多页 p0..pN-1） |
+| 插画用户全集 | `pic/users/<author>_<userId>/<title>_<artworkId>_p{N}.<ext>` |
+| ugoira 动图 | `<title>_<artworkId>_ugoira.zip`（原图 = 帧序列 zip） |
+
+**目录布局**：小说统一在输出目录 `novel/` 子目录下；插画在 `pic/` 子目录
+（用户全集再套一层 `pic/users/<作者>_<userId>/`）。
 
 ---
 
@@ -313,19 +323,34 @@ CREATE INDEX idx_novels_series ON novels(series_id);
 CREATE INDEX idx_novels_author ON novels(author_id);
 
 -- 任务进度（断点续传）
-CREATE TABLE tasks (
+CREATE TABLE IF NOT EXISTS tasks (
   task_id     TEXT PRIMARY KEY,            -- uuid
   source_type TEXT NOT NULL,               -- 'single' | 'series' | 'user'
   source_id   TEXT NOT NULL,
+  category    TEXT NOT NULL DEFAULT 'novel',  -- 'novel' | 'illustration'
   status      TEXT NOT NULL,               -- 'pending'|'running'|'paused'|'done'|'failed'|'canceled'
   total       INTEGER DEFAULT 0,
   done        INTEGER DEFAULT 0,
   skipped     INTEGER DEFAULT 0,
-  failed_ids  TEXT DEFAULT '[]',           -- JSON array of novel_id
+  failed_ids  TEXT DEFAULT '[]',           -- JSON array of novel_id / artwork_id
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   error       TEXT
 );
+
+-- 已抓插画（去重 + 历史）
+CREATE TABLE illustrations (
+  artwork_id  INTEGER PRIMARY KEY,
+  title       TEXT NOT NULL,
+  author_id   INTEGER NOT NULL,
+  author_name TEXT,
+  illust_type INTEGER DEFAULT 0,           -- 0=插画 1=漫画 2=ugoira
+  page_count  INTEGER DEFAULT 1,
+  saved_paths TEXT DEFAULT '[]',           -- JSON array of 文件路径
+  captured_at TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'ok'
+);
+CREATE INDEX idx_illustrations_author ON illustrations(author_id);
 ```
 
 ### 5.2 配置文件
@@ -360,8 +385,9 @@ CREATE TABLE tasks (
 
 | 页面 | 路由 | 必需 |
 |---|---|---|
-| 抓取 | `/` | ✅ |
-| 任务 | `/tasks` | ✅ |
+| 抓取-小说 | `/` | ✅ |
+| 抓取-插画 | `/illustration` | ✅ |
+| 任务 | `/tasks`（支持小说/插画分类筛选） | ✅ |
 | 历史 | `/history` | ✅ |
 | 设置 | `/settings` | ✅ |
 
@@ -395,7 +421,8 @@ CREATE TABLE tasks (
 | Method | Path | 说明 |
 |---|---|---|
 | GET | `/api/novel/{id}` | 查询单篇小说元数据 |
-| POST | `/api/tasks` | 创建抓取任务（body: `{source_type, source_id, formats}`） |
+| POST | `/api/tasks` | 创建抓取任务（body: `{source_type, source_id, formats, category}`；category `novel`/`illustration`） |
+| GET | `/api/tasks?category=` | 任务列表（可按小说/插画过滤） |
 | GET | `/api/tasks` | 任务列表 |
 | GET | `/api/tasks/{id}` | 任务详情 |
 | GET | `/api/tasks/{id}/events` | **SSE** 进度流 |

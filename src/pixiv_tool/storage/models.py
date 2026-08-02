@@ -27,6 +27,7 @@ class Task:
     task_id: str
     source_type: str  # 'single' | 'series' | 'user'
     source_id: str
+    category: str = "novel"  # 'novel' | 'illustration'
     status: str = "pending"  # pending|running|paused|done|failed|canceled
     total: int = 0
     done: int = 0
