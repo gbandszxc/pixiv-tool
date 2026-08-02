@@ -1,3 +1,14 @@
+# ---------------------------------------------------------------------------
+# 依赖源镜像（国内加速）
+#
+# 默认从 pypi.org 拉取依赖；需要国内镜像加速时用环境变量指定，不要改 uv.lock：
+#   PowerShell:  $env:UV_DEFAULT_INDEX = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+#   bash:        export UV_DEFAULT_INDEX="https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+#
+# 注意：带镜像环境跑 `uv sync` 会把 uv.lock 里的 registry URL 改写为镜像地址，
+# 这是机器环境噪音，不要提交（提交前用 `git checkout -- uv.lock` 恢复）。
+# ---------------------------------------------------------------------------
+
 [project]
 name = "pixiv-tool"
 version = "0.1.0"
