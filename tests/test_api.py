@@ -34,9 +34,11 @@ def client(tmp_path, monkeypatch):
     import pixiv_tool.api.novels as novels_mod
     import pixiv_tool.api.tasks as tasks_mod
     import pixiv_tool.api.illustrations as illust_mod
+    import pixiv_tool.api.history as history_mod
     monkeypatch.setattr(novels_mod, "_db", db)
     monkeypatch.setattr(tasks_mod, "_db", db)
     monkeypatch.setattr(illust_mod, "_db", db)
+    monkeypatch.setattr(history_mod, "_db", db)
 
     # Patch cookie store to stub
     stub_store = MagicMock()
@@ -278,6 +280,93 @@ class TestIllustrationsAPI:
         resp = tc.delete("/api/illustrations")
         assert resp.json() == {"status": "success", "deleted": 2}
         assert db.list_illustrations()["total"] == 0
+
+
+# ── History API (全部/小说/插画 联合查询) ────────────────────────────────────
+
+
+class TestHistoryAPI:
+    def _seed(self, db):
+        db.insert_novel(
+            novel_id=6001, title="N 小说", series_id=100, series_order=1,
+            author_id=1, author_name="作者A", page_count=3,
+            captured_at="2025-01-01T00:00:00+00:00",
+        )
+        db.insert_illustration(
+            artwork_id=7001, title="I 插画", author_id=1, author_name="作者B",
+            illust_type=0, page_count=2,
+            captured_at="2025-01-02T00:00:00+00:00",
+        )
+        db.insert_illustration(
+            artwork_id=7002, title="N 插画二号", author_id=1, author_name="作者C",
+            illust_type=2, page_count=1,
+            captured_at="2025-01-03T00:00:00+00:00",
+        )
+
+    def test_history_empty(self, client):
+        """GET /api/history with no data returns empty."""
+        tc, *_ = client
+        resp = tc.get("/api/history")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["items"] == []
+        assert body["total"] == 0
+
+    def test_history_all_merges_and_sorts(self, client):
+        """全部：两表合并，按 captured_at 倒序。"""
+        tc, db, *_ = client
+        self._seed(db)
+        resp = tc.get("/api/history")
+        body = resp.json()
+        assert body["total"] == 3
+        # 倒序：I 插画二号(01-03) > I 插画(01-02) > N 小说(01-01)
+        assert [row["id"] for row in body["items"]] == [7002, 7001, 6001]
+        assert [row["category"] for row in body["items"]] == [
+            "illustration", "illustration", "novel",
+        ]
+        assert body["items"][0]["pages"] == 1
+        assert body["items"][2]["pages"] == 3
+        assert body["items"][2]["series_id"] == 100
+        assert body["items"][2]["illust_type"] is None
+        assert body["items"][0]["illust_type"] == 2
+
+    def test_history_category_filter(self, client):
+        """category=novel / illustration 只返回对应分类。"""
+        tc, db, *_ = client
+        self._seed(db)
+        resp = tc.get("/api/history", params={"category": "novel"})
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["items"][0]["category"] == "novel"
+
+        resp = tc.get("/api/history", params={"category": "illustration"})
+        body = resp.json()
+        assert body["total"] == 2
+        assert all(r["category"] == "illustration" for r in body["items"])
+
+    def test_history_keyword_filters_both_tables(self, client):
+        """keyword 跨两表模糊匹配标题。"""
+        tc, db, *_ = client
+        self._seed(db)
+        resp = tc.get("/api/history", params={"keyword": "N "})
+        body = resp.json()
+        assert body["total"] == 2
+        assert {r["id"] for r in body["items"]} == {6001, 7002}
+
+    def test_history_pagination(self, client):
+        """分页参数生效。"""
+        tc, db, *_ = client
+        self._seed(db)
+        resp = tc.get("/api/history", params={"page": 1, "page_size": 2})
+        body = resp.json()
+        assert len(body["items"]) == 2
+        assert body["total"] == 3
+
+    def test_history_invalid_category_rejected(self, client):
+        """非法 category 返回 error。"""
+        tc, *_ = client
+        resp = tc.get("/api/history", params={"category": "music"})
+        assert resp.json()["error"]
 
 
 # ── Settings API (ticket 14) ─────────────────────────────────────────────────

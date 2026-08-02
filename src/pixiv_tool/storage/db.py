@@ -298,19 +298,56 @@ class Database:
             conn.execute("DELETE FROM illustrations")
             return count
 
-    def delete_illustrations_batch(self, artwork_ids: list[int]) -> int:
-        if not artwork_ids:
-            return 0
-        placeholders = ",".join("?" * len(artwork_ids))
-        with self._transaction() as conn:
-            cur = conn.execute(
-                f"DELETE FROM illustrations WHERE artwork_id IN ({placeholders})",
-                artwork_ids,
-            )
-            return cur.rowcount or 0
-
     # ------------------------------------------------------------------
-    # Task CRUD
+    # 历史联合查询（小说 + 插画 UNION）
+    # ------------------------------------------------------------------
+
+    def list_history(self, category: str = "all", page: int = 1,
+                     page_size: int = 50, keyword: str | None = None) -> dict:
+        """分页联合查询 novels + illustrations，统一行形状：
+
+        id / category('novel'|'illustration') / title / author_name /
+        pages(page_count) / series_id(仅小说, 插画为 NULL) /
+        illust_type(仅插画, 小说为 NULL) / captured_at
+        """
+        if category not in ("all", "novel", "illustration"):
+            raise ValueError(f"未知历史分类: {category}")
+
+        kw = f"%{keyword}%" if keyword else None
+        novel_where = " WHERE title LIKE ?" if kw else ""
+        illust_where = " WHERE title LIKE ?" if kw else ""
+        params: list = [kw, kw] if kw else []
+
+        novel_sql = (
+            "SELECT novel_id AS id, 'novel' AS category, title, author_name, "
+            "page_count AS pages, series_id, NULL AS illust_type, captured_at "
+            f"FROM novels{novel_where}"
+        )
+        illust_sql = (
+            "SELECT artwork_id AS id, 'illustration' AS category, title, author_name, "
+            "page_count AS pages, NULL AS series_id, illust_type, captured_at "
+            f"FROM illustrations{illust_where}"
+        )
+        if category == "novel":
+            union = novel_sql
+        elif category == "illustration":
+            union = illust_sql
+        else:
+            union = f"{novel_sql} UNION ALL {illust_sql}"
+
+        conn = self._get_conn()
+        total = conn.execute(f"SELECT COUNT(*) FROM ({union})", params).fetchone()[0]
+        offset = (page - 1) * page_size
+        rows = conn.execute(
+            f"SELECT * FROM ({union}) ORDER BY captured_at DESC LIMIT ? OFFSET ?",
+            params + [page_size, offset],
+        ).fetchall()
+        return {
+            "items": [dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
     # ------------------------------------------------------------------
 
     def insert_task(self, task_id: str, source_type: str, source_id: str,

@@ -437,14 +437,21 @@ CREATE INDEX idx_illustrations_author ON illustrations(author_id);
 
 ### 7.3 历史
 
-历史页分小说 / 插画两个分类页签，分别查询 `novels` / `illustrations` 表。
+历史页分**全部 / 小说 / 插画**三个页签，全部页签走 `novels` + `illustrations`
+两表的 UNION 联合查询（统一行形状：id / category / title / author_name /
+pages / series_id / illust_type / captured_at），按 `captured_at` 倒序分页；
+小说、插画页签也走同一端点（`category` 参数过滤）。抓取时间列按**东八区
+固定偏移**（UTC+8）显示 `yyyy-MM-dd HH:mm:ss`。
+
 两类记录的"打开所在文件夹"操作统一走 `src/pixiv_tool/platform.py` 的
 `reveal_in_file_manager()`：Windows `explorer /select,`（定位文件）、macOS
 `open -R`（Finder 显示）、Linux `xdg-open`（直接打开所在目录）；文件已不存在时
-回退打开其父目录。
+回退打开其父目录。删除/清空/打开仍按分类走各自的 `/api/novels/*`、
+`/api/illustrations/*` 端点。
 
 | Method | Path | 说明 |
 |---|---|---|
+| GET | `/api/history` | 分页联合查询（category: all/novel/illustration，支持关键词） |
 | GET | `/api/novels` | 分页查询已抓小说（支持 series_id/author_id/关键词过滤） |
 | GET | `/api/novels/{id}/file` | 返回小说文件路径 |
 | POST | `/api/novels/{id}/open` | 在系统文件管理器中打开小说所在目录 |

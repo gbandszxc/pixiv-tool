@@ -118,6 +118,7 @@ export default {
   history: {
     title: "历史",
     category: {
+      all: "全部",
       novel: "小说",
       illustration: "插画",
     },
@@ -126,6 +127,7 @@ export default {
     authorColumn: "作者",
     seriesColumn: "系列",
     pagesColumn: "页数",
+    typeColumn: "类型",
     capturedAtColumn: "抓取时间",
     actions: "操作",
     openFolder: "打开所在文件夹",

@@ -117,6 +117,7 @@ export default {
   history: {
     title: "History",
     category: {
+      all: "All",
       novel: "Novel",
       illustration: "Illustration",
     },
@@ -125,6 +126,7 @@ export default {
     authorColumn: "Author",
     seriesColumn: "Series",
     pagesColumn: "Pages",
+    typeColumn: "Type",
     capturedAtColumn: "Captured At",
     actions: "Actions",
     openFolder: "Open containing folder",

@@ -5,6 +5,7 @@
     <n-space class="history-toolbar" justify="space-between" align="center">
       <n-space>
         <n-radio-group v-model:value="category" size="small" @update:value="handleCategoryChange">
+          <n-radio-button value="all">{{ t('history.category.all') }}</n-radio-button>
           <n-radio-button value="novel">{{ t('history.category.novel') }}</n-radio-button>
           <n-radio-button value="illustration">{{ t('history.category.illustration') }}</n-radio-button>
         </n-radio-group>
@@ -53,59 +54,79 @@
 
 <script setup lang="ts">
 import { ref, h, onMounted, computed } from "vue";
-import { NDataTable, NInput, NButton, NSpace, NEmpty, NPopconfirm, NTooltip, NRadioGroup, NRadioButton, useMessage } from "naive-ui";
+import {
+  NDataTable, NInput, NButton, NSpace, NEmpty, NPopconfirm, NTooltip,
+  NRadioGroup, NRadioButton, NTag, useMessage,
+} from "naive-ui";
 import type { DataTableColumns, DataTableRowKey } from "naive-ui";
 import { useI18n } from "vue-i18n";
 import { useHistoryStore } from "../stores/history";
-import type { Novel, Illustration } from "../stores/history";
+import type { HistoryItem, HistoryCategory } from "../stores/history";
 
 const { t } = useI18n();
 const message = useMessage();
 const historyStore = useHistoryStore();
 const loading = ref(false);
 const keyword = ref("");
-const checkedRowKeys = ref<number[]>([]);
+const checkedRowKeys = ref<string[]>([]);
 const batchDeleting = ref(false);
 const clearing = ref(false);
-const category = ref<"novel" | "illustration">("novel");
+const category = ref<HistoryCategory>("all");
 
-type HistoryRow = Novel | Illustration;
+const rows = computed(() => historyStore.items);
 
-const rowKey = (row: HistoryRow) => "novel_id" in row ? row.novel_id : row.artwork_id;
-
-const rows = computed(() =>
-  category.value === "novel" ? historyStore.novels : historyStore.illustrations
-);
+// novel_id 与 artwork_id 可跨表重号，行键用 "category:id" 保证唯一
+const rowKey = (row: HistoryItem) => `${row.category}:${row.id}`;
 
 const handleCheck = (keys: DataTableRowKey[]) => {
-  checkedRowKeys.value = keys as number[];
+  checkedRowKeys.value = keys as string[];
 };
 
-// 文件夹图标（lucide folder 轮廓，随 currentColor 着色）
+// 统一按东八区（UTC+8，固定偏移，不随机器时区）显示 yyyy-MM-dd HH:mm:ss
+function formatCapturedAt(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const s = new Date(d.getTime() + 8 * 3600 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${s.getUTCFullYear()}-${pad(s.getUTCMonth() + 1)}-${pad(s.getUTCDate())} ${pad(s.getUTCHours())}:${pad(s.getUTCMinutes())}:${pad(s.getUTCSeconds())}`;
+}
+
+// 文件夹 / 垃圾桶图标（lucide 轮廓，随 currentColor 着色），与按钮尺寸一致
 const FolderOpenIcon = () =>
   h(
     "svg",
     {
-      viewBox: "0 0 24 24",
-      width: "16",
-      height: "16",
-      fill: "none",
-      stroke: "currentColor",
-      "stroke-width": "2",
-      "stroke-linecap": "round",
-      "stroke-linejoin": "round",
-      "aria-hidden": "true",
+      viewBox: "0 0 24 24", width: "16", height: "16", fill: "none",
+      stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round",
+      "stroke-linejoin": "round", "aria-hidden": "true",
     },
     h("path", {
       d: "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
     })
   );
 
-async function handleOpenFolder(row: HistoryRow) {
+const TrashIcon = () =>
+  h(
+    "svg",
+    {
+      viewBox: "0 0 24 24", width: "16", height: "16", fill: "none",
+      stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round",
+      "stroke-linejoin": "round", "aria-hidden": "true",
+    },
+    [
+      h("path", { d: "M3 6h18" }),
+      h("path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" }),
+      h("path", { d: "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" }),
+      h("path", { d: "M10 11v6" }),
+      h("path", { d: "M14 11v6" }),
+    ]
+  );
+
+async function handleOpenFolder(row: HistoryItem) {
   try {
-    const data = "novel_id" in row
-      ? await historyStore.openNovelFile(row.novel_id)
-      : await historyStore.openIllustrationFolder(row.artwork_id);
+    const data = row.category === "novel"
+      ? await historyStore.openNovelFile(row.id)
+      : await historyStore.openIllustrationFolder(row.id);
     if (data.error) {
       message.error(t("history.openFolderFailed"));
     }
@@ -114,64 +135,77 @@ async function handleOpenFolder(row: HistoryRow) {
   }
 }
 
-function actionsRender(row: HistoryRow) {
-  return h(NSpace, { size: 4 }, () => [
-    h(
-      NTooltip,
-      { placement: "top" },
-      {
-        trigger: () =>
-          h(
-            NButton,
-            {
+function actionsRender(row: HistoryItem) {
+  return h(NSpace, { size: 8 }, () => [
+    h(NTooltip, { placement: "top" }, {
+      trigger: () =>
+        h(NButton, {
+          size: "tiny",
+          quaternary: true,
+          "aria-label": t("history.openFolder"),
+          onClick: () => handleOpenFolder(row),
+        }, { icon: FolderOpenIcon }),
+      default: () => t("history.openFolder"),
+    }),
+    h(NPopconfirm, {
+      onPositiveClick: async () => {
+        if (row.category === "novel") {
+          await historyStore.deleteNovel(row.id, true);
+        } else {
+          await historyStore.deleteIllustration(row.id, true);
+        }
+        await loadData();
+      },
+    }, {
+      trigger: () =>
+        h(NTooltip, { placement: "top" }, {
+          trigger: () =>
+            h(NButton, {
               size: "tiny",
               quaternary: true,
-              "aria-label": t("history.openFolder"),
-              onClick: () => handleOpenFolder(row),
-            },
-            { icon: FolderOpenIcon }
-          ),
-        default: () => t("history.openFolder"),
-      }
-    ),
-    h(
-      NPopconfirm,
-      {
-        onPositiveClick: () => {
-          if ("novel_id" in row) {
-            return historyStore.deleteNovel(row.novel_id, true);
-          }
-          return historyStore.deleteIllustration(row.artwork_id, true);
-        },
-      },
-      {
-        trigger: () => h(NButton, { size: "tiny", type: "error" }, () => t("common.delete")),
-        default: () => t("history.deleteConfirm"),
-      }
-    ),
+              type: "error",
+              "aria-label": t("common.delete"),
+            }, { icon: TrashIcon }),
+          default: () => t("common.delete"),
+        }),
+      default: () => t("history.deleteConfirm"),
+    }),
   ]);
 }
 
 // computed 让列标题随 locale 切换自动更新
-const columns = computed<DataTableColumns<HistoryRow>>(() =>
-  category.value === "novel"
-    ? [
-        { type: "selection" },
-        { title: t("history.titleColumn"), key: "title", ellipsis: { tooltip: true } },
-        { title: t("history.authorColumn"), key: "author_name" },
-        { title: t("history.seriesColumn"), key: "series_id", render: (row) => (row as Novel).series_id ? String((row as Novel).series_id) : "-" },
-        { title: t("history.capturedAtColumn"), key: "captured_at", width: 180 },
-        { title: t("history.actions"), key: "actions", width: 120, render: actionsRender },
-      ]
-    : [
-        { type: "selection" },
-        { title: t("history.titleColumn"), key: "title", ellipsis: { tooltip: true } },
-        { title: t("history.authorColumn"), key: "author_name" },
-        { title: t("history.pagesColumn"), key: "page_count", width: 80, render: (row) => String((row as Illustration).page_count) },
-        { title: t("history.capturedAtColumn"), key: "captured_at", width: 180 },
-        { title: t("history.actions"), key: "actions", width: 120, render: actionsRender },
-      ]
-);
+const columns = computed<DataTableColumns<HistoryItem>>(() => {
+  const base = [
+    { type: "selection" as const },
+    ...(category.value === "all"
+      ? [{
+          title: t("history.typeColumn"), key: "category", width: 72,
+          render: (row: HistoryItem) =>
+            h(NTag, { size: "small", type: "info" }, () =>
+              row.category === "novel"
+                ? t("history.category.novel")
+                : t("history.category.illustration")),
+        }]
+      : []),
+    { title: t("history.titleColumn"), key: "title", width: 220, ellipsis: { tooltip: true } },
+    { title: t("history.authorColumn"), key: "author_name", width: 140, ellipsis: { tooltip: true } },
+    ...(category.value === "novel"
+      ? [{
+          title: t("history.seriesColumn"), key: "series_id", width: 90,
+          render: (row: HistoryItem) => (row.series_id != null ? String(row.series_id) : "-"),
+        }]
+      : []),
+    ...(category.value !== "novel"
+      ? [{ title: t("history.pagesColumn"), key: "pages", width: 72, render: (row: HistoryItem) => String(row.pages ?? "-") }]
+      : []),
+    {
+      title: t("history.capturedAtColumn"), key: "captured_at", width: 170,
+      render: (row: HistoryItem) => formatCapturedAt(row.captured_at),
+    },
+    { title: t("history.actions"), key: "actions", width: 88, render: actionsRender },
+  ];
+  return base as DataTableColumns<HistoryItem>;
+});
 
 const pagination = ref({
   page: 1,
@@ -187,12 +221,7 @@ const pagination = ref({
 
 async function loadData() {
   loading.value = true;
-  const params = keyword.value ? { keyword: keyword.value } : undefined;
-  if (category.value === "novel") {
-    await historyStore.fetchNovels(params);
-  } else {
-    await historyStore.fetchIllustrations(params);
-  }
+  await historyStore.fetchHistory(category.value, keyword.value || undefined);
   pagination.value.pageCount = Math.ceil(historyStore.total / historyStore.pageSize);
   loading.value = false;
 }
@@ -211,16 +240,15 @@ function handleCategoryChange() {
 }
 
 async function handleBatchDelete() {
-  const ids = [...checkedRowKeys.value];
+  const keys = [...checkedRowKeys.value];
+  const novelIds = keys.filter((k) => k.startsWith("novel:")).map((k) => Number(k.slice(6)));
+  const illustIds = keys.filter((k) => k.startsWith("illustration:")).map((k) => Number(k.slice(14)));
   batchDeleting.value = true;
   try {
-    if (category.value === "novel") {
-      await historyStore.deleteNovelsBatch(ids, false);
-    } else {
-      await historyStore.deleteIllustrationsBatch(ids, false);
-    }
+    if (novelIds.length) await historyStore.deleteNovelsBatch(novelIds, false);
+    if (illustIds.length) await historyStore.deleteIllustrationsBatch(illustIds, false);
     checkedRowKeys.value = [];
-    message.success(t("history.batchDeleted", { count: ids.length }));
+    message.success(t("history.batchDeleted", { count: keys.length }));
     await loadData();
   } catch {
     message.error(t("common.deleteFailed"));
@@ -232,11 +260,8 @@ async function handleBatchDelete() {
 async function handleDeleteAll() {
   clearing.value = true;
   try {
-    if (category.value === "novel") {
-      await historyStore.deleteAllNovels(false);
-    } else {
-      await historyStore.deleteAllIllustrations(false);
-    }
+    if (category.value !== "illustration") await historyStore.deleteAllNovels(false);
+    if (category.value !== "novel") await historyStore.deleteAllIllustrations(false);
     checkedRowKeys.value = [];
     message.success(t("history.cleared"));
     pagination.value.page = 1;

@@ -27,6 +27,7 @@ app = FastAPI(title="pixiv-tool", docs_url=None, redoc_url=None)
 
 # 注册所有 API 路由
 from pixiv_tool.api.auth import router as auth_router
+from pixiv_tool.api.history import router as history_router
 from pixiv_tool.api.illustrations import router as illustrations_router
 from pixiv_tool.api.novels import router as novels_router
 from pixiv_tool.api.tasks import router as tasks_router
@@ -38,6 +39,7 @@ app.include_router(system_router)
 app.include_router(auth_router)
 app.include_router(novels_router)
 app.include_router(illustrations_router)
+app.include_router(history_router)
 app.include_router(tasks_router)
 app.include_router(settings_router)
 
