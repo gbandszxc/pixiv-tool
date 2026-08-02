@@ -334,6 +334,8 @@ prod 模式登录走子进程（`pixiv-tool.exe --login-window`），依赖 `pyt
 
 curl_cffi issue #5、#455 记录过类似 PyInstaller 打包问题，根因都是动态库没收集。
 
+> **curl_cffi ≥ 0.15 注意**：上游自 0.15.0 起改为**全静态链接**（libcurl 直接编进 `_wrapper.pyd`，wheel 里不再有 `lib/` 目录），此时 `_internal/curl_cffi/` 下**看不到任何 dll 是正常现象**，hook 收集结果为空无害，勿据此误判降级。老版本（< 0.15）才需要上面的 dll 检查。
+
 ### Q8: 如何清理登录浏览器缓存做复测
 
 先完全退出 Pixiv Tool，再删除应用专属登录 profile：
