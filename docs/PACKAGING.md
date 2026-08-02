@@ -107,10 +107,10 @@ LoadLibrary: ?????????
 
 只有 `dist/pixiv-tool/` 下的 exe 是完整的。`build/` 已在 `.gitignore`，本地可随时删。
 
-### 压缩分发
+### 压缩分发（产物输出到 `dist/` 下）
 
 ```powershell
-Compress-Archive -Path dist\pixiv-tool -DestinationPath pixiv-tool-windows-x64.zip
+Compress-Archive -Path dist\pixiv-tool -DestinationPath dist\pixiv-tool-windows-x64.zip
 ```
 
 解压即用，无需安装。接收方机器需有 WebView2 Runtime（Windows 11 自带，Windows 10 可能需要装 [Evergreen Bootstrapper](https://developer.microsoft.com/microsoft-edge/webview2/)）。
@@ -144,11 +144,11 @@ pnpm install --dir frontend
 mac 上打包 `.app` **不能用 `zip`/`tar`**——它们会丢掉 bundle 内的符号链接和可执行权限位，解压后双击没反应。用系统自带的 `ditto`：
 
 ```bash
-# mac：有 .app 时
-cd dist && ditto -c -k --keepParent "Pixiv Tool.app" ../pixiv-tool-macos-x64.zip
+# mac：有 .app 时（产物在 dist/ 下，与 CI 一致）
+cd dist && ditto -c -k --keepParent "Pixiv Tool.app" pixiv-tool-macos-x64.zip
 # mac：无 .app（回退到 onedir 目录）/ Linux
-tar -czf pixiv-tool-macos-x64.zip -C dist/pixiv-tool .     # mac 回退
-tar -czf pixiv-tool-linux-x64.tar.gz -C dist/pixiv-tool .  # linux
+cd dist && tar -czf pixiv-tool-macos-x64.zip -C pixiv-tool .        # mac 回退
+cd dist && tar -czf pixiv-tool-linux-x64.tar.gz -C pixiv-tool .    # linux
 ```
 
 `--keepParent` 保留 `.app` 这一层目录结构。CI（`release.yml`）已按「优先 `.app`、找不到回退 onedir」写好。

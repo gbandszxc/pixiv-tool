@@ -129,11 +129,11 @@ jobs:
           codesign --force --deep --options runtime \
             --sign "$MACOS_CERTIFICATE_NAME" "dist/Pixiv Tool.app"
 
-      # --- 压缩产物 ---
+      # --- 压缩产物（全部输出到 dist/ 下） ---
       # Windows：onedir 目录压 zip。
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
-        run: Compress-Archive -Path dist/pixiv-tool/* -DestinationPath ${{ matrix.artifact_name }}.zip
+        run: cd dist && Compress-Archive -Path pixiv-tool/* -DestinationPath ${{ matrix.artifact_name }}.zip
 
       # macOS：spec 若声明了 BUNDLE 则产物是 dist/Pixiv Tool.app（注意空格），
       # 必须用 ditto 打包（zip/tar 会破坏 bundle 的权限位/符号链接）；
@@ -141,24 +141,25 @@ jobs:
       - name: Package artifact (macOS)
         if: runner.os == 'macOS'
         run: |
-          if [ -d "dist/Pixiv Tool.app" ]; then
-            cd dist && ditto -c -k --keepParent "Pixiv Tool.app" "../${{ matrix.artifact_name }}.zip"
+          cd dist
+          if [ -d "Pixiv Tool.app" ]; then
+            ditto -c -k --keepParent "Pixiv Tool.app" "${{ matrix.artifact_name }}.zip"
           else
             echo "No .app found (BUNDLE not declared in spec); falling back to onedir dir"
-            tar -czf "${{ matrix.artifact_name }}.zip" -C dist/pixiv-tool .
+            tar -czf "${{ matrix.artifact_name }}.zip" -C pixiv-tool .
           fi
 
       # Linux：onedir 目录打 tar.gz（README 注明需预装 webkit2gtk）。
       - name: Package artifact (Linux)
         if: runner.os == 'Linux'
-        run: tar -czf ${{ matrix.artifact_name }}.${{ matrix.archive_ext }} -C dist/pixiv-tool .
+        run: cd dist && tar -czf ${{ matrix.artifact_name }}.${{ matrix.archive_ext }} -C pixiv-tool .
 
       # --- 上传 artifact ---
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
+          path: dist/${{ matrix.artifact_name }}.${{ matrix.archive_ext }}
 
   # -------------------------------------------------------------------
   # 发布任务：汇总产物到 GitHub Release

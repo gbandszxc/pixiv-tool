@@ -529,10 +529,10 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 
 `.github/workflows/release.yml`：push tag `v*` 触发，matrix `[windows-latest, macos-latest, ubuntu-latest]`，分别构建并上传 Release。
 
-产物：
-- `pixiv-tool-windows-x64.zip`
-- `pixiv-tool-macos-x64.zip`（PyInstaller 出 `.app`，压 zip）
-- `pixiv-tool-linux-x64.tar.gz`（README 注明需预装 `webkit2gtk`）
+产物（压缩包输出在 `dist/` 下，与 `dist/pixiv-tool/` 同目录）：
+- `dist/pixiv-tool-windows-x64.zip`
+- `dist/pixiv-tool-macos-x64.zip`（PyInstaller 出 `.app`，压 zip）
+- `dist/pixiv-tool-linux-x64.tar.gz`（README 注明需预装 `webkit2gtk`）
 
 ---
 
