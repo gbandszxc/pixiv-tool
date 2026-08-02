@@ -60,6 +60,27 @@ class IllustCrawler:
         paused_total = 0.0
         timed_out = False
 
+        # 预取分母：用户全集=作品总数，单作品=页数；失败退回增量计数
+        pre_total: int | None = None
+        try:
+            pre_total = await source.resolve_total(self.client)
+        except Exception as exc:
+            logger.warning("任务 %s 预取总数失败，退回增量计数: %s", task_id, exc)
+        if pre_total is not None:
+            total = pre_total
+
+        def bump_progress() -> None:
+            """分子 +1 并落库（单作品按页、用户全集按作品调用）。"""
+            nonlocal done
+            done += 1
+            self.task_manager.update_progress(
+                task_id, done=done, total=total, skipped=skipped)
+            if event_callback:
+                event_callback("progress", {
+                    "task_id": task_id, "done": done,
+                    "total": total, "skipped": skipped,
+                })
+
         # 锚定相对 output_dir 到 DATA_DIR(与小说 Crawler 一致)。
         out = Path(output_dir)
         if not out.is_absolute():
@@ -70,8 +91,10 @@ class IllustCrawler:
 
         try:
             self.task_manager.update_progress(task_id, status="running")
+            if pre_total is not None:
+                self.task_manager.update_progress(task_id, total=total)
             if event_callback:
-                event_callback("progress", {"task_id": task_id, "done": 0, "total": 0, "skipped": 0})
+                event_callback("progress", {"task_id": task_id, "done": 0, "total": total, "skipped": 0})
 
             async for artwork_id in source.resolve(self.client):
                 if cancel_flag.is_set():
@@ -79,10 +102,12 @@ class IllustCrawler:
 
                 if self.db.is_illust_downloaded(artwork_id):
                     skipped += 1
-                    total += 1
+                    if pre_total is None:
+                        total += 1
                     continue
 
-                total += 1
+                if pre_total is None:
+                    total += 1
                 pause_start = time.monotonic()
                 await pause_evt.wait()  # 暂停点
                 paused_total += time.monotonic() - pause_start
@@ -93,15 +118,17 @@ class IllustCrawler:
                     break
 
                 try:
-                    await self._crawl_one(artwork_id, base)
-                    done += 1
-                    self.task_manager.update_progress(
-                        task_id, done=done, total=total, skipped=skipped)
-                    if event_callback:
-                        event_callback("progress", {
-                            "task_id": task_id, "done": done,
-                            "total": total, "skipped": skipped,
-                        })
+                    if user_id is None:
+                        # 单作品：分母=页数，每存一页分子 +1（1 页作品即 1/1）
+                        await self._crawl_one(
+                            artwork_id, base,
+                            cached_data=source.cached_illust(),
+                            on_page_saved=bump_progress,
+                        )
+                    else:
+                        # 用户全集：分母=作品总数，每完成一个作品分子 +1
+                        await self._crawl_one(artwork_id, base)
+                        bump_progress()
                 except Exception as exc:
                     logger.error("抓取插画 %d 失败: %s", artwork_id, exc)
                     failed_ids.append(artwork_id)
@@ -144,9 +171,15 @@ class IllustCrawler:
             logger.warning("获取用户 %d 信息失败,目录退回 userId: %s", user_id, exc)
         return f"user_{user_id}"
 
-    async def _crawl_one(self, artwork_id: int, base: Path) -> list[Path]:
-        """抓取单幅插画:解析各页原图 URL → 下载 → 写库。"""
-        data = await self.client.get_illust(artwork_id)
+    async def _crawl_one(self, artwork_id: int, base: Path,
+                         cached_data: dict | None = None,
+                         on_page_saved=None) -> list[Path]:
+        """抓取单幅插画:解析各页原图 URL → 下载 → 写库。
+
+        cached_data: 单作品源预取的元数据(跳过重复 get_illust 请求)。
+        on_page_saved: 每保存一页回调一次(单作品按页推进进度)。
+        """
+        data = cached_data or await self.client.get_illust(artwork_id)
         title = data.get("title") or str(artwork_id)
         illust_type = int(data.get("illustType", 0))
         page_count = int(data.get("pageCount", 1))
@@ -159,6 +192,8 @@ class IllustCrawler:
         saved: list[Path] = []
         if illust_type == UGOIRA_TYPE:
             saved.append(await self._download_ugoira(artwork_id, base, safe))
+            if on_page_saved:
+                on_page_saved()
         else:
             urls = _collect_page_urls(data, page_count)
             if not urls:
@@ -170,6 +205,8 @@ class IllustCrawler:
                 fp = base / f"{safe}_{artwork_id}_p{idx}.{_url_ext(url)}"
                 fp.write_bytes(content)
                 saved.append(fp)
+                if on_page_saved:
+                    on_page_saved()
 
         self.db.insert_illustration(
             artwork_id=artwork_id,

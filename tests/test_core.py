@@ -19,6 +19,8 @@ from pixiv_tool.core.exporter import (
     _make_filename,
 )
 from pixiv_tool.core.source import SingleNovelSource, SeriesSource, UserNovelsSource
+from pixiv_tool.core.illust_crawler import IllustCrawler
+from pixiv_tool.core.illust_source import SingleIllustSource, UserIllustsSource
 from pixiv_tool.core.task import TaskManager
 from pixiv_tool.core.pixiv_client import (
     PixivClient,
@@ -521,3 +523,140 @@ class TestCrawlerTimeout:
         row = tmp_db.get_task(task.task_id)
         assert row["status"] == "done"
         assert row["done"] == 1
+
+
+# ── IllustSource 分母预取 (插画任务页进度) ───────────────────────────────────
+
+
+class TestIllustSources:
+    @pytest.mark.asyncio
+    async def test_single_illust_total_is_page_count(self):
+        """单作品分母 = 页数，且元数据缓存供爬虫复用。"""
+        src = SingleIllustSource(illust_id=7001)
+        client = AsyncMock()
+        client.get_illust.return_value = {"id": 7001, "title": "多页", "pageCount": 3}
+        assert await src.resolve_total(client) == 3
+        assert src.cached_illust() == {"id": 7001, "title": "多页", "pageCount": 3}
+        results = [r async for r in src.resolve(client)]
+        assert results == [7001]
+
+    @pytest.mark.asyncio
+    async def test_single_illust_total_single_page(self):
+        """单页作品分母 = 1（1/1）。"""
+        src = SingleIllustSource(illust_id=7002)
+        client = AsyncMock()
+        client.get_illust.return_value = {"pageCount": 1}
+        assert await src.resolve_total(client) == 1
+
+    @pytest.mark.asyncio
+    async def test_user_illusts_total_counts_illusts_and_manga(self):
+        """用户全集分母 = 插画数 + 漫画数，resolve 复用预取结果。"""
+        src = UserIllustsSource(user_id=1001)
+        client = AsyncMock()
+        client.get_user_profile_all.return_value = {
+            "illusts": {"1": None, "2": None, "3": None},
+            "manga": {"4": None},
+            "novels": {"9": None},
+        }
+        assert await src.resolve_total(client) == 4
+        results = [r async for r in src.resolve(client)]
+        assert results == [1, 2, 3, 4]
+        assert client.get_user_profile_all.await_count == 1
+
+
+class TestIllustCrawlerProgress:
+    """任务页进度：用户全集分母=作品总数，单作品分母=页数。"""
+
+    @pytest.mark.asyncio
+    async def test_user_collection_total_fixed_and_done_increments(self, tmp_db, tmp_path):
+        """用户全集：total 先固定为作品总数，done 每完成一个作品 +1。"""
+        ids = list(range(1001, 1016))  # 15 幅
+        client = AsyncMock()
+        client.get_user_profile_all.return_value = {
+            "illusts": {str(i): None for i in ids},
+            "manga": {},
+        }
+        client.get_user_info.return_value = {"name": "作者", "account": "acc"}
+        client.get_illust.side_effect = [
+            {"id": i, "title": f"T{i}", "illustType": 0, "pageCount": 1,
+             "meta": {"pages": [{"image_urls": {"original": f"https://i.pximg.net/img/2024/01/01/00/00/00/{i}_p0.png"}}]}}
+            for i in ids
+        ]
+
+        snapshots: list[dict] = []
+
+        async def _download(url):
+            snapshots.append(dict(tmp_db.get_task(task.task_id)))
+            return b"img"
+
+        client.download_bytes = _download
+
+        tm = TaskManager(tmp_db)
+        task = tm.create_task("user", "1001", category="illustration")
+        crawler = IllustCrawler(client, tmp_db, tm)
+        await crawler.run(UserIllustsSource(1001), task.task_id,
+                          output_dir=str(tmp_path), user_id=1001)
+
+        row = tmp_db.get_task(task.task_id)
+        assert row["status"] == "done"
+        assert (row["total"], row["done"]) == (15, 15)
+        # 下载中快照：分母恒 15，分子逐作品递增 0..14
+        assert len(snapshots) == 15
+        assert [s["total"] for s in snapshots] == [15] * 15
+        assert [s["done"] for s in snapshots] == list(range(0, 15))
+
+    @pytest.mark.asyncio
+    async def test_single_illustration_progress_per_page(self, tmp_db, tmp_path):
+        """单作品多页：total=页数，每存一页 done+1 → 1/3,2/3,3/3。"""
+        client = AsyncMock()
+        client.get_illust.return_value = {
+            "id": 7001, "title": "多页", "illustType": 0, "pageCount": 3,
+            "meta": {"pages": [
+                {"image_urls": {"original": "https://i.pximg.net/img/2024/01/01/00/00/00/7001_p0.png"}},
+                {"image_urls": {"original": "https://i.pximg.net/img/2024/01/01/00/00/00/7001_p1.png"}},
+                {"image_urls": {"original": "https://i.pximg.net/img/2024/01/01/00/00/00/7001_p2.png"}},
+            ]},
+        }
+
+        snapshots: list[dict] = []
+
+        async def _download(url):
+            snapshots.append(dict(tmp_db.get_task(task.task_id)))
+            return b"img"
+
+        client.download_bytes = _download
+
+        tm = TaskManager(tmp_db)
+        task = tm.create_task("single", "7001", category="illustration")
+        crawler = IllustCrawler(client, tmp_db, tm)
+        await crawler.run(SingleIllustSource(7001), task.task_id,
+                          output_dir=str(tmp_path))
+
+        row = tmp_db.get_task(task.task_id)
+        assert row["status"] == "done"
+        assert (row["total"], row["done"]) == (3, 3)
+        # 每页落库一次：done 依次 0,1,2
+        assert [s["done"] for s in snapshots] == [0, 1, 2]
+        assert all(s["total"] == 3 for s in snapshots)
+        # 元数据只请求一次（预取复用）
+        assert client.get_illust.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_single_illustration_one_page(self, tmp_db, tmp_path):
+        """单作品单页：1/1。"""
+        client = AsyncMock()
+        client.get_illust.return_value = {
+            "id": 7002, "title": "单页", "illustType": 0, "pageCount": 1,
+            "meta": {"pages": [{"image_urls": {"original": "https://i.pximg.net/img/2024/01/01/00/00/00/7002_p0.png"}}]},
+        }
+        client.download_bytes.return_value = b"img"
+
+        tm = TaskManager(tmp_db)
+        task = tm.create_task("single", "7002", category="illustration")
+        crawler = IllustCrawler(client, tmp_db, tm)
+        await crawler.run(SingleIllustSource(7002), task.task_id,
+                          output_dir=str(tmp_path))
+
+        row = tmp_db.get_task(task.task_id)
+        assert row["status"] == "done"
+        assert (row["total"], row["done"]) == (1, 1)
