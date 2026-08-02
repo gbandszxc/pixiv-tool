@@ -363,12 +363,15 @@ CREATE INDEX idx_illustrations_author ON illustrations(author_id);
   "output_formats": ["txt", "markdown"],
   "language": "zh-CN",
   "theme": "auto",
-  "backend_port": null
+  "backend_port": null,
+  "max_wait_seconds": 180
 }
 ```
 
 - V1 写死 portable 模式，不暴露"系统配置目录"切换开关。
 - `backend_port: null` 时使用范围探测；用户可手动指定。
+- `max_wait_seconds`：任务最大运行时长（秒），默认 180，设置页可配；
+  任务运行超过该时长自动标记为 failed（**不含暂停时间**）。
 
 ### 5.3 Cookie 存储
 
@@ -430,6 +433,7 @@ CREATE INDEX idx_illustrations_author ON illustrations(author_id);
 | POST | `/api/tasks/{id}/resume` | 继续 |
 | POST | `/api/tasks/{id}/cancel` | 取消 |
 | POST | `/api/tasks/{id}/retry-failed` | 重试失败项 |
+| DELETE | `/api/tasks` / `/api/tasks/{id}` | 删除任务记录（**含进行中任务**：先取消再删） |
 
 ### 7.3 历史
 

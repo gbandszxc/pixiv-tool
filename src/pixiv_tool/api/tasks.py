@@ -18,7 +18,7 @@ from pixiv_tool.core.source import SingleNovelSource, SeriesSource, UserNovelsSo
 from pixiv_tool.core.illust_source import SingleIllustSource, UserIllustsSource
 from pixiv_tool.core.task import TaskManager
 from pixiv_tool.core.pixiv_client import PixivClient
-from pixiv_tool.storage.db import Database
+from pixiv_tool.storage.db import Database, TERMINAL_TASK_STATUSES
 from pixiv_tool.storage.cookies import create_cookie_store
 from pixiv_tool.storage.settings import get_settings
 
@@ -84,6 +84,7 @@ async def create_task(body: dict):
                 await crawler.run(
                     source_fn(source_id), task.task_id, formats,
                     output_dir=settings.output_dir,
+                    max_wait_seconds=settings.max_wait_seconds,
                     event_callback=lambda *a: None,  # SSE 推送通过事件流
                 )
             else:
@@ -91,6 +92,7 @@ async def create_task(body: dict):
                     source_fn(source_id), task.task_id,
                     output_dir=settings.output_dir,
                     user_id=user_id,
+                    max_wait_seconds=settings.max_wait_seconds,
                     event_callback=lambda *a: None,
                 )
         finally:
@@ -108,26 +110,33 @@ async def list_tasks(category: str | None = None):
     return {"items": _db.list_tasks(category=category)}
 
 
-def _delete_terminal_task_ids(task_ids: list[str]) -> dict[str, int]:
-    """删除终态任务，并把存储层结果转换成一致的 HTTP 语义。"""
+def _delete_task_ids(task_ids: list[str]) -> dict[str, int]:
+    """删除任务记录（含进行中任务）。
+
+    进行中任务先 cancel：设置 cancel flag，后台循环在下一个作品处退出，
+    然后删除记录。正在下载的当前作品会下完（与手动取消行为一致）。
+    """
     if not task_ids:
         raise HTTPException(status_code=422, detail="task_ids 不能为空")
 
-    deleted, missing_ids, non_terminal_ids = _db.delete_terminal_tasks(task_ids)
+    for tid in task_ids:
+        task = _db.get_task(tid)
+        if task and task.get("status") not in TERMINAL_TASK_STATUSES:
+            _task_manager.cancel(tid)
+
+    deleted, missing_ids = _db.delete_tasks(task_ids)
     if missing_ids:
         raise HTTPException(status_code=404, detail="任务不存在")
-    if non_terminal_ids:
-        raise HTTPException(status_code=409, detail="只能删除已结束的任务")
     return {"deleted": deleted}
 
 
 @router.delete("")
 async def delete_tasks(body: dict):
-    """原子批量删除终态任务记录。"""
+    """批量删除任务记录（含进行中任务，先取消）。"""
     task_ids = body.get("task_ids", [])
     if not isinstance(task_ids, list) or not all(isinstance(task_id, str) for task_id in task_ids):
         raise HTTPException(status_code=422, detail="task_ids 必须是字符串数组")
-    return _delete_terminal_task_ids(task_ids)
+    return _delete_task_ids(task_ids)
 
 
 @router.delete("/completed")
@@ -138,8 +147,8 @@ async def delete_completed_tasks():
 
 @router.delete("/{task_id}")
 async def delete_task(task_id: str):
-    """删除单个终态任务记录。"""
-    return _delete_terminal_task_ids([task_id])
+    """删除单个任务记录（含进行中任务，先取消）。"""
+    return _delete_task_ids([task_id])
 
 
 @router.get("/{task_id}")
@@ -244,7 +253,8 @@ async def retry_failed(task_id: str):
             try:
                 for nid in failed_ids:
                     await crawler.run(SingleNovelSource(nid), new_task.task_id,
-                                      output_dir=settings.output_dir)
+                                      output_dir=settings.output_dir,
+                                      max_wait_seconds=settings.max_wait_seconds)
             finally:
                 await client.close()
     else:
@@ -255,7 +265,8 @@ async def retry_failed(task_id: str):
             try:
                 for nid in failed_ids:
                     await crawler.run(SingleIllustSource(nid), new_task.task_id,
-                                      output_dir=settings.output_dir)
+                                      output_dir=settings.output_dir,
+                                      max_wait_seconds=settings.max_wait_seconds)
             finally:
                 await client.close()
 

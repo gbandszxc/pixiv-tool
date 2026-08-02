@@ -24,6 +24,8 @@ _DEFAULTS: dict = {
     "language": "zh-CN",
     "theme": "auto",
     "backend_port": None,
+    # 任务最大等待时间（秒）：运行超过该时长自动标记失败，不含暂停时间。
+    "max_wait_seconds": 180,
 }
 
 
@@ -34,6 +36,7 @@ class Settings:
     language: str = "zh-CN"
     theme: str = "auto"
     backend_port: int | None = None
+    max_wait_seconds: int = 180
 
     def save(self) -> None:
         """持久化到 settings.json。"""

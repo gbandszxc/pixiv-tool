@@ -90,7 +90,12 @@ async def update_config(body: dict):
             _validate_output_dir(body["output_dir"])
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    for key in ("output_dir", "output_formats", "language", "theme", "backend_port"):
+    if "max_wait_seconds" in body:
+        value = body["max_wait_seconds"]
+        if not isinstance(value, int) or isinstance(value, bool) or not (30 <= value <= 86400):
+            raise HTTPException(status_code=400, detail="最大等待时间必须是 30~86400 秒之间的整数")
+    for key in ("output_dir", "output_formats", "language", "theme", "backend_port",
+                "max_wait_seconds"):
         if key in body:
             setattr(s, key, body[key])
     s.save()

@@ -100,6 +100,7 @@ export default {
     batchDelete: "批量删除 ({count})",
     batchDeleteConfirm: "确定删除选中的 {count} 个任务记录？已导出的文件不会被删除。",
     deleteConfirm: "确定删除此任务记录？已导出的文件不会被删除。",
+    deleteActiveConfirm: "任务尚未结束，删除后将停止抓取并移除记录。已导出的文件不会被删除。",
     deleted: "已删除 {count} 个任务",
     batchDeleted: "已删除 {count} 个任务",
     clearCompleted: "清除所有已完成任务",
@@ -157,5 +158,8 @@ export default {
     saveFailed: "保存失败",
     logsCleared: "日志已清除",
     authCleared: "已清除登录态",
+    maxWait: "最大等待时间（秒）",
+    maxWaitHint: "任务运行超过该时长自动标记失败，暂停时间不计入。默认 180s。",
+    maxWaitInvalid: "最大等待时间必须 ≥ 30 秒",
   },
 };

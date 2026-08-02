@@ -150,6 +150,24 @@ class TestSettingsAPI:
         resp = tc.get("/api/settings")
         assert resp.json()["theme"] == "dark"
 
+    def test_settings_max_wait_default_and_round_trip(self, client):
+        """GET 返回 max_wait_seconds 默认 180；PUT 可修改并持久化。"""
+        tc, db, _, settings_mod, _ = client
+        resp = tc.get("/api/settings")
+        assert resp.json()["max_wait_seconds"] == 180
+
+        resp = tc.put("/api/settings", json={"max_wait_seconds": 300})
+        assert resp.status_code == 200
+        settings_mod._instance = None
+        assert settings_mod.get_settings().max_wait_seconds == 300
+
+    def test_put_max_wait_out_of_range_rejected(self, client):
+        """max_wait_seconds 超出 30~86400 → 400。"""
+        tc, *_ = client
+        for bad in (10, 100000, "180", True):
+            resp = tc.put("/api/settings", json={"max_wait_seconds": bad})
+            assert resp.status_code == 400, f"{bad!r} should be rejected"
+
     def test_put_output_dir_non_str_rejected(self, client):
         """非字符串 output_dir → 400。"""
         tc, *_ = client
@@ -550,16 +568,29 @@ class TestTasksAPI:
 
         assert resp.status_code == 404
 
-    def test_batch_delete_rejects_non_terminal_tasks_atomically(self, client):
+    def test_batch_delete_includes_active_tasks(self, client):
+        """混合批次（终态 + 进行中）全部删除，进行中任务先被取消。"""
         tc, db, *_ = client
         self._insert_task(db, "done-task", "done")
         self._insert_task(db, "running-task", "running")
 
         resp = tc.request("DELETE", "/api/tasks", json={"task_ids": ["done-task", "running-task"]})
 
-        assert resp.status_code == 409
-        assert db.get_task("done-task") is not None
-        assert db.get_task("running-task") is not None
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 2}
+        assert db.get_task("done-task") is None
+        assert db.get_task("running-task") is None
+
+    def test_delete_single_active_task(self, client):
+        """进行中任务可单独删除（先取消再删记录）。"""
+        tc, db, *_ = client
+        self._insert_task(db, "pending-task", "pending")
+
+        resp = tc.delete("/api/tasks/pending-task")
+
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": 1}
+        assert db.get_task("pending-task") is None
 
     def test_batch_delete_rejects_empty_selection(self, client):
         tc, *_ = client

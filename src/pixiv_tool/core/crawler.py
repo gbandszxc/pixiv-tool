@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,8 +35,12 @@ class Crawler:
     async def run(self, source: NovelSource, task_id: str,
                   formats: list[str] | None = None,
                   output_dir: str = "downloads",
+                  max_wait_seconds: int = 180,
                   event_callback=None) -> None:
-        """执行抓取。event_callback(event_type, data) 用于 SSE 推送。"""
+        """执行抓取。event_callback(event_type, data) 用于 SSE 推送。
+
+        max_wait_seconds: 任务最大运行时长（不含暂停时间），超过自动标记失败。
+        """
         formats = formats or ["txt", "markdown"]
         exporters = create_exporters(formats)
         pause_evt = self.task_manager.get_pause_event(task_id)
@@ -45,6 +50,9 @@ class Crawler:
         done = 0
         skipped = 0
         failed_ids: list[int] = []
+        started_at = time.monotonic()
+        paused_total = 0.0
+        timed_out = False
         # 锚定相对 output_dir 到 DATA_DIR（不是 cwd）。
         # frozen + 双击 .app 启动时 cwd 常是 / 或 $HOME,
         # 相对路径会写到不可预期位置。绝对路径（用户在设置里填的）原样使用。
@@ -70,7 +78,14 @@ class Crawler:
                     continue
 
                 total += 1
+                pause_start = time.monotonic()
                 await pause_evt.wait()  # 暂停点
+                paused_total += time.monotonic() - pause_start
+
+                # 最大等待时间：超过自动失败（暂停时长不计入）
+                if time.monotonic() - started_at - paused_total > max_wait_seconds:
+                    timed_out = True
+                    break
 
                 try:
                     await self._crawl_one(novel_id, order, target_dir, exporters)
@@ -86,6 +101,14 @@ class Crawler:
                     failed_ids.append(novel_id)
                     if event_callback:
                         event_callback("failed", {"task_id": task_id, "novel_id": novel_id, "error": str(exc)})
+
+            if timed_out:
+                msg = f"任务超过最大等待时间（{max_wait_seconds}s）"
+                logger.warning("任务 %s %s", task_id, msg)
+                self.task_manager.mark_failed(task_id, msg)
+                if event_callback:
+                    event_callback("failed", {"task_id": task_id, "error": msg})
+                return
 
             status = "canceled" if cancel_flag.is_set() else "done"
             self.task_manager.mark_done(task_id, total, done, skipped, failed_ids)

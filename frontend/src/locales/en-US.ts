@@ -99,6 +99,7 @@ export default {
     batchDelete: "Delete selected ({count})",
     batchDeleteConfirm: "Delete {count} selected task record(s)? Exported files will be kept.",
     deleteConfirm: "Delete this task record? Exported files will be kept.",
+    deleteActiveConfirm: "The task is still in progress. Deleting will stop it and remove the record. Exported files will be kept.",
     deleted: "Deleted {count} task(s)",
     batchDeleted: "Deleted {count} task(s)",
     clearCompleted: "Clear completed tasks",
@@ -156,5 +157,8 @@ export default {
     saveFailed: "Save failed",
     logsCleared: "Logs cleared",
     authCleared: "Login state cleared",
+    maxWait: "Max wait time (s)",
+    maxWaitHint: "Tasks auto-fail after running longer than this (pause time excluded). Default 180s.",
+    maxWaitInvalid: "Max wait time must be at least 30 seconds",
   },
 };

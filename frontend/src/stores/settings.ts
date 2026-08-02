@@ -8,6 +8,7 @@ export interface Settings {
   language: string;
   theme: string;
   backend_port: number | null;
+  max_wait_seconds: number;
 }
 
 export const useSettingsStore = defineStore("settings", () => {
@@ -17,6 +18,7 @@ export const useSettingsStore = defineStore("settings", () => {
     language: "zh-CN",
     theme: "auto",
     backend_port: null,
+    max_wait_seconds: 180,
   });
 
   async function fetchSettings() {

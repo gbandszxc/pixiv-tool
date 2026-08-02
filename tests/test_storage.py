@@ -161,8 +161,8 @@ class TestTaskCRUD:
         tasks = tmp_db.list_tasks()
         assert len(tasks) == 2
 
-    def test_delete_terminal_tasks_is_atomic(self, tmp_db):
-        """终态任务可删除；混入进行中任务时整个批次不产生副作用。"""
+    def test_delete_tasks_any_status(self, tmp_db):
+        """任意状态任务（含进行中）都可删除；缺失时整个批次不删除。"""
         for task_id, status in (("done", "done"), ("running", "running")):
             tmp_db.insert_task(
                 task_id=task_id,
@@ -173,16 +173,22 @@ class TestTaskCRUD:
                 updated_at="2025-01-01",
             )
 
-        deleted, missing, non_terminal = tmp_db.delete_terminal_tasks(["done", "running"])
+        deleted, missing = tmp_db.delete_tasks(["done", "running"])
+        assert (deleted, missing) == (2, set())
+        assert tmp_db.get_task("done") is None
+        assert tmp_db.get_task("running") is None
 
-        assert deleted == 0
-        assert missing == set()
-        assert non_terminal == {"running"}
-        assert tmp_db.get_task("done") is not None
-        assert tmp_db.get_task("running") is not None
+        # 缺失任务：整批不删
+        tmp_db.insert_task(
+            task_id="t2", source_type="single", source_id="1",
+            status="done", created_at="2025-01-01", updated_at="2025-01-01",
+        )
+        deleted, missing = tmp_db.delete_tasks(["t2", "ghost"])
+        assert (deleted, missing) == (0, {"ghost"})
+        assert tmp_db.get_task("t2") is not None
 
-    def test_delete_terminal_tasks_and_completed_tasks(self, tmp_db):
-        """单批删除所有终态，清理完成任务只影响 done。"""
+    def test_delete_tasks_and_completed_tasks(self, tmp_db):
+        """任意状态可删，清理完成任务只影响 done。"""
         for task_id, status in (("done", "done"), ("failed", "failed"), ("canceled", "canceled")):
             tmp_db.insert_task(
                 task_id=task_id,
@@ -193,8 +199,8 @@ class TestTaskCRUD:
                 updated_at="2025-01-01",
             )
 
-        deleted, missing, non_terminal = tmp_db.delete_terminal_tasks(["failed", "canceled"])
-        assert (deleted, missing, non_terminal) == (2, set(), set())
+        deleted, missing = tmp_db.delete_tasks(["failed", "canceled"])
+        assert (deleted, missing) == (2, set())
         assert tmp_db.get_task("failed") is None
         assert tmp_db.get_task("canceled") is None
         assert tmp_db.delete_completed_tasks() == 1
@@ -213,6 +219,7 @@ class TestSettings:
         assert "txt" in s.output_formats
         assert s.language == "zh-CN"
         assert s.theme == "auto"
+        assert s.max_wait_seconds == 180
 
     def test_settings_backward_compat(self, tmp_path, monkeypatch):
         """Missing fields are filled with defaults on load."""
@@ -234,6 +241,7 @@ class TestSettings:
         assert s.output_dir == "custom"
         assert s.language == "en"
         assert s.theme == "auto"  # filled from defaults
+        assert s.max_wait_seconds == 180  # filled from defaults
 
     def test_settings_corrupt_recovery(self, tmp_path, monkeypatch):
         """Corrupt JSON → backup created + defaults restored."""

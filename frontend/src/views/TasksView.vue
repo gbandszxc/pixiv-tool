@@ -52,7 +52,6 @@
           <n-list-item v-for="task in filteredTasks" :key="task.task_id">
             <template #prefix>
               <n-checkbox
-                v-if="isDeletable(task)"
                 :checked="selectedTaskIds.includes(task.task_id)"
                 :aria-label="t('tasks.selectTask', { id: task.task_id })"
                 @update:checked="toggleTaskSelection(task.task_id, $event)"
@@ -106,7 +105,7 @@
                     size="small"
                     @click="taskStore.retryFailed(task.task_id)"
                   >{{ t('tasks.retryFailed') }}</n-button>
-                  <n-popconfirm v-if="isDeletable(task)" @positive-click="handleDeleteTask(task.task_id)">
+                  <n-popconfirm @positive-click="handleDeleteTask(task.task_id)">
                     <template #trigger>
                       <n-button
                         size="small"
@@ -114,7 +113,7 @@
                         :loading="deletingTaskIds.has(task.task_id)"
                       >{{ t('common.delete') }}</n-button>
                     </template>
-                    {{ t('tasks.deleteConfirm') }}
+                    {{ isActiveTask(task) ? t('tasks.deleteActiveConfirm') : t('tasks.deleteConfirm') }}
                   </n-popconfirm>
                 </n-space>
               </template>
@@ -149,7 +148,7 @@ import { useTaskStore } from "../stores/tasks";
 import type { Task } from "../stores/tasks";
 
 const TERMINAL_STATUSES = new Set(["done", "failed", "canceled"]);
-const ACTIVE_STATUSES = new Set(["pending", "running"]);
+const ACTIVE_STATUSES = new Set(["pending", "running", "paused"]);
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -238,8 +237,13 @@ function failedCount(task: Task) {
   }
 }
 
-function isDeletable(task: Task) {
-  return TERMINAL_STATUSES.has(task.status);
+function isActiveTask(task: Task) {
+  return ACTIVE_STATUSES.has(task.status);
+}
+
+// 所有任务都允许删除：进行中的任务删除 = 先取消再移除记录。
+function isDeletable(_task: Task) {
+  return true;
 }
 
 function toggleTaskSelection(taskId: string, checked: boolean) {

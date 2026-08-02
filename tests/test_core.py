@@ -432,3 +432,92 @@ class TestPixivClient:
                     await client._get("https://example.com/api")
             finally:
                 await client.close()
+
+
+# ── Crawler 超时（max_wait_seconds） ─────────────────────────────────────────
+
+
+class TestCrawlerTimeout:
+    @pytest.mark.asyncio
+    async def test_crawler_marks_failed_when_max_wait_exceeded(self, tmp_db):
+        """任务运行超过 max_wait_seconds 自动标记 failed（不写任何文件）。"""
+        from pixiv_tool.core.crawler import Crawler
+        from pixiv_tool.core.source import NovelSource
+
+        class FixedSource(NovelSource):
+            def __init__(self, count: int) -> None:
+                self.count = count
+
+            async def resolve(self, client):
+                for n in range(1, self.count + 1):
+                    yield (n, None)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "body": {"title": "t", "userId": 1, "userName": "u",
+                     "seriesNavData": {}, "pageCount": 1, "updateDate": "",
+                     "content": "hello"}
+        }
+        fake_client = MagicMock()
+        fake_client.get = AsyncMock(return_value=mock_resp)
+        fake_client.close = AsyncMock()
+        fake_client.backend = "test"
+
+        task_manager = TaskManager(tmp_db)
+        task = task_manager.create_task("single", "1")
+
+        with patch("pixiv_tool.core.pixiv_client.create_client", return_value=fake_client):
+            client = PixivClient(cookies={"PHPSESSID": "abc"})
+            try:
+                crawler = Crawler(client, tmp_db, task_manager)
+                # max_wait 为负：任何耗时都视为超时，第一个作品前即失败（确定性）。
+                with patch("pixiv_tool.core.pixiv_client.asyncio.sleep", new_callable=AsyncMock):
+                    await crawler.run(FixedSource(3), task.task_id,
+                                      formats=["txt"], max_wait_seconds=-1)
+            finally:
+                await client.close()
+
+        row = tmp_db.get_task(task.task_id)
+        assert row["status"] == "failed"
+        assert "最大等待时间" in row["error"]
+
+    @pytest.mark.asyncio
+    async def test_crawler_finishes_when_within_max_wait(self, tmp_db, tmp_path):
+        """未超时任务正常 done。"""
+        from pixiv_tool.core.crawler import Crawler
+        from pixiv_tool.core.source import NovelSource
+
+        class SingleSource(NovelSource):
+            async def resolve(self, client):
+                yield (42, None)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "body": {"title": "ok", "userId": 1, "userName": "u",
+                     "seriesNavData": {}, "pageCount": 1, "updateDate": "",
+                     "content": "x"}
+        }
+        fake_client = MagicMock()
+        fake_client.get = AsyncMock(return_value=mock_resp)
+        fake_client.close = AsyncMock()
+        fake_client.backend = "test"
+
+        task_manager = TaskManager(tmp_db)
+        task = task_manager.create_task("single", "42")
+
+        with patch("pixiv_tool.core.pixiv_client.create_client", return_value=fake_client):
+            client = PixivClient(cookies={"PHPSESSID": "abc"})
+            try:
+                crawler = Crawler(client, tmp_db, task_manager)
+                with patch("pixiv_tool.core.pixiv_client.asyncio.sleep", new_callable=AsyncMock):
+                    await crawler.run(SingleSource(), task.task_id,
+                                      formats=["txt"], max_wait_seconds=3600,
+                                      output_dir=str(tmp_path))
+            finally:
+                await client.close()
+
+        row = tmp_db.get_task(task.task_id)
+        assert row["status"] == "done"
+        assert row["done"] == 1

@@ -30,6 +30,11 @@
           <n-select v-model:value="form.theme" :options="themeOptions" />
         </n-form-item>
 
+        <n-form-item :label="t('settings.maxWait')">
+          <n-input-number v-model:value="form.max_wait_seconds" :min="30" :max="86400" :step="30" style="width: 140px" />
+          <span class="field-hint">{{ t('settings.maxWaitHint') }}</span>
+        </n-form-item>
+
         <n-form-item>
           <n-space>
             <n-button type="primary" @click="handleSave">{{ t('common.save') }}</n-button>
@@ -58,7 +63,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { NCard, NForm, NFormItem, NInput, NInputGroup, NSelect, NCheckboxGroup, NCheckbox, NButton, NSpace, NAlert, NPopconfirm, useMessage } from "naive-ui";
+import { NCard, NForm, NFormItem, NInput, NInputGroup, NInputNumber, NSelect, NCheckboxGroup, NCheckbox, NButton, NSpace, NAlert, NPopconfirm, useMessage } from "naive-ui";
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../stores/settings";
 import { useAuthStore } from "../stores/auth";
@@ -72,6 +77,7 @@ const form = ref({
   output_formats: ["txt", "markdown"],
   language: locale.value,
   theme: "auto",
+  max_wait_seconds: 180,
 });
 
 const message = ref("");
@@ -98,6 +104,10 @@ function changeLang(lang: string) {
 
 onMounted(async () => {
   await settingsStore.fetchSettings();
+  // 旧设置文件没有 max_wait_seconds 时回填默认值，避免保存时覆盖为空
+  if (typeof settingsStore.settings.max_wait_seconds !== "number") {
+    settingsStore.settings.max_wait_seconds = 180;
+  }
   form.value = { ...settingsStore.settings };
   // 以 settings 中保存的语言为准（若已持久化）
   if (form.value.language && form.value.language !== locale.value) {
@@ -116,6 +126,11 @@ async function handleBrowse() {
 }
 
 async function handleSave() {
+  if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) {
+    message.value = t("settings.maxWaitInvalid");
+    messageType.value = "error";
+    return;
+  }
   try {
     await settingsStore.saveSettings(form.value);
     message.value = t("settings.saved");
@@ -139,3 +154,11 @@ async function handleLogout() {
   messageType.value = "success";
 }
 </script>
+
+<style scoped>
+.field-hint {
+  margin-left: 8px;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+</style>

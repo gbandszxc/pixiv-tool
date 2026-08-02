@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -42,8 +43,12 @@ class IllustCrawler:
     async def run(self, source: IllustSource, task_id: str,
                   output_dir: str = "downloads",
                   user_id: int | None = None,
+                  max_wait_seconds: int = 180,
                   event_callback=None) -> None:
-        """执行抓取。user_id 非空时按用户全集目录布局(pic/users/)。"""
+        """执行抓取。user_id 非空时按用户全集目录布局(pic/users/)。
+
+        max_wait_seconds: 任务最大运行时长（不含暂停时间），超过自动标记失败。
+        """
         pause_evt = self.task_manager.get_pause_event(task_id)
         cancel_flag = self.task_manager.get_cancel_flag(task_id)
 
@@ -51,6 +56,9 @@ class IllustCrawler:
         done = 0
         skipped = 0
         failed_ids: list[int] = []
+        started_at = time.monotonic()
+        paused_total = 0.0
+        timed_out = False
 
         # 锚定相对 output_dir 到 DATA_DIR(与小说 Crawler 一致)。
         out = Path(output_dir)
@@ -75,7 +83,14 @@ class IllustCrawler:
                     continue
 
                 total += 1
+                pause_start = time.monotonic()
                 await pause_evt.wait()  # 暂停点
+                paused_total += time.monotonic() - pause_start
+
+                # 最大等待时间：超过自动失败（暂停时长不计入）
+                if time.monotonic() - started_at - paused_total > max_wait_seconds:
+                    timed_out = True
+                    break
 
                 try:
                     await self._crawl_one(artwork_id, base)
@@ -94,6 +109,14 @@ class IllustCrawler:
                         event_callback("failed", {
                             "task_id": task_id, "novel_id": artwork_id, "error": str(exc),
                         })
+
+            if timed_out:
+                msg = f"任务超过最大等待时间（{max_wait_seconds}s）"
+                logger.warning("任务 %s %s", task_id, msg)
+                self.task_manager.mark_failed(task_id, msg)
+                if event_callback:
+                    event_callback("failed", {"task_id": task_id, "error": msg})
+                return
 
             status = "canceled" if cancel_flag.is_set() else "done"
             self.task_manager.mark_done(task_id, total, done, skipped, failed_ids)
