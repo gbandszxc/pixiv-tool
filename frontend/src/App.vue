@@ -4,12 +4,26 @@
     <n-layout has-sider class="app-shell">
       <n-layout-sider
         bordered
+        v-model:collapsed="siderCollapsed"
         :collapsed-width="64"
         :width="180"
         show-trigger
         collapse-mode="width"
+        @transitionend="handleSiderTransitionEnd"
       >
-        <div class="sider-title">pixiv-tool</div>
+        <div class="sider-title">
+          <img
+            class="sider-logo"
+            :class="{ 'is-hidden': titleTextVisible }"
+            src="./assets/icon.png"
+            alt=""
+            aria-hidden="true"
+          />
+          <span
+            class="sider-text"
+            :class="{ 'is-visible': titleTextVisible }"
+          >pixiv-tool</span>
+        </div>
         <n-menu
           :collapsed-width="64"
           :collapsed-icon-size="22"
@@ -57,7 +71,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from "vue";
+import { computed, h, onMounted, ref, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import {
@@ -83,6 +97,31 @@ const { t } = useI18n();
 
 // 登录弹窗显隐：点“登录”打开，在浏览器登录 / 手动 Session 间选择。
 const showLoginDialog = ref(false);
+
+// 侧栏折叠状态：折叠时顶部标题切换为项目图标。
+const siderCollapsed = ref(false);
+
+// 标题文字可见性：展开时等 max-width 过渡结束后再交叉淡化到文字，
+// 避免宽度动画中“pixiv-tool”折行重排；收起时立即切回图标。
+const titleTextVisible = ref(true);
+let titleSwapTimer: ReturnType<typeof setTimeout> | undefined;
+
+function handleSiderTransitionEnd(e: TransitionEvent) {
+  if (e.propertyName !== "max-width" || siderCollapsed.value) return;
+  titleTextVisible.value = true;
+}
+
+watch(siderCollapsed, (collapsed) => {
+  clearTimeout(titleSwapTimer);
+  if (collapsed) {
+    titleTextVisible.value = false;
+  } else {
+    // transitionend 优先；超时兜底（过渡被禁用或中断时也能切回文字）
+    titleSwapTimer = setTimeout(() => {
+      if (!siderCollapsed.value) titleTextVisible.value = true;
+    }, 350);
+  }
+});
 
 const theme = computed(() => null); // 浅色，ticket 15 实现完整主题
 
@@ -144,11 +183,44 @@ onMounted(() => {
 }
 
 .sider-title {
-  padding: 16px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 56px;
+  padding: 0 16px;
+  overflow: hidden;
   font-weight: bold;
   font-size: 16px;
-  text-align: center;
   border-bottom: 1px solid var(--divider);
+}
+
+/* 折叠图标与标题文字绝对居中叠加：展开结束后交叉淡化（180ms，DESIGN.md 动效区间）。 */
+.sider-logo,
+.sider-text {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  transition: opacity 180ms ease-out;
+}
+
+.sider-logo {
+  width: 22px;
+  height: 22px;
+}
+
+.sider-logo.is-hidden {
+  opacity: 0;
+}
+
+.sider-text {
+  white-space: nowrap;
+  opacity: 0;
+}
+
+.sider-text.is-visible {
+  opacity: 1;
 }
 
 .sider-footer {
