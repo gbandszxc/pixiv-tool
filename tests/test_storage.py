@@ -212,14 +212,41 @@ class TestTaskCRUD:
 
 class TestSettings:
     def test_settings_defaults(self, tmp_settings):
-        """New settings.json gets default values."""
+        """New settings.json gets default values（输出目录 = 系统下载目录/pixiv-tool）。"""
+        from pathlib import Path
+
         settings_mod, settings_file, _ = tmp_settings
         s = settings_mod.get_settings()
-        assert s.output_dir == "downloads"
+        assert s.output_dir == str(Path.home() / "Downloads" / "pixiv-tool")
         assert "txt" in s.output_formats
         assert s.language == "zh-CN"
         assert s.theme == "auto"
         assert s.max_wait_seconds == 180
+
+    def test_settings_migrates_legacy_downloads_default(self, tmp_path, monkeypatch):
+        """旧默认值 "downloads" 迁移为系统下载目录/pixiv-tool；显式路径不动。"""
+        from pathlib import Path
+        from pixiv_tool.storage import settings as settings_mod
+
+        config_dir = tmp_path / "cfg"
+        config_dir.mkdir()
+        settings_file = config_dir / "settings.json"
+        settings_file.write_text(
+            json.dumps({"output_dir": "downloads"}), encoding="utf-8"
+        )
+        monkeypatch.setattr(settings_mod, "CONFIG_DIR", config_dir)
+        monkeypatch.setattr(settings_mod, "SETTINGS_FILE", settings_file)
+        monkeypatch.setattr(settings_mod, "_instance", None)
+
+        s = settings_mod.get_settings()
+        assert s.output_dir == str(Path.home() / "Downloads" / "pixiv-tool")
+
+        # 显式配置的路径不被迁移
+        settings_file.write_text(
+            json.dumps({"output_dir": "C:\\custom\\dir"}), encoding="utf-8"
+        )
+        monkeypatch.setattr(settings_mod, "_instance", None)
+        assert settings_mod.get_settings().output_dir == "C:\\custom\\dir"
 
     def test_settings_backward_compat(self, tmp_path, monkeypatch):
         """Missing fields are filled with defaults on load."""
@@ -245,6 +272,8 @@ class TestSettings:
 
     def test_settings_corrupt_recovery(self, tmp_path, monkeypatch):
         """Corrupt JSON → backup created + defaults restored."""
+        from pathlib import Path
+
         from pixiv_tool.storage import settings as settings_mod
 
         config_dir = tmp_path / "cfg2"
@@ -258,7 +287,7 @@ class TestSettings:
 
         s = settings_mod.get_settings()
         # Default values restored
-        assert s.output_dir == "downloads"
+        assert s.output_dir == str(Path.home() / "Downloads" / "pixiv-tool")
         # Backup file created
         backups = list(config_dir.glob("*.json.corrupt-*"))
         assert len(backups) == 1

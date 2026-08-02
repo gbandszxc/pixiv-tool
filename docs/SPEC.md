@@ -359,7 +359,7 @@ CREATE INDEX idx_illustrations_author ON illustrations(author_id);
 
 ```json
 {
-  "output_dir": "downloads",
+  "output_dir": "C:\\Users\\<user>\\Downloads\\pixiv-tool",
   "output_formats": ["txt", "markdown"],
   "language": "zh-CN",
   "theme": "auto",
@@ -367,6 +367,11 @@ CREATE INDEX idx_illustrations_author ON illustrations(author_id);
   "max_wait_seconds": 180
 }
 ```
+
+- `output_dir` 默认 = **系统下载目录/pixiv-tool**（`~/Downloads/pixiv-tool`，区分
+  平台统一实现，见 `storage/paths.py:default_output_dir`）；旧默认值字面量
+  `"downloads"` 在加载时自动迁移为新默认。仍支持用户自填绝对路径或相对路径
+  （相对路径锚定 data 目录）。
 
 - V1 写死 portable 模式，不暴露"系统配置目录"切换开关。
 - `backend_port: null` 时使用范围探测；用户可手动指定。

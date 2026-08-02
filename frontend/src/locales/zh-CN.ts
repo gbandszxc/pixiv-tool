@@ -144,6 +144,7 @@ export default {
   settings: {
     title: "设置",
     outputDir: "输出目录",
+    outputDirPlaceholder: "默认：系统下载目录/pixiv-tool",
     browse: "浏览…",
     pickFailed: "无法打开目录选择器",
     outputFormats: "输出格式",
