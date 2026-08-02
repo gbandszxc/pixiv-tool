@@ -5,14 +5,12 @@
 from __future__ import annotations
 
 import logging
-import os
-import platform
-import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Body, Query
 from pydantic import BaseModel, Field
 
+from pixiv_tool.platform import reveal_in_file_manager
 from pixiv_tool.storage.db import Database
 
 logger = logging.getLogger(__name__)
@@ -70,14 +68,7 @@ async def open_novel_file(novel_id: int):
     if not path or not Path(path).exists():
         return {"error": "文件不存在"}
 
-    system = platform.system()
-    if system == "Windows":
-        subprocess.Popen(["explorer", "/select,", str(path)])
-    elif system == "Darwin":
-        subprocess.Popen(["open", "-R", str(path)])
-    else:
-        subprocess.Popen(["xdg-open", str(Path(path).parent)])
-
+    reveal_in_file_manager(Path(path))
     return {"status": "success"}
 
 

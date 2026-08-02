@@ -251,12 +251,16 @@ class Database:
         return dict(row) if row else None
 
     def list_illustrations(self, page: int = 1, page_size: int = 50,
-                           author_id: int | None = None) -> dict:
+                           author_id: int | None = None,
+                           keyword: str | None = None) -> dict:
         conditions: list[str] = []
         params: list = []
         if author_id is not None:
             conditions.append("author_id = ?")
             params.append(author_id)
+        if keyword:
+            conditions.append("title LIKE ?")
+            params.append(f"%{keyword}%")
         where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         conn = self._get_conn()
         total = conn.execute(f"SELECT COUNT(*) FROM illustrations{where}", params).fetchone()[0]
@@ -275,6 +279,24 @@ class Database:
     def delete_illustration(self, artwork_id: int) -> None:
         with self._transaction() as conn:
             conn.execute("DELETE FROM illustrations WHERE artwork_id = ?", (artwork_id,))
+
+    def delete_illustrations_batch(self, artwork_ids: list[int]) -> int:
+        if not artwork_ids:
+            return 0
+        placeholders = ",".join("?" * len(artwork_ids))
+        with self._transaction() as conn:
+            cur = conn.execute(
+                f"DELETE FROM illustrations WHERE artwork_id IN ({placeholders})",
+                artwork_ids,
+            )
+            return cur.rowcount or 0
+
+    def delete_all_illustrations(self) -> int:
+        """清空 illustrations 表，返回删除条数。"""
+        with self._transaction() as conn:
+            count = conn.execute("SELECT COUNT(*) FROM illustrations").fetchone()[0]
+            conn.execute("DELETE FROM illustrations")
+            return count
 
     def delete_illustrations_batch(self, artwork_ids: list[int]) -> int:
         if not artwork_ids:

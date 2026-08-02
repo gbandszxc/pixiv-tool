@@ -391,7 +391,7 @@ CREATE INDEX idx_illustrations_author ON illustrations(author_id);
 | 抓取-小说 | `/` | ✅ |
 | 抓取-插画 | `/illustration` | ✅ |
 | 任务 | `/tasks`（支持小说/插画分类筛选） | ✅ |
-| 历史 | `/history` | ✅ |
+| 历史 | `/history`（支持小说/插画分类切换） | ✅ |
 | 设置 | `/settings` | ✅ |
 
 ### 6.2 i18n
@@ -437,10 +437,25 @@ CREATE INDEX idx_illustrations_author ON illustrations(author_id);
 
 ### 7.3 历史
 
+历史页分小说 / 插画两个分类页签，分别查询 `novels` / `illustrations` 表。
+两类记录的"打开所在文件夹"操作统一走 `src/pixiv_tool/platform.py` 的
+`reveal_in_file_manager()`：Windows `explorer /select,`（定位文件）、macOS
+`open -R`（Finder 显示）、Linux `xdg-open`（直接打开所在目录）；文件已不存在时
+回退打开其父目录。
+
 | Method | Path | 说明 |
 |---|---|---|
 | GET | `/api/novels` | 分页查询已抓小说（支持 series_id/author_id/关键词过滤） |
+| GET | `/api/novels/{id}/file` | 返回小说文件路径 |
+| POST | `/api/novels/{id}/open` | 在系统文件管理器中打开小说所在目录 |
 | DELETE | `/api/novels/{id}` | 删除记录（可选删文件） |
+| POST | `/api/novels/batch-delete` | 批量删除小说记录（可选删文件） |
+| DELETE | `/api/novels` | 清空全部小说记录（可选删文件） |
+| GET | `/api/illustrations` | 分页查询已抓插画（支持 author_id/关键词过滤） |
+| POST | `/api/illustrations/{id}/open` | 在系统文件管理器中打开插画所在目录 |
+| DELETE | `/api/illustrations/{id}` | 删除记录（可选删文件） |
+| POST | `/api/illustrations/batch-delete` | 批量删除插画记录（可选删文件） |
+| DELETE | `/api/illustrations` | 清空全部插画记录（可选删文件） |
 
 ### 7.4 设置
 

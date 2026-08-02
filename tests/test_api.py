@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from unittest.mock import MagicMock, patch
 
@@ -32,8 +33,10 @@ def client(tmp_path, monkeypatch):
     # Patch module-level DB instances in routers
     import pixiv_tool.api.novels as novels_mod
     import pixiv_tool.api.tasks as tasks_mod
+    import pixiv_tool.api.illustrations as illust_mod
     monkeypatch.setattr(novels_mod, "_db", db)
     monkeypatch.setattr(tasks_mod, "_db", db)
+    monkeypatch.setattr(illust_mod, "_db", db)
 
     # Patch cookie store to stub
     stub_store = MagicMock()
@@ -117,6 +120,164 @@ class TestNovelsAPI:
         body = resp.json()
         assert len(body["items"]) == 2
         assert body["total"] == 5
+
+
+# ── Illustrations API (历史页插画兼容) ───────────────────────────────────────
+
+
+class TestIllustrationsAPI:
+    def _insert(self, db, artwork_id: int, title: str, saved_paths: str = "[]",
+                captured_at: str = "2025-01-01", **kw):
+        db.insert_illustration(
+            artwork_id=artwork_id, title=title, author_id=1,
+            saved_paths=saved_paths, captured_at=captured_at, **kw,
+        )
+
+    def test_list_illustrations_empty(self, client):
+        """GET /api/illustrations with no data returns empty."""
+        tc, *_ = client
+        resp = tc.get("/api/illustrations")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["items"] == []
+        assert body["total"] == 0
+
+    def test_list_illustrations_with_data(self, client):
+        """GET /api/illustrations returns inserted illustrations."""
+        tc, db, *_ = client
+        self._insert(db, 7001, "Test Illust")
+        resp = tc.get("/api/illustrations")
+        body = resp.json()
+        assert len(body["items"]) == 1
+        assert body["items"][0]["artwork_id"] == 7001
+
+    def test_list_illustrations_keyword_filter(self, client):
+        """keyword 按标题模糊过滤。"""
+        tc, db, *_ = client
+        self._insert(db, 7001, "夏色の風景")
+        self._insert(db, 7002, "冬の街")
+        resp = tc.get("/api/illustrations", params={"keyword": "夏"})
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["items"][0]["artwork_id"] == 7001
+
+    def test_open_illustration_folder_windows(self, client, tmp_path, monkeypatch):
+        """Windows 下用 explorer /select 定位第一个已保存文件。"""
+        import pixiv_tool.platform as platform_mod
+        tc, db, *_ = client
+        img = tmp_path / "pic" / "test_7001_p0.png"
+        img.parent.mkdir(parents=True)
+        img.write_bytes(b"png")
+        self._insert(db, 7001, "Test", saved_paths=json.dumps([str(img)]))
+
+        popen = MagicMock()
+        monkeypatch.setattr(platform_mod, "subprocess", MagicMock(Popen=popen))
+        monkeypatch.setattr(platform_mod._platform, "system", lambda: "Windows")
+
+        resp = tc.post("/api/illustrations/7001/open")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "success"}
+        popen.assert_called_once_with(["explorer", "/select,", str(img)])
+
+    def test_open_illustration_folder_macos(self, client, tmp_path, monkeypatch):
+        """macOS 用 open -R 定位。"""
+        import pixiv_tool.platform as platform_mod
+        tc, db, *_ = client
+        img = tmp_path / "pic" / "test_7001_p0.png"
+        img.parent.mkdir(parents=True)
+        img.write_bytes(b"png")
+        self._insert(db, 7001, "Test", saved_paths=json.dumps([str(img)]))
+
+        popen = MagicMock()
+        monkeypatch.setattr(platform_mod, "subprocess", MagicMock(Popen=popen))
+        monkeypatch.setattr(platform_mod._platform, "system", lambda: "Darwin")
+
+        resp = tc.post("/api/illustrations/7001/open")
+        assert resp.json() == {"status": "success"}
+        popen.assert_called_once_with(["open", "-R", str(img)])
+
+    def test_open_illustration_folder_linux_opens_dir(self, client, tmp_path, monkeypatch):
+        """Linux 用 xdg-open 打开所在目录。"""
+        import pixiv_tool.platform as platform_mod
+        tc, db, *_ = client
+        img = tmp_path / "pic" / "test_7001_p0.png"
+        img.parent.mkdir(parents=True)
+        img.write_bytes(b"png")
+        self._insert(db, 7001, "Test", saved_paths=json.dumps([str(img)]))
+
+        popen = MagicMock()
+        monkeypatch.setattr(platform_mod, "subprocess", MagicMock(Popen=popen))
+        monkeypatch.setattr(platform_mod._platform, "system", lambda: "Linux")
+
+        resp = tc.post("/api/illustrations/7001/open")
+        assert resp.json() == {"status": "success"}
+        popen.assert_called_once_with(["xdg-open", str(img.parent)])
+
+    def test_open_illustration_missing_file_falls_back_to_parent(self, client, tmp_path, monkeypatch):
+        """文件已不存在时打开其父目录（若父目录存在）。"""
+        import pixiv_tool.platform as platform_mod
+        tc, db, *_ = client
+        missing = tmp_path / "pic" / "gone_7001_p0.png"
+        missing.parent.mkdir(parents=True)
+        self._insert(db, 7001, "Test", saved_paths=json.dumps([str(missing)]))
+
+        popen = MagicMock()
+        monkeypatch.setattr(platform_mod, "subprocess", MagicMock(Popen=popen))
+        monkeypatch.setattr(platform_mod._platform, "system", lambda: "Windows")
+
+        resp = tc.post("/api/illustrations/7001/open")
+        assert resp.json() == {"status": "success"}
+        popen.assert_called_once_with(["explorer", "/select,", str(missing.parent)])
+
+    def test_open_illustration_not_found(self, client):
+        """记录不存在返回 error。"""
+        tc, *_ = client
+        resp = tc.post("/api/illustrations/9999/open")
+        assert resp.json()["error"]
+
+    def test_open_illustration_no_saved_files(self, client):
+        """saved_paths 为空返回 error。"""
+        tc, db, *_ = client
+        self._insert(db, 7001, "Test")
+        resp = tc.post("/api/illustrations/7001/open")
+        assert resp.json()["error"]
+
+    def test_delete_illustration_with_file(self, client, tmp_path):
+        """delete_file=true 时删除记录并删文件。"""
+        tc, db, *_ = client
+        img = tmp_path / "pic" / "test_7001_p0.png"
+        img.parent.mkdir(parents=True)
+        img.write_bytes(b"png")
+        self._insert(db, 7001, "Test", saved_paths=json.dumps([str(img)]))
+
+        resp = tc.delete("/api/illustrations/7001", params={"delete_file": True})
+        assert resp.json() == {"status": "success"}
+        assert db.get_illustration(7001) is None
+        assert not img.exists()
+
+    def test_batch_delete_illustrations(self, client):
+        """POST /api/illustrations/batch-delete 批量删除。"""
+        tc, db, *_ = client
+        self._insert(db, 7001, "A")
+        self._insert(db, 7002, "B")
+        resp = tc.post("/api/illustrations/batch-delete", json={"illustration_ids": [7001, 7002]})
+        assert resp.json() == {"status": "success", "deleted": 2}
+        assert db.list_illustrations()["total"] == 0
+
+    def test_batch_delete_illustrations_rejects_empty(self, client):
+        """空列表被拒绝。"""
+        tc, *_ = client
+        resp = tc.post("/api/illustrations/batch-delete", json={"illustration_ids": []})
+        assert resp.json()["error"]
+
+    def test_delete_all_illustrations(self, client):
+        """DELETE /api/illustrations 清空。"""
+        tc, db, *_ = client
+        self._insert(db, 7001, "A")
+        self._insert(db, 7002, "B")
+        resp = tc.delete("/api/illustrations")
+        assert resp.json() == {"status": "success", "deleted": 2}
+        assert db.list_illustrations()["total"] == 0
 
 
 # ── Settings API (ticket 14) ─────────────────────────────────────────────────
