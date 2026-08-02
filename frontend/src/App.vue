@@ -41,6 +41,7 @@
           >
             <button
               class="account-trigger"
+              :class="{ 'is-collapsed': siderCollapsed }"
               type="button"
               :title="`user_id: ${authStore.userId}`"
               :aria-label="t('auth.accountMenu', { id: authStore.pixivId || authStore.name })"
@@ -247,6 +248,21 @@ onMounted(() => {
   border-radius: var(--radius-control);
   cursor: pointer;
   transition: background-color 180ms ease-out;
+}
+
+/* 头像不参与收缩，避免侧栏收窄时被压成椭圆 */
+.account-trigger :deep(.n-avatar) {
+  flex-shrink: 0;
+}
+
+/* 折叠态：隐藏 ID 文字、头像居中，触发器不再被横向压扁 */
+.account-trigger.is-collapsed {
+  justify-content: center;
+  gap: 0;
+}
+
+.account-trigger.is-collapsed .account-id {
+  display: none;
 }
 
 .account-trigger:hover {
