@@ -166,3 +166,9 @@ downloads/
 
 # ===== AI 辅助工具会话产物（本地规划文档，不入库） =====
 .zcode/
+
+
+# ===== Tauri 2（src-tauri） =====
+src-tauri/target/
+# tauri-build 每次构建重新生成的 schema
+src-tauri/gen/schemas/

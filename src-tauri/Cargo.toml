@@ -1,0 +1,51 @@
+[package]
+name = "pixiv-tool"
+version = "1.0.0"
+description = "Pixiv Tool —— 本地 Pixiv 小说/插画抓取工具（Tauri 2 桌面应用）"
+authors = ["pixiv-tool"]
+license = "MIT"
+edition = "2024"
+rust-version = "1.85"
+
+# lib 名固定 pixiv_tool_lib：main.rs 只做薄壳，业务全在 lib 里（方便测试与后续移动端壳复用）
+[lib]
+name = "pixiv_tool_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "pixiv-tool"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.6", features = [] }
+
+[dependencies]
+tauri = { version = "2.11", features = [] }
+tauri-plugin-dialog = "2.7"
+tauri-plugin-log = "2.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.40", features = ["bundled"] }
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+# keyring 3：平台凭据存储全部要显式开启 feature（keyring 3 无默认后端）。
+# linux-native-sync-persistent = linux-keyutils + Secret Service（dbus），crypto-rust 免系统 openssl。
+keyring = { version = "3.6", features = [
+    "apple-native",
+    "windows-native",
+    "linux-native-sync-persistent",
+    "crypto-rust",
+] }
+# wreq/wreq-util 版本精确锁定：spike 已验证该组合通过 pixiv 风控；
+# wreq-util < 3.0.0-rc.12 是 GPL 不能用。升级前必须重新验证风控。
+wreq = "=6.0.0-rc.31"
+wreq-util = "=3.0.0-rc.14"
+# CDP WebSocket（ws://127.0.0.1 本机调试端口，无需 TLS feature）
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
+regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+anyhow = "1.0"
+log = "0.4"
+rand = "0.9"
