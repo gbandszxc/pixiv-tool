@@ -73,6 +73,7 @@ import {
   useMessage,
 } from "naive-ui";
 import { useAuthStore } from "../../stores/auth";
+import { errorMessage } from "../../api/tauri";
 
 // 此组件渲染在 NMessageProvider 子树内,useMessage 可正常工作。
 const props = defineProps<{ show: boolean }>();
@@ -104,11 +105,8 @@ async function handleCookieLogin() {
     phpsessidInput.value = "";
     emit("update:show", false);
   } catch (err: unknown) {
-    // 后端 HTTPException 的 detail 在 err.response.data.detail
-    const detail =
-      (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-      (err as Error)?.message ||
-      t("auth.cookieLoginFailed");
+    // 失败时后端 reject string（校验类错误），errorMessage 统一归一化
+    const detail = errorMessage(err) || t("auth.cookieLoginFailed");
     message.error(detail);
   } finally {
     cookieLoginLoading.value = false;
@@ -125,7 +123,7 @@ async function handleBuiltinLogin() {
       message.warning(t("auth.builtinLoginNoResult"));
     }
   } catch (err: unknown) {
-    message.error((err as Error)?.message || t("auth.loginFailed"));
+    message.error(errorMessage(err) || t("auth.loginFailed"));
   }
 }
 </script>

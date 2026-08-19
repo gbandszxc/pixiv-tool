@@ -46,6 +46,7 @@ import { ref, computed } from "vue";
 import { NCard, NForm, NFormItem, NInput, NRadioGroup, NRadio, NCheckboxGroup, NCheckbox, NButton, NAlert } from "naive-ui";
 import { useI18n } from "vue-i18n";
 import { useTaskStore } from "../stores/tasks";
+import { errorMessage } from "../api/tauri";
 
 const { t } = useI18n();
 const taskStore = useTaskStore();
@@ -108,8 +109,7 @@ async function handleSubmit() {
       form.value.sourceId = "";
     }
   } catch (err: unknown) {
-    const error = err as { response?: { data?: { error?: string } } };
-    message.value = error.response?.data?.error || t("crawl.createFailed");
+    message.value = errorMessage(err) || t("crawl.createFailed");
     messageType.value = "error";
   } finally {
     submitting.value = false;
