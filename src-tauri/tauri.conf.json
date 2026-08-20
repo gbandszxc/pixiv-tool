@@ -5,8 +5,8 @@
   "identifier": "com.pixivtool.desktop",
   "build": {
     "devUrl": "http://localhost:9961",
-    "beforeDevCommand": "pnpm --dir frontend dev",
-    "beforeBuildCommand": "pnpm --dir frontend build",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../frontend/dist"
   },
   "app": {

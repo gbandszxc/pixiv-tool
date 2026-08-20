@@ -6,7 +6,7 @@
 ## 1. 构建命令
 
 ```bash
-# 生产打包（自动先跑 pnpm --dir frontend build，再编 Rust、出平台安装包）
+# 生产打包（自动先跑前端 build（CWD=frontend/），再编 Rust、出平台安装包）
 cargo tauri build
 
 # 只要调试二进制（不出安装包，日常验证用）
@@ -17,19 +17,19 @@ cargo tauri build --debug --no-bundle
 产物位置：`src-tauri/target/release/bundle/`（dmg/app on macOS、nsis/msi on
 Windows、deb/appimage on Linux）。
 
-注意：`beforeDevCommand` / `beforeBuildCommand` 以**仓库根**为 CWD 执行
-（配置里写 `pnpm --dir frontend ...`，不是 `../frontend`）。
+注意：`beforeDevCommand` / `beforeBuildCommand` 以 **`frontend/`** 为 CWD
+执行（tauri-cli 2.x 实测行为；配置里写 `pnpm build`，不是
+`pnpm --dir frontend build`——那会解析成 `frontend/frontend` 报 ENOENT，
+曾是 release 打包持续失败的根因）。
 
 ## 2. 构建前置
 
-| 平台 | 依赖 |
-|---|---|
-| macOS | Xcode CLT、**cmake**（`brew install cmake`，wreq 编译 BoringSSL 必需） |
-| Windows | MSVC Build Tools、WebView2 SDK（一般随系统）、cmake |
-| Linux | webkit2gtk-4.1、cmake、gcc/g++ |
+| macOS | Xcode CLT、**cmake**（`brew install cmake`）、libclang（随 Xcode CLT） |
+| Windows | MSVC Build Tools、WebView2 SDK（一般随系统）、cmake、**LLVM/libclang**（`winget install LLVM.LLVM`） |
+| Linux | webkit2gtk-4.1、cmake、gcc/g++、libclang-dev |
 
-Rust ≥ 1.85（edition 2024）。首次构建约 5 分钟（BoringSSL 现场编译），增量
-秒级。
+Rust ≥ 1.85（edition 2024）。首次构建约 5–15 分钟（BoringSSL 现场编译 +
+bindgen），增量秒级。
 
 ## 3. 关键依赖约束
 
@@ -61,8 +61,9 @@ cargo tauri icon frontend/src/assets/icon.png
 登录态不在文件系统：macOS Keychain / Windows Credential Manager /
 Linux Secret Service（service `pixiv-tool.cookies`，account `default`）。
 
-## 6. CI（待建）
+## 6. CI（已建：`.github/workflows/release.yml`）
 
-三平台 matrix（windows/macos/ubuntu）跑 `cargo tauri build`，需预装
-Rust + pnpm + cmake（Linux 另装 webkit2gtk）。tag `v*` 触发并上传 Release
-产物。当前为空白，风险 R10。
+tag `v*` push 触发四路 matrix（macOS 双架构 aarch64/x86_64、ubuntu、windows）
+跑 `tauri-action` 构建，产物自动附加到对应 tag 的 GitHub Release。runner
+需装 Rust + pnpm + node + cmake + libclang（Linux 另装 webkit2gtk-4.1，
+均已在 workflow 内声明）。

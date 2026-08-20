@@ -64,7 +64,7 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 ```
 
 - 无后端进程/端口：IPC 直连，Vite 仅 dev 期占用 9961（strictPort）
-- 系统依赖：构建需 cmake（wreq 编译 BoringSSL，全平台，见 docs/PACKAGING.md）
+- 系统依赖：构建需 cmake + LLVM/libclang（wreq 编译 BoringSSL 的 btls-sys 用 bindgen 生成绑定，全平台都需要；Windows 装 LLVM.LLVM，macOS 随 Xcode CLT 自带），见 docs/PACKAGING.md
 
 ### Git 约定
 
@@ -85,6 +85,6 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 
 ### 安全边界
 
-- 登录态存于系统凭据存储（macOS Keychain / Windows Credential Manager），**绝不入库**；`config/` 下不得出现任何 cookie 文件
+- 登录态存于系统凭据存储（macOS Keychain / Windows Credential Manager / Linux Secret Service），**绝不入库**；`config/` 下不得出现任何 cookie 文件
 - `data/app.db` 是用户数据，**绝不入库**
-- spike 代码可参考但**不直接复用**到主代码（见 ADR 0005 复用清单）
+- spike 代码已随 Python 栈移除，结论存档于 ADR 0004/0005（登录态方案、cookie 探测）
