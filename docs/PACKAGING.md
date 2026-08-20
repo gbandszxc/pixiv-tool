@@ -54,7 +54,9 @@ cargo tauri icon frontend/src/assets/icon.png
 
 | 平台 | data / config |
 |---|---|
-| Windows | exe 同级 `data/`、`config/`（portable） |
+| Windows | exe 同级可写：`<exe_dir>/data`、`<exe_dir>/config`（portable）；
+  不可写（MSI/NSIS 装进 Program Files）自动回退
+  `%LOCALAPPDATA%\pixiv-tool\{data,config}` |
 | macOS | `~/Library/Application Support/pixiv-tool/{data,config}` |
 | Linux | `$XDG_DATA_HOME/pixiv-tool/data`、`$XDG_CONFIG_HOME/pixiv-tool/config` |
 

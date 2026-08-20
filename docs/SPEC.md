@@ -97,8 +97,10 @@
 ### 3.3 数据与配置目录
 
 dev（debug 构建）：`<repo>/data`、`<repo>/config`（与旧 Python dev 一致，
-旧 app.db / settings.json 无缝沿用）。release：Windows exe 同级 portable；
-macOS `~/Library/Application Support/pixiv-tool/`；Linux XDG 标准目录。
+旧 app.db / settings.json 无缝沿用）。release：Windows exe 同级可写则
+portable，不可写（MSI/NSIS 装进 Program Files）回退
+`%LOCALAPPDATA%\pixiv-tool\`；macOS `~/Library/Application Support/pixiv-tool/`；
+Linux XDG 标准目录。
 解析在 `src-tauri/src/paths.rs`。
 
 ### 3.4 目录结构

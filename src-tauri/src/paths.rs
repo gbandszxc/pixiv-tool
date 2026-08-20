@@ -5,8 +5,10 @@
 //! （即 `<repo>/src-tauri`）的上一级。
 //!
 //! release 模式分平台：
-//! - Windows: `<exe_dir>/data`、`<exe_dir>/config` —— portable，解压即用，
-//!   升级只要不删 data/ 目录用户数据就保留（V2-03 产品决策，核心需求）。
+//! - Windows: 优先 `<exe_dir>/data`、`<exe_dir>/config`（portable，zip 解压
+//!   即用）；若 exe 目录不可写（MSI/NSIS 装进 Program Files），回退
+//!   `%LOCALAPPDATA%/pixiv-tool/{data,config}`。升级不删用户数据即保留
+//!   （V2-03 产品决策，核心需求）。
 //! - macOS: `~/Library/Application Support/pixiv-tool/{data,config}`。
 //!   不用 `<exe_dir>`：.app bundle 内部代码签名/公证后只读，写入必失败。
 //! - Linux: 遵循 XDG 规范，data 和 config 分开：
@@ -78,9 +80,22 @@ pub fn app_paths(dev: bool) -> AppPaths {
     } else {
         #[cfg(target_os = "windows")]
         {
-            let dir = exe_dir();
-            data_dir = dir.join("data");
-            config_dir = dir.join("config");
+            // 优先 exe 同级（portable，zip 解压即用）；MSI/NSIS 装进
+            // Program Files 后普通用户无写权限，回退 %LOCALAPPDATA%。
+            let portable = exe_dir();
+            let portable_ok = [portable.join("data"), portable.join("config")]
+                .iter()
+                .all(|d| std::fs::create_dir_all(d).is_ok());
+            let base = if portable_ok {
+                portable
+            } else {
+                std::env::var_os("LOCALAPPDATA")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(home_dir)
+                    .join(APP_NAME)
+            };
+            data_dir = base.join("data");
+            config_dir = base.join("config");
         }
         #[cfg(target_os = "macos")]
         {
