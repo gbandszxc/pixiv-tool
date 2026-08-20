@@ -6,108 +6,67 @@
 
 | 层 | 选型 |
 |---|---|
-| 桌面外壳 | pywebview 5+（Windows: WebView2） |
-| 后端 | Python 3.11+ · FastAPI · uvicorn |
+| 桌面外壳 + 后端 | Tauri 2（Rust，IPC 通信，无本地 HTTP 服务） |
 | 前端 | Vue 3.4+ · TypeScript · Vite 5 · Naive UI |
-| 数据库 | SQLite（标准库 sqlite3） |
-| 依赖 | uv（后端）+ pnpm（前端） |
+| HTTP 抓取 | wreq 6（Chrome147 TLS/HTTP2 指纹伪装） |
+| 数据库 | SQLite（rusqlite，schema 兼容旧 Python 版数据） |
+| 依赖 | cargo（后端）+ pnpm（前端） |
 
 ## 快速开始
 
 ### 前置条件
 
-- Python 3.11+（推荐用 pyenv 管理）
-- [uv](https://docs.astral.sh/uv/)（Python 依赖管理）
+- Rust 1.85+（edition 2024）+ [Tauri CLI](https://tauri.app/)（`cargo install tauri-cli`）
 - Node.js 18+ + [pnpm](https://pnpm.io/)
-- Windows 10+ 或 macOS 12+（Linux 部分功能受限，见下方说明）
+- **cmake**（macOS/Linux：wreq 现场编译 BoringSSL；`brew install cmake`）
+- Windows 10+ 或 macOS 12+；Linux 需 webkit2gtk（见下）
 
-### 启动开发服务
-
-**Windows (PowerShell)**
-
-```powershell
-# 一键启动前后端
-./scripts/dev.ps1 start
-
-# 仅启动前端
-./scripts/dev.ps1 start frontend
-
-# 仅启动后端
-./scripts/dev.ps1 start backend
-
-# 查看状态
-./scripts/dev.ps1 status
-
-# 查看日志
-./scripts/dev.ps1 logs
-
-# 停止所有
-./scripts/dev.ps1 stop
-```
-
-**macOS / Linux (bash)**
+### 启动开发
 
 ```bash
-# 一键启动前后端
-./scripts/dev.sh start
-
-# 仅启动前端 / 后端
-./scripts/dev.sh start frontend
-./scripts/dev.sh start backend
-
-# 查看状态 / 日志 / 停止
-./scripts/dev.sh status
-./scripts/dev.sh logs
-./scripts/dev.sh stop
+cd frontend && pnpm install   # 一次性
+cargo tauri dev               # 仓库根执行：Vite(9961) + Rust 热重载 + 应用窗口
 ```
 
-`dev.sh` 与 `dev.ps1` 行为一致：stop 按进程组强杀（连 uvicorn `--reload` 子进程一起清理），start 轮询 `/api/health` 与端口确认就绪。
-
-启动后访问 `http://localhost:9961`。
-
-### 安装依赖
-
-> `dev.ps1` / `dev.sh` 在首次 `start` 时会自动检测并安装缺失依赖（前端看 `node_modules`、后端看 `.venv`，已装则跳过）。以下手动安装仅为可选，适合想提前装好或排查依赖问题时使用。
+测试与构建：
 
 ```bash
-# 后端（在仓库根目录）
-uv sync
-
-# 前端
-cd frontend && pnpm install
+cd src-tauri && cargo test    # 后端测试（单测 + IPC 冒烟）
+cd frontend && pnpm build     # 前端类型检查 + 构建
+cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 ```
+
+dev 模式数据目录沿用仓库 `data/`、`config/`（与旧 Python 版 dev 数据无缝衔接）。
 
 ## 跨平台说明
 
 - **Windows / macOS**：全功能支持（登录、抓取、导出）。登录优先使用独立
-  Chrome / Edge / Chromium 窗口；Windows Cookie 使用 DPAPI，macOS 使用 Keychain。
-- **Linux**：可启动 UI 和浏览，但登录存储暂不可用。Linux 用户需预装 `webkit2gtk`：
+  Chrome / Edge / Chromium 窗口（CDP 提取 Cookie）；未安装时改用手动 Cookie
+  登录。Cookie 存系统凭据存储（Credential Manager / Keychain）。
+- **Linux**：需预装 `webkit2gtk`：
 
   ```bash
   # Ubuntu/Debian
-  sudo apt install libwebkit2gtk-4.1-dev
+  sudo apt install libwebkit2gtk-4.1-dev cmake
 
   # Fedora
-  sudo dnf install webkit2gtk4.1-devel
+  sudo dnf install webkit2gtk4.1-devel cmake
   ```
-
-  mac/linux 本地构建打包用对应平台 extra：`uv sync --extra macos --extra dev`（linux 把 `macos` 换成 `linux`），再 `.venv/bin/python scripts/build.py`，产出 `dist/pixiv-tool/`（mac 若 spec 声明了 BUNDLE 则是 `dist/Pixiv Tool.app`）。详见 `docs/PACKAGING.md` §4。
 
 ## 目录结构
 
 ```
 pixiv-tool/
-├─ src/pixiv_tool/   # Python 后端（FastAPI + uvicorn）
-├─ frontend/         # Vue3 + TS + Vite
-├─ scripts/          # 开发与构建脚本（dev.ps1 / dev.sh / build.py）
-├─ docs/             # SPEC + ADR
-└─ spike/            # 探索性验证代码
+├─ src-tauri/   # Tauri 2 + Rust 后端（pixiv 客户端/爬虫/命令层/存储）
+├─ frontend/    # Vue3 + TS + Vite（api 层走 invoke/listen）
+├─ docs/        # SPEC + ADR
+└─ spike/       # 探索性验证代码
 ```
 
 ## 打包发布
 
-```powershell
-python scripts/build.py
+```bash
+cargo tauri build
 ```
 
-详见 `docs/SPEC.md`。
+详见 `docs/PACKAGING.md` 与 `docs/SPEC.md`。

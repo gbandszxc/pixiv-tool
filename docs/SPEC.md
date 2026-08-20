@@ -1,6 +1,6 @@
 # Pixiv Tool · 技术规格书（SPEC）
 
-> **状态**：v1.0 · 已通过 grilling 评审 · 2026-07-19
+> **状态**：v1.1 · Tauri 2 + Rust 全量重构（ADR 0008）· 2026-08-20
 > **真相源**：本文档是项目开发的唯一真相源。任何架构变更须先更新本文档（或追加 ADR），再改代码。
 
 ---
@@ -28,7 +28,7 @@
 - EPUB 输出（架构预留接口，不实现）
 - 自适应限速（V1 用固定并发 + 429 暂停）
 - 任务断点启动弹窗恢复
-- Linux 登录功能（Windows / macOS 支持登录；Linux Secret Service 延后）
+- Linux 登录功能（Windows / macOS 支持登录；Linux 走 keyring Secret Service 后端，未实机验证）
 - 自动更新、安装器（V1 解压即用）
 - 错误上报（Sentry 等）
 
@@ -40,27 +40,25 @@
 
 | 层 | 选型 |
 |---|---|
-| 桌面外壳 | **pywebview 4+**（Windows: WebView2 / macOS: WKWebView / Linux: WebKitGTK） |
-| 后端 | **Python 3.11+ · FastAPI · uvicorn** |
-| 前端 | **Vue 3.4+ · TypeScript · Vite 5 · Vue Router 4 · Pinia · axios** |
+| 桌面外壳 + 后端 | **Tauri 2（Rust）**，单进程，IPC 通信（见 ADR 0008） |
+| 前端 | **Vue 3.4+ · TypeScript · Vite 5 · Vue Router 4（hash） · Pinia · @tauri-apps/api** |
 | UI 组件库 | **Naive UI** |
 | CSS | 原生 CSS + CSS Variables + Vue `<style scoped>` |
-| HTTP 客户端 | **httpx**（async） |
-| 数据库 | **SQLite**（标准库 `sqlite3`） |
-| 依赖管理 | 后端 **uv** + 前端 **pnpm** |
-| 打包 | **PyInstaller --onedir** |
-| CI | **GitHub Actions** 三平台 matrix |
+| HTTP 客户端 | **wreq 6（Chrome147 指纹伪装，BoringSSL）** |
+| 数据库 | **SQLite（rusqlite）**，schema 与旧 Python 版逐字兼容 |
+| 依赖管理 | 后端 **cargo** + 前端 **pnpm** |
+| 打包 | **Tauri bundler**（三平台 CI 待建，见 docs/PACKAGING.md） |
 
 ### 2.2 不选的替代方案与理由
 
-- **Electron / Tauri**：体积大 / Rust 学习成本，pywebview 在 Windows 上调用 Edge WebView2 已足够。
+- ~~**Electron / Tauri**：体积大 / Rust 学习成本~~ —— **已被 ADR 0008 取代**：PyInstaller 分发负担与 curl_cffi 依赖促成的全量 Tauri 重构。
 - **OAuth 逆向**：pixiv 风控极严，会锁号。
 - **手动解密浏览器 cookie（Chrome App-Bound Encryption）**：v127+ 已基本不可行。
 - **pywebview 原生 JS API**：同步阻塞、无 devtools 网络面板、SSE 推进度困难。
 - **WebSocket**：V1 进度推送 SSE 足够，双向通信是过度设计。
 - **Tailwind / UnoCSS**：4 个页面用不上原子化 CSS 的扩展性。
 - **Element Plus / Ant Design Vue**：TS 类型与按需引入不如 Naive UI。
-- **Poetry / pip**：uv 在 2024-2025 已成事实标准，速度快 10-100 倍。
+- **Poetry / pip / Python**：全栈已于 2026-08 迁往 Rust（ADR 0008），Python 后端已删除。
 
 ---
 
@@ -69,99 +67,71 @@
 ### 3.1 进程拓扑
 
 ```
-┌─ pixiv-tool.exe (主进程) ─────────────────────────────────────┐
+┌─ pixiv-tool（Tauri 单进程）───────────────────────────────────┐
 │                                                                │
-│  ┌─ MainThread ─────────────────────────────────────────┐     │
-│  │  1. find_available_port() 探测 [9962, 9999]          │     │
-│  │  2. threading.Thread(uvicorn.Server).start()         │     │
-│  │  3. pywebview.create_window(url=http://127.0.0.1:p/) │     │
-│  │  4. webview.start()  ← 阻塞，关闭即退出              │     │
-│  └──────────────────────────────────────────────────────┘     │
+│  ┌─ 主线程（tao 事件循环）─────────────────────────────┐      │
+│  │  窗口生命周期 + 关闭确认（plugin-dialog，按语言中英） │      │
+│  └──────────────────────────────────────────────────────┘      │
 │                                                                │
-│  ┌─ FastAPI Thread (uvicorn) ─────┐  ┌─ WebView2 (主窗) ───┐  │
-│  │  /api/auth/*                    │  │  Vue3 SPA           │  │
-│  │  /api/novel/{id}                │  │  ↕ HTTP/SSE          │  │
-│  │  /api/series/{id}               │  │  (localhost)        │  │
-│  │  /api/user/{id}/novels          │  └─────────────────────┘  │
-│  │  /api/tasks/{id}/events (SSE)   │                            │
-│  │  / (StaticFiles 挂载 SPA)       │                            │
-│  └─────────────────────────────────┘                            │
-│                                                                │
-│  ┌─ 抓取 asyncio (FastAPI 线程内事件循环) ───────────────┐    │
-│  │  asyncio.Semaphore(2) + 0.4s sleep                    │    │
-│  │  → 通过 SSE 推进度给前端                               │    │
-│  └────────────────────────────────────────────────────────┘    │
+│  ┌─ WebView（主窗）──────────────┐  ┌─ tokio runtime ─────┐   │
+│  │  Vue3 SPA（hash 路由）        │  │  #[tauri::command]   │   │
+│  │  ↕ invoke / listen（IPC）     │↔ │  抓取 asyncio→tokio  │   │
+│  └───────────────────────────────┘  │  Semaphore(2)+0.4s   │   │
+│                                     │  → emit task:// 事件 │   │
+│                                     └──────────────────────┘   │
 └────────────────────────────────────────────────────────────────┘
 ```
 
+无本地 HTTP 服务、无端口、无 SSE——前端经 Tauri IPC 直接调 Rust 命令，
+进度经 `task://progress` / `task://done` 事件推送（TasksView 同时保留 2s
+轮询兜底）。
+
 ### 3.2 通信协议
 
-- **命令类**：HTTP REST（`POST /api/...`、`GET /api/...`）
-- **进度推送**：SSE（`GET /api/tasks/{id}/events` 返回 `text/event-stream`）
-- **安全边界**：FastAPI 只绑 `127.0.0.1`，V1 不做 token 鉴权（本机信任），留 TODO 待未来加随机 token
+- **命令类**：`invoke('<命令名>', args)`，命令与参数清单见 §7（返回体沿用旧
+  HTTP 响应形状，snake_case；业务错误走返回值 `{error}`，校验错误走 reject
+  string）。
+- **进度推送**：Tauri 事件 `task://progress`、`task://done`。
+- **安全边界**：无网络监听面；IPC 仅限本 webview。
 
-### 3.3 端口策略
+### 3.3 数据与配置目录
 
-| 模式 | 端口 |
-|---|---|
-| **dev 前端**（Vite） | **固定 9961** |
-| **dev 后端**（uvicorn） | **固定 9962** |
-| **prod 后端** | **范围探测 `[9962, 9999]`**，全占用回退 `[10000, 19999]`，仍失败抛 `PortAllocationError` |
-
-dev 端口固定便于 Vite proxy、浏览器收藏；prod 动态端口写入 `os.environ['PIXIV_TOOL_PORT']` 供 pywebview 读取。
+dev（debug 构建）：`<repo>/data`、`<repo>/config`（与旧 Python dev 一致，
+旧 app.db / settings.json 无缝沿用）。release：Windows exe 同级 portable；
+macOS `~/Library/Application Support/pixiv-tool/`；Linux XDG 标准目录。
+解析在 `src-tauri/src/paths.rs`。
 
 ### 3.4 目录结构
 
 ```
 pixiv-tool/
-├─ src/
-│  └─ pixiv_tool/               # Python 后端包（snake_case,PEP 8）
-│     ├─ main.py                # 入口：探测端口 + 起 uvicorn + 起 pywebview
-│     ├─ api/                   # FastAPI 路由
-│     │  ├─ auth.py             # 登录、cookie 管理
-│     │  ├─ novels.py           # 单篇、系列、用户
-│     │  ├─ tasks.py            # 任务 + SSE
-│     │  └─ system.py           # /api/health + /api/ping + /api/test/events
-│     ├─ core/                  # 业务核心
-│     │  ├─ pixiv_client.py     # httpx + 限速 + 重试
-│     │  ├─ crawler.py          # 小说 Crawler 编排（id 流 → 抓取）
-│     │  ├─ source.py           # NovelSource 抽象 + 3 实现
-│     │  ├─ illust_crawler.py   # 插画 Crawler（原图/多页/ugoira zip）
-│     │  ├─ illust_source.py    # IllustSource 抽象 + 2 实现
-│     │  ├─ task.py             # Task 状态机
-│     │  └─ exporter.py         # Exporter 接口 + txt/md 实现
-│     ├─ auth/                  # 登录
-│     │  ├─ browser_login.py    # 真实 Chromium 登录 + CDP Cookie 提取
-│     │  └─ login_window.py     # pywebview 缺浏览器时的回退登录窗
-│     ├─ storage/               # 持久化
-│     │  ├─ db.py               # SQLite + schema 初始化
-│     │  ├─ models.py           # dataclass 模型
-│     │  ├─ cookies.py          # CookieStore 接口 + 工厂
-│     │  ├─ cookie_dpapi.py     # Windows DPAPI（V1 实现）
-│     │  └─ settings.py         # JSON 配置
-│     ├─ logging_config.py      # logging 配置
-│     └─ static/                # 前端构建产物（pnpm build 复制,.gitignore）
-├─ tests/                       # pytest 测试（src layout 下保留 root）
+├─ src-tauri/                   # Tauri 2 + Rust 后端
+│  ├─ Cargo.toml                # wreq 6（指纹伪装，锁版本）/ rusqlite / keyring / tokio
+│  ├─ tauri.conf.json           # devUrl 9961、frontendDist ../frontend/dist
+│  ├─ capabilities/default.json # IPC 权限（core + dialog）
+│  └─ src/
+│     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、关闭确认）
+│     ├─ state.rs               # AppState：paths/settings/db/cookies/tasks
+│     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话探测）
+│     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
+│     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）
+│     ├─ commands/              # 25 个 #[tauri::command]（auth/tasks/settings/history/misc）
+│     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
+│     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
+│     ├─ cookies.rs             # keyring CookieStore
+│     ├─ paths.rs / platform.rs / logging.rs
+│     └─ tests/smoke_commands.rs# IPC 层集成冒烟
 ├─ frontend/                    # Vue3 + TS + Vite
 │  ├─ src/
-│  │  ├─ views/                 # CrawlView / TasksView / HistoryView / SettingsView
+│  │  ├─ views/                 # CrawlView / IllustrationView / TasksView / HistoryView / SettingsView
 │  │  ├─ components/
-│  │  ├─ stores/                # Pinia（auth/tasks/settings/history）
-│  │  ├─ api/                   # axios 封装
+│  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
+│  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
 │  │  ├─ locales/               # zh-CN.ts / en-US.ts
 │  │  ├─ styles/                # 全局 CSS Variables
-│  │  ├─ router/
+│  │  ├─ router/                # hash 模式
 │  │  └─ App.vue
-│  ├─ vite.config.ts            # proxy /api/* → 127.0.0.1:9962
-│  └─ package.json
-├─ scripts/
-│  ├─ dev.ps1                   # Windows dev 服务管理（start/stop/restart/logs/status）
-│  ├─ dev.sh                    # macOS/Linux 版（与 dev.ps1 行为一致）
-│  ├─ build.py                  # pnpm build + pyinstaller
-│  └─ find_port.py              # 独立端口探测工具（供 spike 与 prod 复用）
-├─ pyproject.toml               # 项目配置（hatchling + uv + pytest）
-├─ pixiv-tool.spec              # PyInstaller 打包配置
-├─ .github/workflows/release.yml# 三平台 CI
+│  └─ vite.config.ts            # port 9961 + strictPort（无 proxy）
 ├─ docs/                        # 本文档与 ADR
 └─ README.md
 ```
@@ -380,10 +350,11 @@ CREATE INDEX idx_illustrations_author ON illustrations(author_id);
 
 ### 5.3 Cookie 存储
 
-- Windows 位置：`config/cookies.dat`，使用 **DPAPI** 加密
-- macOS 位置：系统 **Keychain**（service `pixiv-tool.cookies`）
-- 接口：`CookieStore` 抽象，按 `sys.platform` 工厂选择实现
-- Linux（Secret Service）仍为 stub，抛 `NotImplementedError`
+- 统一走 **keyring crate**（`src-tauri/src/cookies.rs`）：service
+  `pixiv-tool.cookies`、account `default`、value 为 cookies map 的紧凑 JSON
+- Windows：系统 Credential Manager（旧版 DPAPI 文件 cookies.dat 不再使用）
+- macOS：系统 Keychain（service/account 与旧 Python 版一致，登录态互读兼容）
+- Linux：Secret Service（keyring linux-native 后端，未实机验证）
 
 ---
 
@@ -413,91 +384,48 @@ CREATE INDEX idx_illustrations_author ON illustrations(author_id);
 
 ---
 
-## 7. API 设计
+## 7. IPC 命令设计（invoke）
 
-### 7.1 认证
+命令实现于 `src-tauri/src/commands/`，返回体沿用旧 HTTP 响应形状（snake_case）。
+业务错误（旧 200+`{error}` 风格）在返回值内；校验类错误（旧 4xx/5xx detail）
+reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase 键传入。
 
-| Method | Path | 说明 |
-|---|---|---|
-| GET | `/api/auth/status` | 查询当前登录态（含用户名） |
-| POST | `/api/auth/login` | 打开 pywebview 登录窗 |
-| POST | `/api/auth/login/manual` | 手动提交 PHPSESSID（C 兜底） |
-| POST | `/api/auth/logout` | 清空本地 cookie |
+| 命令 | 说明 |
+|---|---|
+| `auth_status` | 登录态探测（2s 超时；401/403 清 cookie，其余失败保留） |
+| `auth_login` | 真实 Chromium CDP 登录（长阻塞，最长 300s）；无浏览器时返回 error 提示改用手动登录 |
+| `auth_login_manual(phpsessid)` | 手动 PHPSESSID（normalize → 会话探测 → 存储） |
+| `auth_logout` | 清空系统凭据存储 |
+| `tasks_list(category?)` | 任务列表（按小说/插画过滤） |
+| `task_create(sourceType, sourceId, formats, category)` | 创建抓取任务，后台 tokio 运行 |
+| `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
+| `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
+| `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 6 键 + 校验） |
+| `clear_logs` | 清空 app.log |
+| `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |
+| `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
+| `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
+| `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位 |
 
-### 7.2 抓取
+目录选择不走命令：前端直接用 `@tauri-apps/plugin-dialog` 的
+`open({directory: true})`。
 
-| Method | Path | 说明 |
-|---|---|---|
-| GET | `/api/novel/{id}` | 查询单篇小说元数据 |
-| POST | `/api/tasks` | 创建抓取任务（body: `{source_type, source_id, formats, category}`；category `novel`/`illustration`） |
-| GET | `/api/tasks?category=` | 任务列表（可按小说/插画过滤） |
-| GET | `/api/tasks` | 任务列表 |
-| GET | `/api/tasks/{id}` | 任务详情 |
-| GET | `/api/tasks/{id}/events` | **SSE** 进度流 |
-| POST | `/api/tasks/{id}/pause` | 暂停 |
-| POST | `/api/tasks/{id}/resume` | 继续 |
-| POST | `/api/tasks/{id}/cancel` | 取消 |
-| POST | `/api/tasks/{id}/retry-failed` | 重试失败项 |
-| DELETE | `/api/tasks` / `/api/tasks/{id}` | 删除任务记录（**含进行中任务**：先取消再删） |
+历史联合查询规则：`novels` + `illustrations` 两表 UNION ALL（统一行形状
+id / category / title / author_name / pages / series_id / illust_type /
+captured_at），按 `captured_at` 倒序分页，keyword 同时过滤两表；前端抓取
+时间列按东八区固定偏移显示。"打开所在文件夹"由 Rust 侧
+`platform.rs::reveal_in_file_manager` 实现：Windows `explorer /select,`、
+macOS `open -R`、Linux `xdg-open`；文件不存在回退父目录。
 
-### 7.3 历史
-
-历史页分**全部 / 小说 / 插画**三个页签，全部页签走 `novels` + `illustrations`
-两表的 UNION 联合查询（统一行形状：id / category / title / author_name /
-pages / series_id / illust_type / captured_at），按 `captured_at` 倒序分页；
-小说、插画页签也走同一端点（`category` 参数过滤）。抓取时间列按**东八区
-固定偏移**（UTC+8）显示 `yyyy-MM-dd HH:mm:ss`。
-
-两类记录的"打开所在文件夹"操作统一走 `src/pixiv_tool/platform.py` 的
-`reveal_in_file_manager()`：Windows `explorer /select,`（定位文件）、macOS
-`open -R`（Finder 显示）、Linux `xdg-open`（直接打开所在目录）；文件已不存在时
-回退打开其父目录。删除/清空/打开仍按分类走各自的 `/api/novels/*`、
-`/api/illustrations/*` 端点。
-
-| Method | Path | 说明 |
-|---|---|---|
-| GET | `/api/history` | 分页联合查询（category: all/novel/illustration，支持关键词） |
-| GET | `/api/novels` | 分页查询已抓小说（支持 series_id/author_id/关键词过滤） |
-| GET | `/api/novels/{id}/file` | 返回小说文件路径 |
-| POST | `/api/novels/{id}/open` | 在系统文件管理器中打开小说所在目录 |
-| DELETE | `/api/novels/{id}` | 删除记录（可选删文件） |
-| POST | `/api/novels/batch-delete` | 批量删除小说记录（可选删文件） |
-| DELETE | `/api/novels` | 清空全部小说记录（可选删文件） |
-| GET | `/api/illustrations` | 分页查询已抓插画（支持 author_id/关键词过滤） |
-| POST | `/api/illustrations/{id}/open` | 在系统文件管理器中打开插画所在目录 |
-| DELETE | `/api/illustrations/{id}` | 删除记录（可选删文件） |
-| POST | `/api/illustrations/batch-delete` | 批量删除插画记录（可选删文件） |
-| DELETE | `/api/illustrations` | 清空全部插画记录（可选删文件） |
-
-### 7.4 设置
-
-| Method | Path | 说明 |
-|---|---|---|
-| GET | `/api/settings` | 读取配置 |
-| PUT | `/api/settings` | 更新配置 |
-| POST | `/api/settings/clear-logs` | 清除本地日志 |
-
-### 7.5 健康检查
-
-| Method | Path | 说明 |
-|---|---|---|
-| GET | `/api/health` | 返回 `{status: "ok"}`（dev.ps1 status 命令探活用） |
-
-### 7.6 SSE 事件设计
+### 7.1 事件设计（listen）
 
 ```
-event: progress
-data: {"task_id":"...","done":12,"total":50,"skipped":2,"current_title":"第3话 风起"}
-
-event: item
-data: {"task_id":"...","novel_id":12345,"status":"ok","title":"..."}
-
-event: failed
-data: {"task_id":"...","novel_id":12345,"error":"HTTP 404"}
-
-event: done
-data: {"task_id":"...","done":50,"failed":1,"skipped":2}
+task://progress   {task_id, status, done, total, skipped, current_title?}
+task://done       {task_id, status, done, total, failed, skipped}
 ```
+
+每篇/每页完成即推送；TasksView 订阅后刷新列表，同时保留 2s 轮询兜底。
 
 ---
 
@@ -505,34 +433,41 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 
 ### 8.1 开发模式
 
-- **dev 端口固定**：前端 9961、后端 9962
-- **统一脚本**：Windows 用 `scripts/dev.ps1`，macOS/Linux 用 `scripts/dev.sh`（两者行为一致）。子命令 `start|stop|restart|logs|status`，支持 `[all|frontend|backend]` 参数
-- **PID/日志**：`.dev/pids/{frontend,backend}.pid` + `.dev/logs/{frontend,backend}.log`
-- **健康检查**：frontend → `GET 127.0.0.1:9961/`；backend → `GET 127.0.0.1:9962/api/health`
-- **进程清理**：stop 按进程组强杀（连 uvicorn `--reload` 子进程一起清理），不依赖 PID 文件、不按端口盲目杀
-- **后端热重载**：uvicorn `reload=True`
-- **前端热重载**：Vite HMR
+```bash
+# 前置（一次性）
+cd frontend && pnpm install
+
+# 一键启动（Vite 9961 + Rust 热重载 + 窗口）
+cargo tauri dev        # 仓库根执行；等价 cd frontend && pnpm tauri dev
+```
+
+- 无后端进程/端口管理——`tauri dev` 拉起 Vite（9961，strictPort）并加载
+  debug 构建（数据目录用 `<repo>/data`、`<repo>/config`，与旧 dev 数据无缝衔接）
+- Rust 改动自动重编译重启；前端走 Vite HMR
+- 测试：`cd src-tauri && cargo test`（单测 + IPC 冒烟集成测试）；
+  前端类型检查：`cd frontend && pnpm build`
 
 ### 8.2 依赖管理
 
-- 后端：`uv`（`uv sync` 安装，`uv.lock` 入库）
-- 前端：`pnpm`（`pnpm install` 安装，`pnpm-lock.yaml` 入库）
+- 后端：**cargo**（`src-tauri/Cargo.lock` 入库；wreq/wreq-util 锁定
+  6.0.0-rc.31 / 3.0.0-rc.14，**不可降到 Apache 化之前的版本**）
+- 前端：**pnpm**（`pnpm-lock.yaml` 入库）
+- 系统依赖：macOS/Linux 构建需 **cmake**（wreq 现场编译 BoringSSL）；
+  Linux 运行需 webkit2gtk
 
 ### 8.3 构建
 
-1. 前端 `pnpm build` → 产物输出到 `src/pixiv_tool/static/`
-2. FastAPI 用 `StaticFiles` 挂载 `src/pixiv_tool/static/`，SPA fallback 到 `index.html`
-3. `pyinstaller pixiv-tool.spec --onedir` 打包
-4. 产物：`dist/pixiv-tool/`（解压即用）
+1. `cargo tauri build`（自动 `pnpm build` 前端 → 嵌入 → bundler 产出安装包）
+2. 调试产物：`cargo tauri build --debug --no-bundle` →
+   `src-tauri/target/debug/pixiv-tool`
+3. 图标：`cargo tauri icon frontend/src/assets/icon.png`（已生成于
+   `src-tauri/icons/`）
 
 ### 8.4 跨平台 CI
 
-`.github/workflows/release.yml`：push tag `v*` 触发，matrix `[windows-latest, macos-latest, ubuntu-latest]`，分别构建并上传 Release。
-
-产物（压缩包输出在 `dist/` 下，与 `dist/pixiv-tool/` 同目录）：
-- `dist/pixiv-tool-windows-x64.zip`
-- `dist/pixiv-tool-macos-x64.zip`（PyInstaller 出 `.app`，压 zip）
-- `dist/pixiv-tool-linux-x64.tar.gz`（README 注明需预装 `webkit2gtk`）
+原 Python 三平台 release workflow 已随旧栈移除；Tauri 版 CI 待建（需预装
+cmake + Rust + pnpm，matrix 三平台跑 `cargo tauri build`）。见
+`docs/PACKAGING.md`。
 
 ---
 
@@ -550,11 +485,11 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 
 | 项 | 策略 |
 |---|---|
-| Cookie 存储 | Windows DPAPI 加密，仅当前 Windows 用户可解 |
-| 网络监听 | FastAPI 仅绑 `127.0.0.1`，拒绝外部连接 |
+| Cookie 存储 | 系统凭据存储（Windows Credential Manager / macOS Keychain / Linux Secret Service） |
+| 网络监听 | **无**——不再有本地 HTTP 服务，IPC 仅限本 webview |
 | 错误上报 | **不集成**（隐私优先） |
-| 鉴权 | V1 无（本机信任），TODO 留随机 token |
-| 日志脱敏 | PHPSESSID 等敏感字段在日志中掩码（仅前 8 位） |
+| 鉴权 | 不需要（无网络面） |
+| 日志脱敏 | 日志不记录任何 Cookie 值；URL 记录去 query |
 
 ---
 
@@ -569,7 +504,9 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 | R5 | PyInstaller hidden import 漏配 | 中 | spec 文件显式声明；CI 构建测试 |
 | R6 | 长任务断点续传数据一致性 | 中 | 每篇抓完即写库；事务包裹 |
 | R7 | csrf token 路径依赖 pixiv 内部 react-query meta 结构 | 低 | `EXTRACT_AND_VERIFY_JS` 写多路径兜底（A/B/C/D）；pixiv 改版时重新探测 |
-| R8 | Chromium CDP 登录依赖本机浏览器 | 低 | 支持 Chrome/Edge/Chromium；缺失时回退 pywebview |
+| R8 | Chromium CDP 登录依赖本机浏览器 | 中 | 支持 Chrome/Edge/Chromium；**缺失时无回退登录窗**（ADR 0008 裁剪），提示改用手动 Cookie 登录 |
+| R9 | wreq 为 RC 版本且锁版本，风控指纹需随 pixiv 更新 | 中 | 升级 emulation 档位需重新 spike 验证；版本线不可低于 Apache 化（3.0.0-rc.12） |
+| R10 | 三平台发布 CI 待重建（wreq 需 cmake） | 中 | 见 docs/PACKAGING.md；短期本地手动构建 |
 
 ---
 
@@ -583,6 +520,8 @@ data: {"task_id":"...","done":50,"failed":1,"skipped":2}
 | 0004 | Windows DPAPI 加密 cookie，跨平台接口预留 | [adr/0004-cookie-storage.md](adr/0004-cookie-storage.md) |
 | 0005 | Spike 结果：pywebview cookie 探测可行性（R1 已解决） | [adr/0005-cookie-probe-result.md](adr/0005-cookie-probe-result.md) |
 | 0006 | 真实 Chromium 登录 + macOS Keychain | [adr/0006-browser-login-keychain.md](adr/0006-browser-login-keychain.md) |
+| 0007 | 插画抓取（原图/ugoira） | [adr/0007-illustration-crawling.md](adr/0007-illustration-crawling.md) |
+| 0008 | 全量重构为 Tauri 2 + Rust，移除 Python 后端 | [adr/0008-tauri-rewrite.md](adr/0008-tauri-rewrite.md) |
 
 ADR 按需追加，不强制一次性写完。
 

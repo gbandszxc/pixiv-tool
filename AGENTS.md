@@ -4,7 +4,7 @@
 
 ## 项目简介
 
-**pixiv-tool**：本地运行的 Pixiv 客户端工具，V1 聚焦 Pixiv 小说抓取（单篇 / 系列 / 用户全集），技术栈 Python + pywebview + Vue3 + FastAPI。
+**pixiv-tool**：本地运行的 Pixiv 客户端工具，V1 聚焦 Pixiv 小说抓取（单篇 / 系列 / 用户全集），技术栈 Tauri 2（Rust 后端）+ Vue3，IPC 通信无本地 HTTP 服务。
 
 详见 `docs/SPEC.md`。
 
@@ -29,10 +29,10 @@
 开工前先读：
 
 1. `docs/SPEC.md` —— 完整规格 + 风险登记
-2. `docs/adr/0001` ~ `0005` —— 关键架构决策
+2. `docs/adr/0001` ~ `0008` —— 关键架构决策（0008 为现行架构：Tauri 全量重构）
 3. 你要动的 ticket（`.scratch/pixiv-tool-v1/issues/<NN>-xxx.md`）
 4. 涉及前端界面、组件、样式或交互时，必须先读根目录 `DESIGN.md`。
-5. 涉及打包/PyInstaller/分发时，先读 `docs/PACKAGING.md`。
+5. 涉及打包/分发时，先读 `docs/PACKAGING.md`。
 
 ### 设计系统维护
 
@@ -46,37 +46,25 @@
 
 | 层 | 选型 |
 |---|---|
-| 桌面外壳 | pywebview 5+ |
-| 后端 | Python 3.11+ · FastAPI · uvicorn |
+| 桌面外壳 + 后端 | Tauri 2（Rust，`#[tauri::command]` IPC） |
 | 前端 | Vue 3.4+ · TypeScript · Vite 5 · Naive UI |
-| 数据库 | SQLite（标准库 `sqlite3`） |
-| 依赖 | uv（后端）+ pnpm（前端） |
-| 打包 | PyInstaller --onedir |
+| HTTP 抓取 | wreq 6（Chrome147 指纹伪装；版本锁定，见 ADR 0008） |
+| 数据库 | SQLite（rusqlite，schema 兼容旧版） |
+| 依赖 | cargo（后端）+ pnpm（前端） |
+| 打包 | Tauri bundler |
 
 ### 开发命令
 
-Windows (PowerShell)：
-
-```powershell
-# 启动 dev 服务（前后端统一管理）
-./scripts/dev.ps1 start           # 启动所有
-./scripts/dev.ps1 start frontend  # 仅前端
-./scripts/dev.ps1 start backend   # 仅后端
-./scripts/dev.ps1 status          # 查看状态
-./scripts/dev.ps1 logs            # 查看日志
-./scripts/dev.ps1 stop            # 停止所有
-```
-
-macOS / Linux (bash)：
-
 ```bash
-./scripts/dev.sh start           # 启动所有（子命令与 dev.ps1 一致）
-./scripts/dev.sh status          # 查看状态
-./scripts/dev.sh stop            # 停止所有
+cd frontend && pnpm install   # 一次性
+cargo tauri dev               # 仓库根：Vite(9961) + Rust 热重载 + 窗口
+cd src-tauri && cargo test    # 后端测试（单测 + IPC 冒烟）
+cd frontend && pnpm build     # 前端类型检查 + 构建
+cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 ```
 
-- dev 端口：前端 9961、后端 9962
-- prod 端口：范围 `[9962, 9999]` 探测
+- 无后端进程/端口：IPC 直连，Vite 仅 dev 期占用 9961（strictPort）
+- 系统依赖：macOS/Linux 构建需 cmake（wreq 编译 BoringSSL）
 
 ### Git 约定
 
@@ -85,16 +73,16 @@ macOS / Linux (bash)：
 
 ### 应用图标
 
-换应用图标三步：
+换应用图标两步：
 
-1. 替换源图 `docs/icon/raw_icon.png`（正方形最佳；非正方形会被中心裁剪）
-2. 重新生成：`uv run --with pillow python scripts/gen_icons.py`（产出 `src/pixiv_tool/icon.ico` Windows 7 尺寸 + `icon.icns` macOS 10 块）
-3. 重新打包 `scripts/build.py` 后生效（`pixiv-tool.spec` 按 `.exists()` 自动拾取）
+1. 替换源图 `frontend/src/assets/icon.png`（正方形最佳）
+2. 重新生成并打包：`cargo tauri icon frontend/src/assets/icon.png`（产出
+   `src-tauri/icons/` 全平台全尺寸），然后 `cargo tauri build`
 
-平台覆盖：Windows exe 内嵌 `icon.ico`；macOS `.app` 用 `icon.icns`。**Linux 无二进制内嵌图标**（PyInstaller 不支持，桌面集成需另配 `.desktop` + PNG）。
+平台覆盖由 Tauri bundler 自动处理（Windows ico / macOS icns / Linux png）。
 
 ### 安全边界
 
-- `config/cookies.dat` 是 DPAPI 加密的登录态，**绝不入库**（已在 `.gitignore`）
+- 登录态存于系统凭据存储（macOS Keychain / Windows Credential Manager），**绝不入库**；`config/` 下不得出现任何 cookie 文件
 - `data/app.db` 是用户数据，**绝不入库**
 - spike 代码可参考但**不直接复用**到主代码（见 ADR 0005 复用清单）
