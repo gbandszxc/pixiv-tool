@@ -93,9 +93,13 @@ pub async fn open_illustration_folder(
     open_illustration_folder_impl(&state, artwork_id)
 }
 
-// 以下 _impl 函数不依赖 tauri::State，可离线单测。
+// 以下 _impl 函数不依赖 tauri::State，可离线单测/集成测试。
 
-fn novel_delete_impl(state: &AppState, novel_id: i64, delete_file: bool) -> Result<Value, String> {
+pub fn novel_delete_impl(
+    state: &AppState,
+    novel_id: i64,
+    delete_file: bool,
+) -> Result<Value, String> {
     if state.db.get_novel(novel_id).is_none() {
         return Ok(json!({ "error": "小说不存在" }));
     }
@@ -103,7 +107,7 @@ fn novel_delete_impl(state: &AppState, novel_id: i64, delete_file: bool) -> Resu
     Ok(json!({ "status": "success" }))
 }
 
-fn novels_batch_delete_impl(
+pub fn novels_batch_delete_impl(
     state: &AppState,
     novel_ids: Vec<i64>,
     delete_file: bool,
@@ -115,7 +119,7 @@ fn novels_batch_delete_impl(
     Ok(json!({ "status": "success", "deleted": deleted }))
 }
 
-fn illustration_delete_impl(
+pub fn illustration_delete_impl(
     state: &AppState,
     artwork_id: i64,
     delete_file: bool,
@@ -127,7 +131,7 @@ fn illustration_delete_impl(
     Ok(json!({ "status": "success" }))
 }
 
-fn illustrations_batch_delete_impl(
+pub fn illustrations_batch_delete_impl(
     state: &AppState,
     artwork_ids: Vec<i64>,
     delete_file: bool,
@@ -139,7 +143,7 @@ fn illustrations_batch_delete_impl(
     Ok(json!({ "status": "success", "deleted": deleted }))
 }
 
-fn open_novel_file_impl(state: &AppState, novel_id: i64) -> Result<Value, String> {
+pub fn open_novel_file_impl(state: &AppState, novel_id: i64) -> Result<Value, String> {
     let Some(novel) = state.db.get_novel(novel_id) else {
         return Ok(json!({ "error": "小说不存在" }));
     };
@@ -161,7 +165,7 @@ fn open_novel_file_impl(state: &AppState, novel_id: i64) -> Result<Value, String
     }
 }
 
-fn open_illustration_folder_impl(state: &AppState, artwork_id: i64) -> Result<Value, String> {
+pub fn open_illustration_folder_impl(state: &AppState, artwork_id: i64) -> Result<Value, String> {
     let Some(illustration) = state.db.get_illustration(artwork_id) else {
         return Ok(json!({ "error": "插画记录不存在" }));
     };

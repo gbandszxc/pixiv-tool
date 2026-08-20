@@ -18,10 +18,19 @@ pub async fn history_list(
     page_size: i64,
     keyword: Option<String>,
 ) -> Result<Value, String> {
-    // 未知分类（db 层校验文案）→ reject，与桩 doc 契约一致
-    let (items, total) = state
-        .db
-        .list_history(&category, page, page_size, keyword.as_deref())?;
+    history_list_impl(&state, &category, page, page_size, keyword.as_deref())
+}
+
+/// 命令实现（不依赖 tauri::State，可离线集成测试）。
+/// 未知分类（db 层校验文案）→ reject，与桩 doc 契约一致。
+pub fn history_list_impl(
+    state: &AppState,
+    category: &str,
+    page: i64,
+    page_size: i64,
+    keyword: Option<&str>,
+) -> Result<Value, String> {
+    let (items, total) = state.db.list_history(category, page, page_size, keyword)?;
     Ok(json!({
         "items": items,
         "total": total,

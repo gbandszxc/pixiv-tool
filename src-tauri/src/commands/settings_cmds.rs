@@ -51,7 +51,7 @@ pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Resul
 /// 1. output_dir / max_wait_seconds 先做中文校验（失败即 Err，旧 400 文案）
 /// 2. 白名单键覆盖到当前配置序列化结果上，再反解回 Settings
 ///    （类型不合法的值在反解时以中文错误拒绝）
-pub(crate) fn apply_settings_patch(
+pub fn apply_settings_patch(
     current: &Settings,
     patch: &Value,
     data_dir: &Path,
