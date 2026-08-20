@@ -146,11 +146,22 @@ import {
 import { useI18n } from "vue-i18n";
 import { useTaskStore } from "../stores/tasks";
 import type { Task } from "../stores/tasks";
+import { isTauri, listen } from "../api/tauri";
+import type { TaskDoneEvent, TaskProgressEvent, UnlistenFn } from "../api/tauri";
 
 const TERMINAL_STATUSES = new Set(["done", "failed", "canceled"]);
 const ACTIVE_STATUSES = new Set(["pending", "running", "paused"]);
 
 let timer: ReturnType<typeof setInterval> | null = null;
+
+// Tauri 事件推送：收到任务进度/完成事件即刷新列表（轮询仅作兜底保留）。
+let unlistenFns: UnlistenFn[] = [];
+
+function handleTaskEvent() {
+  taskStore.fetchTasks().catch(() => {
+    // 静默:事件刷新失败不打扰
+  });
+}
 
 function ensurePolling() {
   const hasActive = taskStore.tasks.some((task) => ACTIVE_STATUSES.has(task.status));
@@ -313,9 +324,18 @@ onMounted(async () => {
   } finally {
     loading.value = false;
   }
+  // Tauri 环境下订阅任务事件，实时刷新；浏览器调试时跳过（仅轮询）。
+  if (isTauri()) {
+    unlistenFns.push(
+      await listen<TaskProgressEvent>("task://progress", handleTaskEvent),
+      await listen<TaskDoneEvent>("task://done", handleTaskEvent),
+    );
+  }
 });
 
 onUnmounted(() => {
   if (timer) clearInterval(timer);
+  for (const unlisten of unlistenFns) unlisten();
+  unlistenFns = [];
 });
 </script>

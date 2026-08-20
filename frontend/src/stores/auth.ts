@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import api from "../api";
+import { invoke } from "../api/tauri";
+import type { AuthLoginResponse, AuthLoginManualResponse, AuthStatusResponse } from "../api/tauri";
 
 export interface AuthState {
   isLoggedIn: boolean;
@@ -28,8 +29,7 @@ export const useAuthStore = defineStore("auth", () => {
 
   async function checkStatus() {
     try {
-      const resp = await api.get("/api/auth/status");
-      const data = resp.data;
+      const data = await invoke<AuthStatusResponse>("auth_status");
       applyStatus({
         isLoggedIn: data.is_logged_in,
         userId: data.user_id || "",
@@ -49,9 +49,10 @@ export const useAuthStore = defineStore("auth", () => {
 
     isLoggingIn.value = true;
     try {
-      const response = await api.post("/api/auth/login", undefined, { timeout: 0 });
-      const user = response.data.user;
-      if (response.data.status === "success" && user) {
+      // invoke 不设超时：真实浏览器登录是长阻塞，保持 loading 态直到返回。
+      const response = await invoke<AuthLoginResponse>("auth_login");
+      const user = response.user;
+      if (response.status === "success" && user) {
         applyStatus({
           isLoggedIn: true,
           userId: user.user_id || "",
@@ -69,15 +70,11 @@ export const useAuthStore = defineStore("auth", () => {
 
   /** 手动导入 PHPSESSID，后端会验证会话并自动获取 csrf token。 */
   async function loginWithCookie(phpsessid: string) {
-    // 用 form data 而非 query string,避免 PHPSESSID 出现在 URL/日志里。
-    const form = new URLSearchParams();
-    form.append("PHPSESSID", phpsessid.trim());
-    const response = await api.post("/api/auth/login/manual", form, {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      // 后端要请求 Pixiv 当前用户接口校验 Session，给足时间。
-      timeout: 30000,
+    // 失败时后端 reject string（校验类错误），由视图层用 errorMessage() 展示。
+    const response = await invoke<AuthLoginManualResponse>("auth_login_manual", {
+      phpsessid: phpsessid.trim(),
     });
-    const user = response.data.user;
+    const user = response.user;
     applyStatus({
       isLoggedIn: true,
       userId: user?.user_id || "",
@@ -88,7 +85,7 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   async function logout() {
-    await api.post("/api/auth/logout");
+    await invoke("auth_logout");
     clearAuth();
   }
 

@@ -1,19 +1,14 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import api from "../api";
+import { invoke } from "../api/tauri";
+import type { Settings } from "../api/tauri";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
-export interface Settings {
-  output_dir: string;
-  output_formats: string[];
-  language: string;
-  theme: string;
-  backend_port: number | null;
-  max_wait_seconds: number;
-}
+export type { Settings } from "../api/tauri";
 
 export const useSettingsStore = defineStore("settings", () => {
   const settings = ref<Settings>({
-    output_dir: "",  // 实际值由后端 GET /api/settings 提供（系统下载目录/pixiv-tool）
+    output_dir: "",  // 实际值由后端 settings_get 提供（系统下载目录/pixiv-tool）
     output_formats: ["txt", "markdown"],
     language: "zh-CN",
     theme: "auto",
@@ -22,22 +17,23 @@ export const useSettingsStore = defineStore("settings", () => {
   });
 
   async function fetchSettings() {
-    const resp = await api.get("/api/settings");
-    settings.value = resp.data;
+    settings.value = await invoke<Settings>("settings_get");
   }
 
   async function saveSettings(newSettings: Partial<Settings>) {
-    await api.put("/api/settings", newSettings);
+    // 校验失败时后端 reject string，由视图层用 errorMessage() 展示。
+    await invoke("settings_save", { settings: newSettings });
     Object.assign(settings.value, newSettings);
   }
 
   async function clearLogs() {
-    await api.post("/api/settings/clear-logs");
+    await invoke("clear_logs");
   }
 
   async function selectDirectory(): Promise<string | null> {
-    const resp = await api.post("/api/settings/select-directory");
-    return resp.data?.path ?? null;
+    // 目录选择走系统对话框插件，不经过后端命令；取消时返回 null。
+    const selected = await openDialog({ directory: true });
+    return typeof selected === "string" ? selected : null;
   }
 
   return { settings, fetchSettings, saveSettings, clearLogs, selectDirectory };

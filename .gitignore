@@ -1,48 +1,13 @@
 # ============================================================
 # pixiv-tool .gitignore
-# 技术栈：Python + FastAPI + pywebview + Vue3 + Vite + uv + pnpm
+# 技术栈：Tauri 2（Rust）+ Vue3 + Vite + pnpm
 # 平台：Windows / macOS / Linux
 # ============================================================
 
-
-# ===== Python =====
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
-*.egg
-.eggs/
-build/
-develop-eggs/
-parts/
-sdist/
-wheels/
-*.whl
-pip-log.txt
-pip-delete-this-directory.txt
-
-# uv / 虚拟环境
-.venv/
-venv/
-env/
-ENV/
-.python-version
-# uv.lock 入库（锁版本），不 ignore
-# !uv.lock
-
-# 测试 / 类型检查 / lint 缓存
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-.coverage.*
-htmlcov/
-.tox/
-coverage.xml
-*.cover
-
+# ===== Rust / Tauri =====
+src-tauri/target/
+# tauri-build 每次构建重新生成的 schema
+src-tauri/gen/schemas/
 
 # ===== Node / Vue / Vite =====
 node_modules/
@@ -52,21 +17,8 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# Vite 临时
 *.local
 dist-ssr/
-
-# 前端构建产物：开发期不构建，prod 由 CI 执行 pnpm build 生成
-# prod 模式 FastAPI 用 StaticFiles 挂载此目录 serve SPA
-src/pixiv_tool/static/
-
-
-# ===== PyInstaller 打包产物 =====
-dist/
-build/
-*.spec.bak
-
 
 # ===== 编辑器 / IDE =====
 .vscode/*
@@ -79,90 +31,54 @@ build/
 .history/
 .fleet/
 
-
 # ===== 操作系统 =====
-# Windows
 Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 *.lnk
-
-# macOS
 .DS_Store
 .AppleDouble
 .LSOverride
-Icon?
-
-# Linux
-*~
-.directory
+# 注意：不要写 `Icon?`，macOS 大小写不敏感会误伤 src-tauri/icons/
 .Trash-*
 
-
 # ====================================================================
-# ===== 项目特定：用户数据（绝不入库）                              =====
+# ===== 项目特定：用户数据（绝不入库）                                =====
 # ====================================================================
 
-# --- 登录态 cookie（Windows DPAPI 加密，含 PHPSESSID，严禁提交） ---
-config/cookies.dat
-config/cookies.json
-config/cookies.tmp
-config/login-browser-profile/
-
-# --- SQLite 数据库（任务进度、已抓小说去重表、运行时数据） ---
-data/app.db
-data/app.db-journal
-data/app.db-wal
-data/app.db-shm
+# --- SQLite 数据库（任务进度、去重表、运行时数据） ---
 data/*.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
-# V2-03 已修,paths.py 统一锚定后此目录不应再产生数据,保留 ignore 防残留。
-src/data/
 
 # --- 用户配置（含个人输出目录路径等，每机不同） ---
 config/settings.json
-# 保留模板供新用户参考
-!config/settings.example.json
+config/login-browser-profile/
 
 # --- 运行日志 ---
 data/logs/
 *.log
 
-
-# ===== 开发脚本临时文件（dev.ps1 / dev.sh 的 PID 与日志） =====
-.dev/
-.dev/pids/
-.dev/logs/
-
-
-# ===== pywebview WebView2 运行时缓存（仅 prod 模式产生） =====
-webview_cache/
-WebView2Cache/
-EBWebView/
-
 # ===== Spike 运行产物（不入库） =====
 spike/**/result.json
 spike/**/cookie_inspect.json
-spike/**/__pycache__/
-
 
 # ===== 通用 =====
 .env
 .env.local
 .env.*.local
-.env.example.local
-tmp/
-temp/
 *.tmp
 *.bak
 *.orig
-
-
+tmp/
+temp/
 downloads/
 .scratch/build-*
 
 # ===== AI 辅助工具会话产物（本地规划文档，不入库） =====
 .zcode/
+
+# --- 前端构建产物（tauri build 自动生成） ---
+frontend/dist/

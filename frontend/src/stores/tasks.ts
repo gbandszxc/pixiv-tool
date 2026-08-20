@@ -1,70 +1,60 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import api from "../api";
+import { invoke } from "../api/tauri";
+import type { TaskMutationResult, TaskRow } from "../api/tauri";
 
-export interface Task {
-  task_id: string;
-  source_type: string;
-  source_id: string;
-  category: string;
-  status: string;
-  total: number;
-  done: number;
-  skipped: number;
-  failed_ids: string;
-  created_at: string;
-  updated_at: string;
-  error: string | null;
-}
+// 保留旧导出名：视图层（TasksView）按 `Task` 引用任务行类型。
+export type Task = TaskRow;
 
 export const useTaskStore = defineStore("tasks", () => {
   const tasks = ref<Task[]>([]);
 
   async function fetchTasks() {
-    const resp = await api.get("/api/tasks");
-    tasks.value = resp.data.items || [];
+    const data = await invoke<{ items: TaskRow[] }>("tasks_list");
+    tasks.value = data.items || [];
   }
 
   async function createTask(sourceType: string, sourceId: string, formats: string[], category = "novel") {
-    const resp = await api.post("/api/tasks", {
-      source_type: sourceType,
-      source_id: sourceId,
+    // 业务失败时返回 { error }（旧 200+error 风格），由调用方判断。
+    return invoke<TaskMutationResult>("task_create", {
+      sourceType,
+      sourceId,
       formats,
       category,
     });
-    return resp.data;
   }
 
   async function pauseTask(taskId: string) {
-    await api.post(`/api/tasks/${taskId}/pause`);
+    await invoke("task_pause", { taskId });
     await fetchTasks();
   }
 
   async function resumeTask(taskId: string) {
-    await api.post(`/api/tasks/${taskId}/resume`);
+    await invoke("task_resume", { taskId });
     await fetchTasks();
   }
 
   async function cancelTask(taskId: string) {
-    await api.post(`/api/tasks/${taskId}/cancel`);
+    await invoke("task_cancel", { taskId });
     await fetchTasks();
   }
 
   async function retryFailed(taskId: string) {
-    await api.post(`/api/tasks/${taskId}/retry-failed`);
+    await invoke("task_retry_failed", { taskId });
     await fetchTasks();
   }
 
   async function deleteTask(taskId: string) {
-    return (await api.delete(`/api/tasks/${taskId}`)).data as { deleted: number };
+    // 任务不存在时后端 reject '任务不存在'
+    return invoke<{ deleted: number }>("task_delete", { taskId });
   }
 
   async function deleteTasks(taskIds: string[]) {
-    return (await api.delete("/api/tasks", { data: { task_ids: taskIds } })).data as { deleted: number };
+    return invoke<{ deleted: number }>("tasks_delete", { taskIds });
   }
 
   async function deleteCompletedTasks() {
-    return (await api.delete("/api/tasks/completed")).data as { deleted: number };
+    return invoke<{ deleted: number }>("tasks_delete_completed");
   }
 
   return {

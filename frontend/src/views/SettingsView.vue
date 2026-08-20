@@ -67,6 +67,7 @@ import { NCard, NForm, NFormItem, NInput, NInputGroup, NInputNumber, NSelect, NC
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../stores/settings";
 import { useAuthStore } from "../stores/auth";
+import { errorMessage } from "../api/tauri";
 
 const { t, locale } = useI18n();
 const settingsStore = useSettingsStore();
@@ -136,8 +137,8 @@ async function handleSave() {
     message.value = t("settings.saved");
     messageType.value = "success";
   } catch (err) {
-    const detail = (err as any)?.response?.data?.detail;
-    message.value = typeof detail === "string" && detail ? detail : t("settings.saveFailed");
+    const detail = errorMessage(err);
+    message.value = detail || t("settings.saveFailed");
     messageType.value = "error";
   }
 }
