@@ -218,8 +218,8 @@ impl PixivClient {
 
     /// 限速 + 重试核心管线（Python `_request`）：
     /// 1. 取信号量许可 → 2. 等 429 闸门 → 3. 最多 MAX_RETRIES 次尝试
-    /// （Auth/NotFound/RateLimit 立即终止；Server/Client/Network 退避重试）
-    /// → 4. finally：无论成败在 semaphore 持有期间 sleep REQUEST_INTERVAL_MS。
+    ///    （Auth/NotFound/RateLimit 立即终止；Server/Client/Network 退避重试）
+    ///    → 4. finally：无论成败在 semaphore 持有期间 sleep REQUEST_INTERVAL_MS。
     async fn run_gated<T, F, Fut>(&self, mut attempt: F) -> Result<T, PixivError>
     where
         F: FnMut() -> Fut,

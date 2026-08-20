@@ -2,11 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Pixiv Tool",
   "version": "1.0.0",
-  "identifier": "com.pixivtool.app",
+  "identifier": "com.pixivtool.desktop",
   "build": {
     "devUrl": "http://localhost:9961",
-    "beforeDevCommand": "pnpm --dir ../frontend dev",
-    "beforeBuildCommand": "pnpm --dir ../frontend build",
+    "beforeDevCommand": "pnpm --dir frontend dev",
+    "beforeBuildCommand": "pnpm --dir frontend build",
     "frontendDist": "../frontend/dist"
   },
   "app": {

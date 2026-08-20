@@ -11,7 +11,7 @@ use crate::paths::default_output_dir;
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
 
 /// 应用配置。JSON 键为 snake_case，与旧 Python 版逐字段兼容。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     /// 输出目录（绝对路径或锚定 data_dir 的相对路径）。
@@ -274,9 +274,11 @@ mod tests {
     #[test]
     fn save_roundtrip() {
         let dir = temp_config_dir("roundtrip");
-        let mut s = Settings::default();
-        s.max_wait_seconds = 3600;
-        s.language = "en-US".into();
+        let s = Settings {
+            max_wait_seconds: 3600,
+            language: "en-US".into(),
+            ..Default::default()
+        };
         s.save(&dir).unwrap();
         let loaded = Settings::load_or_init(&dir);
         assert_eq!(loaded.max_wait_seconds, 3600);

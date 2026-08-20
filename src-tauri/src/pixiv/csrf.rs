@@ -115,7 +115,7 @@ pub(crate) fn parse_self_response(
         _ => return Err(ProbeError::Invalid("PHPSESSID 无效或已过期".into())),
     };
     // 只有 userData.id 能证明 PHPSESSID 有效（匿名 self 也返回 200+token）
-    let id = user_data.get("id").filter(|v| json_truthy(*v));
+    let id = user_data.get("id").filter(|v| json_truthy(v));
     if id.is_none() {
         return Err(ProbeError::Invalid("PHPSESSID 无效或已过期".into()));
     }
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn normalize_rejects_control_and_separators() {
-        for bad in ["123\r45", "123\n45", "123;45", "123\045"] {
+        for bad in ["123\r45", "123\n45", "123;45", "123\x0045"] {
             assert_eq!(
                 normalize_phpsessid(bad).unwrap_err(),
                 "PHPSESSID 格式不正确",

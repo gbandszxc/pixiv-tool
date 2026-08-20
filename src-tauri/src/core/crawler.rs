@@ -213,6 +213,7 @@ async fn wait_if_paused(controls: &TaskControls) -> Duration {
 }
 
 /// 循环结束后的统一终态处理（外层异常 / 超时 / 正常或取消）。
+#[allow(clippy::too_many_arguments)]
 fn finish_task(
     db: &Db,
     sink: &EventSink,
@@ -714,8 +715,10 @@ mod tests {
     }
 
     /// 捕获事件的 sink。
-    fn capture_sink() -> (EventSink, Arc<Mutex<Vec<(String, Value)>>>) {
-        let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+    type CapturedEvents = Arc<Mutex<Vec<(String, Value)>>>;
+
+    fn capture_sink() -> (EventSink, CapturedEvents) {
+        let events: CapturedEvents = Arc::new(Mutex::new(Vec::new()));
         let sink_events = events.clone();
         let sink: EventSink = Arc::new(move |name, payload| {
             sink_events
