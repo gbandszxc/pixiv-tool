@@ -61,10 +61,6 @@ config/login-browser-profile/
 data/logs/
 *.log
 
-# ===== Spike 运行产物（不入库） =====
-spike/**/result.json
-spike/**/cookie_inspect.json
-
 # ===== 通用 =====
 .env
 .env.local

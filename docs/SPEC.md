@@ -47,7 +47,7 @@
 | HTTP 客户端 | **wreq 6（Chrome147 指纹伪装，BoringSSL）** |
 | 数据库 | **SQLite（rusqlite）**，schema 与旧 Python 版逐字兼容 |
 | 依赖管理 | 后端 **cargo** + 前端 **pnpm** |
-| 打包 | **Tauri bundler**（三平台 CI 待建，见 docs/PACKAGING.md） |
+| 打包 | **Tauri bundler**（三平台 CI：`.github/workflows/release.yml`，tag 触发） |
 
 ### 2.2 不选的替代方案与理由
 
@@ -520,9 +520,9 @@ cargo tauri dev        # 仓库根执行；等价 cd frontend && pnpm tauri dev
 
 ### 8.4 跨平台 CI
 
-原 Python 三平台 release workflow 已随旧栈移除；Tauri 版 CI 待建（需预装
-cmake + Rust + pnpm，matrix 三平台跑 `cargo tauri build`）。见
-`docs/PACKAGING.md`。
+原 Python 三平台 release workflow 已随旧栈移除；Tauri 版已重建：
+`.github/workflows/release.yml`，tag `v*` 触发四路 matrix（macOS 双架构、
+ubuntu、windows），tauri-action 构建并附加产物到 GitHub Release。
 
 ---
 
@@ -562,7 +562,7 @@ cmake + Rust + pnpm，matrix 三平台跑 `cargo tauri build`）。见
 | R7 | 登录探测依赖 `/ajax/user/self` 扁平结构（顶层 userData/token） | 低 | `fetch_session_probe` 双分类错误 + 以非空 `userData.id` 为权威判据；pixiv 改版时重新探测（旧栈页面内 `meta.apiClient.token` 多路径 JS 提取已随旧栈移除） |
 | R8 | Chromium CDP 登录依赖本机浏览器 | 中 | 支持 Chrome/Edge/Chromium；**缺失时无回退登录窗**（ADR 0008 裁剪），提示改用手动 Cookie 登录 |
 | R9 | wreq 为 RC 版本且锁版本，风控指纹需随 pixiv 更新 | 中 | 升级 emulation 档位需重新 spike 验证；版本线不可低于 Apache 化（3.0.0-rc.12） |
-| R10 | 三平台发布 CI 待重建（wreq 需 cmake） | 中 | 见 docs/PACKAGING.md；短期本地手动构建 |
+| R10 | 三平台发布 CI 首跑未验证（wreq 需 cmake + libclang，mac/linux 路径未实机跑） | 中 | 下次 push tag 时观察首跑；失败按日志补依赖声明 |
 
 ---
 
