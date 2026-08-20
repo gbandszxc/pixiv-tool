@@ -2,6 +2,8 @@
 
 **状态**：部分被 ADR 0006 补充 · **日期**：2026-07-19 · **关联 SPEC**：§5.3
 
+> 状态补充（2026-08-20）：Windows DPAPI 文件方案已被 [ADR 0008](0008-tauri-rewrite.md) 取代为 keyring（系统 Credential Manager / Keychain / Secret Service 统一接口）；「跨平台接口预留」的意图由 keyring 落地。
+
 > 2026-07-23：Windows DPAPI 决策不变；macOS Keychain 已由 ADR 0006 实现，
 > 不再是 stub。
 

@@ -64,7 +64,7 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 ```
 
 - 无后端进程/端口：IPC 直连，Vite 仅 dev 期占用 9961（strictPort）
-- 系统依赖：macOS/Linux 构建需 cmake（wreq 编译 BoringSSL）
+- 系统依赖：构建需 cmake（wreq 编译 BoringSSL，全平台，见 docs/PACKAGING.md）
 
 ### Git 约定
 

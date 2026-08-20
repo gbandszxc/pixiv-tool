@@ -5,12 +5,15 @@
 ## 探索前必读
 
 - **`docs/SPEC.md`** —— 本项目的单一真相源（13 章 + 风险登记 + ADR 索引）
-- **`docs/adr/`** —— 读涉及你即将修改区域的 ADR。当前已有：
-  - `0001-pywebview-fastapi-vue.md`：技术栈选型
-  - `0002-login-strategy.md`：登录策略
-  - `0003-task-model.md`：任务模型
-  - `0004-cookie-storage.md`：cookie 存储
-  - `0005-cookie-probe-result.md`：R1 spike 结论（含 5 个 bug 修复详情）
+- **`docs/adr/`** —— 读涉及你即将修改区域的 ADR。当前 0001 ~ 0008：
+  - `0001`：初版技术栈选型（桌面壳 + Python 后端；已被 0008 取代，Vue3 前端沿用）
+  - `0002`：登录策略（浏览器登录主导 + 手动 Cookie 兜底）
+  - `0003`：任务模型（Source + Crawler + Task 状态机）
+  - `0004`：Cookie 存储策略（已被 0008 的 keyring 方案取代）
+  - `0005`：R1 spike 结论（Cookie 探测可行性 + spike→主代码复用清单）
+  - `0006`：真实 Chromium 登录 + macOS Keychain
+  - `0007`：插画抓取（IllustSource / IllustCrawler + novel/pic 目录分域）
+  - `0008`：全量重构为 Tauri 2 + Rust（现行架构）
 
 > 注：标准 mattpocock 流程用 `CONTEXT.md` 作为术语表。本项目目前用 `docs/SPEC.md` 统一承载规格 + 术语，未单独建 `CONTEXT.md`。如果术语开始膨胀（>20 个专有名词），再用 `/domain-modeling` 拆出 `CONTEXT.md`。
 
@@ -20,16 +23,32 @@
 
 ```
 /
+├── AGENTS.md / DESIGN.md / PRODUCT.md / README.md
+├── config/                        ← 用户配置（settings.json；登录态在系统凭据存储，不在文件系统）
+├── data/                          ← 用户数据（app.db、logs/；绝不入库）
 ├── docs/
 │   ├── SPEC.md                    ← 真相源（项目规格 + 风险登记）
-│   ├── adr/                       ← 架构决策记录
-│   │   ├── 0001-pywebview-fastapi-vue.md
-│   │   └── ...
-│   └── agents/                    ← skills 配置（本目录）
+│   ├── PACKAGING.md               ← Tauri 打包与分发指引
+│   ├── adr/                       ← 架构决策记录（0001 ~ 0008）
+│   ├── agents/                    ← skills 配置（本目录）
+│   └── icon/                      ← 应用图标源图（raw_icon.png）
+├── frontend/                      ← Vue3 + TS + Vite（api 层走 invoke/listen）
+├── scripts/
+│   └── make_icon.sh               ← 图标生成（raw_icon.png → 1024×1024 源图）
 ├── spike/                         ← 风险验证脚本
 │   └── cookie_probe/
-├── src/pixiv_tool/                ← Python FastAPI 后端
-└── frontend/                      ← Vue3 + Vite
+└── src-tauri/                     ← Tauri 2 + Rust 后端（单进程，IPC 通信）
+    ├── Cargo.toml / tauri.conf.json / build.rs
+    ├── capabilities/              ← Tauri 权限声明
+    ├── icons/                     ← 全平台图标（tauri.conf.json 引用，必须入库）
+    ├── tests/                     ← IPC 冒烟测试（smoke_commands.rs）
+    └── src/
+        ├── main.rs / lib.rs       ← 入口薄壳 / 业务库（lib 名 pixiv_tool_lib）
+        ├── state.rs / db.rs / settings.rs / cookies.rs / paths.rs / platform.rs / logging.rs
+        ├── pixiv/                 ← API 客户端（client / api / csrf）
+        ├── core/                  ← 任务模型（sources / crawler / illust_crawler / exporter / task_manager）
+        ├── auth/                  ← 登录（browser_login / cdp）
+        └── commands/              ← #[tauri::command] IPC 命令层
 ```
 
 ## 用 SPEC 的术语

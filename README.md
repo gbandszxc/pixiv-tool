@@ -18,7 +18,7 @@
 
 - Rust 1.85+（edition 2024）+ [Tauri CLI](https://tauri.app/)（`cargo install tauri-cli`）
 - Node.js 18+ + [pnpm](https://pnpm.io/)
-- **cmake**（macOS/Linux：wreq 现场编译 BoringSSL；`brew install cmake`）
+- **cmake**（全平台：wreq 现场编译 BoringSSL；macOS `brew install cmake`）
 - Windows 10+ 或 macOS 12+；Linux 需 webkit2gtk（见下）
 
 ### 启动开发
@@ -59,7 +59,10 @@ dev 模式数据目录沿用仓库 `data/`、`config/`（与旧 Python 版 dev �
 pixiv-tool/
 ├─ src-tauri/   # Tauri 2 + Rust 后端（pixiv 客户端/爬虫/命令层/存储）
 ├─ frontend/    # Vue3 + TS + Vite（api 层走 invoke/listen）
-├─ docs/        # SPEC + ADR
+├─ docs/        # SPEC + ADR + 打包指引
+├─ scripts/     # make_icon.sh（图标生成）
+├─ config/      # 用户配置（settings.json，dev 模式生效）
+├─ data/        # 用户数据（app.db，dev 模式生效）
 └─ spike/       # 探索性验证代码
 ```
 

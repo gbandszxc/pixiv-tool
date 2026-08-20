@@ -33,4 +33,4 @@
 
 - **当前 feature**：`pixiv-tool-v1`（路径 `.scratch/pixiv-tool-v1/`）
 - **上游 spec**：`docs/SPEC.md`（13 章）
-- **关联 ADR**：`docs/adr/0001` ~ `0005`
+- **关联 ADR**：`docs/adr/0001` ~ `0008`
