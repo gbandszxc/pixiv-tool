@@ -73,13 +73,15 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 
 ### 应用图标
 
-换应用图标两步：
+换应用图标三步：
 
-1. 替换源图 `frontend/src/assets/icon.png`（正方形最佳）
-2. 重新生成并打包：`cargo tauri icon frontend/src/assets/icon.png`（产出
-   `src-tauri/icons/` 全平台全尺寸），然后 `cargo tauri build`
+1. 替换源图 `docs/icon/raw_icon.png`（正方形最佳；非正方形脚本会居中裁方）
+2. `./scripts/make_icon.sh`——生成 1024×1024 源图到 `frontend/src/assets/icon.png`
+   （兼作 UI 侧栏图标与 tauri icon 输入；macOS 用自带 sips，无第三方依赖）
+3. `cargo tauri icon frontend/src/assets/icon.png`——生成 `src-tauri/icons/` 全平台
+   图标集，再 `cargo tauri build` 生效
 
-平台覆盖由 Tauri bundler 自动处理（Windows ico / macOS icns / Linux png）。
+`src-tauri/icons/` **必须入库**（tauri.conf.json 引用，缺失会构建失败）。
 
 ### 安全边界
 
