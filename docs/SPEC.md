@@ -47,7 +47,7 @@
 | HTTP 客户端 | **wreq 6（Chrome147 指纹伪装，BoringSSL）** |
 | 数据库 | **SQLite（rusqlite）**，schema 与旧 Python 版逐字兼容 |
 | 依赖管理 | 后端 **cargo** + 前端 **pnpm** |
-| 打包 | **Tauri bundler**（三平台 CI：`.github/workflows/release.yml`，tag 触发） |
+| 打包 | **Tauri bundler**（仅本地按需打包：release / debug，无 CI） |
 
 ### 2.2 不选的替代方案与理由
 
@@ -522,11 +522,14 @@ cargo tauri dev        # 仓库根执行；等价 cd frontend && pnpm tauri dev
 3. 图标：`cargo tauri icon frontend/src/assets/icon.png`（已生成于
    `src-tauri/icons/`）
 
-### 8.4 跨平台 CI
+### 8.4 发布方式（仅本地打包）
 
-原 Python 三平台 release workflow 已随旧栈移除；Tauri 版已重建：
-`.github/workflows/release.yml`，tag `v*` 触发四路 matrix（macOS 双架构、
-ubuntu、windows），tauri-action 构建并附加产物到 GitHub Release。
+GitCode 托管无流水线，`.github/workflows/release.yml` 已移除。**打包只在本地
+按需执行**：`cargo tauri build`（release，出平台安装包）或
+`cargo tauri build --debug --no-bundle`（调试二进制），命令见 §8.3 与
+`docs/PACKAGING.md`。三平台安装包需分别在对应系统本地构建。版本以
+`src-tauri/tauri.conf.json` 的 `version` 为准，tag（`v*`）仅作版本标记，
+不触发任何自动化。
 
 ---
 
@@ -566,7 +569,7 @@ ubuntu、windows），tauri-action 构建并附加产物到 GitHub Release。
 | R7 | 登录探测依赖 `/ajax/user/self` 扁平结构（顶层 userData/token） | 低 | `fetch_session_probe` 双分类错误 + 以非空 `userData.id` 为权威判据；pixiv 改版时重新探测（旧栈页面内 `meta.apiClient.token` 多路径 JS 提取已随旧栈移除） |
 | R8 | Chromium CDP 登录依赖本机浏览器 | 低 | 支持 Chrome/Edge/Chromium；缺失时回退内嵌 webview 登录窗（ADR 0009，2026-08-21 真人登录实测 PASS）；残余风险：WebKit 指纹变化可能影响 reCAPTCHA 通过率，届时仍有手动 Cookie 兜底 |
 | R9 | wreq 为 RC 版本且锁版本，风控指纹需随 pixiv 更新 | 中 | 升级 emulation 档位需重新 spike 验证；版本线不可低于 Apache 化（3.0.0-rc.12） |
-| R10 | 三平台发布 CI 首跑未验证（wreq 需 cmake + libclang，mac/linux 路径未实机跑） | 中 | 下次 push tag 时观察首跑；失败按日志补依赖声明 |
+| ~~R10~~ | ~~三平台发布 CI 首跑未验证~~（历史） | **✅ 已消除** | GitCode 无流水线，release CI 已整体移除（2026-08-21），打包仅在本地按需执行（§8.4） |
 
 ---
 
