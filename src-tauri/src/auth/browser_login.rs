@@ -48,7 +48,8 @@ pub struct LoginResult {
 }
 
 impl LoginResult {
-    fn terminal(status: &str, message: Option<String>) -> Self {
+    /// 构造非 success 终态（cancelled / timeout / error），供 webview_login 复用。
+    pub(crate) fn terminal(status: &str, message: Option<String>) -> Self {
         Self {
             status: status.to_string(),
             cookies: None,
@@ -155,7 +156,8 @@ pub fn has_pixiv_main_target(items: &[Value]) -> bool {
 }
 
 /// URL → 小写主机名（剥 scheme / userinfo / 端口），等价 Python `urlparse().hostname`。
-fn url_host(url: &str) -> Option<String> {
+/// 供 webview_login 轮询窗口 URL 时复用。
+pub fn url_host(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
     let authority = rest.split(['/', '?', '#']).next()?;
     let host = authority.rsplit('@').next()?;

@@ -72,7 +72,7 @@ import {
   NAlert,
   useMessage,
 } from "naive-ui";
-import { useAuthStore } from "../../stores/auth";
+import { useAuthStore, LoginError } from "../../stores/auth";
 import { errorMessage } from "../../api/tauri";
 
 // 此组件渲染在 NMessageProvider 子树内,useMessage 可正常工作。
@@ -115,15 +115,22 @@ async function handleCookieLogin() {
 
 async function handleBuiltinLogin() {
   try {
+    // login() 仅在后端返回 success 且携带 user 时正常返回，否则抛 LoginError
     await authStore.login();
-    if (authStore.isLoggedIn) {
-      message.success(t("auth.loginSuccess"));
-      emit("update:show", false);
-    } else {
-      message.warning(t("auth.builtinLoginNoResult"));
-    }
+    message.success(t("auth.loginSuccess"));
+    emit("update:show", false);
   } catch (err: unknown) {
-    message.error(errorMessage(err) || t("auth.loginFailed"));
+    if (err instanceof LoginError) {
+      if (err.status === "cancelled") {
+        // 用户主动关闭浏览器窗口，不算失败，温和提示即可
+        message.warning(t("auth.builtinLoginNoResult"));
+      } else {
+        // timeout/error：优先展示后端原因（超时/错误细节），为空再回退通用文案
+        message.error(err.message || t("auth.loginFailed"));
+      }
+    } else {
+      message.error(errorMessage(err) || t("auth.loginFailed"));
+    }
   }
 }
 </script>

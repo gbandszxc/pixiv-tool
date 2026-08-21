@@ -11,6 +11,20 @@ export interface AuthState {
   profileImg: string;
 }
 
+/**
+ * auth_login 返回非 success 时抛出：携带后端 status 与原始 message。
+ * message 可能为空，展示侧需自行回退到本地化通用文案。
+ */
+export class LoginError extends Error {
+  status: AuthLoginResponse["status"];
+
+  constructor(status: AuthLoginResponse["status"], message?: string) {
+    super(message);
+    this.name = "LoginError";
+    this.status = status;
+  }
+}
+
 export const useAuthStore = defineStore("auth", () => {
   const isLoggedIn = ref(false);
   const userId = ref("");
@@ -61,7 +75,10 @@ export const useAuthStore = defineStore("auth", () => {
           profileImg: user.profile_img || "",
         });
       } else {
+        // 非 success（cancelled/timeout/error）：仍刷新一次本地登录态，
+        // 再抛出携带后端信息的错误，由视图层展示具体原因。
         await checkStatus();
+        throw new LoginError(response.status, response.message);
       }
     } finally {
       isLoggingIn.value = false;
