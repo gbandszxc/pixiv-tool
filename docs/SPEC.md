@@ -142,10 +142,14 @@ pixiv-tool/
 
 ### 4.1 登录与 Cookie（V1 最高风险点）
 
-**方案**：真实 Chromium 独立 profile CDP 登录主导 + 手动粘 PHPSESSID 兜底。
-**无回退登录窗**——Tauri 的 WKWebView / WebView2 没有统一的 Cookie 读取 API
-（PHPSESSID 是 HttpOnly），本机没有 Chrome / Edge / Chromium 时返回 error 终态，
-文案引导改用手动 Cookie 登录（ADR 0008 裁剪）。
+**方案**：真实 Chromium 独立 profile CDP 登录主导 + 手动粘 PHPSESSID 兜底 +
+内嵌 webview 登录窗回退。本机没有 Chrome / Edge / Chromium
+（BrowserNotFoundError）时不返回 error 终态，而是回退打开内嵌 webview 登录窗
+（960×720，独立数据目录 `<config>/login-webview-profile`）：真人登录跳转 pixiv
+主站后经 Tauri 原生 cookie API（wry 0.55 内置，三平台原生存储实现，HttpOnly
+无损可读）提取 Cookie，复用同一会话验证与 Keychain 存储，`LoginResult` 契约
+不变（ADR 0009，恢复 ADR 0006 第 6 条、曾被 ADR 0008 裁剪的回退路径）。环境
+变量 `PIXIV_TOOL_FORCE_WEBVIEW_LOGIN=1` 强制走 webview 路径（测试钩子）。
 
 **登录流程**（`src-tauri/src/auth/browser_login.rs` + `auth/cdp.rs`）：
 
@@ -447,7 +451,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | 命令 | 说明 |
 |---|---|
 | `auth_status` | 登录态探测（2s 超时；401/403 清 cookie，其余失败保留） |
-| `auth_login` | 真实 Chromium CDP 登录（长阻塞，最长 300s）；无浏览器时返回 error 提示改用手动登录 |
+| `auth_login` | 真实 Chromium CDP 登录（长阻塞，最长 300s）；无浏览器时回退内嵌 webview 登录窗（ADR 0009），`PIXIV_TOOL_FORCE_WEBVIEW_LOGIN=1` 强制走 webview |
 | `auth_login_manual(phpsessid)` | 手动 PHPSESSID（normalize → 会话探测 → 存储） |
 | `auth_logout` | 清空系统凭据存储 |
 | `tasks_list(category?)` | 任务列表（按小说/插画过滤） |
@@ -560,7 +564,7 @@ ubuntu、windows），tauri-action 构建并附加产物到 GitHub Release。
 | ~~R5~~ | ~~PyInstaller hidden import 漏配~~（历史） | **✅ 已消除** | 随 Python 旧栈整体移除（ADR 0008），无打包 spec 需维护 |
 | R6 | 长任务断点续传数据一致性 | 中 | 每篇抓完即写库（单条 INSERT 原子）；任务进度逐项落库 |
 | R7 | 登录探测依赖 `/ajax/user/self` 扁平结构（顶层 userData/token） | 低 | `fetch_session_probe` 双分类错误 + 以非空 `userData.id` 为权威判据；pixiv 改版时重新探测（旧栈页面内 `meta.apiClient.token` 多路径 JS 提取已随旧栈移除） |
-| R8 | Chromium CDP 登录依赖本机浏览器 | 中 | 支持 Chrome/Edge/Chromium；**缺失时无回退登录窗**（ADR 0008 裁剪），提示改用手动 Cookie 登录 |
+| R8 | Chromium CDP 登录依赖本机浏览器 | 低 | 支持 Chrome/Edge/Chromium；缺失时回退内嵌 webview 登录窗（ADR 0009，2026-08-21 真人登录实测 PASS）；残余风险：WebKit 指纹变化可能影响 reCAPTCHA 通过率，届时仍有手动 Cookie 兜底 |
 | R9 | wreq 为 RC 版本且锁版本，风控指纹需随 pixiv 更新 | 中 | 升级 emulation 档位需重新 spike 验证；版本线不可低于 Apache 化（3.0.0-rc.12） |
 | R10 | 三平台发布 CI 首跑未验证（wreq 需 cmake + libclang，mac/linux 路径未实机跑） | 中 | 下次 push tag 时观察首跑；失败按日志补依赖声明 |
 

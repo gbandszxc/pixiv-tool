@@ -29,7 +29,7 @@
 开工前先读：
 
 1. `docs/SPEC.md` —— 完整规格 + 风险登记
-2. `docs/adr/0001` ~ `0008` —— 关键架构决策（0008 为现行架构：Tauri 全量重构）
+2. `docs/adr/0001` ~ `0009` —— 关键架构决策（0008 为现行架构：Tauri 全量重构；0009 为 webview 登录回退）
 3. 你要动的 ticket（`.scratch/pixiv-tool-v1/issues/<NN>-xxx.md`）
 4. 涉及前端界面、组件、样式或交互时，必须先读根目录 `DESIGN.md`。
 5. 涉及打包/分发时，先读 `docs/PACKAGING.md`。
