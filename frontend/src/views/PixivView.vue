@@ -64,8 +64,7 @@
       </div>
 
       <div class="toolbar-actions">
-        <!-- Phase 3 接同步逻辑，本阶段 disabled 占位 -->
-        <n-button size="small" disabled>
+        <n-button size="small" :loading="syncingLogin" @click="handleSyncLogin">
           {{ t('pixiv.syncLogin') }}
         </n-button>
       </div>
@@ -184,7 +183,15 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from "vue"
 import { useRouter } from "vue-router";
 import { NButton, NTooltip, NSpin, NCheckboxGroup, NCheckbox, NAlert } from "naive-ui";
 import { useI18n } from "vue-i18n";
-import { invoke, listen, isTauri, errorMessage, type UnlistenFn } from "../api/tauri";
+import {
+  invoke,
+  listen,
+  isTauri,
+  errorMessage,
+  type UnlistenFn,
+  type BrowseSyncLoginResponse,
+} from "../api/tauri";
+import { useAuthStore } from "../stores/auth";
 import { useTaskStore } from "../stores/tasks";
 import { parsePixivUrl } from "../utils/pixivUrl";
 
@@ -192,8 +199,8 @@ const BROWSE_HOME = "https://www.pixiv.net/";
 
 const { t } = useI18n();
 const router = useRouter();
+const authStore = useAuthStore();
 const taskStore = useTaskStore();
-
 const hostEl = ref<HTMLElement | null>(null);
 const currentUrl = ref("");
 
@@ -218,9 +225,9 @@ const detectedLabel = computed(() => {
 // 格式选择与操作状态
 const selectedFormats = ref(["txt", "markdown"]);
 const submitting = ref(false);
+const syncingLogin = ref(false);
 const alertMessage = ref("");
-const alertType = ref<"success" | "error" | "info">("info");
-
+const alertType = ref<"success" | "error" | "info" | "warning">("info");
 let unlisten: UnlistenFn | null = null;
 let resizeObserver: ResizeObserver | null = null;
 
@@ -244,6 +251,33 @@ function handleReload() {
   invoke("browse_navigate", { url: currentUrl.value || BROWSE_HOME }).catch(() => {});
 }
 
+
+async function handleSyncLogin() {
+  syncingLogin.value = true;
+  alertMessage.value = "";
+  try {
+    const res = await invoke<BrowseSyncLoginResponse>("browse_sync_login");
+    if (res.status === "success") {
+      await authStore.checkStatus();
+      alertMessage.value = t("pixiv.syncLoginSuccess");
+      alertType.value = "success";
+    } else if (res.status === "no_session") {
+      alertMessage.value = t("pixiv.syncLoginNoSession");
+      alertType.value = "warning";
+    } else if (res.status === "invalid") {
+      alertMessage.value = res.message || t("pixiv.syncLoginInvalid");
+      alertType.value = "error";
+    } else {
+      alertMessage.value = res.message || t("pixiv.syncLoginError");
+      alertType.value = "error";
+    }
+  } catch (err: unknown) {
+    alertMessage.value = errorMessage(err) || t("pixiv.syncLoginError");
+    alertType.value = "error";
+  } finally {
+    syncingLogin.value = false;
+  }
+}
 async function executeCreateTask(
   sourceType: string,
   sourceId: string,

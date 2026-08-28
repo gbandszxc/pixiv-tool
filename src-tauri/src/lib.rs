@@ -57,6 +57,7 @@ pub fn run() {
             commands::browse_cmds::browse_hide,
             commands::browse_cmds::browse_show,
             commands::browse_cmds::browse_navigate,
+            commands::browse_cmds::browse_sync_login,
             // tasks
             commands::task_cmds::tasks_list,
             commands::task_cmds::task_create,

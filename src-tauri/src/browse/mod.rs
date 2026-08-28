@@ -56,8 +56,47 @@ pub async fn ensure_browse_webview(app: &AppHandle, state: &AppState) -> Result<
             LogicalSize::new(1.0, 1.0),
         )
         .map_err(|e| format!("添加子 Webview 失败: {e}"))?;
-
     let _ = webview.hide();
+
+    // 注入已保存的登录态 Cookie 并导航至 Pixiv 首页
+    let home_url: Url = BROWSE_HOME
+        .parse()
+        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
+
+    let cookies = match state.cookies.load() {
+        Ok(c) => c,
+        Err(err) => {
+            log::warn!("读取本地登录态失败: {err}");
+            None
+        }
+    };
+
+    let wv_init = webview.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(map) = cookies {
+            if !map.is_empty() {
+                for (k, v) in map {
+                    if k.is_empty() || v.is_empty() {
+                        continue;
+                    }
+                    let cookie = tauri::webview::Cookie::build((k.clone(), v))
+                        .domain(".pixiv.net")
+                        .path("/")
+                        .secure(true)
+                        .http_only(true)
+                        .build();
+                    if let Err(err) = wv_init.set_cookie(cookie) {
+                        log::warn!("注入 Cookie 失败: {k} ({err})");
+                    }
+                }
+            }
+        }
+        if let Err(err) = wv_init.navigate(home_url) {
+            log::warn!("导航到 Pixiv 首页失败: {err}");
+        }
+    })
+    .await
+    .map_err(|e| format!("异步执行异常: {e}"))?;
 
     if POLL_STARTED.set(()).is_ok() {
         let app_handle = app.clone();

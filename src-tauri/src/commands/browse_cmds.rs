@@ -100,3 +100,52 @@ pub async fn browse_navigate(app: AppHandle, url: String) -> Result<(), String> 
     .await
     .map_err(|e| format!("异步执行异常: {e}"))?
 }
+
+/// 从子 webview 提取并同步登录态到系统凭据存储。
+#[tauri::command]
+pub async fn browse_sync_login(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let wv = app
+        .get_webview(BROWSE_LABEL)
+        .ok_or_else(|| "未找到 Pixiv 浏览窗口".to_string())?;
+
+    let raw_cookies = tokio::task::spawn_blocking(move || wv.cookies())
+        .await
+        .map_err(|e| format!("异步执行异常: {e}"))?
+        .map_err(|e| format!("读取浏览器 Cookie 失败: {e}"))?;
+
+    let mut cookies = crate::auth::webview_login::extract_pixiv_cookies_from_store(&raw_cookies);
+
+    let phpsessid = match cookies.get("PHPSESSID").filter(|v| !v.is_empty()) {
+        Some(s) => s.clone(),
+        None => {
+            return Ok(serde_json::json!({
+                "status": "no_session",
+            }));
+        }
+    };
+
+    match crate::pixiv::csrf::fetch_session_probe(&phpsessid).await {
+        Ok(probe) => {
+            cookies.insert("x-csrf-token".to_string(), probe.csrf_token);
+            state
+                .cookies
+                .save(&cookies)
+                .map_err(|e| format!("保存登录态失败: {e}"))?;
+
+            Ok(serde_json::json!({
+                "status": "success",
+            }))
+        }
+        Err(crate::pixiv::csrf::ProbeError::Invalid(_)) => Ok(serde_json::json!({
+            "status": "invalid",
+            "message": "PHPSESSID 无效或已过期",
+        })),
+        Err(e) => Ok(serde_json::json!({
+            "status": "error",
+            "message": e.to_string(),
+        })),
+    }
+}

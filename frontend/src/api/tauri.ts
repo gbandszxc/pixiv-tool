@@ -140,6 +140,12 @@ export interface AuthLoginManualResponse {
   user: AuthUserFields;
 }
 
+/** browse_sync_login：从内嵌浏览页提取 cookies 并同步到系统凭据存储。 */
+export interface BrowseSyncLoginResponse {
+  status: "success" | "no_session" | "invalid" | "error";
+  message?: string;
+}
+
 /** task://progress 事件 payload。 */
 export interface TaskProgressEvent {
   task_id: string;
