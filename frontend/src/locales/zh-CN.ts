@@ -178,5 +178,18 @@ export default {
     reload: "刷新",
     loading: "正在加载 Pixiv...",
     syncLogin: "同步登录态",
+    crawlNow: "立即抓取",
+    crawlUserNovels: "抓取全部小说",
+    crawlUserIllustrations: "抓取全部插画",
+    fillForm: "返填抓取表单",
+    fillIllustForm: "返填插画表单",
+    taskCreated: "任务已创建：{id}",
+    createFailed: "创建任务失败",
+    detected: {
+      novelSingle: "已识别小说 #{id}",
+      novelSeries: "已识别系列 #{id}",
+      user: "已识别用户 #{id}",
+      illustration: "已识别插画 #{id}",
+    },
   },
 };

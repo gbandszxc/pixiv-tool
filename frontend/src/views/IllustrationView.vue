@@ -34,13 +34,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { NCard, NForm, NFormItem, NInput, NRadioGroup, NRadio, NButton, NAlert } from "naive-ui";
 import { useI18n } from "vue-i18n";
 import { useTaskStore } from "../stores/tasks";
 import { errorMessage } from "../api/tauri";
+import { parsePixivUrl } from "../utils/pixivUrl";
 
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
 const taskStore = useTaskStore();
 
 const form = ref({
@@ -58,18 +62,24 @@ const inputPlaceholder = computed(() => {
 });
 
 function extractId(input: string): string {
-  // 从 URL 提取 ID: https://www.pixiv.net/artworks/12345
-  const artworkMatch = input.match(/\/artworks\/(\d+)/);
-  if (artworkMatch) return artworkMatch[1];
-  // https://www.pixiv.net/users/12345
-  const userMatch = input.match(/\/users\/(\d+)/);
-  if (userMatch) return userMatch[1];
-  // /user/12345
-  const userAltMatch = input.match(/\/user\/(\d+)/);
-  if (userAltMatch) return userAltMatch[1];
-  // 纯数字
+  const parsed = parsePixivUrl(input);
+  if (parsed && (parsed.kind === "illustration" || parsed.kind === "user")) {
+    return parsed.id;
+  }
   return input.trim();
 }
+
+onMounted(() => {
+  if (typeof route.query.sourceType === "string" && ["single", "user"].includes(route.query.sourceType)) {
+    form.value.sourceType = route.query.sourceType;
+  }
+  if (typeof route.query.sourceId === "string" && route.query.sourceId) {
+    form.value.sourceId = route.query.sourceId;
+  }
+  if (route.query.sourceType || route.query.sourceId) {
+    router.replace({ query: {} });
+  }
+});
 
 async function handleSubmit() {
   const sourceId = extractId(form.value.sourceId);

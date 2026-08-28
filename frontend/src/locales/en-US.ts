@@ -177,5 +177,18 @@ export default {
     reload: "Reload",
     loading: "Loading Pixiv...",
     syncLogin: "Sync Login",
+    crawlNow: "Crawl Now",
+    crawlUserNovels: "Crawl All Novels",
+    crawlUserIllustrations: "Crawl All Illustrations",
+    fillForm: "Fill Novel Form",
+    fillIllustForm: "Fill Illustration Form",
+    taskCreated: "Task created: {id}",
+    createFailed: "Failed to create task",
+    detected: {
+      novelSingle: "Detected Novel #{id}",
+      novelSeries: "Detected Series #{id}",
+      user: "Detected User #{id}",
+      illustration: "Detected Artwork #{id}",
+    },
   },
 };
