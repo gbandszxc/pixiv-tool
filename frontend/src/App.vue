@@ -89,6 +89,7 @@ import {
 import type { GlobalThemeOverrides, MenuOption } from "naive-ui";
 import LoginDialog from "./components/auth/LoginDialog.vue";
 import { useAuthStore } from "./stores/auth";
+import { invoke } from "./api/tauri";
 import SidebarIcon, { type SidebarIconName } from "./components/navigation/SidebarIcon.vue";
 
 const router = useRouter();
@@ -123,6 +124,13 @@ watch(siderCollapsed, (collapsed) => {
     }, 350);
   }
 });
+watch(showLoginDialog, (visible) => {
+  if (visible) {
+    invoke("browse_hide").catch(() => {});
+  } else if (route.path === "/pixiv") {
+    invoke("browse_show").catch(() => {});
+  }
+});
 
 const theme = computed(() => null); // 浅色，ticket 15 实现完整主题
 
@@ -149,6 +157,7 @@ function renderNavigationIcon(name: SidebarIconName) {
 
 // computed 让菜单文案随 locale 切换自动更新
 const menuOptions = computed<MenuOption[]>(() => [
+  { label: t("nav.pixiv"), key: "/pixiv", icon: renderNavigationIcon("pixiv") },
   {
     label: t("nav.crawl"),
     key: "crawl",

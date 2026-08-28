@@ -11,6 +11,7 @@ export default {
     open: "Open",
   },
   nav: {
+    pixiv: "Pixiv",
     crawl: "Crawl",
     crawlNovel: "Novel",
     crawlIllustration: "Illustration",
@@ -169,5 +170,12 @@ export default {
     maxWait: "Max wait time (s)",
     maxWaitHint: "Tasks auto-fail after running longer than this (pause time excluded). Default 180s.",
     maxWaitInvalid: "Max wait time must be at least 30 seconds",
+  },
+  pixiv: {
+    title: "Pixiv",
+    home: "Home",
+    reload: "Reload",
+    loading: "Loading Pixiv...",
+    syncLogin: "Sync Login",
   },
 };

@@ -11,6 +11,7 @@ export default {
     open: "打开",
   },
   nav: {
+    pixiv: "Pixiv",
     crawl: "抓取",
     crawlNovel: "小说",
     crawlIllustration: "插画",
@@ -170,5 +171,12 @@ export default {
     maxWait: "最大等待时间（秒）",
     maxWaitHint: "任务运行超过该时长自动标记失败，暂停时间不计入。默认 180s。",
     maxWaitInvalid: "最大等待时间必须 ≥ 30 秒",
+  },
+  pixiv: {
+    title: "Pixiv",
+    home: "主页",
+    reload: "刷新",
+    loading: "正在加载 Pixiv...",
+    syncLogin: "同步登录态",
   },
 };
