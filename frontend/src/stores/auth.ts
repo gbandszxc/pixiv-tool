@@ -1,7 +1,13 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { invoke } from "../api/tauri";
-import type { AuthLoginResponse, AuthLoginManualResponse, AuthStatusResponse } from "../api/tauri";
+import type {
+  AccountEntry,
+  AuthAccountsResponse,
+  AuthLoginResponse,
+  AuthLoginManualResponse,
+  AuthStatusResponse,
+} from "../api/tauri";
 
 export interface AuthState {
   isLoggedIn: boolean;
@@ -35,6 +41,12 @@ export const useAuthStore = defineStore("auth", () => {
   const profileImg = ref("");
   const avatarUrl = ref("");
   const isLoggingIn = ref(false);
+  /** 已保存的多账号列表（后端账号索引快照）。 */
+  const accounts = ref<AccountEntry[]>([]);
+  /** 当前激活账号的 user_id（未登录时可能为空）。 */
+  const activeAccountId = ref("");
+  /** 账号切换进行中（触发器转圈，防重复点击）。 */
+  const isSwitching = ref(false);
 
   function applyStatus(data: AuthState) {
     isLoggedIn.value = data.isLoggedIn;
@@ -81,6 +93,7 @@ export const useAuthStore = defineStore("auth", () => {
         });
         // auth_login 返回体不含头像缓存，补拉一次 auth_status（含代下与协议 URL）
         await checkStatus();
+        await fetchAccounts();
       } else {
         // 非 success（cancelled/timeout/error）：仍刷新一次本地登录态，
         // 再抛出携带后端信息的错误，由视图层展示具体原因。
@@ -108,11 +121,43 @@ export const useAuthStore = defineStore("auth", () => {
     });
     // 同 login：补拉含 avatar_url 的完整状态
     await checkStatus();
+    await fetchAccounts();
+  }
+
+  /** 拉取已保存账号列表（登录 / 登出 / 切换后调用以刷新下拉）。 */
+  async function fetchAccounts() {
+    try {
+      const data = await invoke<AuthAccountsResponse>("auth_accounts_list");
+      accounts.value = data.accounts ?? [];
+      activeAccountId.value = data.active ?? "";
+    } catch {
+      // 索引读取失败不阻塞主流程：保留旧列表，下次操作再试
+    }
+  }
+
+  /**
+   * 切换当前账号。后端会归档当前登录态、激活目标账号并同步内嵌 webview；
+   * 成功后本地刷新登录态与账号列表。失败抛 reject string（中文文案）。
+   */
+  async function switchAccount(targetUserId: string) {
+    if (isSwitching.value) {
+      return;
+    }
+    isSwitching.value = true;
+    try {
+      await invoke("auth_account_switch", { userId: targetUserId });
+      await checkStatus();
+      await fetchAccounts();
+    } finally {
+      isSwitching.value = false;
+    }
   }
 
   async function logout() {
     await invoke("auth_logout");
     clearAuth();
+    // 当前账号已从后端索引移除，刷新列表（其余账号保留）
+    await fetchAccounts();
   }
 
   function clearAuth() {
@@ -132,9 +177,14 @@ export const useAuthStore = defineStore("auth", () => {
     profileImg,
     avatarUrl,
     isLoggingIn,
+    accounts,
+    activeAccountId,
+    isSwitching,
     checkStatus,
     login,
     loginWithCookie,
+    fetchAccounts,
+    switchAccount,
     logout,
     clearAuth,
   };

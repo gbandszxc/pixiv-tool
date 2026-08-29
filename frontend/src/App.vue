@@ -33,35 +33,15 @@
           @update:value="navigateTo"
         />
         <div class="sider-footer">
-          <n-dropdown
-            v-if="authStore.isLoggedIn"
-            trigger="click"
-            :options="accountMenuOptions"
-            @select="handleAccountMenuSelect"
-          >
-            <button
-              class="account-trigger"
-              :class="{ 'is-collapsed': siderCollapsed }"
-              type="button"
-              :title="`user_id: ${authStore.userId}`"
-              :aria-label="t('auth.accountMenu', { id: authStore.pixivId || authStore.name })"
-            >
-              <!-- NAvatar 语义：default slot 存在则不渲染 img，故有 URL 时
-                   只给 #fallback（img 加载失败兜底），无 URL 时给 default 显示首字母。
-                   条件写在两个 n-avatar 外层：条件 slot（<template #fallback v-if> + v-else）
-                   会让 Vue 3.5.40 模板编译器崩溃（Codegen node is missing） -->
-              <n-avatar
-                v-if="authStore.avatarUrl"
-                round
-                :size="32"
-                :src="authStore.avatarUrl"
-              >
-                <template #fallback>{{ accountInitial }}</template>
-              </n-avatar>
-              <n-avatar v-else round :size="32">{{ accountInitial }}</n-avatar>
-              <span class="account-id">{{ authStore.pixivId || authStore.name }}</span>
-            </button>
-          </n-dropdown>
+          <!-- 多账号：下拉列出已保存账号（点击切换）+ 添加账号 + 退出登录。
+               下拉展开需先藏内嵌子 webview（原生层浮于 DOM 之上），经
+               visible 事件走统一的 syncBrowseVisibility -->
+          <AccountMenu
+            v-if="authStore.isLoggedIn || authStore.accounts.length > 0"
+            :collapsed="siderCollapsed"
+            @visible="syncBrowseVisibility"
+            @add-account="showLoginDialog = true"
+          />
           <n-button v-else size="small" block @click="showLoginDialog = true">{{ t('auth.login') }}</n-button>
         </div>
       </n-layout-sider>
@@ -100,14 +80,13 @@ import {
   NLayoutContent,
   NMenu,
   NButton,
-  NAvatar,
-  NDropdown,
   NMessageProvider,
   NModal,
 } from "naive-ui";
 import type { GlobalThemeOverrides, MenuOption } from "naive-ui";
 import { darkTheme } from "naive-ui";
 import LoginDialog from "./components/auth/LoginDialog.vue";
+import AccountMenu from "./components/auth/AccountMenu.vue";
 import { useAuthStore } from "./stores/auth";
 import { useSettingsStore } from "./stores/settings";
 import { invoke, setWindowTheme } from "./api/tauri";
@@ -211,12 +190,6 @@ const themeOverrides: GlobalThemeOverrides = {
   },
 };
 
-const accountInitial = computed(() => (authStore.name || authStore.pixivId || "P").charAt(0).toUpperCase());
-
-const accountMenuOptions = computed<MenuOption[]>(() => [
-  { label: t("auth.logout"), key: "logout" },
-]);
-
 function renderNavigationIcon(name: SidebarIconName) {
   return () => h(SidebarIcon, { name });
 }
@@ -242,12 +215,6 @@ function navigateTo(key: string) {
   router.push(key);
 }
 
-async function handleAccountMenuSelect(key: string) {
-  if (key === "logout") {
-    await authStore.logout();
-  }
-}
-
 onMounted(async () => {
   // 启动即取设置：主题（light/dark/auto）需要立即生效。
   // 失败时保持 windowThemeReady=false：窗口维持 Rust setup 按
@@ -259,6 +226,8 @@ onMounted(async () => {
     })
     .catch(() => {});
   authStore.checkStatus();
+  // 多账号列表：左下角下拉的账号项（失败静默，保留空列表展示登录按钮）
+  authStore.fetchAccounts();
   // 退出确认事件：Rust 拦截窗口关闭/Cmd+Q 后发来
   listen("app://confirm-exit", () => {
     showExitConfirm.value = true;
@@ -327,55 +296,7 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--divider);
 }
 
-.account-trigger {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  min-width: 0;
-  gap: 8px;
-  padding: 6px;
-  color: var(--ink);
-  font: inherit;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-control);
-  cursor: pointer;
-  transition: background-color 180ms ease-out;
-}
-
-/* 头像不参与收缩，避免侧栏收窄时被压成椭圆 */
-.account-trigger :deep(.n-avatar) {
-  flex-shrink: 0;
-}
-
-/* 折叠态：隐藏 ID 文字、头像居中，触发器不再被横向压扁 */
-.account-trigger.is-collapsed {
-  justify-content: center;
-  gap: 0;
-}
-
-.account-trigger.is-collapsed .account-id {
-  display: none;
-}
-
-.account-trigger:hover {
-  background: #e5f5ff;
-}
-
-.account-trigger:focus-visible {
-  outline: 2px solid var(--pixiv-blue);
-  outline-offset: 2px;
-}
-
-.account-id {
-  overflow: hidden;
-  flex: 1;
-  color: var(--ink-strong);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 账号触发器样式在 AccountMenu.vue（组件内 scoped） */
 
 /* Pixiv 内嵌全屏浏览路由：零内边距、充满高度、禁用外层滚动 */
 .app-content.is-pixiv-route {

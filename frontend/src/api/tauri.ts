@@ -156,6 +156,24 @@ export interface AuthLoginManualResponse {
   user: AuthUserFields;
 }
 
+/** 账号索引条目（auth_accounts_list.accounts 元素，snake_case）。 */
+export interface AccountEntry {
+  user_id: string;
+  pixiv_id?: string;
+  name?: string;
+  profile_img?: string;
+  avatar_file?: string;
+  /** 本地头像缓存协议 URL（pixiv-avatar://）；缺省回退首字母 */
+  avatar_url?: string;
+  saved_at?: number;
+}
+
+/** auth_accounts_list：已保存账号列表 + 当前激活账号 user_id。 */
+export interface AuthAccountsResponse {
+  active: string | null;
+  accounts: AccountEntry[];
+}
+
 /** browse_sync_login：从内嵌浏览页提取 cookies 并同步到系统凭据存储。 */
 export interface BrowseSyncLoginResponse {
   status: "success" | "injected" | "no_session" | "invalid" | "error";
