@@ -172,13 +172,6 @@ async fn ensure_avatar_file(state: &AppState, client: &PixivClient, url: &str) -
     Some(filename)
 }
 
-/// 确保头像缓存就绪并返回前端可用的协议 URL。
-async fn ensure_avatar_cache(state: &AppState, client: &PixivClient, url: &str) -> Option<String> {
-    ensure_avatar_file(state, client, url)
-        .await
-        .map(|file| avatar_scheme_url(&file))
-}
-
 /// 登记账号进多账号管理（凭据归档到 `u-<user_id>` + 索引 upsert + 激活）。
 /// 失败只记日志不向调用方传播：default 镜像已写成功，索引可由后续
 /// auth_status 校验成功补建档。

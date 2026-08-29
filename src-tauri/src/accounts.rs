@@ -79,7 +79,7 @@ fn now_unix() -> i64 {
 
 /// 索引文件结构（active 指向当前激活账号的 user_id）。
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-struct AccountsIndex {
+pub(crate) struct AccountsIndex {
     #[serde(default)]
     active: Option<String>,
     #[serde(default)]
@@ -122,7 +122,7 @@ impl AccountManager {
 
     /// 读索引：文件不存在 / 读失败 / JSON 损坏 → 备份损坏文件后返回默认
     /// （凭据本体在 keyring，索引损坏只丢列表不丢登录态，重新登录即恢复）。
-    pub fn load_index(&self) -> AccountsIndex {
+    pub(crate) fn load_index(&self) -> AccountsIndex {
         let path = self.index_path();
         let raw = match std::fs::read_to_string(&path) {
             Ok(raw) => raw,
