@@ -30,6 +30,13 @@ pub const BROWSE_HOME: &str = "https://www.pixiv.net/";
 
 #[cfg(windows)]
 const WEBVIEW2_COOKIE_DOMAIN: &str = ".pixiv.net";
+#[cfg(windows)]
+const WEBVIEW2_COOKIE_TTL_SECS: i64 = 90 * 24 * 60 * 60;
+
+#[cfg(windows)]
+fn webview2_cookie_expires_at(now_unix: i64) -> f64 {
+    now_unix.saturating_add(WEBVIEW2_COOKIE_TTL_SECS) as f64
+}
 
 static POLL_STARTED: OnceLock<()> = OnceLock::new();
 
@@ -158,6 +165,9 @@ pub fn inject_cookies_to_webview(
                     let uri = HSTRING::from(BROWSE_HOME);
                     let domain = HSTRING::from(WEBVIEW2_COOKIE_DOMAIN);
                     let path = HSTRING::from("/");
+                    let expires = webview2_cookie_expires_at(
+                        tauri::webview::cookie::time::OffsetDateTime::now_utc().unix_timestamp(),
+                    );
 
                     for (name, value) in &injectable {
                         let http_only = name == "PHPSESSID";
@@ -171,6 +181,7 @@ pub fn inject_cookies_to_webview(
                         )?;
                         cookie.SetIsSecure(true)?;
                         cookie.SetIsHttpOnly(http_only)?;
+                        cookie.SetExpires(expires)?;
                         manager.AddOrUpdateCookie(&cookie)?;
                     }
                     Ok(injectable.len())
@@ -227,33 +238,34 @@ fn auto_inject_on_first_load(app: &AppHandle, wv: &Webview, url: &Url) {
             return;
         }
 
-        // 探测 webview cookie 存储是否已带有效登录态（上次进程注入的
-        // cookie 持久化在 WKWebsiteDataStore）：有效则免注入+刷新，
-        // 消除每次启动首进 Pixiv 的可见整页刷新。
-        //
-        // 非 Windows 平台保留原探测；Windows 上 store 条目与实际请求的
-        // 域匹配可能不同，不能据此跳过注入。
-        // 「store 里有有效 sid」⇒「页面请求会携带」。Windows 上二者被
-        // wry 剥点拆开——host-only pixiv.net 可存有效 sid 但不发子域，
-        // 探测通过页面却仍访客（16:00 实证），故 Windows 必须无条件注入。
-        #[cfg(not(windows))]
-        {
-            let wv_probe = wv.clone();
-            let raw = tauri::async_runtime::spawn_blocking(move || wv_probe.cookies().ok())
-                .await
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let existing = crate::auth::webview_login::extract_pixiv_cookies_from_store(&raw);
-            if let Some(sid) = existing.get("PHPSESSID").filter(|v| !v.is_empty()) {
-                match crate::pixiv::csrf::fetch_session_probe(sid).await {
-                    Ok(_) => {
-                        log::info!("webview 已有有效登录态，跳过注入与刷新");
-                        return;
-                    }
-                    Err(e) => {
-                        log::info!("webview 登录态已失效（{e}），重新注入");
-                    }
+        // 只读取当前 URL 真正会携带的 Cookie：Windows 不能用 cookies()，
+        // 否则 host-only pixiv.net 条目会被误判为可发送到 www.pixiv.net。
+        // 已有会话有效时不注入、不刷新；过期或失效才回填 App 登录态。
+        let wv_probe = wv.clone();
+        let raw = tauri::async_runtime::spawn_blocking(move || {
+            #[cfg(windows)]
+            {
+                let home: Url = BROWSE_HOME.parse().expect("Pixiv 主页 URL 常量必然合法");
+                wv_probe.cookies_for_url(home).ok()
+            }
+            #[cfg(not(windows))]
+            {
+                wv_probe.cookies().ok()
+            }
+        })
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+        let existing = crate::auth::webview_login::extract_pixiv_cookies_from_store(&raw);
+        if let Some(sid) = existing.get("PHPSESSID").filter(|v| !v.is_empty()) {
+            match crate::pixiv::csrf::fetch_session_probe(sid).await {
+                Ok(_) => {
+                    log::info!("webview 已有有效登录态，跳过注入与刷新");
+                    return;
+                }
+                Err(e) => {
+                    log::info!("webview 登录态已失效（{e}），重新注入");
                 }
             }
         }
@@ -498,5 +510,11 @@ mod tests {
         assert_eq!(cookie.domain(), Some("pixiv.net"));
         assert_ne!(cookie.domain(), Some(WEBVIEW2_COOKIE_DOMAIN));
         assert_eq!(WEBVIEW2_COOKIE_DOMAIN, ".pixiv.net");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn webview2_cookie_is_persistent_for_90_days() {
+        assert_eq!(webview2_cookie_expires_at(1_000), 7_777_000.0);
     }
 }
