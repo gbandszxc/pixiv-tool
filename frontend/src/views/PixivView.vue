@@ -366,16 +366,9 @@ onMounted(async () => {
     }
   }
   await invoke("browse_open", { x, y, w, h }).catch(() => {});
-  if (authStore.isLoggedIn) {
-    await invoke("browse_inject_login").catch(() => {});
-  }
   await nextTick();
   syncBounds();
-
-  // 多轮延迟校准边界，确保过渡动画与容器完成布局后精准对齐
-  [50, 150, 300, 600, 1000].forEach((ms) => {
-    setTimeout(syncBounds, ms);
-  });
+  // 布局后续变化由 ResizeObserver / window resize 驱动，无需定时器连发
   if (isTauri()) {
     unlisten = await listen<{ url: string }>("browse://url-changed", (e) => {
       currentUrl.value = e.payload.url;

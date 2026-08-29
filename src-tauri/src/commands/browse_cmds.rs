@@ -32,6 +32,34 @@ pub async fn browse_open(
     Ok(())
 }
 
+/// 将客户端保存的登录态注入子 Webview 并刷新首页（load 后注入，可靠路径）。
+///
+/// 返回是否执行了注入（本地存在非空 PHPSESSID 才注入）。
+async fn inject_saved_and_reload(
+    wv: &tauri::Webview,
+    cookies: &crate::cookies::CookieStore,
+) -> Result<bool, String> {
+    let Ok(Some(saved)) = cookies.load() else {
+        return Ok(false);
+    };
+    if !saved.get("PHPSESSID").is_some_and(|s| !s.is_empty()) {
+        return Ok(false);
+    }
+    let home_url: Url = crate::browse::BROWSE_HOME
+        .parse()
+        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
+
+    let wv_inject = wv.clone();
+    tokio::task::spawn_blocking(move || {
+        let n = crate::browse::inject_cookies_to_webview(&wv_inject, &saved);
+        let _ = wv_inject.navigate(home_url);
+        log::info!("同步登录回退注入 {n} 个 Cookie 并刷新首页");
+    })
+    .await
+    .map_err(|e| format!("异步执行异常: {e}"))?;
+    Ok(true)
+}
+
 /// 同步子 webview 的边界位置与尺寸。
 ///
 /// 前端根据占位 DOM 的 bounding rect 传入逻辑坐标。
@@ -54,6 +82,11 @@ pub async fn browse_set_bounds(
 
     log::info!("设置浏览页边界: x={x}, y={y}, w={w}, h={h}");
 
+    let scale_factor = app
+        .get_window("main")
+        .and_then(|win| win.scale_factor().ok())
+        .unwrap_or(1.0);
+
     let rect = tauri::Rect {
         position: tauri::Position::Logical(tauri::LogicalPosition::new(x, y)),
         size: tauri::Size::Logical(tauri::LogicalSize::new(w, h)),
@@ -62,6 +95,21 @@ pub async fn browse_set_bounds(
     tokio::task::spawn_blocking(move || {
         wv.set_bounds(rect)
             .map_err(|e| format!("设置 bounds 失败: {e}"))?;
+        // 回读校准：确认 setFrame 实际生效（bounds 错位问题的诊断信号）
+        match wv.bounds() {
+            Ok(rb) => {
+                let pos = rb.position.to_logical::<f64>(scale_factor);
+                let size = rb.size.to_logical::<f64>(scale_factor);
+                log::info!(
+                    "边界同步: sent=({x},{y},{w},{h}) readback=({:.0},{:.0},{:.0},{:.0})",
+                    pos.x,
+                    pos.y,
+                    size.width,
+                    size.height
+                );
+            }
+            Err(e) => log::warn!("边界回读失败: {e}"),
+        }
         let _ = wv.show();
         Ok::<(), String>(())
     })
@@ -143,24 +191,11 @@ pub async fn browse_sync_login(
     let phpsessid = match cookies.get("PHPSESSID").filter(|v| !v.is_empty()) {
         Some(s) => s.clone(),
         None => {
-            // 若 Webview 中未检测到登录态，但客户端本地已保存登录态，则主动注入到 Webview 并刷新
-            if let Ok(Some(saved)) = state.cookies.load() {
-                if saved.get("PHPSESSID").is_some_and(|s| !s.is_empty()) {
-                    let wv_inject = wv.clone();
-                    let home_url: Url = crate::browse::BROWSE_HOME
-                        .parse()
-                        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
-                    tokio::task::spawn_blocking(move || {
-                        crate::browse::inject_cookies_to_webview(&wv_inject, &saved);
-                        let _ = wv_inject.navigate(home_url);
-                    })
-                    .await
-                    .map_err(|e| format!("异步执行异常: {e}"))?;
-
-                    return Ok(serde_json::json!({
-                        "status": "injected",
-                    }));
-                }
+            // Webview 中无登录态：尝试将本地保存的登录态注入并刷新
+            if inject_saved_and_reload(&wv, &state.cookies).await? {
+                return Ok(serde_json::json!({
+                    "status": "injected",
+                }));
             }
             return Ok(serde_json::json!({
                 "status": "no_session",
@@ -181,25 +216,12 @@ pub async fn browse_sync_login(
             }))
         }
         Err(crate::pixiv::csrf::ProbeError::Invalid(_)) => {
-            // Webview 中提取到的 PHPSESSID 为未登录/匿名访客 session
-            // 尝试读取客户端本地保存的真实登录态并注入到 Webview
-            if let Ok(Some(saved)) = state.cookies.load() {
-                if saved.get("PHPSESSID").is_some_and(|s| !s.is_empty()) {
-                    let wv_inject = wv.clone();
-                    let home_url: Url = crate::browse::BROWSE_HOME
-                        .parse()
-                        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
-                    tokio::task::spawn_blocking(move || {
-                        crate::browse::inject_cookies_to_webview(&wv_inject, &saved);
-                        let _ = wv_inject.navigate(home_url);
-                    })
-                    .await
-                    .map_err(|e| format!("异步执行异常: {e}"))?;
-
-                    return Ok(serde_json::json!({
-                        "status": "injected",
-                    }));
-                }
+            // Webview 中提取到的 PHPSESSID 为未登录/匿名访客 session：
+            // 注入本地保存的真实登录态并刷新
+            if inject_saved_and_reload(&wv, &state.cookies).await? {
+                return Ok(serde_json::json!({
+                    "status": "injected",
+                }));
             }
             Ok(serde_json::json!({
                 "status": "no_session",
@@ -221,22 +243,5 @@ pub async fn browse_inject_login(
     let Some(wv) = app.get_webview(BROWSE_LABEL) else {
         return Ok(false);
     };
-
-    let cookies = match state.cookies.load() {
-        Ok(Some(c)) if !c.is_empty() => c,
-        _ => return Ok(false),
-    };
-    let home_url: Url = crate::browse::BROWSE_HOME
-        .parse()
-        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
-
-    let wv_inject = wv.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::browse::inject_cookies_to_webview(&wv_inject, &cookies);
-        let _ = wv_inject.navigate(home_url);
-        let _ = wv_inject.show();
-    })
-    .await
-    .map_err(|e| format!("异步执行异常: {e}"))?;
-    Ok(true)
+    inject_saved_and_reload(&wv, &state.cookies).await
 }
