@@ -36,11 +36,58 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(log_plugin)
-        .plugin(tauri_plugin_dialog::init())
+        // 头像回显协议：从 data/cache 读取后端代下的头像文件。
+        // i.pximg.net 防盗链导致 webview 直连 403，故走本地自定义协议。
+        .register_uri_scheme_protocol("pixiv-avatar", |ctx, request| {
+            use std::borrow::Cow;
+            // 只取最后一段文件名，天然免疫路径穿越
+            let name = std::path::Path::new(request.uri().path())
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let state = ctx.app_handle().state::<crate::state::AppState>();
+            let path = state.paths.data_dir.join("cache").join(name);
+            log::info!("头像协议请求: {name} → {}", path.display());
+            match std::fs::read(path) {
+                Ok(bytes) => {
+                    let mime = match name.rsplit('.').next() {
+                        Some("png") => "image/png",
+                        Some("webp") => "image/webp",
+                        Some("gif") => "image/gif",
+                        _ => "image/jpeg",
+                    };
+                    tauri::http::Response::builder()
+                        .header("Content-Type", mime)
+                        .body(Cow::Owned(bytes))
+                        .expect("带 Content-Type 的响应构造不会失败")
+                }
+                Err(err) => {
+                    log::warn!("头像协议 404: {name} ({err})");
+                    tauri::http::Response::builder()
+                        .status(404)
+                        .body(Cow::Borrowed(&[][..]))
+                        .expect("静态 404 响应构造不会失败")
+                }
+            }
+        })
         .setup(move |app| {
             let settings = Settings::load_or_init(&paths.config_dir);
             let db = Db::open(&paths.data_dir.join("app.db"))?;
+            // 显式主题须在任何子 webview 创建前同步设置：窗口默认外观跟随
+            // 系统，与持久化主题不一致时，pixiv 首次加载会按浅色完成 JS
+            // 初始化，之后窗口转深色也只有 CSS 媒体查询部分跟随，出现
+            // 白块。auto 不设置，保持跟随系统（首载天然正确）。
+            let explicit_theme = match settings.theme.as_str() {
+                "dark" => Some(tauri::Theme::Dark),
+                "light" => Some(tauri::Theme::Light),
+                _ => None,
+            };
             app.manage(AppState::new(paths.clone(), settings, db));
+            if let Some(theme) = explicit_theme {
+                if let Some(win) = app.get_window("main") {
+                    let _ = win.set_theme(Some(theme));
+                }
+            }
             logging::init(app.handle());
             register_close_confirmation(app);
             Ok(())
@@ -55,6 +102,7 @@ pub fn run() {
             commands::browse_cmds::browse_open,
             commands::browse_cmds::browse_set_bounds,
             commands::browse_cmds::browse_hide,
+            commands::browse_cmds::browse_set_theme,
             commands::browse_cmds::browse_show,
             commands::browse_cmds::browse_navigate,
             commands::browse_cmds::browse_go_back,

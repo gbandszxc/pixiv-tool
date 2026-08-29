@@ -71,6 +71,9 @@ export type { UnlistenFn } from "@tauri-apps/api/event";
 export async function setWindowTheme(theme: "light" | "dark"): Promise<void> {
   if (!isTauri()) return;
   await getCurrentWindow().setTheme(theme);
+  // 同步子 webview 底色，避免深色主题下加载期/overscroll 露白。
+  // webview 未创建时后端静默跳过；创建时会按窗口当前主题设初始底色。
+  await invoke("browse_set_theme", { dark: theme === "dark" }).catch(() => {});
 }
 
 // ===== 后端契约类型（snake_case，与 Rust 命令返回体一致）=====
@@ -131,6 +134,8 @@ export interface AuthUserFields {
   pixiv_id?: string;
   name?: string;
   profile_img?: string;
+  /** 本地头像缓存的可访问 URL（pixiv-avatar:// 协议），auth_status 提供 */
+  avatar_url?: string;
 }
 
 export interface AuthStatusResponse extends AuthUserFields {

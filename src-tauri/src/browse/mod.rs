@@ -15,6 +15,16 @@ use crate::state::AppState;
 /// 子 webview 标识符。
 pub const BROWSE_LABEL: &str = "pixiv-browse";
 
+/// 子 webview 底色：深色取应用深色表面（DESIGN.md dark surface #101014），
+/// 浅色纯白。用于消除深色主题下 webview 加载期白闪与 overscroll 露白。
+pub fn webview_surface_color(dark: bool) -> tauri::window::Color {
+    if dark {
+        tauri::window::Color(0x10, 0x10, 0x14, 0xFF)
+    } else {
+        tauri::window::Color(0xFF, 0xFF, 0xFF, 0xFF)
+    }
+}
+
 /// Pixiv 主页地址。
 pub const BROWSE_HOME: &str = "https://www.pixiv.net/";
 
@@ -224,8 +234,15 @@ pub async fn ensure_browse_webview(
         .map_err(|e| format!("添加子 Webview 失败: {e}"))?;
 
     let wv_init = webview.clone();
+    // 按窗口当前生效主题设底色：窗口外观在 setup 已按持久化主题预设，
+    // 这里读取的是 webview 首次加载时的真实 prefers-color-scheme
+    let init_dark = main_window
+        .theme()
+        .map(|t| t == tauri::Theme::Dark)
+        .unwrap_or(false);
     tokio::task::spawn_blocking(move || {
         let _ = wv_init.show();
+        let _ = wv_init.set_background_color(Some(webview_surface_color(init_dark)));
     })
     .await
     .map_err(|e| format!("异步执行异常: {e}"))?;

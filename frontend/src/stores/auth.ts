@@ -9,6 +9,8 @@ export interface AuthState {
   pixivId: string;
   name: string;
   profileImg: string;
+  /** pixiv-avatar:// 本地缓存 URL；空则头像回退首字母 */
+  avatarUrl?: string;
 }
 
 /**
@@ -31,6 +33,7 @@ export const useAuthStore = defineStore("auth", () => {
   const pixivId = ref("");
   const name = ref("");
   const profileImg = ref("");
+  const avatarUrl = ref("");
   const isLoggingIn = ref(false);
 
   function applyStatus(data: AuthState) {
@@ -39,6 +42,7 @@ export const useAuthStore = defineStore("auth", () => {
     pixivId.value = data.pixivId || "";
     name.value = data.name || "";
     profileImg.value = data.profileImg || "";
+    avatarUrl.value = data.avatarUrl || "";
   }
 
   async function checkStatus() {
@@ -50,6 +54,7 @@ export const useAuthStore = defineStore("auth", () => {
         pixivId: data.pixiv_id || "",
         name: data.name || "",
         profileImg: data.profile_img || "",
+        avatarUrl: data.avatar_url || "",
       });
     } catch {
       isLoggedIn.value = false;
@@ -74,6 +79,8 @@ export const useAuthStore = defineStore("auth", () => {
           name: user.name || "",
           profileImg: user.profile_img || "",
         });
+        // auth_login 返回体不含头像缓存，补拉一次 auth_status（含代下与协议 URL）
+        await checkStatus();
       } else {
         // 非 success（cancelled/timeout/error）：仍刷新一次本地登录态，
         // 再抛出携带后端信息的错误，由视图层展示具体原因。
@@ -99,6 +106,8 @@ export const useAuthStore = defineStore("auth", () => {
       name: user?.name || "",
       profileImg: user?.profile_img || "",
     });
+    // 同 login：补拉含 avatar_url 的完整状态
+    await checkStatus();
   }
 
   async function logout() {
@@ -112,6 +121,7 @@ export const useAuthStore = defineStore("auth", () => {
     pixivId.value = "";
     name.value = "";
     profileImg.value = "";
+    avatarUrl.value = "";
   }
 
   return {
@@ -120,6 +130,7 @@ export const useAuthStore = defineStore("auth", () => {
     pixivId,
     name,
     profileImg,
+    avatarUrl,
     isLoggingIn,
     checkStatus,
     login,
