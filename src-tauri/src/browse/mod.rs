@@ -2,7 +2,9 @@
 //!
 //! 负责子 webview 的生命周期、域白名单控制、URL 轮询与事件派发。
 
+use std::sync::LazyLock;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder,
     WebviewUrl,
@@ -17,6 +19,9 @@ pub const BROWSE_LABEL: &str = "pixiv-browse";
 pub const BROWSE_HOME: &str = "https://www.pixiv.net/";
 
 static POLL_STARTED: OnceLock<()> = OnceLock::new();
+
+/// 自动注入登录态是否已尝试过（每个 webview 进程实例只尝试一次）。
+static AUTO_INJECT_DONE: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(false));
 
 /// 检查目标 host 是否在 Pixiv 白名单内（允许 pixiv、CDN、静态资源、第三方验证与空白页）。
 pub fn is_allowed_host(host: &str) -> bool {
@@ -41,42 +46,106 @@ pub fn is_allowed_host(host: &str) -> bool {
         || host == "gstatic.com"
         || host.ends_with(".gstatic.com")
 }
-
-/// 将本地 Cookie Map 注入到子 Webview 中。
+/// 将本地 Cookie Map 注入到子 Webview 中，返回成功写入的个数。
 ///
-/// 严格区分 HttpOnly 属性：仅 PHPSESSID 设置为 HttpOnly，其他 Cookie 允许 JS 读取；
-/// 过滤非 Cookie 字段（如 x-csrf-token）；
+/// 前提：目标域页面已完成过至少一次加载（WKWebView 网络进程会话已建立），
+/// 注入后需 navigate 刷新才会携带新登录态——load → set → reload 是
+/// WKWebView cookie 注入的可靠顺序；首次导航前批量注入不可靠（访客加载后
+/// pixiv 会用访客 PHPSESSID 覆盖同名登录 cookie）。
+///
+/// 仅 PHPSESSID 设置为 HttpOnly，其他 Cookie 允许 JS 读取；
+/// 过滤非 Cookie 字段（如 x-csrf-token）；只写 .pixiv.net 单域。
+/// set_cookie 自身阻塞等待 WebKit completion 回调，无需额外 sleep。
 pub fn inject_cookies_to_webview(
     webview: &Webview,
     cookies: &std::collections::HashMap<String, String>,
-) {
+) -> usize {
+    // 先清空 store 中现存 pixiv 域 cookie：历史双域注入残留与 pixiv 访客
+    // Set-Cookie 会与登录版同名并存，请求与回读可能取到旧值（访客版）
+    if let Ok(existing) = webview.cookies() {
+        for c in existing {
+            let domain = c.domain().unwrap_or("").trim_start_matches('.');
+            let is_pixiv = domain == "pixiv.net" || domain.ends_with(".pixiv.net");
+            if is_pixiv {
+                let name = c.name().to_string();
+                if let Err(err) = webview.delete_cookie(c) {
+                    log::warn!("清理旧 Cookie 失败: {name} ({err})");
+                }
+            }
+        }
+    }
+
+    let mut count = 0usize;
     for (k, v) in cookies {
         if k.is_empty() || v.is_empty() || k == "x-csrf-token" {
             continue;
         }
-        let is_http_only = k == "PHPSESSID";
-        // 同时写入 .pixiv.net 与 pixiv.net，兼容 WebKit 各版本域名匹配机制
-        for domain in [".pixiv.net", "pixiv.net"] {
-            let cookie = tauri::webview::Cookie::build((k.clone(), v.clone()))
-                .domain(domain)
-                .path("/")
-                .secure(true)
-                .http_only(is_http_only)
-                .build();
-            let _ = webview.set_cookie(cookie);
+        let cookie = tauri::webview::Cookie::build((k.clone(), v.clone()))
+            .domain(".pixiv.net")
+            .path("/")
+            .secure(true)
+            .http_only(k == "PHPSESSID")
+            .build();
+        match webview.set_cookie(cookie) {
+            Ok(()) => count += 1,
+            Err(err) => log::warn!("注入 Cookie 失败: {k} ({err})"),
         }
     }
-    // 等待底层 WebKit Cookie Jar 跨进程异步落库
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    count
+}
+
+/// 首次加载完成后自动注入本地登录态并刷新（幂等：每个进程实例只尝试一次）。
+///
+/// 由 WebviewBuilder::on_page_load(Finished) 触发；实际注入放到
+/// async_runtime 的阻塞线程执行（set_cookie 阻塞等待 completion，不卡主线程）。
+fn auto_inject_on_first_load(app: &AppHandle, wv: &Webview, url: &Url) {
+    let host = url.host_str().unwrap_or("");
+    let is_pixiv_main = host == "pixiv.net" || host.ends_with(".pixiv.net");
+    if !is_pixiv_main || AUTO_INJECT_DONE.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let app = app.clone();
+    let wv = wv.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let saved = match state.cookies.load() {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                log::info!("本地无登录态，跳过自动注入");
+                return;
+            }
+            Err(e) => {
+                log::warn!("读取本地登录态失败，跳过自动注入: {e}");
+                return;
+            }
+        };
+        if !saved.get("PHPSESSID").is_some_and(|v| !v.is_empty()) {
+            log::info!("本地登录态缺 PHPSESSID，跳过自动注入");
+            return;
+        }
+
+        let wv_inject = wv.clone();
+        let count = tauri::async_runtime::spawn_blocking(move || {
+            let n = inject_cookies_to_webview(&wv_inject, &saved);
+            let home: Url = BROWSE_HOME.parse().expect("Pixiv 主页 URL 常量必然合法");
+            let _ = wv_inject.navigate(home);
+            n
+        })
+        .await
+        .unwrap_or(0);
+        log::info!("首次加载完成，自动注入登录态 {count} 个 Cookie 并刷新首页");
+    });
 }
 
 /// 确保子 webview 已创建（幂等）。
 ///
-/// 若未创建，则在主窗口添加子 webview（默认隐藏，等待前端同步 bounds 后显示），
+/// 直接以 Pixiv 首页创建并显示；登录态注入不在创建时做——首次加载完成后
+/// 由 `auto_inject_on_first_load`（on_page_load Finished）注入并刷新。
 /// 并启动后台 URL 变化轮询任务。
 pub async fn ensure_browse_webview(
     app: &AppHandle,
-    state: &AppState,
+    _state: &AppState,
     x: f64,
     y: f64,
     w: f64,
@@ -90,16 +159,14 @@ pub async fn ensure_browse_webview(
         .get_window("main")
         .ok_or_else(|| "未找到主窗口".to_string())?;
 
-    let profile_dir = state.paths.config_dir.join("browse-webview-profile");
-    let blank_url: Url = "about:blank".parse().unwrap();
     let home_url: Url = BROWSE_HOME
         .parse()
         .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
 
-    log::info!("创建 Pixiv 浏览页 Webview，Profile 目录: {:?}", profile_dir);
+    log::info!("创建 Pixiv 浏览页 Webview");
 
-    let builder = WebviewBuilder::new(BROWSE_LABEL, WebviewUrl::External(blank_url))
-        .data_directory(profile_dir)
+    let app_for_load = app.clone();
+    let builder = WebviewBuilder::new(BROWSE_LABEL, WebviewUrl::External(home_url))
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .on_navigation(|url| {
             let host = url.host_str().unwrap_or("");
@@ -108,6 +175,11 @@ pub async fn ensure_browse_webview(
                 log::warn!("拦截非白名单域名导航: {url}");
             }
             allowed
+        })
+        .on_page_load(move |wv, payload| {
+            if let tauri::webview::PageLoadEvent::Finished = payload.event() {
+                auto_inject_on_first_load(&app_for_load, &wv, payload.url());
+            }
         });
 
     let initial_pos = if x >= 0.0 && y >= 0.0 {
@@ -125,29 +197,14 @@ pub async fn ensure_browse_webview(
         .add_child(builder, initial_pos, initial_size)
         .map_err(|e| format!("添加子 Webview 失败: {e}"))?;
 
-    let cookies = match state.cookies.load() {
-        Ok(c) => c,
-        Err(err) => {
-            log::warn!("读取本地登录态失败: {err}");
-            None
-        }
-    };
-
     let wv_init = webview.clone();
     tokio::task::spawn_blocking(move || {
-        if let Some(map) = cookies {
-            if !map.is_empty() {
-                log::info!("初始化注入本地已保存的 Cookie: {} 个", map.len());
-                inject_cookies_to_webview(&wv_init, &map);
-            }
-        }
-        let _ = wv_init.navigate(home_url);
         let _ = wv_init.show();
     })
     .await
     .map_err(|e| format!("异步执行异常: {e}"))?;
 
-    log::info!("Pixiv 浏览页 Webview 创建完成并导航至首页");
+    log::info!("Pixiv 浏览页 Webview 创建完成，首次加载后将注入登录态");
 
     if POLL_STARTED.set(()).is_ok() {
         let app_handle = app.clone();
