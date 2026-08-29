@@ -60,36 +60,62 @@ pub fn inject_cookies_to_webview(
     webview: &Webview,
     cookies: &std::collections::HashMap<String, String>,
 ) -> usize {
-    // 先清空 store 中现存 pixiv 域 cookie：历史双域注入残留与 pixiv 访客
-    // Set-Cookie 会与登录版同名并存，请求与回读可能取到旧值（访客版）
-    if let Ok(existing) = webview.cookies() {
-        for c in existing {
-            let domain = c.domain().unwrap_or("").trim_start_matches('.');
-            let is_pixiv = domain == "pixiv.net" || domain.ends_with(".pixiv.net");
-            if is_pixiv {
-                let name = c.name().to_string();
-                if let Err(err) = webview.delete_cookie(c) {
-                    log::warn!("清理旧 Cookie 失败: {name} ({err})");
-                }
+    // Cloudflare 凭证绑定获取它的客户端 TLS/浏览器指纹：keyring 里的
+    // cf_clearance 等来自 Chrome（CDP 登录），注入 WKWebView（Safari 指纹）
+    // 无效且会挤掉 WKWebView 自己协商的凭证，导致 reload 被 CF 判为访客
+    // （13:08 回读日志实证：cf_clearance 双份 + reload 后出现访客 cc1 cookie）。
+    // 注入一律跳过，保留 WKWebView 自己的 CF 凭证。
+    fn is_cf_cookie(name: &str) -> bool {
+        matches!(name, "cf_clearance" | "__cf_bm" | "__cf_ob")
+    }
+
+    // 注入采用「同 key 覆盖」而非删除：wry deleteCookie 从读回重建
+    // NSHTTPCookie 时丢失 domain 点前缀/host-only 标志，与 store 条目
+    // 匹配不上，删除静默失败（13:10 回读实证 40 个双份堆积）。
+    // 对每个名字写三种 key 形式，覆盖 pixiv 服务器 Set 的 host-only
+    // www.pixiv.net、旧双域注入残留 pixiv.net 与 domain 版 .pixiv.net。
+    // 旧访客版若不被覆盖会因排序在前被 pixiv 优先取到（始终未登录的根因）。
+    let mut count = 0usize;
+    for (k, v) in cookies {
+        if k.is_empty() || v.is_empty() || k == "x-csrf-token" || is_cf_cookie(k) {
+            continue;
+        }
+        // 显式 Expires：WKHTTPCookieStore 对无过期时间的 session cookie
+        // 存在不随后续请求发送的已知行为；真实过期以 keyring 真相源为准
+        let expires = tauri::webview::cookie::time::OffsetDateTime::now_utc()
+            + tauri::webview::cookie::time::Duration::days(90);
+        for domain in [".pixiv.net", "pixiv.net", "www.pixiv.net"] {
+            let cookie = tauri::webview::Cookie::build((k.clone(), v.clone()))
+                .domain(domain)
+                .path("/")
+                .secure(true)
+                .http_only(k == "PHPSESSID")
+                .expires(expires)
+                .build();
+            match webview.set_cookie(cookie) {
+                Ok(()) => count += 1,
+                Err(err) => log::warn!("注入 Cookie 失败: {k}@{domain} ({err})"),
             }
         }
     }
 
-    let mut count = 0usize;
-    for (k, v) in cookies {
-        if k.is_empty() || v.is_empty() || k == "x-csrf-token" {
-            continue;
-        }
-        let cookie = tauri::webview::Cookie::build((k.clone(), v.clone()))
-            .domain(".pixiv.net")
-            .path("/")
-            .secure(true)
-            .http_only(k == "PHPSESSID")
-            .build();
-        match webview.set_cookie(cookie) {
-            Ok(()) => count += 1,
-            Err(err) => log::warn!("注入 Cookie 失败: {k} ({err})"),
-        }
+    // 回读校验：确认 cookie 真实落库（只打名字与域，不打值）
+    if let Ok(after) = webview.cookies() {
+        let pixiv: Vec<String> = after
+            .iter()
+            .filter(|c| {
+                let d = c.domain().unwrap_or("").trim_start_matches('.');
+                d == "pixiv.net" || d.ends_with(".pixiv.net")
+            })
+            .map(|c| {
+                format!(
+                    "{}@{}",
+                    c.name(),
+                    c.domain().unwrap_or("?")
+                )
+            })
+            .collect();
+        log::info!("注入后回读: 写入 {count} 个, store 现有 pixiv 域 cookie {} 个: {pixiv:?}", pixiv.len());
     }
     count
 }

@@ -5,6 +5,27 @@ use tauri::{AppHandle, Manager, State, Url};
 use crate::browse::{BROWSE_LABEL, ensure_browse_webview, is_allowed_host};
 use crate::state::AppState;
 
+/// 返回 (scale_factor, 标题栏高度 logical px)。
+///
+/// macOS 实测：子 webview setFrame 的 y 原点相对窗口 frame 顶（含标题栏），
+/// 而前端 getBoundingClientRect 的 y 原点相对内容区顶（标题栏下方），
+/// 需要 y += 标题栏高度补偿。标题栏高度 = outer_size - inner_size 实测。
+/// 非 macOS 窗口装饰差异存在时同样按此公式自适应。
+fn window_metrics(app: &AppHandle) -> (f64, f64) {
+    let Some(win) = app.get_window("main") else {
+        return (1.0, 0.0);
+    };
+    let scale = win.scale_factor().unwrap_or(1.0);
+    // tao 在 macOS 的 outer/inner position、size 实测均相等（13:08 日志），
+    // 运行时拿不到标题栏高度；标准标题栏（无 toolbar、无 fullSizeContentView）
+    // 恒为 28pt，直接采用。窗口样式变更时需同步此常量。
+    #[cfg(target_os = "macos")]
+    let runtime_titlebar: f64 = 28.0;
+    #[cfg(not(target_os = "macos"))]
+    let runtime_titlebar: f64 = 0.0;
+    (scale, runtime_titlebar)
+}
+
 /// 打开 Pixiv 浏览页（确保子 webview 创建）。
 #[tauri::command]
 pub async fn browse_open(
@@ -22,8 +43,9 @@ pub async fn browse_open(
     log::info!("执行 browse_open, 目标区域: ({px}, {py}, {pw}, {ph})");
     let wv = ensure_browse_webview(&app, &state, px, py, pw, ph).await?;
     if pw > 0.0 && ph > 0.0 {
+        let (_, titlebar_h) = window_metrics(&app);
         let rect = tauri::Rect {
-            position: tauri::Position::Logical(tauri::LogicalPosition::new(px, py)),
+            position: tauri::Position::Logical(tauri::LogicalPosition::new(px, py + titlebar_h)),
             size: tauri::Size::Logical(tauri::LogicalSize::new(pw, ph)),
         };
         let _ = wv.set_bounds(rect);
@@ -82,33 +104,49 @@ pub async fn browse_set_bounds(
 
     log::info!("设置浏览页边界: x={x}, y={y}, w={w}, h={h}");
 
-    let scale_factor = app
-        .get_window("main")
-        .and_then(|win| win.scale_factor().ok())
-        .unwrap_or(1.0);
+    let (scale_factor, titlebar_h) = window_metrics(&app);
+    let y_adj = y + titlebar_h;
+    log::info!("边界补偿: titlebar_h={titlebar_h} y {y} -> {y_adj}");
 
     let rect = tauri::Rect {
-        position: tauri::Position::Logical(tauri::LogicalPosition::new(x, y)),
+        position: tauri::Position::Logical(tauri::LogicalPosition::new(x, y_adj)),
         size: tauri::Size::Logical(tauri::LogicalSize::new(w, h)),
     };
+
+    let main_wv = app.get_webview("main");
+    let inner = app
+        .get_window("main")
+        .and_then(|win| win.inner_size().ok())
+        .map(|s| s.to_logical::<f64>(scale_factor));
+
 
     tokio::task::spawn_blocking(move || {
         wv.set_bounds(rect)
             .map_err(|e| format!("设置 bounds 失败: {e}"))?;
-        // 回读校准：确认 setFrame 实际生效（bounds 错位问题的诊断信号）
-        match wv.bounds() {
-            Ok(rb) => {
-                let pos = rb.position.to_logical::<f64>(scale_factor);
-                let size = rb.size.to_logical::<f64>(scale_factor);
-                log::info!(
-                    "边界同步: sent=({x},{y},{w},{h}) readback=({:.0},{:.0},{:.0},{:.0})",
-                    pos.x,
-                    pos.y,
-                    size.width,
-                    size.height
-                );
-            }
-            Err(e) => log::warn!("边界回读失败: {e}"),
+        // 回读校准 + 三方对账（bounds 错位定位）：子 webview 实际 frame、
+        // 主 webview frame、窗口内尺寸——三者坐标系一致则视觉必然对齐
+        if let Ok(rb) = wv.bounds() {
+            let pos = rb.position.to_logical::<f64>(scale_factor);
+            let size = rb.size.to_logical::<f64>(scale_factor);
+            let main_desc = main_wv
+                .as_ref()
+                .and_then(|m| m.bounds().ok())
+                .map(|mb| {
+                    let p = mb.position.to_logical::<f64>(scale_factor);
+                    let s = mb.size.to_logical::<f64>(scale_factor);
+                    format!("main=({:.0},{:.0},{:.0},{:.0})", p.x, p.y, s.width, s.height)
+                })
+                .unwrap_or_else(|| "main=??".to_string());
+            let inner_desc = inner
+                .map(|i| format!("inner=({:.0},{:.0})", i.width, i.height))
+                .unwrap_or_else(|| "inner=??".to_string());
+            log::info!(
+                "边界同步: sent=({x},{y},{w},{h}) readback=({:.0},{:.0},{:.0},{:.0}) {main_desc} {inner_desc} sf={scale_factor}",
+                pos.x,
+                pos.y,
+                size.width,
+                size.height
+            );
         }
         let _ = wv.show();
         Ok::<(), String>(())
