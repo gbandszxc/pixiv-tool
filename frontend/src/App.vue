@@ -46,14 +46,19 @@
               :title="`user_id: ${authStore.userId}`"
               :aria-label="t('auth.accountMenu', { id: authStore.pixivId || authStore.name })"
             >
+              <!-- NAvatar 语义：default slot 存在则不渲染 img，故有 URL 时
+                   只给 #fallback（img 加载失败兜底），无 URL 时给 default 显示首字母。
+                   条件写在两个 n-avatar 外层：条件 slot（<template #fallback v-if> + v-else）
+                   会让 Vue 3.5.40 模板编译器崩溃（Codegen node is missing） -->
               <n-avatar
+                v-if="authStore.avatarUrl"
                 round
                 :size="32"
-                :src="authStore.profileImg || undefined"
-                :fallback-src="undefined"
+                :src="authStore.avatarUrl"
               >
-                {{ accountInitial }}
+                <template #fallback>{{ accountInitial }}</template>
               </n-avatar>
+              <n-avatar v-else round :size="32">{{ accountInitial }}</n-avatar>
               <span class="account-id">{{ authStore.pixivId || authStore.name }}</span>
             </button>
           </n-dropdown>
@@ -69,6 +74,15 @@
       </n-layout-content>
     </n-layout>
 
+    <!-- 退出确认：Rust 拦截窗口关闭/Cmd+Q 后发事件，此处统一 Naive UI 确认。 -->
+    <n-modal
+      v-model:show="showExitConfirm"
+      preset="dialog"
+      :title="t('app.exitConfirmTitle')"
+      :positive-text="t('app.exit')"
+      :negative-text="t('common.cancel')"
+      @positive-click="invoke('app_exit').catch(() => {})"
+    />
     <!-- 登录弹窗：真实浏览器主路径 + 手动 Session 兜底。 -->
     <LoginDialog v-model:show="showLoginDialog" />
     </n-message-provider>
@@ -89,6 +103,7 @@ import {
   NAvatar,
   NDropdown,
   NMessageProvider,
+  NModal,
 } from "naive-ui";
 import type { GlobalThemeOverrides, MenuOption } from "naive-ui";
 import { darkTheme } from "naive-ui";
@@ -97,14 +112,19 @@ import { useAuthStore } from "./stores/auth";
 import { useSettingsStore } from "./stores/settings";
 import { invoke, setWindowTheme } from "./api/tauri";
 import SidebarIcon, { type SidebarIconName } from "./components/navigation/SidebarIcon.vue";
+import { listen } from "@tauri-apps/api/event";
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const { t } = useI18n();
-
 // 登录弹窗显隐：点“登录”打开，在浏览器登录 / 手动 Session 间选择。
 const showLoginDialog = ref(false);
+
+// 退出确认：红叉/Cmd+W/Cmd+Q 均被 Rust 拦下并 emit，此处弹框；
+// 已打开时重复 emit 无副作用（v-model 幂等置 true）
+const showExitConfirm = ref(false);
+let unlistenExit: (() => void) | undefined;
 
 // 侧栏折叠状态：折叠时顶部标题切换为项目图标。
 const siderCollapsed = ref(false);
@@ -157,12 +177,18 @@ const isDark = computed(
 
 // 深色时挂 html.dark 驱动 CSS 变量切换（main.css）；
 // 同时同步窗口原生主题——内嵌 pixiv webview 的 prefers-color-scheme
-// 跟随窗口外观，使内嵌页与应用主题一致（而非跟随系统）
+// 跟随窗口外观，使内嵌页与应用主题一致（而非跟随系统）。
+// 但 settings 就绪前不动原生窗口：初始 isDark 基于 store 默认值（auto），
+// 与持久化主题不符的错误 setTheme 会影响子 webview 首次加载的外观；
+// 窗口初始外观已由 Rust setup 按持久化主题预设。
+const windowThemeReady = ref(false);
 watch(
   isDark,
   (dark) => {
     document.documentElement.classList.toggle("dark", dark);
-    setWindowTheme(dark ? "dark" : "light").catch(() => {});
+    if (windowThemeReady.value) {
+      setWindowTheme(dark ? "dark" : "light").catch(() => {});
+    }
   },
   { immediate: true }
 );
@@ -219,9 +245,26 @@ async function handleAccountMenuSelect(key: string) {
 }
 
 onMounted(async () => {
-  // 启动即取设置：主题（light/dark/auto）需要立即生效
-  settingsStore.fetchSettings().catch(() => {});
+  // 启动即取设置：主题（light/dark/auto）需要立即生效。
+  // 失败时保持 windowThemeReady=false：窗口维持 Rust setup 按
+  // 持久化设置预设的外观，不用 store 默认值覆盖
+  settingsStore
+    .fetchSettings()
+    .then(() => {
+      windowThemeReady.value = true;
+    })
+    .catch(() => {});
   authStore.checkStatus();
+  // 退出确认事件：Rust 拦截窗口关闭/Cmd+Q 后发来
+  listen("app://confirm-exit", () => {
+    showExitConfirm.value = true;
+  }).then((fn) => {
+    unlistenExit = fn;
+  });
+});
+
+onBeforeUnmount(() => {
+  unlistenExit?.();
 });
 </script>
 

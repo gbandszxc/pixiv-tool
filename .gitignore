@@ -59,6 +59,7 @@ config/login-browser-profile/
 
 # --- 运行日志 ---
 data/logs/
+data/cache/
 *.log
 
 # ===== 通用 =====

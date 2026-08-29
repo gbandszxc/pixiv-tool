@@ -10,6 +10,7 @@
 //! - 异步命令借用 `tauri::State`，按 Tauri 约定一律返回 `Result<_, String>`
 //! - 目录选择不设命令：前端直接用 plugin-dialog 的 open API
 
+pub mod app_cmds;
 pub mod auth_cmds;
 pub mod browse_cmds;
 pub mod history_cmds;

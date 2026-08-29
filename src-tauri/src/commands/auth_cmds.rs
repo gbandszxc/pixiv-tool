@@ -48,14 +48,16 @@ pub async fn auth_status(state: State<'_, AppState>) -> Result<Value, String> {
 
     let attempt = async {
         // 与抓取 / fetch_session_probe 共用同一套 wreq 指纹伪装，避免裸 UA 风控
-        let client = PixivClient::new(&cookies)
-            .map_err(|err| ProbeFailure::Other(format!("创建 HTTP 客户端失败: {err}")))?;
-        let api = crate::pixiv::api::PixivApi::new(Arc::new(client));
+        let client = Arc::new(
+            PixivClient::new(&cookies)
+                .map_err(|err| ProbeFailure::Other(format!("创建 HTTP 客户端失败: {err}")))?,
+        );
+        let api = crate::pixiv::api::PixivApi::new(client.clone());
         let (user_data, _token) = api.get_user_self().await.map_err(|err| match err {
             PixivError::Auth => ProbeFailure::Auth,
             other => ProbeFailure::Other(other.to_string()),
         })?;
-        Ok::<Value, ProbeFailure>(user_data)
+        Ok::<(Arc<PixivClient>, Value), ProbeFailure>((client, user_data))
     };
 
     match tokio::time::timeout(Duration::from_secs(AUTH_STATUS_TIMEOUT_SEC), attempt).await {
@@ -74,8 +76,79 @@ pub async fn auth_status(state: State<'_, AppState>) -> Result<Value, String> {
             log::warn!("登录态验证失败（保留 cookie）: {msg}");
             Ok(json!({ "is_logged_in": false }))
         }
-        Ok(Ok(user_data)) => Ok(auth_status_body(&user_data)),
+        Ok(Ok((client, user_data))) => {
+            let mut body = auth_status_body(&user_data);
+            // 头像回显：i.pximg.net 有 Referer 防盗链，webview 直连 403，
+            // 需后端代下到 data/cache 并经 pixiv-avatar:// 协议供前端显示。
+            // 下载失败不影响登录态（前端兜底首字母）。
+            if let Some(url) = body
+                .get("profile_img")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                if let Some(scheme_url) = ensure_avatar_cache(&state, &client, url).await {
+                    log::info!("头像缓存命中: {scheme_url}");
+                    body["avatar_url"] = json!(scheme_url);
+                }
+            }
+            Ok(body)
+        }
     }
+}
+
+/// 头像下载超时（秒）。登录态验证本身 2s 内完成，头像慢些无碍 UI。
+const AVATAR_DOWNLOAD_TIMEOUT_SEC: u64 = 5;
+
+/// 头像 URL 最后段做缓存文件名，白名单字符过滤防路径穿越；空/非法 → None。
+fn avatar_filename(url: &str) -> Option<String> {
+    let name = url.rsplit('/').next()?.trim();
+    let valid = !name.is_empty()
+        && name.len() <= 128
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
+    valid.then(|| name.to_string())
+}
+
+/// 缓存文件名 → 前端可用的自定义协议 URL（Windows 用 https 子域形式）。
+fn avatar_scheme_url(filename: &str) -> String {
+    if cfg!(windows) {
+        format!("https://pixiv-avatar.localhost/{filename}")
+    } else {
+        format!("pixiv-avatar://localhost/{filename}")
+    }
+}
+
+/// 确保 `data/cache/` 有头像缓存：有则直接返回，无则用登录态客户端代下
+///（download_bytes 已带 pixiv Referer 过防盗链）。返回前端可用 URL。
+async fn ensure_avatar_cache(
+    state: &AppState,
+    client: &PixivClient,
+    url: &str,
+) -> Option<String> {
+    let filename = avatar_filename(url)?;
+    let dir = state.paths.data_dir.join("cache");
+    let path = dir.join(&filename);
+    if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+        return Some(avatar_scheme_url(&filename));
+    }
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(AVATAR_DOWNLOAD_TIMEOUT_SEC),
+        client.download_bytes(url),
+    )
+    .await
+    .ok()
+    .and_then(|r| r.ok());
+    let Some(bytes) = bytes else {
+        log::warn!("头像下载失败（前端回退首字母）: {url}");
+        return None;
+    };
+    let _ = tokio::fs::create_dir_all(&dir).await;
+    if let Err(err) = tokio::fs::write(&path, &bytes).await {
+        log::warn!("头像缓存写入失败: {err}");
+        return None;
+    }
+    Some(avatar_scheme_url(&filename))
 }
 
 /// /ajax/user/self 的 userData → auth_status 响应体（纯函数，离线可测）。
@@ -259,6 +332,28 @@ mod tests {
                 json!(false),
                 "userData={empty}"
             );
+        }
+    }
+
+    #[test]
+    fn avatar_filename_filters_and_extracts() {
+        assert_eq!(
+            avatar_filename("https://i.pximg.net/user-profile/img/2024/01/01/12345_abcdef_50.jpg"),
+            Some("12345_abcdef_50.jpg".to_string())
+        );
+        // 路径穿越与非法字符被拒
+        assert_eq!(avatar_filename("https://x/..%2Fevil"), None);
+        assert_eq!(avatar_filename("https://x/"), None);
+        assert_eq!(avatar_filename("https://x/a b.jpg"), None);
+    }
+
+    #[test]
+    fn avatar_scheme_url_platform_shape() {
+        let url = avatar_scheme_url("a_50.jpg");
+        if cfg!(windows) {
+            assert_eq!(url, "https://pixiv-avatar.localhost/a_50.jpg");
+        } else {
+            assert_eq!(url, "pixiv-avatar://localhost/a_50.jpg");
         }
     }
 }

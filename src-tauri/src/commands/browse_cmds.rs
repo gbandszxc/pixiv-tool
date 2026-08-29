@@ -218,6 +218,22 @@ pub async fn browse_go_back(app: AppHandle) -> Result<(), String> {
         .map_err(|e| format!("后退失败: {e}"))
 }
 
+/// 同步子 webview 底色到当前主题（窗口主题切换时由前端调用）。
+#[tauri::command]
+pub async fn browse_set_theme(app: AppHandle, dark: bool) -> Result<(), String> {
+    let Some(wv) = app.get_webview(BROWSE_LABEL) else {
+        return Ok(());
+    };
+    let wv_bg = wv.clone();
+    tokio::task::spawn_blocking(move || {
+        wv_bg
+            .set_background_color(Some(crate::browse::webview_surface_color(dark)))
+            .map_err(|e| format!("设置底色失败: {e}"))
+    })
+    .await
+    .map_err(|e| format!("异步执行异常: {e}"))?
+}
+
 /// 从子 webview 提取并同步登录态到系统凭据存储。
 #[tauri::command]
 pub async fn browse_sync_login(

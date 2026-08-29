@@ -15,6 +15,16 @@ use crate::state::AppState;
 /// 子 webview 标识符。
 pub const BROWSE_LABEL: &str = "pixiv-browse";
 
+/// 子 webview 底色：深色取应用深色表面（DESIGN.md dark surface #101014），
+/// 浅色纯白。用于消除深色主题下 webview 加载期白闪与 overscroll 露白。
+pub fn webview_surface_color(dark: bool) -> tauri::window::Color {
+    if dark {
+        tauri::window::Color(0x10, 0x10, 0x14, 0xFF)
+    } else {
+        tauri::window::Color(0xFF, 0xFF, 0xFF, 0xFF)
+    }
+}
+
 /// Pixiv 主页地址。
 pub const BROWSE_HOME: &str = "https://www.pixiv.net/";
 
@@ -164,6 +174,74 @@ fn auto_inject_on_first_load(app: &AppHandle, wv: &Webview, url: &Url) {
     });
 }
 
+/// 深色补丁 JS：pixiv 登录深色模式下 novel/show.php 的正文与评论区卡片
+/// 写死白底（styled-components 组件未适配深色，站内 bug，浏览器复现一致）。
+/// 启发式定位：非透明、近纯白、大面积（≥400×160）的 div/section 染成
+/// pixiv 深色卡片色 #1f1f1f，深色文字分级翻浅（正文 #f5f5f5 / 次级 #d6d6dc，
+/// 均取自 pixiv 深色体系实测值）。MutationObserver 常驻补染（200ms debounce）
+/// + 16 轮初始轮询，覆盖 hydration 延迟与二次渲染；脚本幂等，重复注入无害。
+// ponytail: 启发式补丁依赖 pixiv 深色体系与白卡片特征，pixiv 改版后若
+// 失效/误染，调整面积与亮度阈值即可；切回浅色主题不回滚，刷新页面即恢复。
+const DARK_NOVEL_PATCH_JS: &str = r#"(function(){
+    // 同时经 initialization_script（document start，消除闪白）与
+    // on_page_load(Finished) eval（兜底）注入；__dkPatchInstalled 保证幂等。
+    // 深色判定读页面真实 prefers-color-scheme（WKWebView effective 外观）。
+    // 不能用窗口 theme()：未显式 set_theme（auto）时 tao 记录默认 Light，
+    // 与实际跟随系统的深色外观不符（release 白块复现根因）
+    if (!/novel\/show\.php/.test(location.href)) return;
+    if (!window.matchMedia('(prefers-color-scheme: dark)').matches) return;
+    if (window.__dkPatchInstalled) return;
+    window.__dkPatchInstalled = true;
+    function lumaOf(c){ var m=/^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c); return m ? (0.299*m[1]+0.587*m[2]+0.114*m[3])/255 : 1; }
+    function fix(){
+        document.querySelectorAll('div,section').forEach(function(el){
+            if (el.dataset.dkPatched) return;
+            var cs = getComputedStyle(el);
+            var bg = cs.backgroundColor;
+            if (bg.indexOf('rgba') === 0) return;
+            if (lumaOf(bg) < 0.92) return;
+            var r = el.getBoundingClientRect();
+            if (r.width < 400 || r.height < 160) return;
+            el.dataset.dkPatched = '1';
+            el.style.backgroundColor = '#1f1f1f';
+            if (lumaOf(cs.color) < 0.5) el.style.color = '#f5f5f5';
+            el.querySelectorAll('*').forEach(function(ch){
+                if (ch.dataset.dkText) return;
+                var l2 = lumaOf(getComputedStyle(ch).color);
+                if (l2 < 0.2) { ch.dataset.dkText='1'; ch.style.color = '#f5f5f5'; }
+                else if (l2 < 0.5) { ch.dataset.dkText='1'; ch.style.color = '#d6d6dc'; }
+            });
+        });
+    }
+    var t = null;
+    function schedule(){
+        if (t) return;
+        t = setTimeout(function(){ t = null; fix(); }, 200);
+    }
+    for (var i = 0; i < 16; i++) setTimeout(fix, i * 500);
+    // document start 时 documentElement 可能尚未解析，轮询挂载 observer
+    function install(){
+        if (document.documentElement) {
+            new MutationObserver(schedule).observe(document.documentElement, {childList: true, subtree: true});
+        } else {
+            setTimeout(install, 10);
+        }
+    }
+    install();
+})()"#;
+
+/// novel/show.php 页面深色补丁兜底：Finished 时 eval 注入同一脚本（幂等）。
+/// initialization_script 理论上在 document start 即生效，此路径保证
+/// 任何情况下补丁最终注入。
+fn inject_dark_page_patch(wv: &Webview, url: &Url) {
+    if !url.path().starts_with("/novel/show.php") {
+        return;
+    }
+    if let Err(e) = wv.eval(DARK_NOVEL_PATCH_JS) {
+        log::warn!("深色补丁注入失败: {e}");
+    }
+}
+
 /// 确保子 webview 已创建（幂等）。
 ///
 /// 直接以 Pixiv 首页创建并显示；登录态注入不在创建时做——首次加载完成后
@@ -193,6 +271,7 @@ pub async fn ensure_browse_webview(
 
     let app_for_load = app.clone();
     let builder = WebviewBuilder::new(BROWSE_LABEL, WebviewUrl::External(home_url))
+        .initialization_script(DARK_NOVEL_PATCH_JS)
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .on_navigation(|url| {
             let host = url.host_str().unwrap_or("");
@@ -205,6 +284,7 @@ pub async fn ensure_browse_webview(
         .on_page_load(move |wv, payload| {
             if let tauri::webview::PageLoadEvent::Finished = payload.event() {
                 auto_inject_on_first_load(&app_for_load, &wv, payload.url());
+                inject_dark_page_patch(&wv, payload.url());
             }
         });
 
@@ -224,8 +304,15 @@ pub async fn ensure_browse_webview(
         .map_err(|e| format!("添加子 Webview 失败: {e}"))?;
 
     let wv_init = webview.clone();
+    // 按窗口当前生效主题设底色：窗口外观在 setup 已按持久化主题预设，
+    // 这里读取的是 webview 首次加载时的真实 prefers-color-scheme
+    let init_dark = main_window
+        .theme()
+        .map(|t| t == tauri::Theme::Dark)
+        .unwrap_or(false);
     tokio::task::spawn_blocking(move || {
         let _ = wv_init.show();
+        let _ = wv_init.set_background_color(Some(webview_surface_color(init_dark)));
     })
     .await
     .map_err(|e| format!("异步执行异常: {e}"))?;
@@ -241,17 +328,24 @@ pub async fn ensure_browse_webview(
                 let Some(wv) = app_handle.get_webview(BROWSE_LABEL) else {
                     continue;
                 };
-                let current_url =
-                    tokio::task::spawn_blocking(move || wv.url().map(|u| u.to_string()))
-                        .await
-                        .ok()
-                        .and_then(|r| r.ok());
+                let probe = tokio::task::spawn_blocking(move || {
+                    let url = wv.url().ok().map(|u| u.to_string());
+                    (wv, url)
+                })
+                .await
+                .ok();
 
-                if let Some(url_str) = current_url {
+                if let Some((wv, Some(url_str))) = probe {
                     if url_str != last_url {
                         last_url = url_str.clone();
                         let _ = app_handle
                             .emit("browse://url-changed", serde_json::json!({ "url": url_str }));
+                        // SPA 路由（pushState）不触发 on_page_load，也不重新执行
+                        // initialization_script——URL 轮询是唯一可靠覆盖 SPA 跳转的
+                        // 注入通道；脚本幂等，整页导航场景重复注入无副作用
+                        if url_str.contains("/novel/show.php") {
+                            let _ = wv.eval(DARK_NOVEL_PATCH_JS);
+                        }
                     }
                 }
             }
@@ -260,6 +354,7 @@ pub async fn ensure_browse_webview(
 
     Ok(webview)
 }
+
 
 #[cfg(test)]
 mod tests {
