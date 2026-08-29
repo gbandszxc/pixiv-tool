@@ -72,7 +72,7 @@ data/cache/
 tmp/
 temp/
 downloads/
-.scratch/build-*
+.scratch/
 
 # ===== AI 辅助工具会话产物（本地规划文档，不入库） =====
 .zcode/
