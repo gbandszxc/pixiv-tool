@@ -27,6 +27,34 @@ pub fn is_allowed_host(host: &str) -> bool {
     host == "pixiv.net" || host.ends_with(".pixiv.net")
 }
 
+/// 将本地 Cookie Map 注入到子 Webview 中。
+///
+/// 严格区分 HttpOnly 属性：仅 PHPSESSID 设置为 HttpOnly，其他 Cookie 允许 JS 读取；
+/// 过滤非 Cookie 字段（如 x-csrf-token）；
+/// 注入后执行短暂等待，确保底层 Cookie Jar 完成异步落地后再进行导航。
+pub fn inject_cookies_to_webview(
+    webview: &Webview,
+    cookies: &std::collections::HashMap<String, String>,
+) {
+    for (k, v) in cookies {
+        if k.is_empty() || v.is_empty() || k == "x-csrf-token" {
+            continue;
+        }
+        let is_http_only = k == "PHPSESSID";
+        let cookie = tauri::webview::Cookie::build((k.clone(), v.clone()))
+            .domain(".pixiv.net")
+            .path("/")
+            .secure(true)
+            .http_only(is_http_only)
+            .build();
+        if let Err(err) = webview.set_cookie(cookie) {
+            log::warn!("注入 Cookie 失败: {k} ({err})");
+        }
+    }
+    // 短暂等待底层 Cookie 存储异步落库
+    std::thread::sleep(std::time::Duration::from_millis(150));
+}
+
 /// 确保子 webview 已创建（幂等）。
 ///
 /// 若未创建，则在主窗口添加子 webview（默认隐藏，等待前端同步 bounds 后显示），
@@ -75,20 +103,7 @@ pub async fn ensure_browse_webview(app: &AppHandle, state: &AppState) -> Result<
     tokio::task::spawn_blocking(move || {
         if let Some(map) = cookies {
             if !map.is_empty() {
-                for (k, v) in map {
-                    if k.is_empty() || v.is_empty() {
-                        continue;
-                    }
-                    let cookie = tauri::webview::Cookie::build((k.clone(), v))
-                        .domain(".pixiv.net")
-                        .path("/")
-                        .secure(true)
-                        .http_only(true)
-                        .build();
-                    if let Err(err) = wv_init.set_cookie(cookie) {
-                        log::warn!("注入 Cookie 失败: {k} ({err})");
-                    }
-                }
+                inject_cookies_to_webview(&wv_init, &map);
             }
         }
         if let Err(err) = wv_init.navigate(home_url) {
@@ -97,7 +112,6 @@ pub async fn ensure_browse_webview(app: &AppHandle, state: &AppState) -> Result<
     })
     .await
     .map_err(|e| format!("异步执行异常: {e}"))?;
-
     if POLL_STARTED.set(()).is_ok() {
         let app_handle = app.clone();
         tokio::spawn(async move {

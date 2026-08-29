@@ -261,6 +261,9 @@ async function handleSyncLogin() {
       await authStore.checkStatus();
       alertMessage.value = t("pixiv.syncLoginSuccess");
       alertType.value = "success";
+    } else if (res.status === "injected") {
+      alertMessage.value = t("pixiv.syncLoginInjected");
+      alertType.value = "success";
     } else if (res.status === "no_session") {
       alertMessage.value = t("pixiv.syncLoginNoSession");
       alertType.value = "warning";
@@ -355,9 +358,11 @@ watch([page, alertMessage], async () => {
 
 onMounted(async () => {
   await invoke("browse_open").catch(() => {});
+  if (authStore.isLoggedIn) {
+    await invoke("browse_inject_login").catch(() => {});
+  }
   await nextTick();
   syncBounds();
-
   if (isTauri()) {
     unlisten = await listen<{ url: string }>("browse://url-changed", (e) => {
       currentUrl.value = e.payload.url;

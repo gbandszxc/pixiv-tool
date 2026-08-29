@@ -111,7 +111,8 @@ pub async fn browse_sync_login(
         .get_webview(BROWSE_LABEL)
         .ok_or_else(|| "未找到 Pixiv 浏览窗口".to_string())?;
 
-    let raw_cookies = tokio::task::spawn_blocking(move || wv.cookies())
+    let wv_cookies = wv.clone();
+    let raw_cookies = tokio::task::spawn_blocking(move || wv_cookies.cookies())
         .await
         .map_err(|e| format!("异步执行异常: {e}"))?
         .map_err(|e| format!("读取浏览器 Cookie 失败: {e}"))?;
@@ -121,6 +122,25 @@ pub async fn browse_sync_login(
     let phpsessid = match cookies.get("PHPSESSID").filter(|v| !v.is_empty()) {
         Some(s) => s.clone(),
         None => {
+            // 若 Webview 中未检测到登录态，但客户端本地已保存登录态，则主动注入到 Webview 并刷新
+            if let Ok(Some(saved)) = state.cookies.load() {
+                if saved.get("PHPSESSID").is_some_and(|s| !s.is_empty()) {
+                    let wv_inject = wv.clone();
+                    let home_url: Url = crate::browse::BROWSE_HOME
+                        .parse()
+                        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
+                    tokio::task::spawn_blocking(move || {
+                        crate::browse::inject_cookies_to_webview(&wv_inject, &saved);
+                        let _ = wv_inject.navigate(home_url);
+                    })
+                    .await
+                    .map_err(|e| format!("异步执行异常: {e}"))?;
+
+                    return Ok(serde_json::json!({
+                        "status": "injected",
+                    }));
+                }
+            }
             return Ok(serde_json::json!({
                 "status": "no_session",
             }));
@@ -148,4 +168,33 @@ pub async fn browse_sync_login(
             "message": e.to_string(),
         })),
     }
+}
+
+/// 主动将客户端系统凭据中的登录态注入到子 Webview 并刷新。
+#[tauri::command]
+pub async fn browse_inject_login(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let Some(wv) = app.get_webview(BROWSE_LABEL) else {
+        return Ok(false);
+    };
+
+    let cookies = match state.cookies.load() {
+        Ok(Some(c)) if !c.is_empty() => c,
+        _ => return Ok(false),
+    };
+
+    let home_url: Url = crate::browse::BROWSE_HOME
+        .parse()
+        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
+
+    tokio::task::spawn_blocking(move || {
+        crate::browse::inject_cookies_to_webview(&wv, &cookies);
+        let _ = wv.navigate(home_url);
+    })
+    .await
+    .map_err(|e| format!("异步执行异常: {e}"))?;
+
+    Ok(true)
 }
