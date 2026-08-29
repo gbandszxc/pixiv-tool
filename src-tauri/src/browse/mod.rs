@@ -161,6 +161,29 @@ fn auto_inject_on_first_load(app: &AppHandle, wv: &Webview, url: &Url) {
             return;
         }
 
+        // 探测 webview cookie 存储是否已带有效登录态（上次进程注入的
+        // cookie 在 WKWebsiteDataStore 持久）：有效则免注入+刷新，
+        // 消除每次启动首进 Pixiv 的可见整页刷新
+        let wv_probe = wv.clone();
+        let raw = tauri::async_runtime::spawn_blocking(move || wv_probe.cookies().ok())
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let existing =
+            crate::auth::webview_login::extract_pixiv_cookies_from_store(&raw);
+        if let Some(sid) = existing.get("PHPSESSID").filter(|v| !v.is_empty()) {
+            match crate::pixiv::csrf::fetch_session_probe(sid).await {
+                Ok(_) => {
+                    log::info!("webview 已有有效登录态，跳过注入与刷新");
+                    return;
+                }
+                Err(e) => {
+                    log::info!("webview 登录态已失效（{e}），重新注入");
+                }
+            }
+        }
+
         let wv_inject = wv.clone();
         let count = tauri::async_runtime::spawn_blocking(move || {
             let n = inject_cookies_to_webview(&wv_inject, &saved);
