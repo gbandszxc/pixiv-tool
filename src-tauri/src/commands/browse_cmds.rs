@@ -208,6 +208,16 @@ pub async fn browse_navigate(app: AppHandle, url: String) -> Result<(), String> 
     .map_err(|e| format!("异步执行异常: {e}"))?
 }
 
+/// 子 webview 后退（浏览器后退语义，SPA 内路由同样适用）。
+#[tauri::command]
+pub async fn browse_go_back(app: AppHandle) -> Result<(), String> {
+    let Some(wv) = app.get_webview(BROWSE_LABEL) else {
+        return Ok(());
+    };
+    wv.eval("history.back()")
+        .map_err(|e| format!("后退失败: {e}"))
+}
+
 /// 从子 webview 提取并同步登录态到系统凭据存储。
 #[tauri::command]
 pub async fn browse_sync_login(

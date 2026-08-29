@@ -9,6 +9,33 @@
               quaternary
               circle
               size="small"
+              aria-label="Back"
+              @click="handleBack"
+            >
+              <template #icon>
+                <svg
+                  class="toolbar-icon"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+              </template>
+            </n-button>
+          </template>
+          {{ t('pixiv.back') }}
+        </n-tooltip>
+
+        <n-tooltip trigger="hover">
+          <template #trigger>
+            <n-button
+              quaternary
+              circle
+              size="small"
               aria-label="Home"
               @click="handleHome"
             >
@@ -246,6 +273,9 @@ function handleReload() {
   invoke("browse_navigate", { url: currentUrl.value || BROWSE_HOME }).catch(() => {});
 }
 
+function handleBack() {
+  invoke("browse_go_back").catch(() => {});
+}
 
 async function handleSyncLogin() {
   syncingLogin.value = true;

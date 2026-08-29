@@ -173,6 +173,7 @@ export default {
   },
   pixiv: {
     title: "Pixiv",
+    back: "Back",
     home: "Home",
     reload: "Reload",
     loading: "Loading Pixiv...",

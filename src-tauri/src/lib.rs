@@ -57,6 +57,7 @@ pub fn run() {
             commands::browse_cmds::browse_hide,
             commands::browse_cmds::browse_show,
             commands::browse_cmds::browse_navigate,
+            commands::browse_cmds::browse_go_back,
             commands::browse_cmds::browse_sync_login,
             commands::browse_cmds::browse_inject_login,
             // tasks

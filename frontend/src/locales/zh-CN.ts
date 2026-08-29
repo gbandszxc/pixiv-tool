@@ -174,6 +174,7 @@ export default {
   },
   pixiv: {
     title: "Pixiv",
+    back: "后退",
     home: "主页",
     reload: "刷新",
     loading: "正在加载 Pixiv...",
