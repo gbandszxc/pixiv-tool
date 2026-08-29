@@ -15,6 +15,7 @@
 //! `default.p1..pN` 存分片内容。macOS/Linux 无此限制但走同一路径，行为一致。
 
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +36,11 @@ struct ShardHeader {
 pub struct CookieStore {
     service: String,
     account: String,
+    /// 内存缓存：keychain 读取在 macOS 会弹授权框（dev 下二进制每次重编译
+    /// 签名变化，「始终允许」失效），启动后只允许首次真实读取，
+    /// 之后 load 全走缓存；save/clear 同步更新。
+    /// None = 未读过；Some(map) = 已读（空 map 等价无登录态）。
+    cache: RwLock<Option<HashMap<String, String>>>,
 }
 
 impl Default for CookieStore {
@@ -48,10 +54,11 @@ impl CookieStore {
         Self {
             service: SERVICE.to_string(),
             account: ACCOUNT.to_string(),
+            cache: RwLock::new(None),
         }
     }
 
-    /// 保存（覆盖）登录态。超限时自动分片。
+    /// 保存（覆盖）登录态。超限时自动分片；成功后同步更新内存缓存。
     pub fn save(&self, cookies: &HashMap<String, String>) -> Result<(), String> {
         let payload =
             serde_json::to_string(cookies).map_err(|err| format!("登录态序列化失败: {err}"))?;
@@ -61,31 +68,49 @@ impl CookieStore {
 
         let parts = chunk_payload(&payload, PART_CHAR_LIMIT);
         if parts.len() <= 1 {
-            return self.entry(&self.account)?.set_password(&payload).map_err(|err| format!("保存登录态失败: {err}"));
+            self.entry(&self.account)?
+                .set_password(&payload)
+                .map_err(|err| format!("保存登录态失败: {err}"))?;
+        } else {
+            // 内容分片先写，头最后写：读到头才算有效数据（部分写入 → 视为损坏重登）
+            for (i, part) in parts.iter().enumerate() {
+                self.entry(&self.part_account(i + 1))?
+                    .set_password(part)
+                    .map_err(|err| format!("保存登录态失败（分片 {}）: {err}", i + 1))?;
+            }
+            let header = serde_json::to_string(&ShardHeader {
+                v: HEADER_VERSION,
+                parts: parts.len(),
+            })
+            .map_err(|err| format!("登录态序列化失败: {err}"))?;
+            self.entry(&self.account)?
+                .set_password(&header)
+                .map_err(|err| format!("保存登录态失败: {err}"))?;
         }
-
-        // 内容分片先写，头最后写：读到头才算有效数据（部分写入 → 视为损坏重登）
-        for (i, part) in parts.iter().enumerate() {
-            self.entry(&self.part_account(i + 1))?
-                .set_password(part)
-                .map_err(|err| format!("保存登录态失败（分片 {}）: {err}", i + 1))?;
+        if let Ok(mut c) = self.cache.write() {
+            *c = Some(cookies.clone());
         }
-        let header = serde_json::to_string(&ShardHeader {
-            v: HEADER_VERSION,
-            parts: parts.len(),
-        })
-        .map_err(|err| format!("登录态序列化失败: {err}"))?;
-        self.entry(&self.account)?
-            .set_password(&header)
-            .map_err(|err| format!("保存登录态失败: {err}"))
+        Ok(())
     }
 
     /// 读取登录态。None = 从未存储过；
     /// 坏 JSON → Err("...登录态已损坏，请重新登录")；非对象 → Err("...格式无效...")。
+    ///
+    /// 命中内存缓存直接返回（不触发 keychain 授权框）；仅进程内首次读取
+    /// 落 keychain。读取失败（含用户拒绝授权）不写缓存，下次重试。
     pub fn load(&self) -> Result<Option<HashMap<String, String>>, String> {
+        // 命中缓存：空 map 等价无登录态（None）
+        if let Ok(c) = self.cache.read() {
+            if let Some(map) = &*c {
+                return Ok((!map.is_empty()).then(|| map.clone()));
+            }
+        }
         let payload = match self.load_payload()? {
             Some(p) => p,
-            None => return Ok(None),
+            None => {
+                self.remember(HashMap::new());
+                return Ok(None);
+            }
         };
         let parsed: serde_json::Value = serde_json::from_str(&payload)
             .map_err(|_| "系统凭据存储中的登录态已损坏，请重新登录".to_string())?;
@@ -93,19 +118,22 @@ impl CookieStore {
             .as_object()
             .ok_or_else(|| "系统凭据存储中的登录态格式无效，请重新登录".to_string())?;
         // 值非字符串时退化为空串（正常数据不会出现）
-        Ok(Some(
-            map.iter()
-                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
-                .collect(),
-        ))
+        let cookies: HashMap<String, String> = map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+            .collect();
+        self.remember(cookies.clone());
+        Ok(Some(cookies))
     }
 
-    /// 清除登录态。条目不存在视为已清空（忽略）；其他错误向上抛。
+    /// 清除登录态。条目不存在视为已清空（忽略）；其他错误向上抛。成功后清缓存。
     pub fn clear(&self) -> Result<(), String> {
         self.clear_shards()?;
         match self.entry(&self.account)?.delete_credential() {
-            Ok(()) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring::Error::NoEntry) => {
+                self.remember(HashMap::new());
+                Ok(())
+            }
             Err(err) => Err(format!("清除登录态失败: {err}")),
         }
     }
@@ -158,6 +186,13 @@ impl CookieStore {
 
     fn part_account(&self, i: usize) -> String {
         format!("{}.p{i}", self.account)
+    }
+
+    /// 更新缓存（锁失败静默跳过，下次 load 落 keychain 重读）。
+    fn remember(&self, cookies: HashMap<String, String>) {
+        if let Ok(mut c) = self.cache.write() {
+            *c = Some(cookies);
+        }
     }
 
     /// keyring 3 的 Entry 不 Clone，按需创建（开销可忽略）。

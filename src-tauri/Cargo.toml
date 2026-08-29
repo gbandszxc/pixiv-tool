@@ -20,7 +20,7 @@ path = "src/main.rs"
 tauri-build = { version = "2.6", features = [] }
 
 [dependencies]
-tauri = { version = "2.11", features = [] }
+tauri = { version = "2.11", features = ["unstable"] }
 tauri-plugin-dialog = "2.7"
 tauri-plugin-log = "2.9"
 serde = { version = "1.0", features = ["derive"] }

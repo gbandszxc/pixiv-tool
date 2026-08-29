@@ -16,7 +16,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tauri::State;
 
-use crate::auth::browser_login::open_browser_login;
+use crate::auth::browser_login::{find_login_browser, open_browser_login};
+use crate::auth::webview_login::open_webview_login;
 use crate::pixiv::client::{PixivClient, PixivError};
 use crate::pixiv::csrf::{ProbeError, fetch_session_probe, normalize_phpsessid};
 use crate::state::AppState;
@@ -111,12 +112,36 @@ fn auth_status_body(user_data: &Value) -> Value {
     })
 }
 
+/// 测试钩子：PIXIV_TOOL_FORCE_WEBVIEW_LOGIN=1 时跳过浏览器探测，强制内嵌 webview 登录。
+fn force_webview_login() -> bool {
+    std::env::var("PIXIV_TOOL_FORCE_WEBVIEW_LOGIN").as_deref() == Ok("1")
+}
+
 /// 打开真实浏览器登录（长阻塞，等价旧 POST /api/auth/login）。
-/// 找不到浏览器 → {"status":"error","message":"未找到 Chrome、Edge 或 Chromium"}。
+/// 未装 Chrome/Edge/Chromium 时回退内嵌 webview 登录（浏览器路径中途的
+/// 其他错误不触发回退）；PIXIV_TOOL_FORCE_WEBVIEW_LOGIN=1 强制走 webview。
 #[tauri::command]
-pub async fn auth_login(state: State<'_, AppState>) -> Result<Value, String> {
-    let profile_dir = state.paths.config_dir.join("login-browser-profile");
-    let result = open_browser_login(&profile_dir).await;
+pub async fn auth_login(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let result = if force_webview_login() {
+        log::info!("PIXIV_TOOL_FORCE_WEBVIEW_LOGIN=1，强制使用内嵌 webview 登录");
+        open_webview_login(&app, &state.paths.config_dir.join("login-webview-profile")).await
+    } else {
+        match find_login_browser() {
+            Ok(_) => {
+                let profile_dir = state.paths.config_dir.join("login-browser-profile");
+                open_browser_login(&profile_dir).await
+            }
+            // 无 Chromium 系浏览器 → 回退内嵌 webview 登录
+            Err(err) => {
+                log::info!("未找到可用浏览器（{err}），回退内嵌 webview 登录");
+                open_webview_login(&app, &state.paths.config_dir.join("login-webview-profile"))
+                    .await
+            }
+        }
+    };
 
     if result.status == "success" {
         let Some(cookies) = result.cookies.as_ref().filter(|c| !c.is_empty()) else {

@@ -42,15 +42,18 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { NCard, NForm, NFormItem, NInput, NRadioGroup, NRadio, NCheckboxGroup, NCheckbox, NButton, NAlert } from "naive-ui";
 import { useI18n } from "vue-i18n";
 import { useTaskStore } from "../stores/tasks";
 import { errorMessage } from "../api/tauri";
+import { parsePixivUrl } from "../utils/pixivUrl";
 
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
 const taskStore = useTaskStore();
-
 const form = ref({
   sourceType: "single",
   sourceId: "",
@@ -67,21 +70,24 @@ const inputPlaceholder = computed(() => {
 });
 
 function extractId(input: string): string {
-  // 从 URL 提取 ID: https://www.pixiv.net/novel/show.php?id=12345
-  const urlMatch = input.match(/[?&]id=(\d+)/);
-  if (urlMatch) return urlMatch[1];
-  // /novel/12345
-  const pathMatch = input.match(/\/novel\/(\d+)/);
-  if (pathMatch) return pathMatch[1];
-  // /user/12345
-  const userMatch = input.match(/\/user\/(\d+)/);
-  if (userMatch) return userMatch[1];
-  // /series/12345
-  const seriesMatch = input.match(/\/series\/(\d+)/);
-  if (seriesMatch) return seriesMatch[1];
-  // 纯数字
+  const parsed = parsePixivUrl(input);
+  if (parsed && (parsed.kind === "novel-single" || parsed.kind === "novel-series" || parsed.kind === "user")) {
+    return parsed.id;
+  }
   return input.trim();
 }
+
+onMounted(() => {
+  if (typeof route.query.sourceType === "string" && ["single", "series", "user"].includes(route.query.sourceType)) {
+    form.value.sourceType = route.query.sourceType;
+  }
+  if (typeof route.query.sourceId === "string" && route.query.sourceId) {
+    form.value.sourceId = route.query.sourceId;
+  }
+  if (route.query.sourceType || route.query.sourceId) {
+    router.replace({ query: {} });
+  }
+});
 
 async function handleSubmit() {
   const sourceId = extractId(form.value.sourceId);

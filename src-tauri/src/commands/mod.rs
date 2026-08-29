@@ -11,6 +11,7 @@
 //! - 目录选择不设命令：前端直接用 plugin-dialog 的 open API
 
 pub mod auth_cmds;
+pub mod browse_cmds;
 pub mod history_cmds;
 pub mod misc_cmds;
 pub mod settings_cmds;

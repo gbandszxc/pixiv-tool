@@ -60,7 +60,11 @@
           <n-button v-else size="small" block @click="showLoginDialog = true">{{ t('auth.login') }}</n-button>
         </div>
       </n-layout-sider>
-      <n-layout-content class="app-content">
+      <n-layout-content
+        class="app-content"
+        :class="{ 'is-pixiv-route': route.path === '/pixiv' }"
+        :native-scrollbar="route.path !== '/pixiv'"
+      >
         <router-view />
       </n-layout-content>
     </n-layout>
@@ -72,7 +76,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from "vue";
+import { computed, h, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import {
@@ -87,8 +91,11 @@ import {
   NMessageProvider,
 } from "naive-ui";
 import type { GlobalThemeOverrides, MenuOption } from "naive-ui";
+import { darkTheme } from "naive-ui";
 import LoginDialog from "./components/auth/LoginDialog.vue";
 import { useAuthStore } from "./stores/auth";
+import { useSettingsStore } from "./stores/settings";
+import { invoke, setWindowTheme } from "./api/tauri";
 import SidebarIcon, { type SidebarIconName } from "./components/navigation/SidebarIcon.vue";
 
 const router = useRouter();
@@ -123,8 +130,45 @@ watch(siderCollapsed, (collapsed) => {
     }, 350);
   }
 });
+watch(showLoginDialog, (visible) => {
+  if (visible) {
+    invoke("browse_hide").catch(() => {});
+  } else if (route.path === "/pixiv") {
+    invoke("browse_show").catch(() => {});
+  }
+});
 
-const theme = computed(() => null); // 浅色，ticket 15 实现完整主题
+const settingsStore = useSettingsStore();
+
+// 系统深色偏好：auto 模式的数据源，监听系统实时切换
+const systemDark = ref(window.matchMedia("(prefers-color-scheme: dark)").matches);
+const media = window.matchMedia("(prefers-color-scheme: dark)");
+const onMediaChange = (e: MediaQueryListEvent) => {
+  systemDark.value = e.matches;
+};
+media.addEventListener("change", onMediaChange);
+onBeforeUnmount(() => media.removeEventListener("change", onMediaChange));
+
+const isDark = computed(
+  () =>
+    settingsStore.settings.theme === "dark" ||
+    (settingsStore.settings.theme === "auto" && systemDark.value)
+);
+
+// 深色时挂 html.dark 驱动 CSS 变量切换（main.css）；
+// 同时同步窗口原生主题——内嵌 pixiv webview 的 prefers-color-scheme
+// 跟随窗口外观，使内嵌页与应用主题一致（而非跟随系统）
+watch(
+  isDark,
+  (dark) => {
+    document.documentElement.classList.toggle("dark", dark);
+    setWindowTheme(dark ? "dark" : "light").catch(() => {});
+  },
+  { immediate: true }
+);
+
+// NaiveUI 主题：dark 时用 darkTheme（themeOverrides 中主色等仍叠加生效）
+const theme = computed(() => (isDark.value ? darkTheme : null));
 
 const themeOverrides: GlobalThemeOverrides = {
   common: {
@@ -149,6 +193,7 @@ function renderNavigationIcon(name: SidebarIconName) {
 
 // computed 让菜单文案随 locale 切换自动更新
 const menuOptions = computed<MenuOption[]>(() => [
+  { label: t("nav.pixiv"), key: "/pixiv", icon: renderNavigationIcon("pixiv") },
   {
     label: t("nav.crawl"),
     key: "crawl",
@@ -173,7 +218,9 @@ async function handleAccountMenuSelect(key: string) {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // 启动即取设置：主题（light/dark/auto）需要立即生效
+  settingsStore.fetchSettings().catch(() => {});
   authStore.checkStatus();
 });
 </script>
@@ -281,6 +328,19 @@ onMounted(() => {
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Pixiv 内嵌全屏浏览路由：零内边距、充满高度、禁用外层滚动 */
+.app-content.is-pixiv-route {
+  padding: 0 !important;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-content.is-pixiv-route :deep(.n-layout-scroll-container) {
+  padding: 0 !important;
+  height: 100% !important;
+  overflow: hidden !important;
 }
 
 </style>

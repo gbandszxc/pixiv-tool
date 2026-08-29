@@ -85,6 +85,13 @@ Pixiv Tool 是个人内容整理工具，不是社交产品或营销页。界面
 
 **The One Accent Rule.** Pixiv Blue 是唯一的产品强调色；成功、警告和错误继续使用 Naive UI 语义色，不能用蓝色替代或伪装状态。
 
+### Dark（html.dark，跟随系统或手动深色时激活）
+
+- **Surface** (`#101014`): 主内容底色，对齐 NaiveUI darkTheme body。
+- **Ink 系反转**: `#d6d6dc` / `#e6e6ec` / `#9a9aa4` / `#6f6f7a`（正文/强调/辅助/低优先），分隔线 `#2c2c34`。
+- **Pixiv Blue 不变**：深浅两态共用同一主色与 hover/pressed 序列。
+- 主题由 `App.vue` 统一计算（设置 light/dark/auto + `prefers-color-scheme` 监听），通过 `html.dark` 类名驱动 `main.css` 变量覆盖，并叠加 NaiveUI `darkTheme`；页面禁止绕过变量直接写死中性色。
+
 ## 3. Typography
 
 **Display Font:** 不使用独立展示字体。

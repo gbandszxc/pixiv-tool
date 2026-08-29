@@ -8,6 +8,7 @@
  *   b) invoke reject 一个 string（旧 4xx/5xx detail），统一用 errorMessage() 归一化。
  */
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 declare global {
   interface Window {
@@ -61,6 +62,16 @@ export function errorMessage(err: unknown): string {
 // 事件订阅原样转出（listen 内部同样依赖 Tauri 环境，调用方先用 isTauri() 判断）。
 export { listen } from "@tauri-apps/api/event";
 export type { UnlistenFn } from "@tauri-apps/api/event";
+
+/** 设置窗口原生主题（NSAppearance）。
+ *
+ * 作用不止主 webview：内嵌子 webview（pixiv-browse）的
+ * prefers-color-scheme 同样跟随窗口外观，pixiv 页面深浅色随之切换。
+ * 仅 Tauri 环境可用；非 Tauri（浏览器调试）静默跳过。 */
+export async function setWindowTheme(theme: "light" | "dark"): Promise<void> {
+  if (!isTauri()) return;
+  await getCurrentWindow().setTheme(theme);
+}
 
 // ===== 后端契约类型（snake_case，与 Rust 命令返回体一致）=====
 
@@ -138,6 +149,12 @@ export interface AuthLoginManualResponse {
   status: "success";
   message: string;
   user: AuthUserFields;
+}
+
+/** browse_sync_login：从内嵌浏览页提取 cookies 并同步到系统凭据存储。 */
+export interface BrowseSyncLoginResponse {
+  status: "success" | "injected" | "no_session" | "invalid" | "error";
+  message?: string;
 }
 
 /** task://progress 事件 payload。 */

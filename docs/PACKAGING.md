@@ -63,9 +63,12 @@ cargo tauri icon frontend/src/assets/icon.png
 登录态不在文件系统：macOS Keychain / Windows Credential Manager /
 Linux Secret Service（service `pixiv-tool.cookies`，account `default`）。
 
-## 6. CI（已建：`.github/workflows/release.yml`）
+## 6. 发布方式（仅本地打包）
 
-tag `v*` push 触发四路 matrix（macOS 双架构 aarch64/x86_64、ubuntu、windows）
-跑 `tauri-action` 构建，产物自动附加到对应 tag 的 GitHub Release。runner
-需装 Rust + pnpm + node + cmake + libclang（Linux 另装 webkit2gtk-4.1，
-均已在 workflow 内声明）。
+GitCode 托管无流水线，`tauri-action` release CI 已移除（2026-08-21）。
+**打包只在本地按需执行**：
+
+- release 安装包：`cargo tauri build`（产物在本目录 `bundle/` 下）
+- 调试二进制：`cargo tauri build --debug --no-bundle`
+
+三平台安装包分别在对应系统本地构建；tag（`v*`）仅作版本标记，不触发自动化。

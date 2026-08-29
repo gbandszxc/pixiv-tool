@@ -8,6 +8,7 @@
 
 pub mod auth;
 pub mod commands;
+pub mod browse;
 pub mod cookies;
 pub mod core;
 pub mod db;
@@ -50,6 +51,15 @@ pub fn run() {
             commands::auth_cmds::auth_login,
             commands::auth_cmds::auth_login_manual,
             commands::auth_cmds::auth_logout,
+            // browse
+            commands::browse_cmds::browse_open,
+            commands::browse_cmds::browse_set_bounds,
+            commands::browse_cmds::browse_hide,
+            commands::browse_cmds::browse_show,
+            commands::browse_cmds::browse_navigate,
+            commands::browse_cmds::browse_go_back,
+            commands::browse_cmds::browse_sync_login,
+            commands::browse_cmds::browse_inject_login,
             // tasks
             commands::task_cmds::tasks_list,
             commands::task_cmds::task_create,
