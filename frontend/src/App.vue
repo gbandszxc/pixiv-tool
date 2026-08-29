@@ -150,13 +150,17 @@ watch(siderCollapsed, (collapsed) => {
     }, 350);
   }
 });
-watch(showLoginDialog, (visible) => {
-  if (visible) {
+// 弹窗显隐同步：原生子 webview 永远浮在主 webview DOM 之上，
+// 任何弹窗（登录/退出确认）打开前须先藏子 webview，关闭后按路由恢复。
+function syncBrowseVisibility(hidden: boolean) {
+  if (hidden) {
     invoke("browse_hide").catch(() => {});
   } else if (route.path === "/pixiv") {
     invoke("browse_show").catch(() => {});
   }
-});
+}
+watch(showLoginDialog, (visible) => syncBrowseVisibility(visible));
+watch(showExitConfirm, (visible) => syncBrowseVisibility(visible));
 
 const settingsStore = useSettingsStore();
 
