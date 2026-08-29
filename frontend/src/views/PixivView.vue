@@ -228,13 +228,14 @@ let resizeObserver: ResizeObserver | null = null;
 function syncBounds() {
   if (!hostEl.value) return;
   const r = hostEl.value.getBoundingClientRect();
-  if (r.width <= 0 || r.height <= 0) return;
-  invoke("browse_set_bounds", {
-    x: r.left,
-    y: r.top,
-    w: r.width,
-    h: r.height,
-  }).catch(() => {});
+  const x = r.left >= 0 ? r.left : 180;
+  const y = r.top >= 0 ? r.top : 42;
+  const w = r.width > 0 ? r.width : (window.innerWidth - x);
+  const h = r.height > 0 ? r.height : (window.innerHeight - y);
+  if (w <= 0 || h <= 0) return;
+  invoke("browse_set_bounds", { x, y, w, h }).catch((err) => {
+    console.error("browse_set_bounds error:", err);
+  });
 }
 
 function handleHome() {
@@ -351,7 +352,20 @@ watch([page, alertMessage], async () => {
 });
 
 onMounted(async () => {
-  await invoke("browse_open").catch(() => {});
+  let x = 180;
+  let y = 42;
+  let w = window.innerWidth - 180;
+  let h = window.innerHeight - 42;
+  if (hostEl.value) {
+    const r = hostEl.value.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      x = r.left;
+      y = r.top;
+      w = r.width;
+      h = r.height;
+    }
+  }
+  await invoke("browse_open", { x, y, w, h }).catch(() => {});
   if (authStore.isLoggedIn) {
     await invoke("browse_inject_login").catch(() => {});
   }
@@ -359,10 +373,9 @@ onMounted(async () => {
   syncBounds();
 
   // 多轮延迟校准边界，确保过渡动画与容器完成布局后精准对齐
-  [50, 150, 300, 600].forEach((ms) => {
+  [50, 150, 300, 600, 1000].forEach((ms) => {
     setTimeout(syncBounds, ms);
   });
-
   if (isTauri()) {
     unlisten = await listen<{ url: string }>("browse://url-changed", (e) => {
       currentUrl.value = e.payload.url;
@@ -493,18 +506,12 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.browse-alert-container {
-  padding: 6px 16px;
-  background: var(--n-color, #ffffff);
-  border-bottom: 1px solid rgba(128, 128, 128, 0.15);
-  flex-shrink: 0;
-}
-
 .browse-host {
   flex: 1;
+  width: 100%;
+  height: 100%;
   min-height: 0;
   position: relative;
-  width: 100%;
 }
 
 .loading-state {

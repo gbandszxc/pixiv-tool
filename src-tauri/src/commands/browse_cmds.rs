@@ -10,9 +10,25 @@ use crate::state::AppState;
 pub async fn browse_open(
     app: AppHandle,
     state: State<'_, AppState>,
+    x: Option<f64>,
+    y: Option<f64>,
+    w: Option<f64>,
+    h: Option<f64>,
 ) -> Result<(), String> {
-    log::info!("执行 browse_open");
-    ensure_browse_webview(&app, &state).await?;
+    let px = x.unwrap_or(180.0);
+    let py = y.unwrap_or(42.0);
+    let pw = w.unwrap_or(800.0);
+    let ph = h.unwrap_or(600.0);
+    log::info!("执行 browse_open, 目标区域: ({px}, {py}, {pw}, {ph})");
+    let wv = ensure_browse_webview(&app, &state, px, py, pw, ph).await?;
+    if pw > 0.0 && ph > 0.0 {
+        let rect = tauri::Rect {
+            position: tauri::Position::Logical(tauri::LogicalPosition::new(px, py)),
+            size: tauri::Size::Logical(tauri::LogicalSize::new(pw, ph)),
+        };
+        let _ = wv.set_bounds(rect);
+        let _ = wv.show();
+    }
     Ok(())
 }
 
