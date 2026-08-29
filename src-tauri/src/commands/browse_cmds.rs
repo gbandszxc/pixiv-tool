@@ -86,7 +86,7 @@ pub async fn browse_navigate(app: AppHandle, url: String) -> Result<(), String> 
     let parsed_url: Url = url.parse().map_err(|e| format!("URL 无效: {e}"))?;
     let host = parsed_url.host_str().unwrap_or("");
     if !is_allowed_host(host) {
-        return Err("仅允许访问 pixiv.net 域名".to_string());
+        return Err("仅允许访问 pixiv 相关域名".to_string());
     }
 
     let Some(wv) = app.get_webview(BROWSE_LABEL) else {
@@ -95,7 +95,9 @@ pub async fn browse_navigate(app: AppHandle, url: String) -> Result<(), String> 
 
     tokio::task::spawn_blocking(move || {
         wv.navigate(parsed_url)
-            .map_err(|e| format!("导航失败: {e}"))
+            .map_err(|e| format!("导航失败: {e}"))?;
+        let _ = wv.show();
+        Ok::<(), String>(())
     })
     .await
     .map_err(|e| format!("异步执行异常: {e}"))?
@@ -205,17 +207,17 @@ pub async fn browse_inject_login(
         Ok(Some(c)) if !c.is_empty() => c,
         _ => return Ok(false),
     };
-
     let home_url: Url = crate::browse::BROWSE_HOME
         .parse()
         .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
 
+    let wv_inject = wv.clone();
     tokio::task::spawn_blocking(move || {
-        crate::browse::inject_cookies_to_webview(&wv, &cookies);
-        let _ = wv.navigate(home_url);
+        crate::browse::inject_cookies_to_webview(&wv_inject, &cookies);
+        let _ = wv_inject.navigate(home_url);
+        let _ = wv_inject.show();
     })
     .await
     .map_err(|e| format!("异步执行异常: {e}"))?;
-
     Ok(true)
 }

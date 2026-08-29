@@ -169,12 +169,7 @@
     </div>
 
     <!-- 原生子 Webview 宿主占位容器 -->
-    <div ref="hostEl" class="browse-host">
-      <div v-if="!currentUrl" class="loading-state">
-        <n-spin size="medium" />
-        <span class="loading-text">{{ t('pixiv.loading') }}</span>
-      </div>
-    </div>
+    <div ref="hostEl" class="browse-host"></div>
   </div>
 </template>
 
@@ -202,8 +197,7 @@ const router = useRouter();
 const authStore = useAuthStore();
 const taskStore = useTaskStore();
 const hostEl = ref<HTMLElement | null>(null);
-const currentUrl = ref("");
-
+const currentUrl = ref(BROWSE_HOME);
 // 页面场景识别
 const page = computed(() => parsePixivUrl(currentUrl.value));
 
@@ -363,6 +357,12 @@ onMounted(async () => {
   }
   await nextTick();
   syncBounds();
+
+  // 多轮延迟校准边界，确保过渡动画与容器完成布局后精准对齐
+  [50, 150, 300, 600].forEach((ms) => {
+    setTimeout(syncBounds, ms);
+  });
+
   if (isTauri()) {
     unlisten = await listen<{ url: string }>("browse://url-changed", (e) => {
       currentUrl.value = e.payload.url;

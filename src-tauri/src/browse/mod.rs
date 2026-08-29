@@ -18,13 +18,22 @@ pub const BROWSE_HOME: &str = "https://www.pixiv.net/";
 
 static POLL_STARTED: OnceLock<()> = OnceLock::new();
 
-/// 检查目标 host 是否在 Pixiv 白名单内（允许 pixiv.net 及其所有子域名）。
+/// 检查目标 host 是否在 Pixiv 白名单内（允许 pixiv 及其 CDN、静态资源域名与空白页）。
 pub fn is_allowed_host(host: &str) -> bool {
-    let host = host.trim();
-    if host.is_empty() {
-        return false;
+    let host = host.trim().to_lowercase();
+    if host.is_empty() || host == "about:blank" {
+        return true;
     }
-    host == "pixiv.net" || host.ends_with(".pixiv.net")
+    host == "pixiv.net"
+        || host.ends_with(".pixiv.net")
+        || host == "pximg.net"
+        || host.ends_with(".pximg.net")
+        || host == "pixiv.org"
+        || host.ends_with(".pixiv.org")
+        || host == "fanbox.cc"
+        || host.ends_with(".fanbox.cc")
+        || host == "booth.pm"
+        || host.ends_with(".booth.pm")
 }
 
 /// 将本地 Cookie Map 注入到子 Webview 中。
@@ -151,13 +160,17 @@ mod tests {
         assert!(is_allowed_host("www.pixiv.net"));
         assert!(is_allowed_host("accounts.pixiv.net"));
         assert!(is_allowed_host("sketch.pixiv.net"));
-        assert!(is_allowed_host("touch.pixiv.net"));
+        assert!(is_allowed_host("s.pximg.net"));
+        assert!(is_allowed_host("i.pximg.net"));
+        assert!(is_allowed_host("fanbox.cc"));
+        assert!(is_allowed_host("booth.pm"));
+        assert!(is_allowed_host(""));
+        assert!(is_allowed_host("about:blank"));
 
         assert!(!is_allowed_host("evil-pixiv.net"));
         assert!(!is_allowed_host("pixiv.net.evil.com"));
         assert!(!is_allowed_host("notpixiv.net"));
         assert!(!is_allowed_host("example.com"));
-        assert!(!is_allowed_host(""));
-        assert!(!is_allowed_host("   "));
+        assert!(!is_allowed_host("evil-pximg.net"));
     }
 }
