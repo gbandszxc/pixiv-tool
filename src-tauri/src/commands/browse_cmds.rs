@@ -57,7 +57,9 @@ pub async fn browse_open(
 /// 将客户端保存的登录态注入子 Webview 并刷新首页（load 后注入，可靠路径）。
 ///
 /// 返回是否执行了注入（本地存在非空 PHPSESSID 才注入）。
-async fn inject_saved_and_reload(
+/// 除本文件的同步登录回退外，auth_account_switch 切换账号后也复用此路径
+/// 把新账号登录态推进内嵌 webview。
+pub(crate) async fn inject_saved_and_reload(
     wv: &tauri::Webview,
     cookies: &crate::cookies::CookieStore,
 ) -> Result<bool, String> {

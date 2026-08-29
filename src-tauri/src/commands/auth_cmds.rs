@@ -7,15 +7,21 @@
 //!   其他 → {"status":"cancelled"|"timeout"|"error","message":...}
 //! - auth_login_manual 成功 → {"status":"success","message":"Cookie 已保存","user":{...}}；
 //!   失败 → Err(中文错误文案)
-//! - auth_logout → {"status":"success"}
+//! - auth_logout → {"status":"success"}（多账号语义：仅退出当前账号）
+//!
+//! 多账号扩展（账号索引 + 每账号凭据条目，default 恒为当前账号镜像）：
+//! - auth_accounts_list → {"active": str|null, "accounts": [AccountInfo...]}
+//! - auth_account_switch(user_id) → {"status":"success"}；
+//!   目标凭据缺失/失效 → Err(中文错误文案)
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tauri::State;
+use tauri::{Manager, State};
 
+use crate::accounts::AccountInfo;
 use crate::auth::browser_login::{find_login_browser, open_browser_login};
 use crate::auth::webview_login::open_webview_login;
 use crate::pixiv::client::{PixivClient, PixivError};
@@ -66,9 +72,16 @@ pub async fn auth_status(state: State<'_, AppState>) -> Result<Value, String> {
             Ok(json!({ "is_logged_in": false }))
         }
         Ok(Err(ProbeFailure::Auth)) => {
-            // 401/403：登录态确定失效，主动清除
+            // 401/403：登录态确定失效——清除 default 镜像，并从账号列表移除
+            // 该账号（含其独立凭据条目），避免「死账号」反复出现在切换列表里
+            let active = state.accounts.active();
             if let Err(err) = state.cookies.clear() {
                 log::warn!("清除失效登录态失败: {err}");
+            }
+            if let Some(uid) = active {
+                if let Err(err) = state.accounts.remove(&uid) {
+                    log::warn!("移除失效账号失败: {err}");
+                }
             }
             Ok(json!({ "is_logged_in": false }))
         }
@@ -81,15 +94,22 @@ pub async fn auth_status(state: State<'_, AppState>) -> Result<Value, String> {
             // 头像回显：i.pximg.net 有 Referer 防盗链，webview 直连 403，
             // 需后端代下到 data/cache 并经 pixiv-avatar:// 协议供前端显示。
             // 下载失败不影响登录态（前端兜底首字母）。
+            let mut avatar_file = String::new();
             if let Some(url) = body
                 .get("profile_img")
                 .and_then(Value::as_str)
                 .filter(|s| !s.is_empty())
             {
-                if let Some(scheme_url) = ensure_avatar_cache(&state, &client, url).await {
-                    log::info!("头像缓存命中: {scheme_url}");
-                    body["avatar_url"] = json!(scheme_url);
+                if let Some(file) = ensure_avatar_file(&state, &client, url).await {
+                    avatar_file = file.clone();
+                    body["avatar_url"] = json!(avatar_scheme_url(&file));
+                    log::info!("头像缓存命中: {}", body["avatar_url"]);
                 }
+            }
+            // 多账号：校验成功即登记/刷新当前账号（旧单账号 default 数据
+            // 由此自动建档迁移进索引；失败只记日志，不影响状态返回）
+            if body.get("is_logged_in").and_then(Value::as_bool) == Some(true) {
+                enroll_account(&state, &body, &cookies, &avatar_file);
             }
             Ok(body)
         }
@@ -124,14 +144,14 @@ fn avatar_scheme_url(filename: &str) -> String {
     }
 }
 
-/// 确保 `data/cache/` 有头像缓存：有则直接返回，无则用登录态客户端代下
-///（download_bytes 已带 pixiv Referer 过防盗链）。返回前端可用 URL。
-async fn ensure_avatar_cache(state: &AppState, client: &PixivClient, url: &str) -> Option<String> {
+/// 确保 `data/cache/` 有头像缓存：有则直接返回文件名，无则用登录态客户端
+/// 代下（download_bytes 已带 pixiv Referer 过防盗链）。返回缓存文件名。
+async fn ensure_avatar_file(state: &AppState, client: &PixivClient, url: &str) -> Option<String> {
     let filename = avatar_filename(url)?;
     let dir = state.paths.data_dir.join("cache");
     let path = dir.join(&filename);
     if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-        return Some(avatar_scheme_url(&filename));
+        return Some(filename);
     }
     let bytes = tokio::time::timeout(
         Duration::from_secs(AVATAR_DOWNLOAD_TIMEOUT_SEC),
@@ -149,7 +169,49 @@ async fn ensure_avatar_cache(state: &AppState, client: &PixivClient, url: &str) 
         log::warn!("头像缓存写入失败: {err}");
         return None;
     }
-    Some(avatar_scheme_url(&filename))
+    Some(filename)
+}
+
+/// 确保头像缓存就绪并返回前端可用的协议 URL。
+async fn ensure_avatar_cache(state: &AppState, client: &PixivClient, url: &str) -> Option<String> {
+    ensure_avatar_file(state, client, url)
+        .await
+        .map(|file| avatar_scheme_url(&file))
+}
+
+/// 登记账号进多账号管理（凭据归档到 `u-<user_id>` + 索引 upsert + 激活）。
+/// 失败只记日志不向调用方传播：default 镜像已写成功，索引可由后续
+/// auth_status 校验成功补建档。
+fn enroll_account(
+    state: &AppState,
+    user: &Value,
+    cookies: &HashMap<String, String>,
+    avatar_file: &str,
+) {
+    let Some(mut info) = AccountInfo::from_user_value(user) else {
+        log::warn!("登录响应缺少用户信息，跳过多账号登记");
+        return;
+    };
+    info.avatar_file = avatar_file.to_string();
+    if let Err(err) = state.accounts.enroll(info, cookies) {
+        log::warn!("登记账号失败: {err}");
+    }
+}
+
+/// 多账号列表响应体（纯函数，离线可测）：active + 账号元信息数组，
+/// 有本地头像缓存的账号附带协议 URL。
+fn account_list_body(active: Option<String>, accounts: Vec<AccountInfo>) -> Value {
+    let items: Vec<Value> = accounts
+        .into_iter()
+        .map(|a| {
+            let mut v = serde_json::to_value(&a).unwrap_or_else(|_| json!({}));
+            if !a.avatar_file.is_empty() {
+                v["avatar_url"] = json!(avatar_scheme_url(&a.avatar_file));
+            }
+            v
+        })
+        .collect();
+    json!({ "active": active, "accounts": items })
 }
 
 /// /ajax/user/self 的 userData → auth_status 响应体（纯函数，离线可测）。
@@ -231,6 +293,8 @@ pub async fn auth_login(
             .as_ref()
             .and_then(|u| serde_json::to_value(u).ok())
             .unwrap_or_else(|| json!({}));
+        // 多账号：新登录账号登记并激活（头像缓存由随后前端的 auth_status 补）
+        enroll_account(&state, &user, cookies, "");
         return Ok(json!({
             "status": "success",
             "message": "登录成功",
@@ -269,6 +333,8 @@ pub async fn auth_login_manual(
         .as_ref()
         .and_then(|u| serde_json::to_value(u).ok())
         .unwrap_or_else(|| json!({}));
+    // 多账号：登记并激活（同 auth_login）
+    enroll_account(&state, &user, &cookies, "");
     Ok(json!({
         "status": "success",
         "message": "Cookie 已保存",
@@ -276,12 +342,70 @@ pub async fn auth_login_manual(
     }))
 }
 
-/// 清空本地登录态（等价旧 POST /api/auth/logout）。
+/// 清空当前账号登录态（等价旧 POST /api/auth/logout）。
+/// 多账号语义：退出 = 清 default 镜像 + 从账号列表移除该账号（含其独立
+/// 凭据条目）；其余已保存账号保留，可由账号菜单重新切换/登录。
 #[tauri::command]
 pub async fn auth_logout(state: State<'_, AppState>) -> Result<Value, String> {
+    let active = state.accounts.active();
     // 清除失败不影响响应（条目不存在视为已清空；其余失败仅记日志）
     if let Err(err) = state.cookies.clear() {
         log::warn!("清除登录态失败: {err}");
+    }
+    if let Some(uid) = active {
+        if let Err(err) = state.accounts.remove(&uid) {
+            log::warn!("移除已退出账号失败: {err}");
+        }
+    }
+    Ok(json!({ "status": "success" }))
+}
+
+/// 已保存账号列表（含当前激活标记与本地头像协议 URL）。
+#[tauri::command]
+pub async fn auth_accounts_list(state: State<'_, AppState>) -> Result<Value, String> {
+    Ok(account_list_body(state.accounts.active(), state.accounts.list()))
+}
+
+/// 切换当前账号：
+/// 1) 当前 default 镜像归档回原激活账号条目（目标 != 当前才写）
+/// 2) 目标账号条目凭据写入 default（缺 PHPSESSID → Err）
+/// 3) 索引 active 指向目标
+/// 4) 内嵌 webview 已创建则注入新账号登录态并回首页；未创建时首次
+///    加载的 auto_inject 读 default 即新账号，无需处理
+#[tauri::command]
+pub async fn auth_account_switch(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    user_id: String,
+) -> Result<Value, String> {
+    let target = state
+        .accounts
+        .load_cookies(&user_id)?
+        .filter(|c| c.get("PHPSESSID").is_some_and(|v| !v.is_empty()))
+        .ok_or_else(|| "该账号的登录态不存在或已失效，请重新登录".to_string())?;
+
+    // 切出前把当前镜像归档回原账号条目（用户在 webview 里同步过的
+    // 最新 cookie 也随镜像一起归档）
+    if let Some(current) = state.accounts.active().filter(|id| id != &user_id) {
+        if let Ok(Some(current_cookies)) = state.cookies.load() {
+            if !current_cookies.is_empty() {
+                if let Err(err) = state.accounts.store_cookies(&current, &current_cookies) {
+                    log::warn!("归档切出账号登录态失败: {err}");
+                }
+            }
+        }
+    }
+
+    state.cookies.save(&target)?;
+    state.accounts.set_active(&user_id)?;
+    log::info!("已切换当前账号");
+
+    if let Some(wv) = app.get_webview(crate::browse::BROWSE_LABEL) {
+        match crate::commands::browse_cmds::inject_saved_and_reload(&wv, &state.cookies).await {
+            Ok(true) => log::info!("切换账号后已同步内嵌 webview 登录态"),
+            Ok(false) => log::info!("切换账号后内嵌 webview 无需注入"),
+            Err(err) => log::warn!("切换账号后同步内嵌 webview 失败: {err}"),
+        }
     }
     Ok(json!({ "status": "success" }))
 }
@@ -356,5 +480,37 @@ mod tests {
         } else {
             assert_eq!(url, "pixiv-avatar://localhost/a_50.jpg");
         }
+    }
+
+    #[test]
+    fn account_list_body_shape() {
+        let mut a1 = AccountInfo {
+            user_id: "100".into(),
+            pixiv_id: "pid_100".into(),
+            name: "用户100".into(),
+            profile_img: "https://i.pximg.net/100.jpg".into(),
+            avatar_file: "100_50.jpg".into(),
+            saved_at: 0,
+        };
+        let a2 = AccountInfo {
+            avatar_file: String::new(),
+            ..a1.clone()
+        };
+        a1.saved_at = 123;
+
+        let body = account_list_body(Some("100".into()), vec![a1, a2]);
+        assert_eq!(body["active"], json!("100"));
+        let items = body["accounts"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["user_id"], json!("100"));
+        assert_eq!(items[0]["avatar_url"], json!(avatar_scheme_url("100_50.jpg")));
+        assert_eq!(items[0]["saved_at"], json!(123));
+        // 无头像缓存的账号不带 avatar_url 键（前端回退首字母）
+        assert!(items[1].get("avatar_url").is_none());
+
+        // 未登录 / 空列表
+        let empty = account_list_body(None, Vec::new());
+        assert_eq!(empty["active"], json!(null));
+        assert_eq!(empty["accounts"], json!([]));
     }
 }

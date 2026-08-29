@@ -101,6 +101,8 @@ pub fn run() {
             commands::auth_cmds::auth_login,
             commands::auth_cmds::auth_login_manual,
             commands::auth_cmds::auth_logout,
+            commands::auth_cmds::auth_accounts_list,
+            commands::auth_cmds::auth_account_switch,
             // browse
             commands::browse_cmds::browse_open,
             commands::browse_cmds::browse_set_bounds,
