@@ -174,6 +174,70 @@ fn auto_inject_on_first_load(app: &AppHandle, wv: &Webview, url: &Url) {
     });
 }
 
+/// 深色补丁 JS：pixiv 登录深色模式下 novel/show.php 的正文与评论区卡片
+/// 写死白底（styled-components 组件未适配深色，站内 bug，浏览器复现一致）。
+/// 启发式定位：非透明、近纯白、大面积（≥400×160）的 div/section 染成
+/// pixiv 深色卡片色 #1f1f1f，深色文字分级翻浅（正文 #f5f5f5 / 次级 #d6d6dc，
+/// 均取自 pixiv 深色体系实测值）。MutationObserver 常驻补染（200ms debounce）
+/// + 16 轮初始轮询，覆盖 hydration 延迟与二次渲染；脚本幂等，重复注入无害。
+// ponytail: 启发式补丁依赖 pixiv 深色体系与白卡片特征，pixiv 改版后若
+// 失效/误染，调整面积与亮度阈值即可；切回浅色主题不回滚，刷新页面即恢复。
+const DARK_NOVEL_PATCH_JS: &str = r#"(function(){
+    if (window.__dkPatchInstalled) return;
+    window.__dkPatchInstalled = true;
+    function lumaOf(c){ var m=/^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c); return m ? (0.299*m[1]+0.587*m[2]+0.114*m[3])/255 : 1; }
+    function fix(){
+        document.querySelectorAll('div,section').forEach(function(el){
+            if (el.dataset.dkPatched) return;
+            var cs = getComputedStyle(el);
+            var bg = cs.backgroundColor;
+            if (bg.indexOf('rgba') === 0) return;
+            if (lumaOf(bg) < 0.92) return;
+            var r = el.getBoundingClientRect();
+            if (r.width < 400 || r.height < 160) return;
+            el.dataset.dkPatched = '1';
+            el.style.backgroundColor = '#1f1f1f';
+            if (lumaOf(cs.color) < 0.5) el.style.color = '#f5f5f5';
+            el.querySelectorAll('*').forEach(function(ch){
+                if (ch.dataset.dkText) return;
+                var l2 = lumaOf(getComputedStyle(ch).color);
+                if (l2 < 0.2) { ch.dataset.dkText='1'; ch.style.color = '#f5f5f5'; }
+                else if (l2 < 0.5) { ch.dataset.dkText='1'; ch.style.color = '#d6d6dc'; }
+            });
+        });
+    }
+    var t = null;
+    function schedule(){
+        if (t) return;
+        t = setTimeout(function(){ t = null; fix(); }, 200);
+    }
+    for (var i = 0; i < 16; i++) setTimeout(fix, i * 500);
+    new MutationObserver(schedule).observe(document.documentElement, {childList: true, subtree: true});
+})()"#;
+
+/// novel/show.php 页面深色补丁：窗口为深色时注入 DARK_NOVEL_PATCH_JS。
+fn inject_dark_page_patch(app: &AppHandle, wv: &Webview, url: &Url) {
+    if !url.path().starts_with("/novel/show.php") {
+        return;
+    }
+    let app = app.clone();
+    let wv = wv.clone();
+    std::thread::spawn(move || {
+        // theme() 走同步 dispatcher，放独立线程避免与主线程互等
+        let dark = app
+            .get_window("main")
+            .and_then(|w| w.theme().ok())
+            .is_some_and(|t| t == tauri::Theme::Dark);
+        if !dark {
+            return;
+        }
+        if let Err(e) = wv.eval(DARK_NOVEL_PATCH_JS) {
+            log::warn!("深色补丁注入失败: {e}");
+        }
+    });
+}
+
+
 /// 确保子 webview 已创建（幂等）。
 ///
 /// 直接以 Pixiv 首页创建并显示；登录态注入不在创建时做——首次加载完成后
@@ -215,6 +279,7 @@ pub async fn ensure_browse_webview(
         .on_page_load(move |wv, payload| {
             if let tauri::webview::PageLoadEvent::Finished = payload.event() {
                 auto_inject_on_first_load(&app_for_load, &wv, payload.url());
+                inject_dark_page_patch(&app_for_load, &wv, payload.url());
             }
         });
 
@@ -277,6 +342,7 @@ pub async fn ensure_browse_webview(
 
     Ok(webview)
 }
+
 
 #[cfg(test)]
 mod tests {
