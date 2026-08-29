@@ -183,6 +183,13 @@ fn auto_inject_on_first_load(app: &AppHandle, wv: &Webview, url: &Url) {
 // ponytail: 启发式补丁依赖 pixiv 深色体系与白卡片特征，pixiv 改版后若
 // 失效/误染，调整面积与亮度阈值即可；切回浅色主题不回滚，刷新页面即恢复。
 const DARK_NOVEL_PATCH_JS: &str = r#"(function(){
+    // 同时经 initialization_script（document start，消除闪白）与
+    // on_page_load(Finished) eval（兜底）注入；__dkPatchInstalled 保证幂等。
+    // 深色判定读页面真实 prefers-color-scheme（WKWebView effective 外观）。
+    // 不能用窗口 theme()：未显式 set_theme（auto）时 tao 记录默认 Light，
+    // 与实际跟随系统的深色外观不符（release 白块复现根因）
+    if (!/novel\/show\.php/.test(location.href)) return;
+    if (!window.matchMedia('(prefers-color-scheme: dark)').matches) return;
     if (window.__dkPatchInstalled) return;
     window.__dkPatchInstalled = true;
     function lumaOf(c){ var m=/^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c); return m ? (0.299*m[1]+0.587*m[2]+0.114*m[3])/255 : 1; }
@@ -212,31 +219,28 @@ const DARK_NOVEL_PATCH_JS: &str = r#"(function(){
         t = setTimeout(function(){ t = null; fix(); }, 200);
     }
     for (var i = 0; i < 16; i++) setTimeout(fix, i * 500);
-    new MutationObserver(schedule).observe(document.documentElement, {childList: true, subtree: true});
+    // document start 时 documentElement 可能尚未解析，轮询挂载 observer
+    function install(){
+        if (document.documentElement) {
+            new MutationObserver(schedule).observe(document.documentElement, {childList: true, subtree: true});
+        } else {
+            setTimeout(install, 10);
+        }
+    }
+    install();
 })()"#;
 
-/// novel/show.php 页面深色补丁：窗口为深色时注入 DARK_NOVEL_PATCH_JS。
-fn inject_dark_page_patch(app: &AppHandle, wv: &Webview, url: &Url) {
+/// novel/show.php 页面深色补丁兜底：Finished 时 eval 注入同一脚本（幂等）。
+/// initialization_script 理论上在 document start 即生效，此路径保证
+/// 任何情况下补丁最终注入。
+fn inject_dark_page_patch(wv: &Webview, url: &Url) {
     if !url.path().starts_with("/novel/show.php") {
         return;
     }
-    let app = app.clone();
-    let wv = wv.clone();
-    std::thread::spawn(move || {
-        // theme() 走同步 dispatcher，放独立线程避免与主线程互等
-        let dark = app
-            .get_window("main")
-            .and_then(|w| w.theme().ok())
-            .is_some_and(|t| t == tauri::Theme::Dark);
-        if !dark {
-            return;
-        }
-        if let Err(e) = wv.eval(DARK_NOVEL_PATCH_JS) {
-            log::warn!("深色补丁注入失败: {e}");
-        }
-    });
+    if let Err(e) = wv.eval(DARK_NOVEL_PATCH_JS) {
+        log::warn!("深色补丁注入失败: {e}");
+    }
 }
-
 
 /// 确保子 webview 已创建（幂等）。
 ///
@@ -267,6 +271,7 @@ pub async fn ensure_browse_webview(
 
     let app_for_load = app.clone();
     let builder = WebviewBuilder::new(BROWSE_LABEL, WebviewUrl::External(home_url))
+        .initialization_script(DARK_NOVEL_PATCH_JS)
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .on_navigation(|url| {
             let host = url.host_str().unwrap_or("");
@@ -279,7 +284,7 @@ pub async fn ensure_browse_webview(
         .on_page_load(move |wv, payload| {
             if let tauri::webview::PageLoadEvent::Finished = payload.event() {
                 auto_inject_on_first_load(&app_for_load, &wv, payload.url());
-                inject_dark_page_patch(&app_for_load, &wv, payload.url());
+                inject_dark_page_patch(&wv, payload.url());
             }
         });
 
