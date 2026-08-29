@@ -89,6 +89,7 @@ pub fn run() {
                     let _ = win.set_theme(Some(theme));
                 }
             }
+            setup_app_menu(app);
             logging::init(app.handle());
             register_close_confirmation(app);
             Ok(())
@@ -163,5 +164,52 @@ fn register_close_confirmation(app: &tauri::App) {
         };
         api.prevent_close();
         let _ = app_handle.emit("app://confirm-exit", ());
+    });
+}
+
+/// 应用菜单栏：自定义 Quit 项接管 Cmd+Q——macOS 系统 terminate 不经过
+/// tauri 事件循环（tao 无 applicationShouldTerminate，ExitRequested 拦不到），
+/// 把快捷键派发到自己的菜单项是唯一拦截点。附带 Edit 菜单保证 webview
+/// 文本编辑快捷键（粘贴 Session 等）在有菜单栏后仍可用。
+fn setup_app_menu(app: &tauri::App) {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    let language = app
+        .try_state::<AppState>()
+        .and_then(|state| state.settings.lock().ok().map(|s| s.language.clone()))
+        .unwrap_or_else(|| "zh-CN".to_string());
+    let zh = language != "en-US";
+    let quit = MenuItemBuilder::with_id(
+        "app-quit",
+        if zh { "退出 Pixiv Tool" } else { "Quit Pixiv Tool" },
+    )
+    .accelerator("CmdOrCtrl+Q")
+    .build(app)
+    .expect("菜单项构建不会失败");
+    let edit_title = if zh { "编辑" } else { "Edit" };
+    let result = (|| -> Result<(), tauri::Error> {
+        let app_submenu = SubmenuBuilder::new(app, "Pixiv Tool").item(&quit).build()?;
+        let edit_submenu = SubmenuBuilder::new(app, edit_title)
+            .undo()
+            .redo()
+            .separator()
+            .cut()
+            .copy()
+            .paste()
+            .select_all()
+            .build()?;
+        let menubar = MenuBuilder::new(app)
+            .item(&app_submenu)
+            .item(&edit_submenu)
+            .build()?;
+        app.set_menu(menubar)?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        log::warn!("应用菜单构建失败（Cmd+Q 拦截不可用）: {e}");
+    }
+    app.on_menu_event(move |app_handle, event| {
+        if event.id() == "app-quit" {
+            let _ = app_handle.emit("app://confirm-exit", ());
+        }
     });
 }
