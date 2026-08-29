@@ -74,6 +74,15 @@
       </n-layout-content>
     </n-layout>
 
+    <!-- 退出确认：Rust 拦截窗口关闭/Cmd+Q 后发事件，此处统一 Naive UI 确认。 -->
+    <n-modal
+      v-model:show="showExitConfirm"
+      preset="dialog"
+      :title="t('app.exitConfirmTitle')"
+      :positive-text="t('app.exit')"
+      :negative-text="t('common.cancel')"
+      @positive-click="invoke('app_exit').catch(() => {})"
+    />
     <!-- 登录弹窗：真实浏览器主路径 + 手动 Session 兜底。 -->
     <LoginDialog v-model:show="showLoginDialog" />
     </n-message-provider>
@@ -94,6 +103,7 @@ import {
   NAvatar,
   NDropdown,
   NMessageProvider,
+  NModal,
 } from "naive-ui";
 import type { GlobalThemeOverrides, MenuOption } from "naive-ui";
 import { darkTheme } from "naive-ui";
@@ -102,14 +112,19 @@ import { useAuthStore } from "./stores/auth";
 import { useSettingsStore } from "./stores/settings";
 import { invoke, setWindowTheme } from "./api/tauri";
 import SidebarIcon, { type SidebarIconName } from "./components/navigation/SidebarIcon.vue";
+import { listen } from "@tauri-apps/api/event";
 
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
 const { t } = useI18n();
-
 // 登录弹窗显隐：点“登录”打开，在浏览器登录 / 手动 Session 间选择。
 const showLoginDialog = ref(false);
+
+// 退出确认：红叉/Cmd+W/Cmd+Q 均被 Rust 拦下并 emit，此处弹框；
+// 已打开时重复 emit 无副作用（v-model 幂等置 true）
+const showExitConfirm = ref(false);
+let unlistenExit: (() => void) | undefined;
 
 // 侧栏折叠状态：折叠时顶部标题切换为项目图标。
 const siderCollapsed = ref(false);
@@ -240,6 +255,16 @@ onMounted(async () => {
     })
     .catch(() => {});
   authStore.checkStatus();
+  // 退出确认事件：Rust 拦截窗口关闭/Cmd+Q 后发来
+  listen("app://confirm-exit", () => {
+    showExitConfirm.value = true;
+  }).then((fn) => {
+    unlistenExit = fn;
+  });
+});
+
+onBeforeUnmount(() => {
+  unlistenExit?.();
 });
 </script>
 

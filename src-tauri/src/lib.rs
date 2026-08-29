@@ -19,7 +19,8 @@ pub mod platform;
 pub mod settings;
 pub mod state;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
 
 use crate::db::Db;
 use crate::paths::app_paths;
@@ -133,50 +134,34 @@ pub fn run() {
             commands::misc_cmds::illustrations_delete_all,
             commands::misc_cmds::open_novel_file,
             commands::misc_cmds::open_illustration_folder,
+            // app
+            commands::app_cmds::app_exit,
         ])
-        .run(tauri::generate_context!())
-        .expect("Pixiv Tool 运行失败");
+        .build(tauri::generate_context!())
+        .expect("Pixiv Tool 构建失败")
+        .run(|app_handle, event| {
+            // Cmd+Q / 菜单 Quit 走 ExitRequested（不触发窗口 CloseRequested）；
+            // code=None 才拦（app_exit 的 exit(0) 是 code=Some，放行避免死循环）
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+                api.prevent_exit();
+                let _ = app_handle.emit("app://confirm-exit", ());
+            }
+        });
 }
 
-/// 主窗口关闭确认：先 prevent_close，弹 ask 对话框，确认后 destroy。
-///
-/// 注意：handler 跑在主线程事件循环里，不能用 blocking_show（会在主线程上
-/// 死锁等到超时），必须用回调式 show。文案语言实时读 settings.language。
+/// 主窗口关闭（红叉 / Cmd+W）确认：prevent_close 后发事件给前端，
+/// 由前端 Naive UI 确认框统一处理（与 Cmd+Q 路径一致）。
 /// （Tauri 2 没有 v1 的 on_close_requested 便捷方法，走 on_window_event。）
 fn register_close_confirmation(app: &tauri::App) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
     let app_handle = app.handle().clone();
-    let confirmed_window = window.clone();
     window.on_window_event(move |event| {
         let tauri::WindowEvent::CloseRequested { api, .. } = event else {
             return;
         };
         api.prevent_close();
-        let language = app_handle
-            .try_state::<AppState>()
-            .and_then(|state| state.settings.lock().ok().map(|s| s.language.clone()))
-            .unwrap_or_else(|| "zh-CN".to_string());
-        let (message, ok_text, cancel_text) = if language == "en-US" {
-            ("Quit Pixiv Tool?", "Quit", "Cancel")
-        } else {
-            ("确认退出 Pixiv Tool 吗？", "退出", "取消")
-        };
-        use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-        let close_target = confirmed_window.clone();
-        app_handle
-            .dialog()
-            .message(message)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                ok_text.to_string(),
-                cancel_text.to_string(),
-            ))
-            .show(move |confirmed| {
-                if confirmed {
-                    // destroy 不再走 CloseRequested，直接关窗
-                    let _ = close_target.destroy();
-                }
-            });
+        let _ = app_handle.emit("app://confirm-exit", ());
     });
 }

@@ -10,6 +10,10 @@ export default {
     retry: "重试",
     open: "打开",
   },
+  app: {
+    exitConfirmTitle: "确认退出 Pixiv Tool 吗？",
+    exit: "退出",
+  },
   nav: {
     pixiv: "Pixiv",
     crawl: "抓取",

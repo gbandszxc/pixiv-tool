@@ -10,6 +10,10 @@ export default {
     retry: "Retry",
     open: "Open",
   },
+  app: {
+    exitConfirmTitle: "Quit Pixiv Tool?",
+    exit: "Quit",
+  },
   nav: {
     pixiv: "Pixiv",
     crawl: "Crawl",
