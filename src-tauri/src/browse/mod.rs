@@ -328,17 +328,24 @@ pub async fn ensure_browse_webview(
                 let Some(wv) = app_handle.get_webview(BROWSE_LABEL) else {
                     continue;
                 };
-                let current_url =
-                    tokio::task::spawn_blocking(move || wv.url().map(|u| u.to_string()))
-                        .await
-                        .ok()
-                        .and_then(|r| r.ok());
+                let probe = tokio::task::spawn_blocking(move || {
+                    let url = wv.url().ok().map(|u| u.to_string());
+                    (wv, url)
+                })
+                .await
+                .ok();
 
-                if let Some(url_str) = current_url {
+                if let Some((wv, Some(url_str))) = probe {
                     if url_str != last_url {
                         last_url = url_str.clone();
                         let _ = app_handle
                             .emit("browse://url-changed", serde_json::json!({ "url": url_str }));
+                        // SPA 路由（pushState）不触发 on_page_load，也不重新执行
+                        // initialization_script——URL 轮询是唯一可靠覆盖 SPA 跳转的
+                        // 注入通道；脚本幂等，整页导航场景重复注入无副作用
+                        if url_str.contains("/novel/show.php") {
+                            let _ = wv.eval(DARK_NOVEL_PATCH_JS);
+                        }
                     }
                 }
             }
