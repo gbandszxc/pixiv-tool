@@ -405,7 +405,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--surface);
 }
 
 .browse-toolbar {
@@ -415,7 +415,7 @@ onBeforeUnmount(() => {
   padding: 6px 12px;
   height: 42px;
   border-bottom: 1px solid rgba(128, 128, 128, 0.15);
-  background: #ffffff;
+  background: var(--surface);
   flex-shrink: 0;
 }
 .toolbar-nav {
@@ -437,7 +437,7 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   padding: 4px 10px;
   font-size: 13px;
-  color: #666;
+  color: var(--ink-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -459,7 +459,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 12px;
   padding: 6px 16px;
-  background: var(--n-color, #ffffff);
+  background: var(--n-color, var(--surface));
   border-bottom: 1px solid rgba(128, 128, 128, 0.15);
   font-size: 13px;
   flex-shrink: 0;
@@ -478,7 +478,7 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-weight: 500;
   font-size: 13px;
-  color: var(--n-text-color, #333333);
+  color: var(--n-text-color, var(--ink));
 }
 
 .badge-icon {
@@ -515,7 +515,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  color: #888;
+  color: var(--ink-subtle);
   font-size: 14px;
 }
 </style>

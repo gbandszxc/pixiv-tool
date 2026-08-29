@@ -16,6 +16,18 @@
   --space-xl: 24px;
 }
 
+/* 深色主题：html.dark 下覆盖中性变量，主色不变。
+ * 取值对齐 NaiveUI darkTheme 基调（body #101014 / 卡面 #18181c），
+ * 避免出现第二套设计语言；由 App.vue 按设置与系统偏好切换类名。 */
+html.dark {
+  --surface: #101014;
+  --ink: #d6d6dc;
+  --ink-strong: #e6e6ec;
+  --ink-muted: #9a9aa4;
+  --ink-subtle: #6f6f7a;
+  --divider: #2c2c34;
+}
+
 * {
   box-sizing: border-box;
 }
