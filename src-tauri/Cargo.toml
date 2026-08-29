@@ -49,3 +49,8 @@ thiserror = "2.0"
 anyhow = "1.0"
 log = "0.4"
 rand = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+# Tauri with_webview 暴露的原生 WebView2 类型；版本须与 Tauri 2.11 锁定的一致。
+webview2-com = "=0.38.2"
+windows-core = "=0.61.2"

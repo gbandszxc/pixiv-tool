@@ -64,7 +64,7 @@ async fn inject_saved_and_reload(
     let Ok(Some(saved)) = cookies.load() else {
         return Ok(false);
     };
-    if !saved.get("PHPSESSID").is_some_and(|s| !s.is_empty()) {
+    if saved.get("PHPSESSID").is_none_or(|s| s.is_empty()) {
         return Ok(false);
     }
     let home_url: Url = crate::browse::BROWSE_HOME
@@ -73,12 +73,15 @@ async fn inject_saved_and_reload(
 
     let wv_inject = wv.clone();
     tokio::task::spawn_blocking(move || {
-        let n = crate::browse::inject_cookies_to_webview(&wv_inject, &saved);
+        crate::browse::inject_cookies_to_webview(&wv_inject, &saved);
+        #[cfg(not(windows))]
         let _ = wv_inject.navigate(home_url);
-        log::info!("同步登录回退注入 {n} 个 Cookie 并刷新首页");
     })
     .await
     .map_err(|e| format!("异步执行异常: {e}"))?;
+    #[cfg(windows)]
+    let _ = wv.navigate(home_url);
+    log::info!("同步登录回退注入完成，已刷新首页");
     Ok(true)
 }
 
@@ -118,7 +121,6 @@ pub async fn browse_set_bounds(
         .get_window("main")
         .and_then(|win| win.inner_size().ok())
         .map(|s| s.to_logical::<f64>(scale_factor));
-
 
     tokio::task::spawn_blocking(move || {
         wv.set_bounds(rect)

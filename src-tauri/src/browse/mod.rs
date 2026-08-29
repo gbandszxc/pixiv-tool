@@ -28,6 +28,9 @@ pub fn webview_surface_color(dark: bool) -> tauri::window::Color {
 /// Pixiv 主页地址。
 pub const BROWSE_HOME: &str = "https://www.pixiv.net/";
 
+#[cfg(windows)]
+const WEBVIEW2_COOKIE_DOMAIN: &str = ".pixiv.net";
+
 static POLL_STARTED: OnceLock<()> = OnceLock::new();
 
 /// 自动注入登录态是否已尝试过（每个 webview 进程实例只尝试一次）。
@@ -58,76 +61,139 @@ pub fn is_allowed_host(host: &str) -> bool {
 }
 /// 将本地 Cookie Map 注入到子 Webview 中，返回成功写入的个数。
 ///
-/// 前提：目标域页面已完成过至少一次加载（WKWebView 网络进程会话已建立），
+/// Windows（WebView2）：绕过 wry `set_cookie`，直接调用原生 CookieManager。
+/// cookie crate 的 `domain()` 会剥掉前导点，使 `.pixiv.net` 退化为
+/// host-only `pixiv.net`；`document.cookie` 又无法覆盖 HttpOnly 访客会话。
+/// 原生 API 保留前导点，并在写入前删除 www.pixiv.net 可见的同名旧条目。
+///
+/// macOS（WKWebView）：保留 `set_cookie` 路径。NSHTTPCookie 对无点域仍做
+/// 子域匹配，原三域覆盖策略有效（历史实证）。
+///
+/// 前提：目标域页面已完成过至少一次加载（网络进程会话已建立），
 /// 注入后需 navigate 刷新才会携带新登录态——load → set → reload 是
-/// WKWebView cookie 注入的可靠顺序；首次导航前批量注入不可靠（访客加载后
+/// cookie 注入的可靠顺序；首次导航前批量注入不可靠（访客加载后
 /// pixiv 会用访客 PHPSESSID 覆盖同名登录 cookie）。
 ///
-/// 仅 PHPSESSID 设置为 HttpOnly，其他 Cookie 允许 JS 读取；
-/// 过滤非 Cookie 字段（如 x-csrf-token）；只写 .pixiv.net 单域。
-/// set_cookie 自身阻塞等待 WebKit completion 回调，无需额外 sleep。
+/// 过滤非 Cookie 字段（如 x-csrf-token）与 CF 凭证（绑定客户端指纹）。
 pub fn inject_cookies_to_webview(
     webview: &Webview,
     cookies: &std::collections::HashMap<String, String>,
 ) -> usize {
     // Cloudflare 凭证绑定获取它的客户端 TLS/浏览器指纹：keyring 里的
-    // cf_clearance 等来自 Chrome（CDP 登录），注入 WKWebView（Safari 指纹）
-    // 无效且会挤掉 WKWebView 自己协商的凭证，导致 reload 被 CF 判为访客
-    // （13:08 回读日志实证：cf_clearance 双份 + reload 后出现访客 cc1 cookie）。
-    // 注入一律跳过，保留 WKWebView 自己的 CF 凭证。
+    // cf_clearance 等来自 Chrome（CDP 登录），注入 webview 无效且会挤掉
+    // webview 自己协商的凭证，导致 reload 被 CF 判为访客。注入一律跳过。
     fn is_cf_cookie(name: &str) -> bool {
         matches!(name, "cf_clearance" | "__cf_bm" | "__cf_ob")
     }
 
-    // 注入采用「同 key 覆盖」而非删除：wry deleteCookie 从读回重建
-    // NSHTTPCookie 时丢失 domain 点前缀/host-only 标志，与 store 条目
-    // 匹配不上，删除静默失败（13:10 回读实证 40 个双份堆积）。
-    // 对每个名字写三种 key 形式，覆盖 pixiv 服务器 Set 的 host-only
-    // www.pixiv.net、旧双域注入残留 pixiv.net 与 domain 版 .pixiv.net。
-    // 旧访客版若不被覆盖会因排序在前被 pixiv 优先取到（始终未登录的根因）。
-    let mut count = 0usize;
-    for (k, v) in cookies {
-        if k.is_empty() || v.is_empty() || k == "x-csrf-token" || is_cf_cookie(k) {
-            continue;
+    let injectable: Vec<(String, String)> = cookies
+        .iter()
+        .filter(|(k, v)| {
+            !k.is_empty() && !v.is_empty() && k.as_str() != "x-csrf-token" && !is_cf_cookie(k)
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    #[cfg(not(windows))]
+    {
+        // 注入采用「同 key 覆盖」而非删除：wry deleteCookie 从读回重建
+        // NSHTTPCookie 时丢失 domain 点前缀/host-only 标志，与 store 条目
+        // 匹配不上，删除静默失败（13:10 回读实证 40 个双份堆积）。
+        // 对每个名字写三种 key 形式，覆盖 pixiv 服务器 Set 的 host-only
+        // www.pixiv.net、旧双域注入残留 pixiv.net 与 domain 版 .pixiv.net。
+        // 旧访客版若不被覆盖会因排序在前被 pixiv 优先取到（始终未登录的根因）。
+        let mut count = 0usize;
+        for (k, v) in &injectable {
+            // 显式 Expires：WKHTTPCookieStore 对无过期时间的 session cookie
+            // 存在不随后续请求发送的已知行为；真实过期以 keyring 真相源为准
+            let expires = tauri::webview::cookie::time::OffsetDateTime::now_utc()
+                + tauri::webview::cookie::time::Duration::days(90);
+            for domain in [".pixiv.net", "pixiv.net", "www.pixiv.net"] {
+                let cookie = tauri::webview::Cookie::build((k.clone(), v.clone()))
+                    .domain(domain)
+                    .path("/")
+                    .secure(true)
+                    .http_only(k.as_str() == "PHPSESSID")
+                    .expires(expires)
+                    .build();
+                match webview.set_cookie(cookie) {
+                    Ok(()) => count += 1,
+                    Err(err) => log::warn!("注入 Cookie 失败: {k}@{domain} ({err})"),
+                }
+            }
         }
-        // 显式 Expires：WKHTTPCookieStore 对无过期时间的 session cookie
-        // 存在不随后续请求发送的已知行为；真实过期以 keyring 真相源为准
-        let expires = tauri::webview::cookie::time::OffsetDateTime::now_utc()
-            + tauri::webview::cookie::time::Duration::days(90);
-        for domain in [".pixiv.net", "pixiv.net", "www.pixiv.net"] {
-            let cookie = tauri::webview::Cookie::build((k.clone(), v.clone()))
-                .domain(domain)
-                .path("/")
-                .secure(true)
-                .http_only(k == "PHPSESSID")
-                .expires(expires)
-                .build();
-            match webview.set_cookie(cookie) {
-                Ok(()) => count += 1,
-                Err(err) => log::warn!("注入 Cookie 失败: {k}@{domain} ({err})"),
+
+        // 回读校验：确认 cookie 真实落库（只打名字与域，不打值）
+        if let Ok(after) = webview.cookies() {
+            let pixiv: Vec<String> = after
+                .iter()
+                .filter(|c| {
+                    let d = c.domain().unwrap_or("").trim_start_matches('.');
+                    d == "pixiv.net" || d.ends_with(".pixiv.net")
+                })
+                .map(|c| format!("{}@{}", c.name(), c.domain().unwrap_or("?")))
+                .collect();
+            log::info!(
+                "注入后回读: 写入 {count} 个, store 现有 pixiv 域 cookie {} 个: {pixiv:?}",
+                pixiv.len()
+            );
+        }
+        count
+    }
+
+    #[cfg(windows)]
+    {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_2;
+        use windows_core::{HSTRING, Interface};
+
+        let (tx, rx) = mpsc::sync_channel(1);
+        if let Err(err) = webview.with_webview(move |platform| {
+            let result = unsafe {
+                (|| -> windows_core::Result<usize> {
+                    let core = platform.controller().CoreWebView2()?;
+                    let core: ICoreWebView2_2 = core.cast()?;
+                    let manager = core.CookieManager()?;
+                    let uri = HSTRING::from(BROWSE_HOME);
+                    let domain = HSTRING::from(WEBVIEW2_COOKIE_DOMAIN);
+                    let path = HSTRING::from("/");
+
+                    for (name, value) in &injectable {
+                        let http_only = name == "PHPSESSID";
+                        let name = HSTRING::from(name.as_str());
+                        manager.DeleteCookies(&name, &uri)?;
+                        let cookie = manager.CreateCookie(
+                            &name,
+                            &HSTRING::from(value.as_str()),
+                            &domain,
+                            &path,
+                        )?;
+                        cookie.SetIsSecure(true)?;
+                        cookie.SetIsHttpOnly(http_only)?;
+                        manager.AddOrUpdateCookie(&cookie)?;
+                    }
+                    Ok(injectable.len())
+                })()
+            };
+            let _ = tx.send(result.map_err(|e| e.to_string()));
+        }) {
+            log::warn!("派发 WebView2 Cookie 注入失败: {err}");
+            return 0;
+        }
+
+        match rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(Ok(count)) => count,
+            Ok(Err(err)) => {
+                log::warn!("WebView2 Cookie 注入失败: {err}");
+                0
+            }
+            Err(err) => {
+                log::warn!("等待 WebView2 Cookie 注入完成失败: {err}");
+                0
             }
         }
     }
-
-    // 回读校验：确认 cookie 真实落库（只打名字与域，不打值）
-    if let Ok(after) = webview.cookies() {
-        let pixiv: Vec<String> = after
-            .iter()
-            .filter(|c| {
-                let d = c.domain().unwrap_or("").trim_start_matches('.');
-                d == "pixiv.net" || d.ends_with(".pixiv.net")
-            })
-            .map(|c| {
-                format!(
-                    "{}@{}",
-                    c.name(),
-                    c.domain().unwrap_or("?")
-                )
-            })
-            .collect();
-        log::info!("注入后回读: 写入 {count} 个, store 现有 pixiv 域 cookie {} 个: {pixiv:?}", pixiv.len());
-    }
-    count
 }
 
 /// 首次加载完成后自动注入本地登录态并刷新（幂等：每个进程实例只尝试一次）。
@@ -156,43 +222,59 @@ fn auto_inject_on_first_load(app: &AppHandle, wv: &Webview, url: &Url) {
                 return;
             }
         };
-        if !saved.get("PHPSESSID").is_some_and(|v| !v.is_empty()) {
+        if saved.get("PHPSESSID").is_none_or(|v| v.is_empty()) {
             log::info!("本地登录态缺 PHPSESSID，跳过自动注入");
             return;
         }
 
         // 探测 webview cookie 存储是否已带有效登录态（上次进程注入的
-        // cookie 在 WKWebsiteDataStore 持久）：有效则免注入+刷新，
-        // 消除每次启动首进 Pixiv 的可见整页刷新
-        let wv_probe = wv.clone();
-        let raw = tauri::async_runtime::spawn_blocking(move || wv_probe.cookies().ok())
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        let existing =
-            crate::auth::webview_login::extract_pixiv_cookies_from_store(&raw);
-        if let Some(sid) = existing.get("PHPSESSID").filter(|v| !v.is_empty()) {
-            match crate::pixiv::csrf::fetch_session_probe(sid).await {
-                Ok(_) => {
-                    log::info!("webview 已有有效登录态，跳过注入与刷新");
-                    return;
-                }
-                Err(e) => {
-                    log::info!("webview 登录态已失效（{e}），重新注入");
+        // cookie 持久化在 WKWebsiteDataStore）：有效则免注入+刷新，
+        // 消除每次启动首进 Pixiv 的可见整页刷新。
+        //
+        // 非 Windows 平台保留原探测；Windows 上 store 条目与实际请求的
+        // 域匹配可能不同，不能据此跳过注入。
+        // 「store 里有有效 sid」⇒「页面请求会携带」。Windows 上二者被
+        // wry 剥点拆开——host-only pixiv.net 可存有效 sid 但不发子域，
+        // 探测通过页面却仍访客（16:00 实证），故 Windows 必须无条件注入。
+        #[cfg(not(windows))]
+        {
+            let wv_probe = wv.clone();
+            let raw = tauri::async_runtime::spawn_blocking(move || wv_probe.cookies().ok())
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            let existing = crate::auth::webview_login::extract_pixiv_cookies_from_store(&raw);
+            if let Some(sid) = existing.get("PHPSESSID").filter(|v| !v.is_empty()) {
+                match crate::pixiv::csrf::fetch_session_probe(sid).await {
+                    Ok(_) => {
+                        log::info!("webview 已有有效登录态，跳过注入与刷新");
+                        return;
+                    }
+                    Err(e) => {
+                        log::info!("webview 登录态已失效（{e}），重新注入");
+                    }
                 }
             }
         }
 
         let wv_inject = wv.clone();
         let count = tauri::async_runtime::spawn_blocking(move || {
-            let n = inject_cookies_to_webview(&wv_inject, &saved);
-            let home: Url = BROWSE_HOME.parse().expect("Pixiv 主页 URL 常量必然合法");
-            let _ = wv_inject.navigate(home);
-            n
+            let count = inject_cookies_to_webview(&wv_inject, &saved);
+            #[cfg(not(windows))]
+            {
+                let home: Url = BROWSE_HOME.parse().expect("Pixiv 主页 URL 常量必然合法");
+                let _ = wv_inject.navigate(home);
+            }
+            count
         })
         .await
         .unwrap_or(0);
+        #[cfg(windows)]
+        {
+            let home: Url = BROWSE_HOME.parse().expect("Pixiv 主页 URL 常量必然合法");
+            let _ = wv.navigate(home);
+        }
         log::info!("首次加载完成，自动注入登录态 {count} 个 Cookie 并刷新首页");
     });
 }
@@ -361,8 +443,10 @@ pub async fn ensure_browse_webview(
                 if let Some((wv, Some(url_str))) = probe {
                     if url_str != last_url {
                         last_url = url_str.clone();
-                        let _ = app_handle
-                            .emit("browse://url-changed", serde_json::json!({ "url": url_str }));
+                        let _ = app_handle.emit(
+                            "browse://url-changed",
+                            serde_json::json!({ "url": url_str }),
+                        );
                         // SPA 路由（pushState）不触发 on_page_load，也不重新执行
                         // initialization_script——URL 轮询是唯一可靠覆盖 SPA 跳转的
                         // 注入通道；脚本幂等，整页导航场景重复注入无副作用
@@ -377,7 +461,6 @@ pub async fn ensure_browse_webview(
 
     Ok(webview)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -401,5 +484,19 @@ mod tests {
         assert!(!is_allowed_host("notpixiv.net"));
         assert!(!is_allowed_host("example.com"));
         assert!(!is_allowed_host("evil-pximg.net"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn webview2_cookie_domain_must_cover_pixiv_subdomains() {
+        let cookie = tauri::webview::Cookie::build(("PHPSESSID", "test-session"))
+            .domain(".pixiv.net")
+            .path("/")
+            .http_only(true)
+            .build();
+
+        assert_eq!(cookie.domain(), Some("pixiv.net"));
+        assert_ne!(cookie.domain(), Some(WEBVIEW2_COOKIE_DOMAIN));
+        assert_eq!(WEBVIEW2_COOKIE_DOMAIN, ".pixiv.net");
     }
 }

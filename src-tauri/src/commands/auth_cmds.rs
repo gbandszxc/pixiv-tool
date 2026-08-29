@@ -110,10 +110,15 @@ fn avatar_filename(url: &str) -> Option<String> {
     valid.then(|| name.to_string())
 }
 
-/// 缓存文件名 → 前端可用的自定义协议 URL（Windows 用 https 子域形式）。
+/// 缓存文件名 → 前端可用的自定义协议 URL。
+///
+/// Windows：wry WebView2 自定义协议走 WebResourceRequested 拦截，filter
+/// 前缀由 use_https_scheme 决定（默认 false → `http://pixiv-avatar.localhost*`，
+/// wry webview2/mod.rs:472,935）。URL 必须是 http 形态，https 会漏拦走真实
+/// DNS（*.localhost 保留域必失败）。macOS 直接注册 scheme，无前缀转换。
 fn avatar_scheme_url(filename: &str) -> String {
     if cfg!(windows) {
-        format!("https://pixiv-avatar.localhost/{filename}")
+        format!("http://pixiv-avatar.localhost/{filename}")
     } else {
         format!("pixiv-avatar://localhost/{filename}")
     }
@@ -121,11 +126,7 @@ fn avatar_scheme_url(filename: &str) -> String {
 
 /// 确保 `data/cache/` 有头像缓存：有则直接返回，无则用登录态客户端代下
 ///（download_bytes 已带 pixiv Referer 过防盗链）。返回前端可用 URL。
-async fn ensure_avatar_cache(
-    state: &AppState,
-    client: &PixivClient,
-    url: &str,
-) -> Option<String> {
+async fn ensure_avatar_cache(state: &AppState, client: &PixivClient, url: &str) -> Option<String> {
     let filename = avatar_filename(url)?;
     let dir = state.paths.data_dir.join("cache");
     let path = dir.join(&filename);
@@ -351,7 +352,7 @@ mod tests {
     fn avatar_scheme_url_platform_shape() {
         let url = avatar_scheme_url("a_50.jpg");
         if cfg!(windows) {
-            assert_eq!(url, "https://pixiv-avatar.localhost/a_50.jpg");
+            assert_eq!(url, "http://pixiv-avatar.localhost/a_50.jpg");
         } else {
             assert_eq!(url, "pixiv-avatar://localhost/a_50.jpg");
         }
