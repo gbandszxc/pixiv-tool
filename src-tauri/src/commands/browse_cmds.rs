@@ -11,6 +11,7 @@ pub async fn browse_open(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    log::info!("执行 browse_open");
     ensure_browse_webview(&app, &state).await?;
     Ok(())
 }
@@ -34,6 +35,8 @@ pub async fn browse_set_bounds(
     let Some(wv) = app.get_webview(BROWSE_LABEL) else {
         return Ok(());
     };
+
+    log::info!("设置浏览页边界: x={x}, y={y}, w={w}, h={h}");
 
     let rect = tauri::Rect {
         position: tauri::Position::Logical(tauri::LogicalPosition::new(x, y)),

@@ -78,27 +78,31 @@ pub async fn ensure_browse_webview(app: &AppHandle, state: &AppState) -> Result<
         .ok_or_else(|| "未找到主窗口".to_string())?;
 
     let profile_dir = state.paths.config_dir.join("browse-webview-profile");
-    let initial_url: Url = "about:blank"
+    let home_url: Url = BROWSE_HOME
         .parse()
-        .map_err(|e| format!("URL 解析失败: {e}"))?;
+        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
 
-    let builder = WebviewBuilder::new(BROWSE_LABEL, WebviewUrl::External(initial_url))
+    log::info!("创建 Pixiv 浏览页 Webview，Profile 目录: {:?}", profile_dir);
+
+    let builder = WebviewBuilder::new(BROWSE_LABEL, WebviewUrl::External(home_url.clone()))
         .data_directory(profile_dir)
-        .on_navigation(|url| is_allowed_host(url.host_str().unwrap_or("")));
+        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .on_navigation(|url| {
+            let host = url.host_str().unwrap_or("");
+            let allowed = is_allowed_host(host);
+            if !allowed {
+                log::warn!("拦截非白名单域名导航: {url}");
+            }
+            allowed
+        });
 
     let webview = main_window
         .add_child(
             builder,
-            LogicalPosition::new(0.0, 0.0),
-            LogicalSize::new(1.0, 1.0),
+            LogicalPosition::new(180.0, 42.0),
+            LogicalSize::new(800.0, 600.0),
         )
         .map_err(|e| format!("添加子 Webview 失败: {e}"))?;
-    let _ = webview.hide();
-
-    // 注入已保存的登录态 Cookie 并导航至 Pixiv 首页
-    let home_url: Url = BROWSE_HOME
-        .parse()
-        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
 
     let cookies = match state.cookies.load() {
         Ok(c) => c,
@@ -112,15 +116,18 @@ pub async fn ensure_browse_webview(app: &AppHandle, state: &AppState) -> Result<
     tokio::task::spawn_blocking(move || {
         if let Some(map) = cookies {
             if !map.is_empty() {
+                log::info!("初始化注入本地已保存的 Cookie: {} 个", map.len());
                 inject_cookies_to_webview(&wv_init, &map);
+                let _ = wv_init.navigate(home_url);
             }
         }
-        if let Err(err) = wv_init.navigate(home_url) {
-            log::warn!("导航到 Pixiv 首页失败: {err}");
-        }
+        let _ = wv_init.show();
     })
     .await
     .map_err(|e| format!("异步执行异常: {e}"))?;
+
+    log::info!("Pixiv 浏览页 Webview 创建完成");
+
     if POLL_STARTED.set(()).is_ok() {
         let app_handle = app.clone();
         tokio::spawn(async move {
