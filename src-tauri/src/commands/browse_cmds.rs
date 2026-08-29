@@ -159,10 +159,31 @@ pub async fn browse_sync_login(
                 "status": "success",
             }))
         }
-        Err(crate::pixiv::csrf::ProbeError::Invalid(_)) => Ok(serde_json::json!({
-            "status": "invalid",
-            "message": "PHPSESSID 无效或已过期",
-        })),
+        Err(crate::pixiv::csrf::ProbeError::Invalid(_)) => {
+            // Webview 中提取到的 PHPSESSID 为未登录/匿名访客 session
+            // 尝试读取客户端本地保存的真实登录态并注入到 Webview
+            if let Ok(Some(saved)) = state.cookies.load() {
+                if saved.get("PHPSESSID").is_some_and(|s| !s.is_empty()) {
+                    let wv_inject = wv.clone();
+                    let home_url: Url = crate::browse::BROWSE_HOME
+                        .parse()
+                        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
+                    tokio::task::spawn_blocking(move || {
+                        crate::browse::inject_cookies_to_webview(&wv_inject, &saved);
+                        let _ = wv_inject.navigate(home_url);
+                    })
+                    .await
+                    .map_err(|e| format!("异步执行异常: {e}"))?;
+
+                    return Ok(serde_json::json!({
+                        "status": "injected",
+                    }));
+                }
+            }
+            Ok(serde_json::json!({
+                "status": "no_session",
+            }))
+        }
         Err(e) => Ok(serde_json::json!({
             "status": "error",
             "message": e.to_string(),

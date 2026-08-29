@@ -47,6 +47,12 @@ textarea {
   padding: var(--space-xl);
 }
 
+.app-content.is-pixiv-route {
+  padding: 0 !important;
+  height: 100%;
+  overflow: hidden;
+}
+
 .page-view {
   width: min(100%, 1120px);
 }

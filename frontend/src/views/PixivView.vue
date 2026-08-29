@@ -394,22 +394,24 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .pixiv-view {
+  width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: #ffffff;
 }
 
 .browse-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 16px;
+  gap: 8px;
+  padding: 6px 12px;
+  height: 42px;
   border-bottom: 1px solid rgba(128, 128, 128, 0.15);
-  background: var(--n-color, #ffffff);
+  background: #ffffff;
   flex-shrink: 0;
 }
-
 .toolbar-nav {
   display: flex;
   align-items: center;

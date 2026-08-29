@@ -60,7 +60,11 @@
           <n-button v-else size="small" block @click="showLoginDialog = true">{{ t('auth.login') }}</n-button>
         </div>
       </n-layout-sider>
-      <n-layout-content class="app-content">
+      <n-layout-content
+        class="app-content"
+        :class="{ 'is-pixiv-route': route.path === '/pixiv' }"
+        :native-scrollbar="route.path !== '/pixiv'"
+      >
         <router-view />
       </n-layout-content>
     </n-layout>
@@ -290,6 +294,19 @@ onMounted(() => {
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Pixiv 内嵌全屏浏览路由：零内边距、充满高度、禁用外层滚动 */
+.app-content.is-pixiv-route {
+  padding: 0 !important;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-content.is-pixiv-route :deep(.n-layout-scroll-container) {
+  padding: 0 !important;
+  height: 100% !important;
+  overflow: hidden !important;
 }
 
 </style>
