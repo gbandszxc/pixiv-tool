@@ -6,6 +6,7 @@
 //! - 全部命令注册（见 invoke_handler，与 commands/ 一一对应）
 //! - 主窗口关闭确认（读 settings.language 决定中英文文案）
 
+pub mod accounts;
 pub mod auth;
 pub mod commands;
 pub mod browse;

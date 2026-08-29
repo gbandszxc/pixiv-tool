@@ -15,7 +15,7 @@
 //! `default.p1..pN` 存分片内容。macOS/Linux 无此限制但走同一路径，行为一致。
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -40,7 +40,18 @@ pub struct CookieStore {
     /// 签名变化，「始终允许」失效），启动后只允许首次真实读取，
     /// 之后 load 全走缓存；save/clear 同步更新。
     /// None = 未读过；Some(map) = 已读（空 map 等价无登录态）。
-    cache: RwLock<Option<HashMap<String, String>>>,
+    /// Arc 使 Clone 共享同一份缓存（多账号管理器按条目缓存实例）。
+    cache: Arc<RwLock<Option<HashMap<String, String>>>>,
+}
+
+impl Clone for CookieStore {
+    fn clone(&self) -> Self {
+        Self {
+            service: self.service.clone(),
+            account: self.account.clone(),
+            cache: Arc::clone(&self.cache),
+        }
+    }
 }
 
 impl Default for CookieStore {
@@ -54,7 +65,17 @@ impl CookieStore {
         Self {
             service: SERVICE.to_string(),
             account: ACCOUNT.to_string(),
-            cache: RwLock::new(None),
+            cache: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// 指定 keyring 条目名的存储（多账号：`u-<user_id>`；`default` 恒为
+    /// 当前激活账号的镜像）。分片条目自动派生为 `<account>.p1..pN`。
+    pub fn with_account(account: &str) -> Self {
+        Self {
+            service: SERVICE.to_string(),
+            account: account.to_string(),
+            cache: Arc::new(RwLock::new(None)),
         }
     }
 

@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::accounts::AccountManager;
 use crate::cookies::CookieStore;
 use crate::core::task_manager::TaskManager;
 use crate::db::Db;
@@ -13,6 +14,9 @@ pub struct AppState {
     pub settings: Arc<Mutex<Settings>>,
     pub db: Db,
     pub cookies: CookieStore,
+    /// 多账号管理（索引 + 每账号凭据条目）；`cookies`（default）恒为
+    /// 当前激活账号的镜像。
+    pub accounts: AccountManager,
     pub tasks: Arc<TaskManager>,
 }
 
@@ -21,6 +25,7 @@ impl AppState {
     pub fn new(paths: AppPaths, settings: Settings, db: Db) -> Self {
         let tasks = Arc::new(TaskManager::new(db.clone(), paths.data_dir.clone()));
         Self {
+            accounts: AccountManager::new(&paths.config_dir),
             paths,
             settings: Arc::new(Mutex::new(settings)),
             db,
