@@ -418,8 +418,10 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   登录态互读兼容）
 - Linux：Secret Service / kernel keyutils（linux-native-sync-persistent；
   无 Secret Service 时读写返回错误文案；未实机验证）
-- 超长 JSON 在 Windows Credential Manager 的 blob 上限内自动分片为
-  `default.p1..pN`（头条目提交点最后写，读到头才算有效）
+- 超长 JSON 仅在 **Windows**（Credential Manager 单条 blob 上限 2560 字节）
+  自动分片为 `default.p1..pN`（头条目提交点最后写，读到头才算有效）；
+  macOS / Linux 单条目存储——每个分片是独立 keychain 条目（各自 ACL），
+  分片会在重编译/重打包后把授权弹窗按条目数放大（弹窗治理，见 PACKAGING）
 - **多账号**（ADR 0010）：`default` 条目恒为**当前激活账号的镜像**，
   抓取客户端 / auth_status / webview 自动注入等读取方零感知；每账号另存
   独立条目 `u-<user_id>`（分片规则同上）；账号索引

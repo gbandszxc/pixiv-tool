@@ -24,7 +24,13 @@ pub const ACCOUNT: &str = "default";
 
 /// 单分片字符数上限。Windows Credential Manager blob 上限 2560 字节
 /// （UTF-16 每字符 2 字节 = 1280 字符），留余量取 1200。
+/// 非 Windows 不分片：keychain / Secret Service 单条目容量充足；且每个
+/// 分片是独立 keychain 条目（各自带 ACL），macOS 上重编译/重打包后的
+/// 首次访问会按条目逐个弹授权框，分片会把弹窗成倍放大。
+#[cfg(windows)]
 const PART_CHAR_LIMIT: usize = 1200;
+#[cfg(not(windows))]
+const PART_CHAR_LIMIT: usize = usize::MAX;
 const HEADER_VERSION: u8 = 2;
 
 #[derive(Serialize, Deserialize)]
@@ -226,7 +232,9 @@ impl CookieStore {
 /// 按字符切分（UTF-16 安全：BMP 内 1 char = 1 unit），末片为余数。
 fn chunk_payload(payload: &str, limit: usize) -> Vec<String> {
     let mut parts = Vec::new();
-    let mut current = String::with_capacity(limit);
+    // 容量按字节长度给上限提示（≥ 字符数）；limit 为 usize::MAX（不分片）时
+    // 不能直接当容量用，否则 with_capacity 溢出
+    let mut current = String::with_capacity(limit.min(payload.len()));
     let mut count = 0;
     for c in payload.chars() {
         current.push(c);
@@ -246,6 +254,8 @@ fn chunk_payload(payload: &str, limit: usize) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// 多分片场景仅 Windows 存在（PART_CHAR_LIMIT 平台相关）。
+    #[cfg(windows)]
     #[test]
     fn chunk_roundtrip() {
         let payload = "x".repeat(4500); // 1200×3=3600 余 900 → 4 片
@@ -255,6 +265,15 @@ mod tests {
         assert_eq!(parts.concat(), payload);
     }
 
+    /// 非 Windows：上限放开后任何合法负载都是单条目（弹窗治理的前提）。
+    #[cfg(not(windows))]
+    #[test]
+    fn chunk_never_splits_without_limit() {
+        let payload = "x".repeat(4500);
+        let parts = chunk_payload(&payload, PART_CHAR_LIMIT);
+        assert_eq!(parts, vec![payload]);
+    }
+
     #[test]
     fn chunk_short_is_single() {
         let payload = "{\"PHPSESSID\":\"abc\"}".to_string();
@@ -262,12 +281,20 @@ mod tests {
         assert_eq!(parts, vec![payload]);
     }
 
+    /// 多字节不被切断（拼接还原），平台无关。
     #[test]
-    fn chunk_multibyte_safe() {
-        // 多字节字符不被切断：每片 chars() 拼回完整
+    fn chunk_concat_multibyte_safe() {
         let payload = "登录态测试".repeat(600);
         let parts = chunk_payload(&payload, PART_CHAR_LIMIT);
         assert_eq!(parts.concat(), payload);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn chunk_multibyte_shards_fit_credman_blob() {
+        // 多字节字符不被切断：每片 chars() 拼回完整
+        let payload = "登录态测试".repeat(600);
+        let parts = chunk_payload(&payload, PART_CHAR_LIMIT);
         // 每片 UTF-16 编码后 ≤ 2560 字节（Windows CRED blob 限制）
         assert!(parts.iter().all(|p| p.encode_utf16().count() * 2 <= 2560));
     }

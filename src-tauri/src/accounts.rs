@@ -218,7 +218,14 @@ impl AccountManager {
             return Err(format!("账号 ID 非法: {}", info.user_id));
         }
         let user_id = info.user_id.clone();
-        self.store_cookies(&user_id, cookies)?;
+        // 凭据未变化时不重写：auth_status 校验成功后的每次登记都会走到这里，
+        // 而 keychain 条目写入同样要过 ACL 授权（重编译/重打包后首写必弹），
+        // 跳过无变化写可把弹窗压缩到「首次导入 / 凭据实际变更」才发生。
+        let unchanged =
+            matches!(self.load_cookies(&user_id), Ok(Some(existing)) if existing == *cookies);
+        if !unchanged {
+            self.store_cookies(&user_id, cookies)?;
+        }
 
         let mut idx = self.load_index();
         match idx.accounts.iter_mut().find(|a| a.user_id == user_id) {

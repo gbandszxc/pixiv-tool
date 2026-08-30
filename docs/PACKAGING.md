@@ -72,3 +72,26 @@ GitCode 托管无流水线，`tauri-action` release CI 已移除（2026-08-21）
 - 调试二进制：`cargo tauri build --debug --no-bundle`
 
 三平台安装包分别在对应系统本地构建；tag（`v*`）仅作版本标记，不触发自动化。
+
+## 7. macOS 签名与 Keychain 授权弹窗（重要）
+
+默认 `cargo tauri build` 产出 **ad-hoc 签名**（无签名身份）的包：二进制
+每次重打包哈希都变，macOS Keychain 的「始终允许」授权按签名绑定，**跨
+构建一律失效**——每次装新包首次访问登录态都会重新弹窗。这是「弹窗过于
+频繁」的根因之一（另一因素：keyring 分账号条目越多、首次访问弹窗越多，
+已通过非 Windows 单条目存储收敛，见 SPEC §5.3）。
+
+**彻底解法：本机建一个自签名代码签名证书**（无需 Apple 开发者账号）：
+
+1. 打开「钥匙串访问」→ 菜单「证书助理」→「创建证书」：
+   - 名称自定（如 `pixiv-tool-local`），身份类型「自签名根证书」，
+     证书类型「代码签名」，创建。
+2. 打包时指定身份（tauri bundler 读取该环境变量）：
+   ```bash
+   APPLE_SIGNING_IDENTITY="pixiv-tool-local" cargo tauri build
+   ```
+3. 用同一证书签出的包「始终允许」跨构建持久；首次访问每条目仍会弹一次，
+   允许后不再弹。
+
+注意：自签名包只是让 Keychain ACL 可持久，不具备对外分发所需的
+Developer ID 公证能力（对外分发另议）。
