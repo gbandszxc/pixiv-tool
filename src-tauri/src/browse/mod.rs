@@ -66,6 +66,59 @@ pub fn is_allowed_host(host: &str) -> bool {
         || host == "gstatic.com"
         || host.ends_with(".gstatic.com")
 }
+
+#[cfg(any(not(windows), test))]
+fn is_pixiv_session_cookie(cookie: &tauri::webview::Cookie<'_>) -> bool {
+    let domain = cookie.domain().unwrap_or_default().trim_start_matches('.');
+    cookie.name() == "PHPSESSID" && (domain == "pixiv.net" || domain.ends_with(".pixiv.net"))
+}
+
+/// 清掉内嵌 Pixiv 的旧账号会话，保留 device_token / Cloudflare 等设备态。
+/// 返回成功删除的会话 Cookie 数。
+pub fn clear_session_from_webview(webview: &Webview) -> usize {
+    #[cfg(not(windows))]
+    {
+        let Ok(cookies) = webview.cookies() else {
+            return 0;
+        };
+        cookies
+            .into_iter()
+            .filter(is_pixiv_session_cookie)
+            .filter(|cookie| webview.delete_cookie(cookie.clone()).is_ok())
+            .count()
+    }
+
+    #[cfg(windows)]
+    {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_2;
+        use windows_core::{HSTRING, Interface};
+
+        let (tx, rx) = mpsc::sync_channel(1);
+        if webview
+            .with_webview(move |platform| {
+                let result = unsafe {
+                    (|| -> windows_core::Result<()> {
+                        let core = platform.controller().CoreWebView2()?;
+                        let core: ICoreWebView2_2 = core.cast()?;
+                        let manager = core.CookieManager()?;
+                        manager.DeleteCookies(
+                            &HSTRING::from("PHPSESSID"),
+                            &HSTRING::from(BROWSE_HOME),
+                        )?;
+                        Ok(())
+                    })()
+                };
+                let _ = tx.send(result);
+            })
+            .is_err()
+        {
+            return 0;
+        }
+        matches!(rx.recv_timeout(Duration::from_secs(5)), Ok(Ok(()))) as usize
+    }
+}
 /// 将本地 Cookie Map 注入到子 Webview 中，返回成功写入的个数。
 ///
 /// Windows（WebView2）：绕过 wry `set_cookie`，直接调用原生 CookieManager。
@@ -103,12 +156,10 @@ pub fn inject_cookies_to_webview(
 
     #[cfg(not(windows))]
     {
-        // 注入采用「同 key 覆盖」而非删除：wry deleteCookie 从读回重建
-        // NSHTTPCookie 时丢失 domain 点前缀/host-only 标志，与 store 条目
-        // 匹配不上，删除静默失败（13:10 回读实证 40 个双份堆积）。
-        // 对每个名字写三种 key 形式，覆盖 pixiv 服务器 Set 的 host-only
-        // www.pixiv.net、旧双域注入残留 pixiv.net 与 domain 版 .pixiv.net。
-        // 旧访客版若不被覆盖会因排序在前被 pixiv 优先取到（始终未登录的根因）。
+        clear_session_from_webview(webview);
+        // 先按原始 cookie 对象删除全部旧 PHPSESSID，再写三种域形式覆盖
+        // pixiv 服务器的 host-only 与历史 domain 版本；避免切换时同名旧会话
+        // 因 Cookie 排序在前而继续生效。
         let mut count = 0usize;
         for (k, v) in &injectable {
             // 显式 Expires：WKHTTPCookieStore 对无过期时间的 session cookie
@@ -496,6 +547,26 @@ mod tests {
         assert!(!is_allowed_host("notpixiv.net"));
         assert!(!is_allowed_host("example.com"));
         assert!(!is_allowed_host("evil-pximg.net"));
+    }
+
+    #[test]
+    fn identifies_only_pixiv_session_cookies() {
+        let session = tauri::webview::Cookie::build(("PHPSESSID", "old"))
+            .domain(".pixiv.net")
+            .path("/")
+            .build();
+        let device = tauri::webview::Cookie::build(("device_token", "keep"))
+            .domain(".pixiv.net")
+            .path("/")
+            .build();
+        let foreign = tauri::webview::Cookie::build(("PHPSESSID", "keep"))
+            .domain("example.com")
+            .path("/")
+            .build();
+
+        assert!(is_pixiv_session_cookie(&session));
+        assert!(!is_pixiv_session_cookie(&device));
+        assert!(!is_pixiv_session_cookie(&foreign));
     }
 
     #[cfg(windows)]

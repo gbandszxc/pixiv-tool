@@ -12,7 +12,7 @@
 //! **Windows 分片**：Credential Manager 单条 blob 上限 2560 UTF-16 字符
 //! （CRED_MAX_CREDENTIAL_BLOB_SIZE），pixiv 完整 cookie JSON 超限。超限时拆成
 //! 多条目存储：`default` 存头 `{"v":2,"parts":N}`（提交点，最后写入），
-//! `default.p1..pN` 存分片内容。macOS/Linux 无此限制但走同一路径，行为一致。
+//! `default.p1..pN` 存分片内容。macOS/Linux 始终使用单条目。
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -48,6 +48,8 @@ pub struct CookieStore {
     /// None = 未读过；Some(map) = 已读（空 map 等价无登录态）。
     /// Arc 使 Clone 共享同一份缓存（多账号管理器按条目缓存实例）。
     cache: Arc<RwLock<Option<HashMap<String, String>>>>,
+    /// 已读取到的旧分片数；避免 clear/save 为确认“没有分片”再次访问 Keychain。
+    shard_parts: Arc<RwLock<Option<usize>>>,
 }
 
 impl Clone for CookieStore {
@@ -56,6 +58,7 @@ impl Clone for CookieStore {
             service: self.service.clone(),
             account: self.account.clone(),
             cache: Arc::clone(&self.cache),
+            shard_parts: Arc::clone(&self.shard_parts),
         }
     }
 }
@@ -72,6 +75,7 @@ impl CookieStore {
             service: SERVICE.to_string(),
             account: ACCOUNT.to_string(),
             cache: Arc::new(RwLock::new(None)),
+            shard_parts: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -82,6 +86,7 @@ impl CookieStore {
             service: SERVICE.to_string(),
             account: account.to_string(),
             cache: Arc::new(RwLock::new(None)),
+            shard_parts: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -90,8 +95,11 @@ impl CookieStore {
         let payload =
             serde_json::to_string(cookies).map_err(|err| format!("登录态序列化失败: {err}"))?;
 
-        // 先清掉可能的旧分片，避免残留（如之前存了 3 片、现在只需 2 片）
-        self.clear_shards()?;
+        // Windows 才会产生分片。macOS/Linux 若也先读主条目检查分片，
+        // 每次保存都会额外触发一次系统凭据授权。
+        if uses_shards() || self.known_shard_parts().is_some_and(|parts| parts > 0) {
+            self.clear_shards()?;
+        }
 
         let parts = chunk_payload(&payload, PART_CHAR_LIMIT);
         if parts.len() <= 1 {
@@ -117,6 +125,7 @@ impl CookieStore {
         if let Ok(mut c) = self.cache.write() {
             *c = Some(cookies.clone());
         }
+        self.remember_shard_parts(if parts.len() > 1 { parts.len() } else { 0 });
         Ok(())
     }
 
@@ -159,6 +168,7 @@ impl CookieStore {
         match self.entry(&self.account)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => {
                 self.remember(HashMap::new());
+                self.remember_shard_parts(0);
                 Ok(())
             }
             Err(err) => Err(format!("清除登录态失败: {err}")),
@@ -170,7 +180,10 @@ impl CookieStore {
         let entry = self.entry(&self.account)?;
         let stored = match entry.get_password() {
             Ok(p) => p,
-            Err(keyring::Error::NoEntry) => return Ok(None),
+            Err(keyring::Error::NoEntry) => {
+                self.remember_shard_parts(0);
+                return Ok(None);
+            }
             Err(err) => return Err(format!("读取登录态失败: {err}")),
         };
         // 尝试按分片头解析；解析失败或非 v2 头 = v1 单条格式
@@ -179,8 +192,12 @@ impl CookieStore {
             .filter(|h| h.v == HEADER_VERSION);
         let header = match header {
             Some(h) => h,
-            None => return Ok(Some(stored)),
+            None => {
+                self.remember_shard_parts(0);
+                return Ok(Some(stored));
+            }
         };
+        self.remember_shard_parts(header.parts);
         let mut payload = String::new();
         for i in 1..=header.parts {
             let part = self
@@ -194,13 +211,17 @@ impl CookieStore {
 
     /// 删除全部分片条目。依据当前头里的 parts 数；无头/旧格式则无分片可清。
     fn clear_shards(&self) -> Result<(), String> {
-        let parts = match self.entry(&self.account)?.get_password() {
-            Ok(stored) => serde_json::from_str::<ShardHeader>(&stored)
-                .ok()
-                .filter(|h| h.v == HEADER_VERSION)
-                .map(|h| h.parts)
-                .unwrap_or(0),
-            Err(_) => 0,
+        let parts = if let Some(parts) = self.known_shard_parts() {
+            parts
+        } else {
+            match self.entry(&self.account)?.get_password() {
+                Ok(stored) => serde_json::from_str::<ShardHeader>(&stored)
+                    .ok()
+                    .filter(|h| h.v == HEADER_VERSION)
+                    .map(|h| h.parts)
+                    .unwrap_or(0),
+                Err(_) => 0,
+            }
         };
         for i in 1..=parts {
             match self.entry(&self.part_account(i))?.delete_credential() {
@@ -208,6 +229,7 @@ impl CookieStore {
                 Err(err) => return Err(format!("清除登录态分片失败: {err}")),
             }
         }
+        self.remember_shard_parts(0);
         Ok(())
     }
 
@@ -222,11 +244,25 @@ impl CookieStore {
         }
     }
 
+    fn known_shard_parts(&self) -> Option<usize> {
+        self.shard_parts.read().ok().and_then(|parts| *parts)
+    }
+
+    fn remember_shard_parts(&self, parts: usize) {
+        if let Ok(mut known) = self.shard_parts.write() {
+            *known = Some(parts);
+        }
+    }
+
     /// keyring 3 的 Entry 不 Clone，按需创建（开销可忽略）。
     fn entry(&self, account: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new(&self.service, account)
             .map_err(|err| format!("当前平台登录态存储不可用: {err}"))
     }
+}
+
+const fn uses_shards() -> bool {
+    cfg!(windows)
 }
 
 /// 按字符切分（UTF-16 安全：BMP 内 1 char = 1 unit），末片为余数。
@@ -272,6 +308,7 @@ mod tests {
         let payload = "x".repeat(4500);
         let parts = chunk_payload(&payload, PART_CHAR_LIMIT);
         assert_eq!(parts, vec![payload]);
+        assert!(!uses_shards());
     }
 
     #[test]
@@ -301,7 +338,10 @@ mod tests {
 
     #[test]
     fn header_roundtrip() {
-        let h = ShardHeader { v: HEADER_VERSION, parts: 3 };
+        let h = ShardHeader {
+            v: HEADER_VERSION,
+            parts: 3,
+        };
         let s = serde_json::to_string(&h).unwrap();
         let back: ShardHeader = serde_json::from_str(&s).unwrap();
         assert_eq!(back.parts, 3);

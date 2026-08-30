@@ -23,19 +23,22 @@ account `default`）存当前账号 cookie，登录即覆盖。用户需要在�
 1. **`default` 条目语义不变，恒为「当前激活账号」的镜像**。所有既有读取方
    零改动，切换账号 = 原子地换掉镜像内容。
 2. **每账号独立凭据条目** `u-<user_id>`（同 service，复用 CookieStore 的
-   Windows 分片机制）。切换时先把当前镜像归档回原账号条目，再把目标条目
-   读出写入镜像——互不覆盖、互不丢失。
+   Windows 分片机制）。显式登录与网页同步时同时更新镜像和账号条目；切换时
+   直接把目标条目读出写入镜像，避免无变化的重复归档触发 Keychain 授权。
 3. **账号索引** `config/accounts.json`：`{active, accounts:[元信息]}`，
    **只存元信息，任何 cookie 都不进 config**。登记时机：登录成功
    （浏览器 / 内嵌 webview / 手动 Session）、`browse_sync_login` 成功、
-   `auth_status` 校验成功（旧单账号 default 数据由此自动建档迁移）。
+   `auth_status` 校验成功只刷新元信息；旧单账号 default 数据首次校验时补建
+   账号凭据条目完成迁移。
 4. **切换后内嵌 webview 自动同步**：`auth_account_switch` 在 webview 已创建
-   时复用 `inject_saved_and_reload`（注入新账号 cookie → 导航回首页）；
+   时复用 `inject_saved_and_reload`（先清全部旧 PHPSESSID，再注入新账号
+   cookie → 导航回首页）；
    未创建时无需处理（首次加载的 auto_inject 读镜像即新账号）。既有
    「webview 已有有效会话则跳过注入」探测只影响 auto_inject 路径，
    不拦截显式切换。
 5. **退出登录语义收窄为「退出当前账号」**：清镜像 + 删该账号条目 + 移除
-   索引项；其余已存账号保留。`auth_status` 探测确定失效（401/403）同样
+   索引项；若仍有账号则自动激活列表首项并同步 webview，若没有则同步清除
+   webview 的 PHPSESSID。`auth_status` 探测确定失效（401/403）同样
    移除该账号，避免「死账号」反复出现在切换列表里。
 6. 账号条目实例按 user_id 缓存（Arc 共享其 load 内存缓存）：macOS Keychain
    对 dev 重编译的二进制首读会弹授权框，实例缓存把弹框压到每账号一次。
@@ -51,8 +54,8 @@ account `default`）存当前账号 cookie，登录即覆盖。用户需要在�
 **负面**
 
 - cookie 在「镜像 + 账号条目」双写，约 2× keyring 空间（每条几 KB，可忽略）；
-  一致性由切换流程的固定顺序保证（先归档后换镜像），无并发切换场景。
-- macOS dev 环境下新增账号首次切换会多弹一次 Keychain 授权框
-  （既有行为模式，release 签名下仅首次）。
+  一致性由显式登录/网页同步双写与切换时替换镜像保证，无并发切换场景。
+- macOS 每个账号凭据条目首次访问仍可能弹一次 Keychain 授权框；稳定签名后
+  「始终允许」可持续生效，ad-hoc 重打包仍会使授权失效（见 PACKAGING §7）。
 - 索引与凭据分开存储：索引损坏只丢列表不丢登录态（重新校验自动重建）；
   凭据条目被用户手动删除的账号在切换时报「登录态不存在或已失效」。

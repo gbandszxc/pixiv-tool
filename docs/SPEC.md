@@ -426,9 +426,11 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   抓取客户端 / auth_status / webview 自动注入等读取方零感知；每账号另存
   独立条目 `u-<user_id>`（分片规则同上）；账号索引
   `config/accounts.json` **只存用户元信息**（user_id / pixiv_id / name /
-  头像缓存文件名），**任何 cookie 都不落 config**。登录成功、
-  browse_sync_login 成功、auth_status 校验成功均登记/刷新索引；
-  退出登录移除当前账号（镜像 + 条目 + 索引项）；auth_status 探测确定
+  头像缓存文件名），**任何 cookie 都不落 config**。显式登录与
+  browse_sync_login 成功时双写镜像/账号条目，auth_status 只刷新
+  索引元信息（旧单账号首次校验仍补建账号条目），避免启动时重复访问 Keychain；
+  退出登录移除当前账号（镜像 + 条目 + 索引项），有剩余账号时自动激活列表
+  中首个账号，否则同步清除内嵌 Pixiv 会话；auth_status 探测确定
   失效（401/403）时同样移除，避免死账号
 
 ---
@@ -474,9 +476,9 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `auth_status` | 登录态探测（2s 超时；401/403 清 cookie，其余失败保留） |
 | `auth_login` | 真实 Chromium CDP 登录（长阻塞，最长 300s）；无浏览器时回退内嵌 webview 登录窗（ADR 0009），`PIXIV_TOOL_FORCE_WEBVIEW_LOGIN=1` 强制走 webview |
 | `auth_login_manual(phpsessid)` | 手动 PHPSESSID（normalize → 会话探测 → 存储） |
-| `auth_logout` | 退出当前账号：清 default 镜像 + 移除其账号条目与索引项（其余已存账号保留） |
+| `auth_logout` | 退出当前账号：清 default 镜像 + 移除其账号条目与索引项；有剩余账号则自动激活首个并同步内嵌 Pixiv，否则内嵌 Pixiv 同步退出 |
 | `auth_accounts_list` | 已保存账号列表：`{active, accounts:[{user_id,pixiv_id,name,profile_img,avatar_file,avatar_url?,saved_at}]}` |
-| `auth_account_switch(userId)` | 切换当前账号：归档当前镜像 → 目标条目写入 default → 索引 active → 内嵌 webview 已创建则注入新账号并回首页；目标凭据缺失/失效 → Err |
+| `auth_account_switch(userId)` | 切换当前账号：目标条目写入 default → 索引 active → 内嵌 webview 清旧 PHPSESSID、注入新账号并回首页；目标凭据缺失/失效 → Err |
 | `tasks_list(category?)` | 任务列表（按小说/插画过滤） |
 | `task_create(sourceType, sourceId, formats, category)` | 创建抓取任务，后台 tokio 运行 |
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |

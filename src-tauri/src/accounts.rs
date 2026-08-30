@@ -8,8 +8,7 @@
 //!
 //! 兼容语义：keyring 的 `default` 条目**恒为当前激活账号的镜像**，
 //! auth_status / 抓取客户端 / webview 自动注入等既有读取方零感知；
-//! 切换账号时先把当前 default 写回原账号条目，再把目标条目写入 default
-//! （顺序由命令层编排，本模块只做单账号粒度的存取与索引维护）。
+//! 显式登录/同步登录同时更新账号条目，切换时只需把目标条目写入 default。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -208,7 +207,7 @@ impl AccountManager {
     }
 
     /// 登记账号：覆盖凭据 + 索引 upsert（按 user_id 去重，保持登记顺序）
-    /// + 设为激活。登录成功、状态校验成功均走这里（幂等）。
+    /// + 设为激活。仅显式登录/同步登录调用；状态校验只刷新元信息。
     pub fn enroll(
         &self,
         info: AccountInfo,
@@ -217,16 +216,16 @@ impl AccountManager {
         if entry_name(&info.user_id).is_none() {
             return Err(format!("账号 ID 非法: {}", info.user_id));
         }
-        let user_id = info.user_id.clone();
-        // 凭据未变化时不重写：auth_status 校验成功后的每次登记都会走到这里，
-        // 而 keychain 条目写入同样要过 ACL 授权（重编译/重打包后首写必弹），
-        // 跳过无变化写可把弹窗压缩到「首次导入 / 凭据实际变更」才发生。
-        let unchanged =
-            matches!(self.load_cookies(&user_id), Ok(Some(existing)) if existing == *cookies);
-        if !unchanged {
-            self.store_cookies(&user_id, cookies)?;
-        }
+        self.store_cookies(&info.user_id, cookies)?;
+        self.upsert(info)
+    }
 
+    /// 只刷新账号元信息与 active，不访问系统凭据存储。
+    pub fn upsert(&self, info: AccountInfo) -> Result<(), String> {
+        if entry_name(&info.user_id).is_none() {
+            return Err(format!("账号 ID 非法: {}", info.user_id));
+        }
+        let user_id = info.user_id.clone();
         let mut idx = self.load_index();
         match idx.accounts.iter_mut().find(|a| a.user_id == user_id) {
             // 已登记：元信息就地刷新（头像缓存文件名空时不覆盖已有值）

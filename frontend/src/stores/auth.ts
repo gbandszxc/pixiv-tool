@@ -155,8 +155,8 @@ export const useAuthStore = defineStore("auth", () => {
 
   async function logout() {
     await invoke("auth_logout");
-    clearAuth();
-    // 当前账号已从后端索引移除，刷新列表（其余账号保留）
+    // 有剩余账号时后端已回退到首个登录态；无账号时状态自然变为未登录。
+    await checkStatus();
     await fetchAccounts();
   }
 

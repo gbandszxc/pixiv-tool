@@ -87,6 +87,24 @@ pub(crate) async fn inject_saved_and_reload(
     Ok(true)
 }
 
+/// 清除内嵌 Pixiv 当前账号会话并刷新首页。
+pub(crate) async fn clear_session_and_reload(wv: &tauri::Webview) -> Result<(), String> {
+    let home_url: Url = crate::browse::BROWSE_HOME
+        .parse()
+        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
+    let wv_clear = wv.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::browse::clear_session_from_webview(&wv_clear);
+        #[cfg(not(windows))]
+        let _ = wv_clear.navigate(home_url);
+    })
+    .await
+    .map_err(|e| format!("异步执行异常: {e}"))?;
+    #[cfg(windows)]
+    let _ = wv.navigate(home_url);
+    Ok(())
+}
+
 /// 同步子 webview 的边界位置与尺寸。
 ///
 /// 前端根据占位 DOM 的 bounding rect 传入逻辑坐标。
@@ -273,11 +291,19 @@ pub async fn browse_sync_login(
 
     match crate::pixiv::csrf::fetch_session_probe(&phpsessid).await {
         Ok(probe) => {
+            let account = probe
+                .user
+                .as_ref()
+                .and_then(|user| serde_json::to_value(user).ok())
+                .and_then(|user| crate::accounts::AccountInfo::from_user_value(&user));
             cookies.insert("x-csrf-token".to_string(), probe.csrf_token);
             state
                 .cookies
                 .save(&cookies)
                 .map_err(|e| format!("保存登录态失败: {e}"))?;
+            if let Some(info) = account {
+                state.accounts.enroll(info, &cookies)?;
+            }
 
             Ok(serde_json::json!({
                 "status": "success",

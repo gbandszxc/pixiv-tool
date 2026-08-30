@@ -7,7 +7,7 @@
 //!   其他 → {"status":"cancelled"|"timeout"|"error","message":...}
 //! - auth_login_manual 成功 → {"status":"success","message":"Cookie 已保存","user":{...}}；
 //!   失败 → Err(中文错误文案)
-//! - auth_logout → {"status":"success"}（多账号语义：仅退出当前账号）
+//! - auth_logout → {"status":"success"}（退出当前账号；有剩余账号则自动回退）
 //!
 //! 多账号扩展（账号索引 + 每账号凭据条目，default 恒为当前账号镜像）：
 //! - auth_accounts_list → {"active": str|null, "accounts": [AccountInfo...]}
@@ -109,7 +109,8 @@ pub async fn auth_status(state: State<'_, AppState>) -> Result<Value, String> {
             // 多账号：校验成功即登记/刷新当前账号（旧单账号 default 数据
             // 由此自动建档迁移进索引；失败只记日志，不影响状态返回）
             if body.get("is_logged_in").and_then(Value::as_bool) == Some(true) {
-                enroll_account(&state, &body, &cookies, &avatar_file);
+                // 状态校验只刷新索引，不读取/重写当前账号的 Keychain 副本。
+                enroll_account(&state, &body, &cookies, &avatar_file, false);
             }
             Ok(body)
         }
@@ -180,15 +181,30 @@ fn enroll_account(
     user: &Value,
     cookies: &HashMap<String, String>,
     avatar_file: &str,
+    persist_credentials: bool,
 ) {
     let Some(mut info) = AccountInfo::from_user_value(user) else {
         log::warn!("登录响应缺少用户信息，跳过多账号登记");
         return;
     };
     info.avatar_file = avatar_file.to_string();
-    if let Err(err) = state.accounts.enroll(info, cookies) {
+    let known = state
+        .accounts
+        .list()
+        .iter()
+        .any(|account| account.user_id == info.user_id);
+    let result = if should_persist_credentials(persist_credentials, known) {
+        state.accounts.enroll(info, cookies)
+    } else {
+        state.accounts.upsert(info)
+    };
+    if let Err(err) = result {
         log::warn!("登记账号失败: {err}");
     }
+}
+
+fn should_persist_credentials(explicit_login: bool, known_account: bool) -> bool {
+    explicit_login || !known_account
 }
 
 /// 账号变化（登录 / 切换）后，把内嵌 webview 同步到当前 default 镜像：
@@ -200,10 +216,22 @@ async fn sync_browse_webview(app: &tauri::AppHandle, state: &AppState) {
     if let Some(wv) = app.get_webview(crate::browse::BROWSE_LABEL) {
         match crate::commands::browse_cmds::inject_saved_and_reload(&wv, &state.cookies).await {
             Ok(true) => log::info!("已同步内嵌 webview 登录态"),
-            Ok(false) => {}
+            Ok(false) => {
+                if let Err(err) = crate::commands::browse_cmds::clear_session_and_reload(&wv).await
+                {
+                    log::warn!("清除内嵌 webview 登录态失败: {err}");
+                }
+            }
             Err(err) => log::warn!("同步内嵌 webview 登录态失败: {err}"),
         }
     }
+}
+
+fn fallback_account_id<'a>(accounts: &'a [AccountInfo], removed: Option<&str>) -> Option<&'a str> {
+    accounts
+        .iter()
+        .find(|account| Some(account.user_id.as_str()) != removed)
+        .map(|account| account.user_id.as_str())
 }
 
 /// 多账号列表响应体（纯函数，离线可测）：active + 账号元信息数组，
@@ -302,7 +330,7 @@ pub async fn auth_login(
             .and_then(|u| serde_json::to_value(u).ok())
             .unwrap_or_else(|| json!({}));
         // 多账号：新登录账号登记并激活（头像缓存由随后前端的 auth_status 补）
-        enroll_account(&state, &user, cookies, "");
+        enroll_account(&state, &user, cookies, "", true);
         // 内嵌 webview 里还是旧账号会话，立即推入新账号（语义同切换）
         sync_browse_webview(&app, &state).await;
         return Ok(json!({
@@ -345,7 +373,7 @@ pub async fn auth_login_manual(
         .and_then(|u| serde_json::to_value(u).ok())
         .unwrap_or_else(|| json!({}));
     // 多账号：登记并激活（同 auth_login）
-    enroll_account(&state, &user, &cookies, "");
+    enroll_account(&state, &user, &cookies, "", true);
     // 内嵌 webview 里还是旧账号会话，立即推入新账号（语义同切换）
     sync_browse_webview(&app, &state).await;
     Ok(json!({
@@ -357,10 +385,15 @@ pub async fn auth_login_manual(
 
 /// 清空当前账号登录态（等价旧 POST /api/auth/logout）。
 /// 多账号语义：退出 = 清 default 镜像 + 从账号列表移除该账号（含其独立
-/// 凭据条目）；其余已保存账号保留，可由账号菜单重新切换/登录。
+/// 凭据条目）；有剩余账号时自动激活首个，否则同步退出内嵌 Pixiv。
 #[tauri::command]
-pub async fn auth_logout(state: State<'_, AppState>) -> Result<Value, String> {
+pub async fn auth_logout(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
     let active = state.accounts.active();
+    let fallback =
+        fallback_account_id(&state.accounts.list(), active.as_deref()).map(str::to_owned);
     // 清除失败不影响响应（条目不存在视为已清空；其余失败仅记日志）
     if let Err(err) = state.cookies.clear() {
         log::warn!("清除登录态失败: {err}");
@@ -370,6 +403,17 @@ pub async fn auth_logout(state: State<'_, AppState>) -> Result<Value, String> {
             log::warn!("移除已退出账号失败: {err}");
         }
     }
+    if let Some(next) = fallback {
+        if let Some(cookies) = state
+            .accounts
+            .load_cookies(&next)?
+            .filter(|c| c.get("PHPSESSID").is_some_and(|v| !v.is_empty()))
+        {
+            state.cookies.save(&cookies)?;
+            state.accounts.set_active(&next)?;
+        }
+    }
+    sync_browse_webview(&app, &state).await;
     Ok(json!({ "status": "success" }))
 }
 
@@ -380,10 +424,9 @@ pub async fn auth_accounts_list(state: State<'_, AppState>) -> Result<Value, Str
 }
 
 /// 切换当前账号：
-/// 1) 当前 default 镜像归档回原激活账号条目（目标 != 当前才写）
-/// 2) 目标账号条目凭据写入 default（缺 PHPSESSID → Err）
-/// 3) 索引 active 指向目标
-/// 4) 内嵌 webview 已创建则注入新账号登录态并回首页；未创建时首次
+/// 1) 目标账号条目凭据写入 default（缺 PHPSESSID → Err）
+/// 2) 索引 active 指向目标
+/// 3) 内嵌 webview 已创建则注入新账号登录态并回首页；未创建时首次
 ///    加载的 auto_inject 读 default 即新账号，无需处理
 #[tauri::command]
 pub async fn auth_account_switch(
@@ -396,18 +439,6 @@ pub async fn auth_account_switch(
         .load_cookies(&user_id)?
         .filter(|c| c.get("PHPSESSID").is_some_and(|v| !v.is_empty()))
         .ok_or_else(|| "该账号的登录态不存在或已失效，请重新登录".to_string())?;
-
-    // 切出前把当前镜像归档回原账号条目（用户在 webview 里同步过的
-    // 最新 cookie 也随镜像一起归档）
-    if let Some(current) = state.accounts.active().filter(|id| id != &user_id) {
-        if let Ok(Some(current_cookies)) = state.cookies.load() {
-            if !current_cookies.is_empty() {
-                if let Err(err) = state.accounts.store_cookies(&current, &current_cookies) {
-                    log::warn!("归档切出账号登录态失败: {err}");
-                }
-            }
-        }
-    }
 
     state.cookies.save(&target)?;
     state.accounts.set_active(&user_id)?;
@@ -519,5 +550,29 @@ mod tests {
         let empty = account_list_body(None, Vec::new());
         assert_eq!(empty["active"], json!(null));
         assert_eq!(empty["accounts"], json!([]));
+    }
+
+    #[test]
+    fn logout_falls_back_to_first_remaining_account() {
+        let account = |user_id: &str| AccountInfo {
+            user_id: user_id.into(),
+            pixiv_id: String::new(),
+            name: String::new(),
+            profile_img: String::new(),
+            avatar_file: String::new(),
+            saved_at: 0,
+        };
+        let accounts = vec![account("100"), account("200")];
+
+        assert_eq!(fallback_account_id(&accounts, Some("200")), Some("100"));
+        assert_eq!(fallback_account_id(&accounts, Some("100")), Some("200"));
+        assert_eq!(fallback_account_id(&[], Some("100")), None);
+    }
+
+    #[test]
+    fn status_probe_only_persists_legacy_single_account() {
+        assert!(should_persist_credentials(false, false));
+        assert!(!should_persist_credentials(false, true));
+        assert!(should_persist_credentials(true, true));
     }
 }
