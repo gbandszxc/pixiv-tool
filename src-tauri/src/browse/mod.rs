@@ -2,9 +2,8 @@
 //!
 //! 负责子 webview 的生命周期、域白名单控制、URL 轮询与事件派发。
 
-use std::sync::LazyLock;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder,
     WebviewUrl,
@@ -40,8 +39,56 @@ fn webview2_cookie_expires_at(now_unix: i64) -> f64 {
 
 static POLL_STARTED: OnceLock<()> = OnceLock::new();
 
+/// Pixiv 路由是否处于前台；非活动时停止 URL 轮询，并在重新进入时恢复最后页面。
+static BROWSE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static LAST_BROWSE_URL: LazyLock<Mutex<String>> =
+    LazyLock::new(|| Mutex::new(BROWSE_HOME.to_string()));
+
 /// 自动注入登录态是否已尝试过（每个 webview 进程实例只尝试一次）。
 static AUTO_INJECT_DONE: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(false));
+static CLEAR_SESSION_ON_NEXT_LOAD: AtomicBool = AtomicBool::new(false);
+
+fn should_remember_browse_url(url: &Url) -> bool {
+    url.host_str().is_some_and(is_allowed_host)
+}
+
+/// 记录离开 Pixiv 路由前的页面，并暂停后台 URL 轮询。
+pub fn deactivate_browse(url: Option<&Url>) {
+    if let Some(url) = url
+        && should_remember_browse_url(url)
+        && let Ok(mut last_url) = LAST_BROWSE_URL.lock()
+    {
+        *last_url = url.to_string();
+    }
+    BROWSE_ACTIVE.store(false, Ordering::SeqCst);
+    AUTO_INJECT_DONE.store(false, Ordering::SeqCst);
+}
+
+/// 标记 Pixiv 路由重新活动；从非活动状态恢复时返回最后访问 URL。
+pub fn activate_browse() -> Option<Url> {
+    if BROWSE_ACTIVE.swap(true, Ordering::SeqCst) {
+        return None;
+    }
+    LAST_BROWSE_URL.lock().ok().and_then(|url| url.parse().ok())
+}
+
+pub fn is_browse_active() -> bool {
+    BROWSE_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// WebView 关闭期间退出账号时，下一次创建后先清掉共享 Cookie 存储中的旧会话。
+pub fn clear_session_on_next_load() {
+    CLEAR_SESSION_ON_NEXT_LOAD.store(true, Ordering::SeqCst);
+    AUTO_INJECT_DONE.store(false, Ordering::SeqCst);
+}
+
+fn last_browse_url() -> Url {
+    LAST_BROWSE_URL
+        .lock()
+        .ok()
+        .and_then(|url| url.parse().ok())
+        .unwrap_or_else(|| BROWSE_HOME.parse().expect("Pixiv 主页 URL 常量必然合法"))
+}
 
 /// 检查目标 host 是否在 Pixiv 白名单内（允许 pixiv、CDN、静态资源、第三方验证与空白页）。
 pub fn is_allowed_host(host: &str) -> bool {
@@ -272,6 +319,17 @@ fn auto_inject_on_first_load(app: &AppHandle, wv: &Webview, url: &Url) {
     let app = app.clone();
     let wv = wv.clone();
     tauri::async_runtime::spawn(async move {
+        if CLEAR_SESSION_ON_NEXT_LOAD.swap(false, Ordering::SeqCst) {
+            let wv_clear = wv.clone();
+            let cleared =
+                tauri::async_runtime::spawn_blocking(move || clear_session_from_webview(&wv_clear))
+                    .await
+                    .unwrap_or(0);
+            if cleared > 0 {
+                let home: Url = BROWSE_HOME.parse().expect("Pixiv 主页 URL 常量必然合法");
+                let _ = wv.navigate(home);
+            }
+        }
         let state = app.state::<AppState>();
         let saved = match state.cookies.load() {
             Ok(Some(c)) => c,
@@ -309,7 +367,10 @@ fn auto_inject_on_first_load(app: &AppHandle, wv: &Webview, url: &Url) {
         .flatten()
         .unwrap_or_default();
         let existing = crate::auth::webview_login::extract_pixiv_cookies_from_store(&raw);
-        if let Some(sid) = existing.get("PHPSESSID").filter(|v| !v.is_empty()) {
+        if let Some(sid) = existing
+            .get("PHPSESSID")
+            .filter(|sid| saved.get("PHPSESSID") == Some(*sid))
+        {
             match crate::pixiv::csrf::fetch_session_probe(sid).await {
                 Ok(_) => {
                     log::info!("webview 已有有效登录态，跳过注入与刷新");
@@ -431,14 +492,12 @@ pub async fn ensure_browse_webview(
         .get_window("main")
         .ok_or_else(|| "未找到主窗口".to_string())?;
 
-    let home_url: Url = BROWSE_HOME
-        .parse()
-        .map_err(|e| format!("Pixiv 主页 URL 解析失败: {e}"))?;
+    let initial_url = last_browse_url();
 
     log::info!("创建 Pixiv 浏览页 Webview");
 
     let app_for_load = app.clone();
-    let builder = WebviewBuilder::new(BROWSE_LABEL, WebviewUrl::External(home_url))
+    let builder = WebviewBuilder::new(BROWSE_LABEL, WebviewUrl::External(initial_url))
         .initialization_script(DARK_NOVEL_PATCH_JS)
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .on_navigation(|url| {
@@ -486,6 +545,7 @@ pub async fn ensure_browse_webview(
     .map_err(|e| format!("异步执行异常: {e}"))?;
 
     log::info!("Pixiv 浏览页 Webview 创建完成，首次加载后将注入登录态");
+    BROWSE_ACTIVE.store(true, Ordering::SeqCst);
 
     if POLL_STARTED.set(()).is_ok() {
         let app_handle = app.clone();
@@ -493,6 +553,9 @@ pub async fn ensure_browse_webview(
             let mut last_url = String::new();
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                if !is_browse_active() {
+                    continue;
+                }
                 let Some(wv) = app_handle.get_webview(BROWSE_LABEL) else {
                     continue;
                 };
@@ -506,6 +569,13 @@ pub async fn ensure_browse_webview(
                 if let Some((wv, Some(url_str))) = probe {
                     if url_str != last_url {
                         last_url = url_str.clone();
+                        if let Ok(url) = url_str.parse() {
+                            if should_remember_browse_url(&url)
+                                && let Ok(mut remembered) = LAST_BROWSE_URL.lock()
+                            {
+                                *remembered = url_str.clone();
+                            }
+                        }
                         let _ = app_handle.emit(
                             "browse://url-changed",
                             serde_json::json!({ "url": url_str }),
@@ -547,6 +617,17 @@ mod tests {
         assert!(!is_allowed_host("notpixiv.net"));
         assert!(!is_allowed_host("example.com"));
         assert!(!is_allowed_host("evil-pximg.net"));
+    }
+
+    #[test]
+    fn remembers_only_real_browse_pages() {
+        assert!(should_remember_browse_url(
+            &"https://www.pixiv.net/artworks/1".parse().unwrap()
+        ));
+        assert!(!should_remember_browse_url(&"about:blank".parse().unwrap()));
+        assert!(!should_remember_browse_url(
+            &"https://example.com/".parse().unwrap()
+        ));
     }
 
     #[test]

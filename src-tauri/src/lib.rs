@@ -107,6 +107,7 @@ pub fn run() {
             commands::browse_cmds::browse_open,
             commands::browse_cmds::browse_set_bounds,
             commands::browse_cmds::browse_hide,
+            commands::browse_cmds::browse_deactivate,
             commands::browse_cmds::browse_set_theme,
             commands::browse_cmds::browse_show,
             commands::browse_cmds::browse_navigate,

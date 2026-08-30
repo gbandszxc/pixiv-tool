@@ -224,6 +224,15 @@ async fn sync_browse_webview(app: &tauri::AppHandle, state: &AppState) {
             }
             Err(err) => log::warn!("同步内嵌 webview 登录态失败: {err}"),
         }
+    } else if state
+        .cookies
+        .load()
+        .ok()
+        .flatten()
+        .and_then(|cookies| cookies.get("PHPSESSID").cloned())
+        .is_none_or(|sid| sid.is_empty())
+    {
+        crate::browse::clear_session_on_next_load();
     }
 }
 

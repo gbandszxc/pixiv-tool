@@ -2,7 +2,10 @@
 
 use tauri::{AppHandle, Manager, State, Url};
 
-use crate::browse::{BROWSE_LABEL, ensure_browse_webview, is_allowed_host};
+use crate::browse::{
+    BROWSE_LABEL, activate_browse, deactivate_browse, ensure_browse_webview, is_allowed_host,
+    is_browse_active,
+};
 use crate::state::AppState;
 
 /// 返回 (scale_factor, 标题栏高度 logical px)。
@@ -42,6 +45,10 @@ pub async fn browse_open(
     let ph = h.unwrap_or(600.0);
     log::info!("执行 browse_open, 目标区域: ({px}, {py}, {pw}, {ph})");
     let wv = ensure_browse_webview(&app, &state, px, py, pw, ph).await?;
+    if let Some(url) = activate_browse() {
+        wv.navigate(url)
+            .map_err(|e| format!("恢复浏览页失败: {e}"))?;
+    }
     if pw > 0.0 && ph > 0.0 {
         let (_, titlebar_h) = window_metrics(&app);
         let rect = tauri::Rect {
@@ -124,6 +131,9 @@ pub async fn browse_set_bounds(
     let Some(wv) = app.get_webview(BROWSE_LABEL) else {
         return Ok(());
     };
+    if !is_browse_active() {
+        return Ok(());
+    }
 
     log::info!("设置浏览页边界: x={x}, y={y}, w={w}, h={h}");
 
@@ -191,9 +201,28 @@ pub async fn browse_hide(app: AppHandle) -> Result<(), String> {
     .map_err(|e| format!("异步执行异常: {e}"))
 }
 
+/// 离开 Pixiv 路由：记录当前页面后关闭子 WebView，释放站点页面与 renderer。
+#[tauri::command]
+pub async fn browse_deactivate(app: AppHandle) -> Result<(), String> {
+    let Some(wv) = app.get_webview(BROWSE_LABEL) else {
+        return Ok(());
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let url = wv.url().ok();
+        deactivate_browse(url.as_ref());
+        wv.close().map_err(|e| format!("关闭浏览页失败: {e}"))
+    })
+    .await
+    .map_err(|e| format!("异步执行异常: {e}"))?
+}
+
 /// 显示子 webview。
 #[tauri::command]
 pub async fn browse_show(app: AppHandle) -> Result<(), String> {
+    if !is_browse_active() {
+        return Ok(());
+    }
     let Some(wv) = app.get_webview(BROWSE_LABEL) else {
         return Ok(());
     };

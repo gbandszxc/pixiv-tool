@@ -86,6 +86,11 @@
 进度经 `task://progress` / `task://done` 事件推送（TasksView 同时保留 2s
 轮询兜底）。
 
+Pixiv 浏览页使用独立子 WebView：离开 `/pixiv` 路由时记录最后 URL 并关闭实例，
+释放站点页面与 renderer、停止 URL 轮询；返回时按最后 URL 重建。临时弹窗只隐藏、
+不关闭。Cookie 仍由平台 WebView 的共享存储保留，关闭期间发生账号切换或退出时，
+下一次创建会同步当前登录态。
+
 ### 3.2 通信协议
 
 - **命令类**：`invoke('<命令名>', args)`，命令与参数清单见 §7（返回体沿用旧

@@ -424,7 +424,7 @@ onBeforeUnmount(() => {
     resizeObserver = null;
   }
   window.removeEventListener("resize", syncBounds);
-  invoke("browse_hide").catch(() => {});
+  invoke("browse_deactivate").catch(() => {});
 });
 </script>
 
