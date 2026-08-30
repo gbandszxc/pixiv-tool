@@ -175,16 +175,20 @@ pub fn url_host(url: &str) -> Option<String> {
 ///
 /// 1. spawn：`<browser> --remote-debugging-port=<随机空闲端口>
 ///    --remote-debugging-address=127.0.0.1 --user-data-dir=<profile_dir>
-///    --no-first-run --no-default-browser-check --app=https://accounts.pixiv.net/login`
-///    （profile_dir 由调用方传 `config_dir/login-browser-profile`，先建目录）
-/// 2. 轮询 `http://127.0.0.1:{port}/json/version` 拿 webSocketDebuggerUrl
-/// 3. 主循环至多 LOGIN_TIMEOUT_SEC（每轮 sleep 0.5s）：
+///    --no-first-run --no-default-browser-check --app=about:blank`
+///    （profile_dir 由调用方传 `config_dir/login-browser-profile`，先建目录；
+///    登录页不由启动参数打开，见 ensure_fresh_login_page）
+/// 2. CDP 连接后：清 profile 里 pixiv 会话 cookie（PHPSESSID，保留设备态），
+///    再由 CDP 打开登录页——顺序保证登录页请求必然未登录，杜绝已登录
+///    profile 在 accounts.pixiv.net/login 被 302 回主站导致轮询秒判成功
+/// 3. 轮询 `http://127.0.0.1:{port}/json/version` 拿 webSocketDebuggerUrl
+/// 4. 主循环至多 LOGIN_TIMEOUT_SEC（每轮 sleep 0.5s）：
 ///    - 进程退出 → {"status":"cancelled"}
 ///    - Target.getTargets 有 pixiv 主站 page → Storage.getCookies →
 ///      extract_pixiv_cookies → 有 PHPSESSID → fetch_session_probe 验证
 ///      （ProbeError::Invalid 忽略继续轮询；成功补 x-csrf-token 返回 success）
-/// 4. 超时 → {"status":"timeout","message":"登录超时（300s）"}
-/// 5. finally：CdpClient Browser.close → 进程 terminate → 3s 内不退则 kill
+/// 5. 超时 → {"status":"timeout","message":"登录超时（300s）"}
+/// 6. finally：CdpClient Browser.close → 进程 terminate → 3s 内不退则 kill
 ///
 /// Cookie 值不得写入日志。
 pub async fn open_browser_login(profile_dir: &Path) -> LoginResult {
@@ -232,6 +236,13 @@ async fn run_browser_login(browser: &Path, profile_dir: &Path) -> Result<LoginRe
         }
     };
 
+    // 登录窗语义：必然以未登录态打开（多账号下的加账号）。清旧会话后
+    // 才打开登录页；失败仅记日志不阻塞——退化为旧行为（已登录 profile
+    // 可能秒关），不应让登录流程整体失败。
+    if let Err(err) = ensure_fresh_login_page(&mut cdp).await {
+        log::warn!("重置浏览器登录态失败（可能回到已登录账号）: {err:#}");
+    }
+
     let outcome = login_loop(&mut cdp, &mut child).await;
     // finally 语义：先 CDP Browser.close（失败忽略，连接随 drop 关闭），
     // 再等浏览器进程退出（至多 3s），仍未退则 kill。
@@ -242,6 +253,8 @@ async fn run_browser_login(browser: &Path, profile_dir: &Path) -> Result<LoginRe
 
 /// spawn 隔离 profile 的浏览器（stdout/stderr 丢弃，避免管道写满死锁）。
 /// tokio::process 让 wait 可异步（清理阶段带超时等待）。
+/// 以 about:blank 启动：登录页由 CDP 在清掉旧会话后再打开
+/// （ensure_fresh_login_page），登录页请求必然未登录。
 fn spawn_browser(browser: &Path, profile_dir: &Path, port: u16) -> Result<Child> {
     tokio::process::Command::new(browser)
         .arg(format!("--remote-debugging-port={port}"))
@@ -249,11 +262,102 @@ fn spawn_browser(browser: &Path, profile_dir: &Path, port: u16) -> Result<Child>
         .arg(format!("--user-data-dir={}", profile_dir.display()))
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
-        .arg(format!("--app={LOGIN_URL}"))
+        .arg("--app=about:blank")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|err| anyhow!("启动浏览器进程失败: {err}"))
+}
+
+/// 从 Storage.getCookies 结果提取 pixiv 域 PHPSESSID 的精确身份
+/// `(name, domain, path)`——过期覆盖删除必须逐字段匹配原条目；
+/// 缺/空 path 视为 "/"；非 pixiv 域与非 PHPSESSID 名不含。
+pub fn pixiv_session_cookie_keys(items: &[Value]) -> Vec<(String, String, String)> {
+    items
+        .iter()
+        .filter_map(|item| {
+            let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+            let domain = item.get("domain").and_then(Value::as_str).unwrap_or("");
+            let is_pixiv_session = name == "PHPSESSID"
+                && !domain.is_empty()
+                && domain.trim_start_matches('.').ends_with("pixiv.net");
+            is_pixiv_session.then(|| {
+                let path = item
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .filter(|p| !p.is_empty())
+                    .unwrap_or("/")
+                    .to_string();
+                (name.to_string(), domain.to_string(), path)
+            })
+        })
+        .collect()
+}
+
+/// 清除 profile 浏览器里的 pixiv 会话 cookie（PHPSESSID），保留
+/// device_token / cf_clearance 等设备态（ADR 0006 持久化 profile 的意义）。
+/// 删除走「同名过期覆盖」（expires=0 的 Set-Cookie 语义），浏览器级 CDP
+/// 即可完成，无需 page session。返回清理条数。
+async fn clear_pixiv_session(cdp: &mut CdpClient) -> Result<usize> {
+    let result = cdp.call("Storage.getCookies", serde_json::json!({})).await?;
+    let items = result
+        .get("cookies")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let keys = pixiv_session_cookie_keys(&items);
+    for (name, domain, path) in &keys {
+        cdp.call(
+            "Storage.setCookies",
+            serde_json::json!({ "cookies": [{
+                "name": name,
+                "value": "",
+                "domain": domain,
+                "path": path,
+                "secure": true,
+                "expires": 0,
+            }]}),
+        )
+        .await?;
+    }
+    Ok(keys.len())
+}
+
+/// 保证登录页以未登录态打开：清 pixiv 会话 cookie → CDP 打开登录页 →
+/// 关掉 about:blank 启动页。顺序不可换——登录页请求必须发生在清会话
+/// 之后，否则已登录 profile 会让 accounts.pixiv.net/login 302 回主站，
+/// 轮询循环立即误判成功并秒关登录窗（加号永远拿到旧账号）。
+async fn ensure_fresh_login_page(cdp: &mut CdpClient) -> Result<()> {
+    let cleared = clear_pixiv_session(cdp).await?;
+    if cleared > 0 {
+        // 只报条数，不涉及任何 cookie 值
+        log::info!("已清除登录 profile 旧会话（PHPSESSID ×{cleared}），设备态 cookie 保留");
+    }
+    cdp.call(
+        "Target.createTarget",
+        serde_json::json!({ "url": LOGIN_URL }),
+    )
+    .await?;
+    let targets = cdp.call("Target.getTargets", serde_json::json!({})).await?;
+    for info in targets
+        .get("targetInfos")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let is_blank_page = info.get("type").and_then(Value::as_str) == Some("page")
+            && info.get("url").and_then(Value::as_str) == Some("about:blank");
+        if !is_blank_page {
+            continue;
+        }
+        if let Some(id) = info.get("targetId").and_then(Value::as_str) {
+            // 失败仅忽略：多留一个空白页不致命
+            let _ = cdp
+                .call("Target.closeTarget", serde_json::json!({ "targetId": id }))
+                .await;
+        }
+    }
+    Ok(())
 }
 
 /// CDP 主循环（轮询目标与 Cookie；连接由调用方建立并在 finally 里关闭）。
@@ -473,6 +577,100 @@ mod tests {
         );
         assert_eq!(url_host("about:blank"), None, "无 scheme");
         assert_eq!(url_host(""), None);
+    }
+
+    #[test]
+    fn session_cookie_keys_filter_pixiv_phpsessid() {
+        let items = vec![
+            json!({"name": "PHPSESSID", "value": "s1", "domain": ".pixiv.net", "path": "/"}),
+            // host-only 变体与缺 path（视为 /）
+            json!({"name": "PHPSESSID", "value": "s2", "domain": "www.pixiv.net"}),
+            json!({"name": "PHPSESSID", "value": "s3", "domain": "..pixiv.net", "path": "/sub"}),
+            // 非 pixiv 域
+            json!({"name": "PHPSESSID", "value": "x", "domain": "pixiv.net.evil.com", "path": "/"}),
+            // pixiv 域但不是会话 cookie（设备态保留，不清）
+            json!({"name": "device_token", "value": "d", "domain": ".pixiv.net", "path": "/"}),
+            // 缺 domain / 空 name 容错
+            json!({"name": "PHPSESSID", "value": "v"}),
+            json!({"name": "", "value": "v", "domain": ".pixiv.net", "path": "/"}),
+        ];
+        let keys = pixiv_session_cookie_keys(&items);
+        assert_eq!(
+            keys,
+            vec![
+                ("PHPSESSID".to_string(), ".pixiv.net".to_string(), "/".to_string()),
+                ("PHPSESSID".to_string(), "www.pixiv.net".to_string(), "/".to_string()),
+                ("PHPSESSID".to_string(), "..pixiv.net".to_string(), "/sub".to_string()),
+            ]
+        );
+        assert!(pixiv_session_cookie_keys(&[]).is_empty());
+    }
+
+    /// 真机验证「过期覆盖删除」语义：临时 headless profile 里种假 PHPSESSID →
+    /// clear_pixiv_session → 回读确认已删。手工跑：
+    /// `cargo test --release -- --ignored clear_pixiv_session_roundtrip`
+    #[tokio::test]
+    #[ignore = "依赖本机 Chrome/Edge/Chromium，仅在环境可控时手工跑"]
+    async fn clear_pixiv_session_roundtrip() {
+        let browser = find_login_browser().expect("需要本机 Chrome/Edge/Chromium");
+        let dir = std::env::temp_dir().join(format!(
+            "pixiv-tool-cdp-clear-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let port = free_port().unwrap();
+        // headless 临时 profile：不闪窗、不触真实账号数据
+        let mut child = tokio::process::Command::new(&browser)
+            .arg(format!("--remote-debugging-port={port}"))
+            .arg("--remote-debugging-address=127.0.0.1")
+            .arg(format!("--user-data-dir={}", dir.display()))
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
+            .arg("--headless=new")
+            .arg("about:blank")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut cdp = async {
+            let ws_url = wait_for_cdp(port).await.unwrap();
+            let mut cdp = CdpClient::connect(&ws_url).await.unwrap();
+
+            // 种假 PHPSESSID（临时 profile，与真实登录态无关）
+            cdp.call(
+                "Storage.setCookies",
+                serde_json::json!({ "cookies": [{
+                    "name": "PHPSESSID",
+                    "value": "fake_test_session_123",
+                    "domain": ".pixiv.net",
+                    "path": "/",
+                    "secure": true,
+                }]}),
+            )
+            .await
+            .unwrap();
+            let raw = cdp
+                .call("Storage.getCookies", serde_json::json!({}))
+                .await
+                .unwrap();
+            let seeded = pixiv_session_cookie_keys(raw["cookies"].as_array().unwrap());
+            assert_eq!(seeded.len(), 1, "假会话应已种入");
+
+            let cleared = clear_pixiv_session(&mut cdp).await.unwrap();
+            assert_eq!(cleared, 1);
+
+            let raw = cdp
+                .call("Storage.getCookies", serde_json::json!({}))
+                .await
+                .unwrap();
+            let left = pixiv_session_cookie_keys(raw["cookies"].as_array().unwrap());
+            assert!(left.is_empty(), "PHPSESSID 应已被过期覆盖删除，残留 {left:?}");
+            cdp
+        }
+        .await;
+        let _ = cdp.close().await;
+        shutdown_browser(&mut child).await;
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

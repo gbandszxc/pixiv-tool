@@ -147,7 +147,8 @@ pixiv-tool/
 **方案**：真实 Chromium 独立 profile CDP 登录主导 + 手动粘 PHPSESSID 兜底 +
 内嵌 webview 登录窗回退。本机没有 Chrome / Edge / Chromium
 （BrowserNotFoundError）时不返回 error 终态，而是回退打开内嵌 webview 登录窗
-（960×720，独立数据目录 `<config>/login-webview-profile`）：真人登录跳转 pixiv
+（960×720，独立数据目录 `<config>/login-webview-profile`，每次打开前整目录
+重置以保证未登录态，ADR 0011）：真人登录跳转 pixiv
 主站后经 Tauri 原生 cookie API（wry 0.55 内置，三平台原生存储实现，HttpOnly
 无损可读）提取 Cookie，复用同一会话验证与 Keychain 存储，`LoginResult` 契约
 不变（ADR 0009，恢复 ADR 0006 第 6 条、曾被 ADR 0008 裁剪的回退路径）。环境
@@ -165,7 +166,13 @@ find_login_browser：按平台找首个已安装的浏览器（找不到 → err
 spawn 隔离浏览器（stdout/stderr 丢弃）：
   --remote-debugging-port=<随机空闲端口> --remote-debugging-address=127.0.0.1
   --user-data-dir=<config>/login-browser-profile --no-first-run
-  --no-default-browser-check --app=https://accounts.pixiv.net/login
+  --no-default-browser-check --app=about:blank
+      ↓
+CDP 连接后先重置登录态（ADR 0011，登录窗语义=必然未登录打开）：
+  Storage.getCookies 找 pixiv 域 PHPSESSID → Storage.setCookies 过期覆盖删除
+  （保留 device_token/cf_clearance 等设备态，减少登录风控）→
+  Target.createTarget 打开 accounts.pixiv.net/login → 关闭 about:blank 启动页
+  （登录页请求发生在清会话之后，杜绝已登录 profile 302 回主站秒判成功）
       ↓
 轮询 http://127.0.0.1:{port}/json/version 拿 webSocketDebuggerUrl
 （HTTP 客户端显式 .no_proxy()，50 次 × 0.1s）

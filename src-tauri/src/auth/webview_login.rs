@@ -84,8 +84,24 @@ pub async fn open_webview_login(app: &AppHandle, profile_dir: &Path) -> LoginRes
     }
 }
 
+/// 重置内嵌登录 webview 的 profile 目录：登录窗语义是「必然未登录地打开」，
+/// 持久化的旧会话会让 accounts.pixiv.net/login 302 回主站，轮询立即误判
+/// 成功（加号秒关）。webview 无 CDP 通道可做定向会话清理，且该目录本就
+/// 以「删目录=完整复测」为既定语义（ADR 0009 第 4 条），故启动前整目录
+/// 重置。与浏览器路径（CDP 定向清 PHPSESSID、保留设备态，ADR 0011）不同：
+/// webview 是无 Chromium 环境的回退路径，使用频率低，重置成本可接受。
+/// 目录本就不存在时静默无操作；删不掉（如被占用）不阻塞登录。
+fn reset_login_profile(profile_dir: &Path) {
+    if let Err(err) = std::fs::remove_dir_all(profile_dir) {
+        if err.kind() != std::io::ErrorKind::NotFound {
+            log::warn!("重置 webview 登录 profile 失败（可能复发加号秒关）: {err}");
+        }
+    }
+}
+
 /// 主流程：任何 Err 都会在 finally 里关窗后由调用方转 error 终态。
 async fn run_webview_login(app: &AppHandle, profile_dir: &Path) -> Result<LoginResult> {
+    reset_login_profile(profile_dir);
     std::fs::create_dir_all(profile_dir)
         .map_err(|err| anyhow!("创建 webview profile 目录失败: {err}"))?;
 
@@ -217,6 +233,21 @@ mod tests {
             cookie.set_domain(domain.to_string());
         }
         cookie
+    }
+
+    #[test]
+    fn reset_login_profile_removes_directory() {
+        let dir = std::env::temp_dir()
+            .join(format!("pixiv-tool-wv-reset-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("Default")).unwrap();
+        std::fs::write(dir.join("Default").join("Cookies"), b"x").unwrap();
+
+        reset_login_profile(&dir);
+        assert!(!dir.exists(), "profile 目录应被整体重置");
+
+        // 目录不存在时静默无操作、不报错
+        reset_login_profile(&dir);
+        assert!(!dir.exists());
     }
 
     #[test]
