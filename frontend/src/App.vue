@@ -13,7 +13,7 @@
     </aside>
     <main class="app-content" :class="{ 'is-pixiv-route': route.path === '/pixiv' }"><router-view /></main>
   </div>
-  <dialog ref="exitDialog" class="m3-dialog"><h2>{{ t('app.exitConfirmTitle') }}</h2><div class="m3-row"><md-text-button @click="showExitConfirm = false">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="invoke('app_exit').catch(() => {})">{{ t('app.exit') }}</md-filled-button></div></dialog>
+  <dialog ref="exitDialog" class="m3-dialog" @close="showExitConfirm = false"><h2>{{ t('app.exitConfirmTitle') }}</h2><div class="m3-row"><md-text-button @click="showExitConfirm = false">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="invoke('app_exit').catch(() => {})">{{ t('app.exit') }}</md-filled-button></div></dialog>
   <LoginDialog v-model:show="showLoginDialog" />
   <div v-if="notification" class="m3-snackbar" role="status">{{ notification }}</div>
 </template>
