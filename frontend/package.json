@@ -10,9 +10,9 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@material/web": "^2.5.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
-    "naive-ui": "^2.40.0",
     "pinia": "^2.2.0",
     "vue": "^3.4.0",
     "vue-i18n": "^10.0.8",

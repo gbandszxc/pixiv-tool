@@ -4,6 +4,7 @@ import { createI18n } from "vue-i18n";
 import router from "./router";
 import App from "./App.vue";
 import "./styles/main.css";
+import "./material";
 import zhCN from "./locales/zh-CN";
 import enUS from "./locales/en-US";
 

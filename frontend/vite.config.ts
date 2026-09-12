@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue({ template: { compilerOptions: { isCustomElement: (tag) => tag.startsWith("md-") } } })],
 
   // Tauri 约定：不吞掉 Rust 侧日志输出；允许读取 TAURI_ 前缀的环境变量。
   clearScreen: false,
