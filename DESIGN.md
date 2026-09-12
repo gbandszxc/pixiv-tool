@@ -74,6 +74,10 @@ Pixiv Tool 是一款以任务完成为中心的本地桌面工具。当前界面
 
 前言中的 token 是浅色主题的规范值。`html.dark` 覆盖这些角色为：primary `#9DCBFF`、on-primary `#003354`、primary-container `#004B77`、on-primary-container `#CFE5FF`、surface `#101418`、surface-container `#1C2025`、on-surface `#E1E2E8`、on-surface-variant `#C2C7CF`、outline `#8C9199`。主题由设置项和系统 `prefers-color-scheme` 共同决定。
 
+### Color palettes
+
+主题模式与色板独立：模式选择浅色、深色或跟随系统；色板选择 Pixiv 蓝（默认）、靛蓝、玉石绿、紫罗兰或琥珀。色板在 `html[data-palette]` 覆盖 primary / secondary 及它们的 on/container 角色，`html.dark[data-palette]` 提供配对的深色值。设置会持久化为 `theme_color`；每个色板都必须同时定义浅深两组角色，不能只替换主按钮颜色。
+
 - Primary / on-primary：Material Web 的 filled button，以及立即执行的主操作。
 - Primary container / on-primary-container：当前左侧导航、头像底色和分类 label。
 - Secondary container / on-secondary-container：Material Web select 选项的当前选择态；深色主题下使用低亮度容器与浅色文字，不能回退到组件默认紫色。

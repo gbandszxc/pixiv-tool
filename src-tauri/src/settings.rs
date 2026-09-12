@@ -22,6 +22,8 @@ pub struct Settings {
     pub language: String,
     /// 主题（"auto" / "light" / "dark"）。
     pub theme: String,
+    /// Material 3 色板（"pixiv" / "indigo" / "jade" / "violet" / "amber"）。
+    pub theme_color: String,
     /// 旧 Python 后端端口配置，Tauri 版无后端进程，仅保留字段兼容旧配置文件。
     pub backend_port: Option<i64>,
     /// 任务最大等待时间（秒）：运行超过该时长自动标记失败，不含暂停时间。
@@ -35,6 +37,7 @@ impl Default for Settings {
             output_formats: vec!["txt".into(), "markdown".into()],
             language: "zh-CN".into(),
             theme: "auto".into(),
+            theme_color: "pixiv".into(),
             backend_port: None,
             max_wait_seconds: 180,
         }
@@ -204,6 +207,7 @@ mod tests {
         assert_eq!(s.output_formats, vec!["txt", "markdown"]);
         assert_eq!(s.language, "zh-CN");
         assert_eq!(s.theme, "auto");
+        assert_eq!(s.theme_color, "pixiv");
         assert_eq!(s.backend_port, None);
         assert_eq!(s.max_wait_seconds, 180);
         assert!(

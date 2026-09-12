@@ -43,6 +43,7 @@ watch(showExitConfirm, (show) => { if (!exitDialog.value) return; if (show) exit
 const systemDark = ref(window.matchMedia("(prefers-color-scheme: dark)").matches); const media = window.matchMedia("(prefers-color-scheme: dark)"); const onMediaChange = (e: MediaQueryListEvent) => systemDark.value = e.matches;
 const isDark = computed(() => settingsStore.settings.theme === "dark" || (settingsStore.settings.theme === "auto" && systemDark.value));
 watch(isDark, (dark) => { document.documentElement.classList.toggle("dark", dark); setWindowTheme(dark ? "dark" : "light").catch(() => {}); }, { immediate: true });
+watch(() => settingsStore.settings.theme_color, (palette) => { document.documentElement.dataset.palette = palette || "pixiv"; }, { immediate: true });
 function onNotification(event: Event) { notification.value = (event as CustomEvent<string>).detail; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => notification.value = "", 3200); }
 onMounted(() => { media.addEventListener("change", onMediaChange); settingsStore.fetchSettings().catch(() => {}); authStore.checkStatus(); authStore.fetchAccounts(); listen("app://confirm-exit", () => showExitConfirm.value = true).then(fn => unlistenExit = fn); window.addEventListener("pixiv-tool:notify", onNotification); });
 onBeforeUnmount(() => { media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); });

@@ -160,6 +160,7 @@ export default {
     outputFormats: "输出格式",
     language: "语言",
     theme: "主题",
+    palette: "配色",
     languages: {
       "zh-CN": "简体中文",
       "en-US": "English",
@@ -168,6 +169,13 @@ export default {
       light: "浅色",
       dark: "深色",
       auto: "跟随系统",
+    },
+    palettes: {
+      pixiv: "Pixiv 蓝",
+      indigo: "靛蓝",
+      jade: "玉石绿",
+      violet: "紫罗兰",
+      amber: "琥珀",
     },
     clearLogs: "清除日志",
     clearLogsConfirm: "确定清除日志文件？",

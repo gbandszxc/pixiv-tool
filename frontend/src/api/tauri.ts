@@ -106,6 +106,7 @@ export interface Settings {
   output_formats: string[];
   language: string;
   theme: string;
+  theme_color: string;
   backend_port: number | null;
   max_wait_seconds: number;
 }

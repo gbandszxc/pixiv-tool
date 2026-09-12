@@ -21,6 +21,10 @@
         <label for="theme">{{ t("settings.theme") }}</label>
         <md-outlined-select id="theme" :value="form.theme" @change="form.theme = ($event.target as HTMLSelectElement).value"><md-select-option v-for="option in themeOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
       </div>
+      <fieldset class="m3-field settings-fieldset">
+        <legend>{{ t("settings.palette") }}</legend>
+        <div class="palette-options"><label v-for="option in paletteOptions" :key="option.value" class="palette-option"><md-radio name="theme-color" :value="option.value" :checked="form.theme_color === option.value" @change="form.theme_color = option.value" /><span class="palette-swatch" :class="`palette-${option.value}`" aria-hidden="true"></span>{{ option.label }}</label></div>
+      </fieldset>
       <div class="m3-field">
         <label for="max-wait">{{ t("settings.maxWait") }}</label>
         <div class="m3-row"><md-outlined-text-field id="max-wait" class="settings-number-input" type="number" min="30" max="86400" step="30" :value="String(form.max_wait_seconds)" @input="form.max_wait_seconds = Number(($event.target as HTMLInputElement).value)" /><span class="field-hint">{{ t("settings.maxWaitHint") }}</span></div>
@@ -49,11 +53,12 @@ const authStore = useAuthStore();
 const formats = ["txt", "markdown"];
 const confirmDialog = ref<HTMLDialogElement | null>(null);
 const confirmAction = ref<"logs" | "auth" | null>(null);
-const form = ref({ output_dir: "downloads", output_formats: ["txt", "markdown"], language: locale.value, theme: "auto", max_wait_seconds: 180 });
+const form = ref({ output_dir: "downloads", output_formats: ["txt", "markdown"], language: locale.value, theme: "auto", theme_color: "pixiv", max_wait_seconds: 180 });
 const message = ref("");
 const messageType = ref<"success" | "error">("success");
 const langOptions = computed(() => [{ label: t("settings.languages.zh-CN"), value: "zh-CN" }, { label: t("settings.languages.en-US"), value: "en-US" }]);
 const themeOptions = computed(() => [{ label: t("settings.themes.light"), value: "light" }, { label: t("settings.themes.dark"), value: "dark" }, { label: t("settings.themes.auto"), value: "auto" }]);
+const paletteOptions = computed(() => ["pixiv", "indigo", "jade", "violet", "amber"].map(value => ({ value, label: t(`settings.palettes.${value}`) })));
 
 function toggleFormat(format: string, checked: boolean) { form.value.output_formats = checked ? [...form.value.output_formats, format] : form.value.output_formats.filter((item) => item !== format); }
 function changeLang(lang: string) { locale.value = lang; form.value.language = lang; localStorage.setItem("pixiv-tool-lang", lang); }
@@ -75,5 +80,6 @@ async function handleConfirm() { const action = confirmAction.value; closeConfir
 .field-hint { color: var(--ink-muted); font-size: 12px; }
 .danger-button { --md-text-button-label-text-color: #ba1a1a; }
 .dialog-actions { justify-content: flex-end; }
+.palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }.palette-pixiv { background: #006eaf; }.palette-indigo { background: #475d92; }.palette-jade { background: #006c4d; }.palette-violet { background: #6f4a72; }.palette-amber { background: #8f4e00; }
 @media (max-width: 640px) { .settings-path-row { align-items: stretch; flex-direction: column; } }
 </style>

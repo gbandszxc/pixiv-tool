@@ -15,11 +15,12 @@ use crate::settings::{Settings, validate_max_wait_value, validate_output_dir_val
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
-const WRITABLE_KEYS: [&str; 6] = [
+const WRITABLE_KEYS: [&str; 7] = [
     "output_dir",
     "output_formats",
     "language",
     "theme",
+    "theme_color",
     "backend_port",
     "max_wait_seconds",
 ];
@@ -64,6 +65,12 @@ pub fn apply_settings_patch(
     }
     if let Some(value) = patch_obj.get("max_wait_seconds") {
         validate_max_wait_value(value)?;
+    }
+    if let Some(value) = patch_obj.get("theme_color") {
+        let color = value.as_str().ok_or_else(|| "主题色板无效".to_string())?;
+        if !["pixiv", "indigo", "jade", "violet", "amber"].contains(&color) {
+            return Err("主题色板无效".to_string());
+        }
     }
     let mut merged = serde_json::to_value(current)
         .map_err(|err| format!("序列化设置失败: {err}"))?
@@ -117,6 +124,7 @@ mod tests {
         let patch = json!({
             "language": "en-US",
             "theme": "dark",
+            "theme_color": "jade",
             "max_wait_seconds": 3600,
             "backend_port": null,
             "output_formats": ["txt"],
@@ -126,6 +134,7 @@ mod tests {
         let updated = apply_settings_patch(&current, &patch, &data_dir).unwrap();
         assert_eq!(updated.language, "en-US");
         assert_eq!(updated.theme, "dark");
+        assert_eq!(updated.theme_color, "jade");
         assert_eq!(updated.max_wait_seconds, 3600);
         assert_eq!(updated.backend_port, None);
         assert_eq!(updated.output_formats, vec!["txt".to_string()]);
@@ -218,6 +227,17 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.starts_with("设置字段格式不正确"), "got {err}");
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_rejects_unknown_theme_color() {
+        let data_dir = temp_data_dir("palette");
+        assert_eq!(
+            apply_settings_patch(&Settings::default(), &json!({"theme_color": "neon"}), &data_dir)
+                .unwrap_err(),
+            "主题色板无效"
+        );
         cleanup(&data_dir);
     }
 }

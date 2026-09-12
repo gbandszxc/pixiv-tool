@@ -12,6 +12,7 @@ export const useSettingsStore = defineStore("settings", () => {
     output_formats: ["txt", "markdown"],
     language: "zh-CN",
     theme: "auto",
+    theme_color: "pixiv",
     backend_port: null,
     max_wait_seconds: 180,
   });

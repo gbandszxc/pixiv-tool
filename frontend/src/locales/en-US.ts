@@ -159,6 +159,7 @@ export default {
     outputFormats: "Output Formats",
     language: "Language",
     theme: "Theme",
+    palette: "Color palette",
     languages: {
       "zh-CN": "Simplified Chinese",
       "en-US": "English",
@@ -167,6 +168,13 @@ export default {
       light: "Light",
       dark: "Dark",
       auto: "System",
+    },
+    palettes: {
+      pixiv: "Pixiv Blue",
+      indigo: "Indigo",
+      jade: "Jade",
+      violet: "Violet",
+      amber: "Amber",
     },
     clearLogs: "Clear Logs",
     clearLogsConfirm: "Clear log file?",
