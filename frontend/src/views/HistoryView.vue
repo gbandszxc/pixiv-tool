@@ -1,278 +1,42 @@
 <template>
-  <div class="page-view">
-    <h1 class="page-title">{{ t('history.title') }}</h1>
-
-    <n-space class="history-toolbar" justify="space-between" align="center">
-      <n-space>
-        <n-radio-group v-model:value="category" size="small" @update:value="handleCategoryChange">
-          <n-radio-button value="all">{{ t('history.category.all') }}</n-radio-button>
-          <n-radio-button value="novel">{{ t('history.category.novel') }}</n-radio-button>
-          <n-radio-button value="illustration">{{ t('history.category.illustration') }}</n-radio-button>
-        </n-radio-group>
-        <n-input
-          v-model:value="keyword"
-          :placeholder="t('history.searchPlaceholder')"
-          clearable
-          class="history-search"
-          @keyup.enter="handleSearch"
-        />
-        <n-button @click="handleSearch">{{ t('common.search') }}</n-button>
-      </n-space>
-      <n-space>
-        <n-popconfirm @positive-click="handleBatchDelete">
-          <template #trigger>
-            <n-button type="warning" :disabled="!checkedRowKeys.length" :loading="batchDeleting">
-              {{ t('history.batchDelete') }}<span v-if="checkedRowKeys.length"> ({{ checkedRowKeys.length }})</span>
-            </n-button>
-          </template>
-          {{ t('history.batchDeleteConfirm', { count: checkedRowKeys.length }) }}
-        </n-popconfirm>
-        <n-popconfirm @positive-click="handleDeleteAll">
-          <template #trigger>
-            <n-button type="error" :disabled="!rows.length || loading" :loading="clearing">
-              {{ t('history.deleteAll') }}
-            </n-button>
-          </template>
-          {{ t('history.deleteAllConfirm') }}
-        </n-popconfirm>
-      </n-space>
-    </n-space>
-
-    <n-data-table
-      :columns="columns"
-      :data="rows"
-      :loading="loading"
-      :pagination="pagination"
-      :row-key="rowKey"
-      :checked-row-keys="checkedRowKeys"
-      @update:checked-row-keys="handleCheck"
-    />
-
-    <n-empty v-if="!loading && !rows.length" :description="t('history.empty')" />
+  <div class="page-view history-view">
+    <h1 class="page-title">{{ t("history.title") }}</h1>
+    <div class="history-toolbar"><div class="history-filters"><div class="m3-radio-group" role="radiogroup" :aria-label='t("history.typeColumn")'><label v-for="option in categories" :key="option.value" class="m3-choice"><md-radio name="history-category" :value="option.value" :checked='category === option.value' @change='changeCategory(option.value)' />{{ option.label }}</label></div><md-outlined-text-field class="history-search" :label='t("history.searchPlaceholder")' :value="keyword" @input='keyword = ($event.target as HTMLInputElement).value' @keydown.enter="search" /><md-filled-button @click="search">{{ t("common.search") }}</md-filled-button></div><div class="history-actions"><md-outlined-button :disabled='!checkedRowKeys.length || batchDeleting' @click='openConfirm("batch")'>{{ batchDeleting ? "…" : t("history.batchDelete", { count: checkedRowKeys.length }) }}</md-outlined-button><md-text-button :disabled='!rows.length || loading || clearing' @click='openConfirm("all")'>{{ clearing ? "…" : t("history.deleteAll") }}</md-text-button></div></div>
+    <div v-if="loading" class="m3-loading" role="status">…</div><p v-else-if="!rows.length" class="m3-empty">{{ t("history.empty") }}</p>
+    <div v-else class="history-table-wrap"><table class="m3-table"><thead><tr><th><md-checkbox :checked="allRowsSelected" :indeterminate="someRowsSelected" :aria-label='t("tasks.selectAllDeletable")' @change='toggleAll(($event.target as HTMLInputElement).checked)' /></th><th v-if='category === "all"'>{{ t("history.typeColumn") }}</th><th>{{ t("history.titleColumn") }}</th><th>{{ t("history.authorColumn") }}</th><th v-if='category === "novel"'>{{ t("history.seriesColumn") }}</th><th v-if='category !== "novel"'>{{ t("history.pagesColumn") }}</th><th>{{ t("history.capturedAtColumn") }}</th><th>{{ t("history.actions") }}</th></tr></thead><tbody><tr v-for="row in rows" :key="rowKey(row)"><td><md-checkbox :checked='checkedRowKeys.includes(rowKey(row))' :aria-label="row.title" @change='toggleRow(rowKey(row), ($event.target as HTMLInputElement).checked)' /></td><td v-if='category === "all"'><span class="m3-label">{{ row.category === "novel" ? t("history.category.novel") : t("history.category.illustration") }}</span></td><td :title="row.title">{{ row.title }}</td><td :title='row.author_name || ""'>{{ row.author_name || "-" }}</td><td v-if='category === "novel"'>{{ row.series_id ?? "-" }}</td><td v-if='category !== "novel"'>{{ row.pages ?? "-" }}</td><td>{{ formatCapturedAt(row.captured_at) }}</td><td class="row-actions"><md-icon-button :aria-label='t("history.openFolder")' @click='openFolder(row)'><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg></md-icon-button><md-icon-button :aria-label='t("common.delete")' @click='openConfirm(row)'><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m5 5v6m4-6v6" /></svg></md-icon-button></td></tr></tbody></table></div>
+    <nav v-if="pageCount > 1" class="pagination" :aria-label='t("history.title")'><md-text-button :disabled='historyStore.page <= 1' @click='changePage(historyStore.page - 1)'>‹</md-text-button><span>{{ historyStore.page }} / {{ pageCount }}</span><md-text-button :disabled='historyStore.page >= pageCount' @click='changePage(historyStore.page + 1)'>›</md-text-button></nav>
+    <dialog ref="confirmDialog" class="m3-dialog local-dialog" @close="pendingAction = null"><p>{{ confirmText }}</p><div class="m3-row"><md-text-button @click='confirmDialog?.close()'>{{ t("common.cancel") }}</md-text-button><md-filled-button @click="runPendingAction">{{ t("common.delete") }}</md-filled-button></div></dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, h, onMounted, computed } from "vue";
-import {
-  NDataTable, NInput, NButton, NSpace, NEmpty, NPopconfirm, NTooltip,
-  NRadioGroup, NRadioButton, NTag, useMessage,
-} from "naive-ui";
-import type { DataTableColumns, DataTableRowKey } from "naive-ui";
+import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useHistoryStore } from "../stores/history";
-import type { HistoryItem, HistoryCategory } from "../stores/history";
+import type { HistoryCategory, HistoryItem } from "../stores/history";
+import { notify } from "../ui/notify";
 
-const { t } = useI18n();
-const message = useMessage();
-const historyStore = useHistoryStore();
-const loading = ref(false);
-const keyword = ref("");
-const checkedRowKeys = ref<string[]>([]);
-const batchDeleting = ref(false);
-const clearing = ref(false);
-const category = ref<HistoryCategory>("all");
-
-const rows = computed(() => historyStore.items);
-
-// novel_id 与 artwork_id 可跨表重号，行键用 "category:id" 保证唯一
+const { t } = useI18n(); const historyStore = useHistoryStore();
+const loading = ref(false), keyword = ref(""), checkedRowKeys = ref<string[]>([]), batchDeleting = ref(false), clearing = ref(false), category = ref<HistoryCategory>("all");
+const confirmDialog = ref<HTMLDialogElement>(), pendingAction = ref<"batch" | "all" | HistoryItem | null>(null);
+const rows = computed(() => historyStore.items), pageCount = computed(() => Math.max(1, Math.ceil(historyStore.total / historyStore.pageSize)));
+const categories = computed(() => [{ value: "all" as const, label: t("history.category.all") }, { value: "novel" as const, label: t("history.category.novel") }, { value: "illustration" as const, label: t("history.category.illustration") }]);
 const rowKey = (row: HistoryItem) => `${row.category}:${row.id}`;
-
-const handleCheck = (keys: DataTableRowKey[]) => {
-  checkedRowKeys.value = keys as string[];
-};
-
-// 统一按东八区（UTC+8，固定偏移，不随机器时区）显示 yyyy-MM-dd HH:mm:ss
-function formatCapturedAt(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const s = new Date(d.getTime() + 8 * 3600 * 1000);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${s.getUTCFullYear()}-${pad(s.getUTCMonth() + 1)}-${pad(s.getUTCDate())} ${pad(s.getUTCHours())}:${pad(s.getUTCMinutes())}:${pad(s.getUTCSeconds())}`;
-}
-
-// 文件夹 / 垃圾桶图标（lucide 轮廓，随 currentColor 着色），与按钮尺寸一致
-const FolderOpenIcon = () =>
-  h(
-    "svg",
-    {
-      viewBox: "0 0 24 24", width: "16", height: "16", fill: "none",
-      stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round",
-      "stroke-linejoin": "round", "aria-hidden": "true",
-    },
-    h("path", {
-      d: "M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z",
-    })
-  );
-
-const TrashIcon = () =>
-  h(
-    "svg",
-    {
-      viewBox: "0 0 24 24", width: "16", height: "16", fill: "none",
-      stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round",
-      "stroke-linejoin": "round", "aria-hidden": "true",
-    },
-    [
-      h("path", { d: "M3 6h18" }),
-      h("path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" }),
-      h("path", { d: "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" }),
-      h("path", { d: "M10 11v6" }),
-      h("path", { d: "M14 11v6" }),
-    ]
-  );
-
-async function handleOpenFolder(row: HistoryItem) {
-  try {
-    const data = row.category === "novel"
-      ? await historyStore.openNovelFile(row.id)
-      : await historyStore.openIllustrationFolder(row.id);
-    if (data.error) {
-      message.error(t("history.openFolderFailed"));
-    }
-  } catch {
-    message.error(t("history.openFolderFailed"));
-  }
-}
-
-function actionsRender(row: HistoryItem) {
-  return h(NSpace, { size: 8 }, () => [
-    h(NTooltip, { placement: "top" }, {
-      trigger: () =>
-        h(NButton, {
-          size: "tiny",
-          quaternary: true,
-          "aria-label": t("history.openFolder"),
-          onClick: () => handleOpenFolder(row),
-        }, { icon: FolderOpenIcon }),
-      default: () => t("history.openFolder"),
-    }),
-    h(NPopconfirm, {
-      onPositiveClick: async () => {
-        if (row.category === "novel") {
-          await historyStore.deleteNovel(row.id, true);
-        } else {
-          await historyStore.deleteIllustration(row.id, true);
-        }
-        await loadData();
-      },
-    }, {
-      trigger: () =>
-        h(NTooltip, { placement: "top" }, {
-          trigger: () =>
-            h(NButton, {
-              size: "tiny",
-              quaternary: true,
-              type: "error",
-              "aria-label": t("common.delete"),
-            }, { icon: TrashIcon }),
-          default: () => t("common.delete"),
-        }),
-      default: () => t("history.deleteConfirm"),
-    }),
-  ]);
-}
-
-// computed 让列标题随 locale 切换自动更新
-const columns = computed<DataTableColumns<HistoryItem>>(() => {
-  const base = [
-    { type: "selection" as const },
-    ...(category.value === "all"
-      ? [{
-          title: t("history.typeColumn"), key: "category", width: 72,
-          render: (row: HistoryItem) =>
-            h(NTag, { size: "small", type: "info" }, () =>
-              row.category === "novel"
-                ? t("history.category.novel")
-                : t("history.category.illustration")),
-        }]
-      : []),
-    { title: t("history.titleColumn"), key: "title", width: 220, ellipsis: { tooltip: true } },
-    { title: t("history.authorColumn"), key: "author_name", width: 140, ellipsis: { tooltip: true } },
-    ...(category.value === "novel"
-      ? [{
-          title: t("history.seriesColumn"), key: "series_id", width: 90,
-          render: (row: HistoryItem) => (row.series_id != null ? String(row.series_id) : "-"),
-        }]
-      : []),
-    ...(category.value !== "novel"
-      ? [{ title: t("history.pagesColumn"), key: "pages", width: 72, render: (row: HistoryItem) => String(row.pages ?? "-") }]
-      : []),
-    {
-      title: t("history.capturedAtColumn"), key: "captured_at", width: 170,
-      render: (row: HistoryItem) => formatCapturedAt(row.captured_at),
-    },
-    { title: t("history.actions"), key: "actions", width: 88, render: actionsRender },
-  ];
-  return base as DataTableColumns<HistoryItem>;
-});
-
-const pagination = ref({
-  page: 1,
-  pageSize: 50,
-  pageCount: 1,
-  showSizePicker: false,
-  onChange: (page: number) => {
-    pagination.value.page = page;
-    historyStore.page = page;
-    loadData();
-  },
-});
-
-async function loadData() {
-  loading.value = true;
-  await historyStore.fetchHistory(category.value, keyword.value || undefined);
-  pagination.value.pageCount = Math.ceil(historyStore.total / historyStore.pageSize);
-  loading.value = false;
-}
-
-function handleSearch() {
-  pagination.value.page = 1;
-  historyStore.page = 1;
-  loadData();
-}
-
-function handleCategoryChange() {
-  checkedRowKeys.value = [];
-  pagination.value.page = 1;
-  historyStore.page = 1;
-  loadData();
-}
-
-async function handleBatchDelete() {
-  const keys = [...checkedRowKeys.value];
-  const novelIds = keys.filter((k) => k.startsWith("novel:")).map((k) => Number(k.slice(6)));
-  const illustIds = keys.filter((k) => k.startsWith("illustration:")).map((k) => Number(k.slice(14)));
-  batchDeleting.value = true;
-  try {
-    if (novelIds.length) await historyStore.deleteNovelsBatch(novelIds, false);
-    if (illustIds.length) await historyStore.deleteIllustrationsBatch(illustIds, false);
-    checkedRowKeys.value = [];
-    message.success(t("history.batchDeleted", { count: keys.length }));
-    await loadData();
-  } catch {
-    message.error(t("common.deleteFailed"));
-  } finally {
-    batchDeleting.value = false;
-  }
-}
-
-async function handleDeleteAll() {
-  clearing.value = true;
-  try {
-    if (category.value !== "illustration") await historyStore.deleteAllNovels(false);
-    if (category.value !== "novel") await historyStore.deleteAllIllustrations(false);
-    checkedRowKeys.value = [];
-    message.success(t("history.cleared"));
-    pagination.value.page = 1;
-    historyStore.page = 1;
-    await loadData();
-  } catch {
-    message.error(t("common.deleteFailed"));
-  } finally {
-    clearing.value = false;
-  }
-}
-
-onMounted(() => loadData());
+const allRowsSelected = computed(() => rows.value.length > 0 && rows.value.every((row) => checkedRowKeys.value.includes(rowKey(row))));
+const someRowsSelected = computed(() => !allRowsSelected.value && checkedRowKeys.value.length > 0);
+const confirmText = computed(() => pendingAction.value === "batch" ? t("history.batchDeleteConfirm", { count: checkedRowKeys.value.length }) : pendingAction.value === "all" ? t("history.deleteAllConfirm") : t("history.deleteConfirm"));
+function formatCapturedAt(iso: string) { const date = new Date(iso); if (Number.isNaN(date.getTime())) return iso; const utc8 = new Date(date.getTime() + 8 * 3600 * 1000), pad = (n: number) => String(n).padStart(2, "0"); return `${utc8.getUTCFullYear()}-${pad(utc8.getUTCMonth() + 1)}-${pad(utc8.getUTCDate())} ${pad(utc8.getUTCHours())}:${pad(utc8.getUTCMinutes())}:${pad(utc8.getUTCSeconds())}`; }
+function toggleRow(key: string, checked: boolean) { checkedRowKeys.value = checked ? [...checkedRowKeys.value, key] : checkedRowKeys.value.filter((item) => item !== key); } function toggleAll(checked: boolean) { checkedRowKeys.value = checked ? rows.value.map(rowKey) : []; }
+async function loadData() { loading.value = true; try { await historyStore.fetchHistory(category.value, keyword.value || undefined); checkedRowKeys.value = checkedRowKeys.value.filter((key) => rows.value.some((row) => rowKey(row) === key)); } finally { loading.value = false; } }
+function search() { historyStore.page = 1; loadData(); } function changeCategory(value: HistoryCategory) { category.value = value; checkedRowKeys.value = []; historyStore.page = 1; loadData(); } function changePage(page: number) { historyStore.page = page; loadData(); } function openConfirm(action: "batch" | "all" | HistoryItem) { pendingAction.value = action; confirmDialog.value?.showModal(); }
+async function openFolder(row: HistoryItem) { try { const result = row.category === "novel" ? await historyStore.openNovelFile(row.id) : await historyStore.openIllustrationFolder(row.id); if (result.error) notify(t("history.openFolderFailed")); } catch { notify(t("history.openFolderFailed")); } }
+async function deleteRow(row: HistoryItem) { if (row.category === "novel") await historyStore.deleteNovel(row.id, true); else await historyStore.deleteIllustration(row.id, true); await loadData(); }
+async function deleteBatch() { const keys = [...checkedRowKeys.value], novels = keys.filter((key) => key.startsWith("novel:")).map((key) => Number(key.slice(6))), illustrations = keys.filter((key) => key.startsWith("illustration:")).map((key) => Number(key.slice(14))); batchDeleting.value = true; try { if (novels.length) await historyStore.deleteNovelsBatch(novels, false); if (illustrations.length) await historyStore.deleteIllustrationsBatch(illustrations, false); checkedRowKeys.value = []; notify(t("history.batchDeleted", { count: keys.length })); await loadData(); } catch { notify(t("common.deleteFailed")); } finally { batchDeleting.value = false; } }
+async function deleteAll() { clearing.value = true; try { if (category.value !== "illustration") await historyStore.deleteAllNovels(false); if (category.value !== "novel") await historyStore.deleteAllIllustrations(false); checkedRowKeys.value = []; notify(t("history.cleared")); historyStore.page = 1; await loadData(); } catch { notify(t("common.deleteFailed")); } finally { clearing.value = false; } }
+async function runPendingAction() { const action = pendingAction.value; confirmDialog.value?.close(); try { if (action === "batch") await deleteBatch(); else if (action === "all") await deleteAll(); else if (action) await deleteRow(action); } catch { notify(t("common.deleteFailed")); } }
+onMounted(loadData);
 </script>
+
+<style scoped>
+.history-toolbar,.history-filters,.history-actions,.pagination{display:flex;align-items:center;gap:var(--space-md)}.history-toolbar{justify-content:space-between;flex-wrap:wrap;margin-bottom:var(--space-lg)}.history-filters,.history-actions,.m3-radio-group{flex-wrap:wrap}.history-filters{flex:1}.m3-radio-group{display:flex;gap:var(--space-sm)}.history-search{min-width:220px}.history-table-wrap{overflow:auto;border-radius:16px}.m3-table{min-width:760px}.m3-table td{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.m3-label{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}.row-actions{display:flex;gap:var(--space-xxs)}.row-actions svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:2}.pagination{justify-content:flex-end;margin-top:var(--space-md)}.m3-empty,.m3-loading{padding:var(--space-xl);color:var(--ink-muted);text-align:center}.local-dialog p{margin:0 0 var(--space-lg)}.local-dialog .m3-row{justify-content:flex-end}@media (max-width:640px){.history-search{min-width:100%}}
+</style>
