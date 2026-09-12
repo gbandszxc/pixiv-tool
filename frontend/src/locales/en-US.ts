@@ -93,6 +93,7 @@ export default {
   tasks: {
     title: "Tasks",
     empty: "No tasks",
+    pageSize: "Rows per page",
     category: {
       all: "All",
       novel: "Novel",
@@ -126,6 +127,7 @@ export default {
   },
   history: {
     title: "History",
+    pageSize: "Rows per page",
     category: {
       all: "All",
       novel: "Novel",

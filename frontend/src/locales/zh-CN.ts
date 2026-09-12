@@ -94,6 +94,7 @@ export default {
   tasks: {
     title: "任务",
     empty: "暂无任务",
+    pageSize: "每页条数",
     category: {
       all: "全部",
       novel: "小说",
@@ -127,6 +128,7 @@ export default {
   },
   history: {
     title: "历史",
+    pageSize: "每页条数",
     category: {
       all: "全部",
       novel: "小说",

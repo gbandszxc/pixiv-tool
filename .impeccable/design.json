@@ -44,6 +44,7 @@
     { "name": "Dialog", "kind": "dialog", "refersTo": "m3-dialog", "description": "Native dialog styled with surface-container, 28px radius and a scrim." },
     { "name": "Task Progress", "kind": "custom", "refersTo": "md-linear-progress", "description": "Material Web linear progress paired with text-first status and metadata." }
     ,{ "name": "Snackbar", "kind": "feedback", "refersTo": "m3-snackbar", "description": "Global top-right notification that disappears after 3.2 seconds." }
+    ,{ "name": "Pagination", "kind": "navigation", "refersTo": "page-size", "description": "History and task lists offer 20, 50, or 100 rows per page." }
   ],
   "narrative": {
     "northStar": "Material 3 Web local task workspace",
