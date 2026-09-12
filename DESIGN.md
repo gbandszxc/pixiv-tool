@@ -116,11 +116,13 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 - `md-filled-button`：主提交、恢复和确认操作；`md-outlined-button`：浏览、同步、批量删除等次要操作；`md-text-button`：取消、删除等低强调操作；`md-icon-button`：工具栏和行级图标动作。
 - `md-outlined-text-field`、`md-outlined-select`、`md-radio` 与 `md-checkbox`：所有可编辑字段和选择；字段以标签、12px–16px 间距和至少 40px 的 choice 行组织。
 - `md-tabs` / `md-primary-tab`：登录方式切换；`md-linear-progress`：任务进度。Material Web 负责它们的默认交互状态。
-- 原生 `dialog`：登录和危险操作确认，采用 surface-container、28px 圆角及右对齐按钮行；自定义 `.m3-snackbar` 固定在右下角，通知在 3.2 秒后消失。
+- 原生 `dialog`：登录和危险操作确认，采用 surface-container、28px 圆角及右对齐按钮行；自定义 `.m3-snackbar` 固定在右上角，通知在 3.2 秒后消失。页面不应另建成功提示条。
 - 左侧导航：图标加文字，hover 使用 8% primary 的状态层，active 使用 primary-container。账号区位于侧栏底部，原生 `details` 菜单向上弹出。
 - alert、状态 pill、表格和表单卡是小型本地样式，复用 M3 颜色角色和上述 shape/spacing，不另建组件库。
 
 **The Native-First Rule.** 已由 Material Web 覆盖的按钮、输入、选择、复选、单选、标签页和进度条不重写外观；原生 `dialog`、`details` 和表格只补充当前实现所需的容器样式。
+
+设置页的主题与配色可即时预览，但只在保存后写入设置；带有未保存预览时离开页面，恢复已保存主题并显示全局 Snackbar。
 
 交互动画主要来自 Material Web 组件；项目全局在 `prefers-reduced-motion: reduce` 下将过渡和动画缩短至 0.01ms、禁止平滑滚动。焦点表现依赖 Material Web 的控件实现；自定义图标按钮提供 `aria-label`，任务筛选组、任务列表、设置表单、通知及告警已有对应的语义标签或角色。新自定义可操作控件必须保留等效的键盘可达性和名称。
 

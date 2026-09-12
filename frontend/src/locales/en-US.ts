@@ -181,6 +181,7 @@ export default {
     clearAuth: "Clear Login",
     clearAuthConfirm: "Clear login state? You will need to re-login.",
     saved: "Settings saved",
+    unsaved: "Settings were not saved; the saved theme has been restored.",
     saveFailed: "Save failed",
     logsCleared: "Logs cleared",
     authCleared: "Login state cleared",

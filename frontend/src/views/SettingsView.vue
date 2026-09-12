@@ -31,7 +31,6 @@
       </div>
       <div class="m3-row settings-actions"><md-filled-button @click="handleSave">{{ t("common.save") }}</md-filled-button><md-outlined-button @click="openConfirm('logs')">{{ t("settings.clearLogs") }}</md-outlined-button><md-text-button class="danger-button" @click="openConfirm('auth')">{{ t("settings.clearAuth") }}</md-text-button></div>
     </section>
-    <div v-if="message" class="m3-alert" :class="messageType" role="status">{{ message }}</div>
     <dialog ref="confirmDialog" class="m3-dialog" @close="confirmAction = null">
       <h2>{{ confirmAction === "logs" ? t("settings.clearLogs") : t("settings.clearAuth") }}</h2>
       <p>{{ confirmAction === "logs" ? t("settings.clearLogsConfirm") : t("settings.clearAuthConfirm") }}</p>
@@ -41,11 +40,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { onBeforeRouteLeave } from "vue-router";
 import { useSettingsStore } from "../stores/settings";
 import { useAuthStore } from "../stores/auth";
-import { errorMessage } from "../api/tauri";
+import { errorMessage, setWindowTheme } from "../api/tauri";
+import { notify } from "../ui/notify";
 
 const { t, locale } = useI18n();
 const settingsStore = useSettingsStore();
@@ -54,20 +55,24 @@ const formats = ["txt", "markdown"];
 const confirmDialog = ref<HTMLDialogElement | null>(null);
 const confirmAction = ref<"logs" | "auth" | null>(null);
 const form = ref({ output_dir: "downloads", output_formats: ["txt", "markdown"], language: locale.value, theme: "auto", theme_color: "pixiv", max_wait_seconds: 180 });
-const message = ref("");
-const messageType = ref<"success" | "error">("success");
+const savedSnapshot = ref("");
 const langOptions = computed(() => [{ label: t("settings.languages.zh-CN"), value: "zh-CN" }, { label: t("settings.languages.en-US"), value: "en-US" }]);
 const themeOptions = computed(() => [{ label: t("settings.themes.light"), value: "light" }, { label: t("settings.themes.dark"), value: "dark" }, { label: t("settings.themes.auto"), value: "auto" }]);
 const paletteOptions = computed(() => ["pixiv", "indigo", "jade", "violet", "amber"].map(value => ({ value, label: t(`settings.palettes.${value}`) })));
 
 function toggleFormat(format: string, checked: boolean) { form.value.output_formats = checked ? [...form.value.output_formats, format] : form.value.output_formats.filter((item) => item !== format); }
 function changeLang(lang: string) { locale.value = lang; form.value.language = lang; localStorage.setItem("pixiv-tool-lang", lang); }
-onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180; form.value = { ...settingsStore.settings }; if (form.value.language && form.value.language !== locale.value) changeLang(form.value.language); });
-async function handleBrowse() { try { const path = await settingsStore.selectDirectory(); if (path) form.value.output_dir = path; } catch { message.value = t("settings.pickFailed"); messageType.value = "error"; } }
-async function handleSave() { if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) { message.value = t("settings.maxWaitInvalid"); messageType.value = "error"; return; } try { await settingsStore.saveSettings(form.value); message.value = t("settings.saved"); messageType.value = "success"; } catch (err) { message.value = errorMessage(err) || t("settings.saveFailed"); messageType.value = "error"; } }
+function snapshot() { return JSON.stringify(form.value); }
+function applyPreview() { const dark = form.value.theme === "dark" || (form.value.theme === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches); document.documentElement.classList.toggle("dark", dark); document.documentElement.dataset.palette = form.value.theme_color || "pixiv"; setWindowTheme(dark ? "dark" : "light").catch(() => {}); }
+function restoreSavedPreview() { const saved = settingsStore.settings; const dark = saved.theme === "dark" || (saved.theme === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches); document.documentElement.classList.toggle("dark", dark); document.documentElement.dataset.palette = saved.theme_color || "pixiv"; setWindowTheme(dark ? "dark" : "light").catch(() => {}); }
+watch(() => [form.value.theme, form.value.theme_color], applyPreview);
+onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180; form.value = { ...settingsStore.settings }; savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) changeLang(form.value.language); });
+async function handleBrowse() { try { const path = await settingsStore.selectDirectory(); if (path) form.value.output_dir = path; } catch { notify(t("settings.pickFailed")); } }
+async function handleSave() { if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) { notify(t("settings.maxWaitInvalid")); return; } try { await settingsStore.saveSettings(form.value); savedSnapshot.value = snapshot(); notify(t("settings.saved")); } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); } }
 async function openConfirm(action: "logs" | "auth") { confirmAction.value = action; await nextTick(); confirmDialog.value?.showModal(); }
 function closeConfirm() { confirmDialog.value?.close(); }
-async function handleConfirm() { const action = confirmAction.value; closeConfirm(); if (action === "logs") { await settingsStore.clearLogs(); message.value = t("settings.logsCleared"); } else if (action === "auth") { await authStore.logout(); message.value = t("settings.authCleared"); } messageType.value = "success"; }
+async function handleConfirm() { const action = confirmAction.value; closeConfirm(); try { if (action === "logs") { await settingsStore.clearLogs(); notify(t("settings.logsCleared")); } else if (action === "auth") { await authStore.logout(); notify(t("settings.authCleared")); } } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); } }
+onBeforeRouteLeave(() => { if (savedSnapshot.value && savedSnapshot.value !== snapshot()) { restoreSavedPreview(); notify(t("settings.unsaved")); } });
 </script>
 
 <style scoped>

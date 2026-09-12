@@ -182,6 +182,7 @@ export default {
     clearAuth: "清除登录",
     clearAuthConfirm: "确定清除登录态？需要重新登录。",
     saved: "设置已保存",
+    unsaved: "设置尚未保存，已恢复为已保存的主题",
     saveFailed: "保存失败",
     logsCleared: "日志已清除",
     authCleared: "已清除登录态",

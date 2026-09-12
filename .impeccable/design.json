@@ -43,6 +43,7 @@
     { "name": "Sidebar Navigation", "kind": "nav", "refersTo": "navigation-item-active", "description": "256px left navigation that collapses to 72px; active item uses primary-container." },
     { "name": "Dialog", "kind": "dialog", "refersTo": "m3-dialog", "description": "Native dialog styled with surface-container, 28px radius and a scrim." },
     { "name": "Task Progress", "kind": "custom", "refersTo": "md-linear-progress", "description": "Material Web linear progress paired with text-first status and metadata." }
+    ,{ "name": "Snackbar", "kind": "feedback", "refersTo": "m3-snackbar", "description": "Global top-right notification that disappears after 3.2 seconds." }
   ],
   "narrative": {
     "northStar": "Material 3 Web local task workspace",
