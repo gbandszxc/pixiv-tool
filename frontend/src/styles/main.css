@@ -3,6 +3,8 @@
   --md-sys-color-on-primary: #ffffff;
   --md-sys-color-primary-container: #cfe5ff;
   --md-sys-color-on-primary-container: #001d36;
+  --md-sys-color-secondary-container: #d7e3f8;
+  --md-sys-color-on-secondary-container: #101c2b;
   --md-sys-color-surface: #f8f9ff;
   --md-sys-color-surface-container: #edf1f9;
   --md-sys-color-on-surface: #191c20;
@@ -33,6 +35,8 @@ html.dark {
   --md-sys-color-on-primary: #003354;
   --md-sys-color-primary-container: #004b77;
   --md-sys-color-on-primary-container: #cfe5ff;
+  --md-sys-color-secondary-container: #3b4858;
+  --md-sys-color-on-secondary-container: #d7e3f8;
   --md-sys-color-surface: #101418;
   --md-sys-color-surface-container: #1c2025;
   --md-sys-color-on-surface: #e1e2e8;

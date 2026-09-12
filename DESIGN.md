@@ -6,6 +6,8 @@ colors:
   on-primary: "#FFFFFF"
   primary-container: "#CFE5FF"
   on-primary-container: "#001D36"
+  secondary-container: "#D7E3F8"
+  on-secondary-container: "#101C2B"
   surface: "#F8F9FF"
   surface-container: "#EDF1F9"
   on-surface: "#191C20"
@@ -74,6 +76,7 @@ Pixiv Tool 是一款以任务完成为中心的本地桌面工具。当前界面
 
 - Primary / on-primary：Material Web 的 filled button，以及立即执行的主操作。
 - Primary container / on-primary-container：当前左侧导航、头像底色和分类 label。
+- Secondary container / on-secondary-container：Material Web select 选项的当前选择态；深色主题下使用低亮度容器与浅色文字，不能回退到组件默认紫色。
 - Surface / surface container：应用底色与低强调层级；侧栏、表单卡、列表、表格及对话框使用 container。
 - On-surface / on-surface-variant / outline：正文、辅助文本和分隔线。分隔线以 outline 的半透明 `color-mix()` 呈现。
 - Error 与 warning container：当前自定义 alert、任务状态使用已定义的浅色危险和警告组合；文字和颜色必须一起表达状态。完成状态目前为独立的绿色字面值，属于已有实现而非通用 primary 角色。

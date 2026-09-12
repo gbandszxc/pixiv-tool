@@ -5,13 +5,14 @@
   "extensions": {
     "colorMeta": {
       "primary": { "role": "primary", "displayName": "M3 Primary", "canonical": "#006EAF", "tonalRamp": ["#CFE5FF", "#006EAF", "#005B91"] },
+      "secondary-container": { "role": "secondary", "displayName": "M3 Secondary Container", "canonical": "#D7E3F8", "tonalRamp": ["#D7E3F8", "#3B4858"] },
       "surface": { "role": "neutral", "displayName": "M3 Surface", "canonical": "#F8F9FF", "tonalRamp": ["#F8F9FF", "#EDF1F9"] },
       "on-surface": { "role": "neutral", "displayName": "M3 On Surface", "canonical": "#191C20", "tonalRamp": ["#191C20", "#42474E", "#72777F"] },
       "error-container": { "role": "error", "displayName": "Error Container", "canonical": "#FFDAD6", "tonalRamp": ["#FFDAD6", "#410002"] },
       "warning-container": { "role": "warning", "displayName": "Warning Container", "canonical": "#FFDDB2", "tonalRamp": ["#FFDDB2", "#2A1700"] }
     },
     "darkTheme": {
-      "primary": "#9DCBFF", "on-primary": "#003354", "primary-container": "#004B77", "on-primary-container": "#CFE5FF", "surface": "#101418", "surface-container": "#1C2025", "on-surface": "#E1E2E8", "on-surface-variant": "#C2C7CF", "outline": "#8C9199"
+      "primary": "#9DCBFF", "on-primary": "#003354", "primary-container": "#004B77", "on-primary-container": "#CFE5FF", "secondary-container": "#3B4858", "on-secondary-container": "#D7E3F8", "surface": "#101418", "surface-container": "#1C2025", "on-surface": "#E1E2E8", "on-surface-variant": "#C2C7CF", "outline": "#8C9199"
     },
     "typographyMeta": {
       "title": { "displayName": "Page Title", "purpose": "Page-level hierarchy." },
