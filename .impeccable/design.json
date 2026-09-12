@@ -1,98 +1,51 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-07-21T00:00:00+08:00",
+  "generatedAt": "2026-09-12T00:00:00+08:00",
   "title": "Design System: Pixiv Tool",
   "extensions": {
     "colorMeta": {
-      "primary": {
-        "role": "primary",
-        "displayName": "Pixiv Blue",
-        "canonical": "#0096FA",
-        "tonalRamp": ["#E5F5FF", "#80CCFF", "#0096FA", "#0077D1", "#005A9E"]
-      },
-      "surface": {
-        "role": "neutral",
-        "displayName": "Library Surface",
-        "canonical": "#FFFFFF",
-        "tonalRamp": ["#FFFFFF", "#F7F8FA", "#E0E0E6"]
-      },
-      "text": {
-        "role": "neutral",
-        "displayName": "Ink",
-        "canonical": "#333333",
-        "tonalRamp": ["#999999", "#777777", "#444444", "#333333"]
-      }
+      "primary": { "role": "primary", "displayName": "M3 Primary", "canonical": "#006EAF", "tonalRamp": ["#CFE5FF", "#006EAF", "#005B91"] },
+      "surface": { "role": "neutral", "displayName": "M3 Surface", "canonical": "#F8F9FF", "tonalRamp": ["#F8F9FF", "#EDF1F9"] },
+      "on-surface": { "role": "neutral", "displayName": "M3 On Surface", "canonical": "#191C20", "tonalRamp": ["#191C20", "#42474E", "#72777F"] },
+      "error-container": { "role": "error", "displayName": "Error Container", "canonical": "#FFDAD6", "tonalRamp": ["#FFDAD6", "#410002"] },
+      "warning-container": { "role": "warning", "displayName": "Warning Container", "canonical": "#FFDDB2", "tonalRamp": ["#FFDDB2", "#2A1700"] }
+    },
+    "darkTheme": {
+      "primary": "#9DCBFF", "on-primary": "#003354", "primary-container": "#004B77", "on-primary-container": "#CFE5FF", "surface": "#101418", "surface-container": "#1C2025", "on-surface": "#E1E2E8", "on-surface-variant": "#C2C7CF", "outline": "#8C9199"
     },
     "typographyMeta": {
-      "body": { "displayName": "Body", "purpose": "Default text for forms, lists and descriptive copy." },
-      "title": { "displayName": "Title", "purpose": "Page and section hierarchy without display typography." },
-      "label": { "displayName": "Label", "purpose": "Compact task metadata and control labels." }
+      "title": { "displayName": "Page Title", "purpose": "Page-level hierarchy." },
+      "body": { "displayName": "Body", "purpose": "Default app copy and controls." },
+      "label": { "displayName": "Label", "purpose": "Table headers, status pills and compact metadata." }
     },
     "shadows": [
-      { "name": "overlay-only", "value": "Naive UI default overlay shadow", "purpose": "Menus, popovers and confirmation overlays only." }
+      { "name": "overlay-only", "value": "0 4px 12px/14px rgb(0 0 0 / 18%)", "purpose": "Account menu and snackbar only." }
     ],
     "motion": [
-      { "name": "state-transition", "value": "180ms ease-out", "purpose": "Hover and menu state feedback; disable non-essential transitions for reduced motion." }
+      { "name": "reduced-motion", "value": "0.01ms", "purpose": "Global reduced-motion override for transitions and animations." }
     ],
-    "breakpoints": []
+    "breakpoints": [
+      { "name": "compact", "value": "640px", "purpose": "Wrap toolbars and stack selected task, history, settings and Pixiv browser controls." }
+    ]
   },
   "components": [
-    {
-      "name": "Primary Button",
-      "kind": "button",
-      "refersTo": "button-primary",
-      "description": "The primary action for a focused task such as starting a crawl or saving settings.",
-      "html": "<button class=\"ds-button-primary\">开始抓取</button>",
-      "css": ".ds-button-primary { min-height: 34px; padding: 0 14px; border: 0; border-radius: 6px; background: #0096FA; color: #FFFFFF; font: 500 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background-color 180ms ease-out; } .ds-button-primary:hover { background: #0077D1; } .ds-button-primary:focus-visible { outline: 2px solid #0096FA; outline-offset: 2px; } .ds-button-primary:active { background: #005A9E; }"
-    },
-    {
-      "name": "Account Trigger",
-      "kind": "nav",
-      "refersTo": "account-trigger",
-      "description": "Sidebar footer trigger combining the current Pixiv avatar, ID and account menu.",
-      "html": "<button class=\"ds-account-trigger\"><span class=\"ds-avatar\">P</span><span class=\"ds-account-id\">pixiv-id</span><span aria-hidden=\"true\">⌄</span></button>",
-      "css": ".ds-account-trigger { display: flex; align-items: center; width: 100%; gap: 8px; padding: 6px; border: 0; border-radius: 6px; background: transparent; color: #333333; font: 500 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; cursor: pointer; transition: background-color 180ms ease-out; } .ds-avatar { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 50%; background: #E5F5FF; color: #0077D1; } .ds-account-id { overflow: hidden; flex: 1; text-align: left; text-overflow: ellipsis; white-space: nowrap; } .ds-account-trigger:hover { background: #E5F5FF; } .ds-account-trigger:focus-visible { outline: 2px solid #0096FA; outline-offset: 2px; }"
-    },
-    {
-      "name": "Text Field",
-      "kind": "input",
-      "refersTo": "input-default",
-      "description": "Single-line source ID or search input; actual app uses the matching Naive UI input.",
-      "html": "<input class=\"ds-input\" placeholder=\"输入小说 ID 或 URL\" />",
-      "css": ".ds-input { width: 100%; min-height: 34px; padding: 0 11px; border: 1px solid #E0E0E6; border-radius: 6px; background: #FFFFFF; color: #333333; font: 400 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; } .ds-input::placeholder { color: #777777; } .ds-input:hover { border-color: #80CCFF; } .ds-input:focus { border-color: #0096FA; outline: 2px solid #E5F5FF; outline-offset: 0; }"
-    },
-    {
-      "name": "Sidebar Navigation Item",
-      "kind": "nav",
-      "refersTo": "navigation-item",
-      "description": "Compact left navigation that makes the current work area immediately identifiable.",
-      "html": "<a class=\"ds-nav-item ds-nav-item-current\" href=\"#\">抓取</a>",
-      "css": ".ds-nav-item { display: block; padding: 9px 12px; border-radius: 6px; color: #444444; font: 500 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-decoration: none; } .ds-nav-item:hover { background: #E5F5FF; } .ds-nav-item:focus-visible { outline: 2px solid #0096FA; outline-offset: 2px; } .ds-nav-item-current { color: #0077D1; background: #E5F5FF; }"
-    },
-    {
-      "name": "Task Status",
-      "kind": "custom",
-      "refersTo": "task-status",
-      "description": "Text-first task state paired with a compact progress indicator; semantic status colors are owned by Naive UI.",
-      "html": "<div class=\"ds-task-status\"><strong>运行中</strong><span>12 / 50 · 跳过 2 · 失败 0</span></div>",
-      "css": ".ds-task-status { display: grid; gap: 4px; color: #333333; font: 400 12px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; } .ds-task-status strong { color: #444444; font-size: 14px; font-weight: 500; } .ds-task-status span { color: #777777; }"
-    }
+    { "name": "Filled Button", "kind": "button", "refersTo": "button-filled", "description": "Material Web primary action such as start, save, resume or confirm." },
+    { "name": "Outlined Button", "kind": "button", "refersTo": "button-outlined", "description": "Material Web secondary action such as browse, sync or batch delete." },
+    { "name": "Form Controls", "kind": "input", "refersTo": "md-outlined-text-field, md-outlined-select, md-radio, md-checkbox", "description": "Material Web controls for source IDs, settings and selection." },
+    { "name": "Sidebar Navigation", "kind": "nav", "refersTo": "navigation-item-active", "description": "256px left navigation that collapses to 72px; active item uses primary-container." },
+    { "name": "Dialog", "kind": "dialog", "refersTo": "m3-dialog", "description": "Native dialog styled with surface-container, 28px radius and a scrim." },
+    { "name": "Task Progress", "kind": "custom", "refersTo": "md-linear-progress", "description": "Material Web linear progress paired with text-first status and metadata." }
   ],
   "narrative": {
-    "northStar": "静谧书库",
-    "overview": "A refined, reliable and efficient local workspace. Naive UI provides the shared interaction vocabulary; Pixiv Blue is reserved for actions and focus, while motion only explains state changes.",
-    "keyCharacteristics": ["Refined and compact", "Reliable state feedback", "Efficient, low-distraction motion"],
+    "northStar": "Material 3 Web local task workspace",
+    "overview": "A compact desktop tool that uses Material 3 color roles and Material Web controls for Pixiv capture tasks.",
+    "keyCharacteristics": ["M3 tonal surfaces", "Compact task-first layout", "System-aware dark and reduced-motion behavior"],
     "rules": [
-      { "name": "The One Accent Rule", "body": "Pixiv Blue is the sole product accent; semantic success, warning and error colors retain their Naive UI meanings.", "section": "colors" },
-      { "name": "The Flat-by-Default Rule", "body": "Shadows belong to overlays, not ordinary cards or lists.", "section": "elevation" }
+      { "name": "The Material Role Rule", "body": "Use existing M3 color roles rather than a second color system.", "section": "colors" },
+      { "name": "The Overlay-Only Shadow Rule", "body": "Shadows identify menus and snackbar overlays, not routine cards.", "section": "elevation" },
+      { "name": "The Native-First Rule", "body": "Reuse Material Web and native semantics before adding local component styles.", "section": "components" }
     ],
-    "dos": [
-      "Use #0096FA through a shared Naive UI theme configuration.",
-      "Use short 180–200ms state transitions and reduce them when motion is reduced.",
-      "Keep account, task progress and failures immediately scannable."],
-    "donts": [
-      "Don't use marketing-page visuals, social-feed layouts or decorative downloader effects.",
-      "Don't use gradient text, colored side stripes, default glassmorphism or nested cards.",
-      "Don't use Pixiv Blue to replace semantic success, warning or error states."]
+    "dos": ["Use Material Web controls and M3 color roles.", "Keep task state textual as well as colored.", "Preserve the 640px responsive rules and reduced-motion override."],
+    "donts": ["Don't restore Naive UI or the prior blue-white design language.", "Don't add shadows to ordinary cards.", "Don't use primary as a success, warning or error color."]
   }
 }
