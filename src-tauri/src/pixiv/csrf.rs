@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::client::{PixivClient, PixivError, json_truthy};
+use super::client::{PixivClient, PixivError, json_truthy, mask_url};
 
 pub const PIXIV_SELF_URL: &str = "https://www.pixiv.net/ajax/user/self?lang=zh";
 const SELF_PATH: &str = "/ajax/user/self?lang=zh";
@@ -185,6 +185,50 @@ pub async fn fetch_session_probe(phpsessid: &str) -> Result<SessionProbe, ProbeE
 }
 
 // ----------------------------------------------------------------------
+// 主站 CSRF token 抓取（浏览层 POST 接口用，如 /ajax/street/v2/main）
+// ----------------------------------------------------------------------
+//
+// 实测（docs/research/pixiv-browse-api.md §10）：旧版 `pixiv.context.token` /
+// `global-data` meta 已不存在，POST 接口需要的 x-csrf-token 在 pixiv-web-next
+// 的 SSR 序列化状态里：`<script id="__NEXT_DATA__">` JSON 的
+// props.pageProps.serverSerializedPreloadedState.api.token。
+
+/// 从主站首页 HTML 解析会话 csrf token（纯函数，离线可测）。
+/// 定位 `id="__NEXT_DATA__"` 的 script 块 → 解析 JSON → 取 api.token；
+/// 任一环节失败返回 None（调用方转可读错误）。
+pub(crate) fn parse_next_data_token(html: &str) -> Option<String> {
+    const MARKER: &str = "id=\"__NEXT_DATA__\"";
+    let idx = html.find(MARKER)?;
+    let after_marker = &html[idx + MARKER.len()..];
+    // script 开标签结束（属性顺序不定，取 marker 之后第一个 '>'）
+    let gt = after_marker.find('>')?;
+    let script_body = &after_marker[gt + 1..];
+    let end = script_body.find("</script>")?;
+    let json: Value = serde_json::from_str(script_body[..end].trim()).ok()?;
+    let token = json.pointer("/props/pageProps/serverSerializedPreloadedState/api/token")?;
+    token.as_str().filter(|t| !t.is_empty()).map(String::from)
+}
+
+/// GET 主站首页，解析 `__NEXT_DATA__` 取会话 csrf token。
+/// 走 PixivClient 的闸门/限速/重试（与 ajax 请求同一套风控语义）。
+/// 路径缺失/非 JSON → `Client("无法获取会话令牌，请重新登录")`。
+/// 注意：token 值不得写入日志。
+pub(crate) async fn fetch_web_csrf_token(client: &PixivClient) -> Result<String, PixivError> {
+    let html = client
+        .run_gated(|| async {
+            let resp = client.send_ajax(super::client::BASE_URL).await?;
+            let text = resp.text().await.map_err(|e| {
+                PixivError::Network(format!("{e}: {}", mask_url(super::client::BASE_URL)))
+            })?;
+            Ok::<String, PixivError>(text)
+        })
+        .await?;
+    log::debug!("已抓取主站 __NEXT_DATA__（{} 字节）", html.len());
+    parse_next_data_token(&html)
+        .ok_or_else(|| PixivError::Client("无法获取会话令牌，请重新登录".into()))
+}
+
+// ----------------------------------------------------------------------
 // 单元测试（全部离线）
 // ----------------------------------------------------------------------
 #[cfg(test)]
@@ -337,5 +381,32 @@ mod tests {
             parse_self_response(200, Some(body)),
             Err(ProbeError::Csrf(_))
         ));
+    }
+
+    fn next_data_html(token: &str) -> String {
+        format!(
+            r#"<!DOCTYPE html><html><body><script>other</script><script type="application/json" id="__NEXT_DATA__">{{"props":{{"pageProps":{{"serverSerializedPreloadedState":{{"api":{{"token":"{token}"}}}}}}}}}}</script></body></html>"#
+        )
+    }
+
+    #[test]
+    fn parse_next_data_token_success() {
+        // 属性顺序在前（id 在 type 前）同样能定位
+        let html = next_data_html("abc123def");
+        assert_eq!(parse_next_data_token(&html).as_deref(), Some("abc123def"));
+    }
+
+    #[test]
+    fn parse_next_data_token_missing_or_broken() {
+        // 无 __NEXT_DATA__ script
+        assert_eq!(parse_next_data_token("<html><body>403</body></html>"), None);
+        // script 内不是 JSON
+        let html = r#"<script id="__NEXT_DATA__">not json</script>"#;
+        assert_eq!(parse_next_data_token(html), None);
+        // JSON 里缺 api.token 路径
+        let html = r#"<script id="__NEXT_DATA__">{"props":{"pageProps":{}}}</script>"#;
+        assert_eq!(parse_next_data_token(html), None);
+        // token 为空串视为缺失
+        assert_eq!(parse_next_data_token(&next_data_html("")), None);
     }
 }

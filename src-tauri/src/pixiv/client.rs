@@ -220,7 +220,9 @@ impl PixivClient {
     /// 1. 取信号量许可 → 2. 等 429 闸门 → 3. 最多 MAX_RETRIES 次尝试
     ///    （Auth/NotFound/RateLimit 立即终止；Server/Client/Network 退避重试）
     ///    → 4. finally：无论成败在 semaphore 持有期间 sleep REQUEST_INTERVAL_MS。
-    async fn run_gated<T, F, Fut>(&self, mut attempt: F) -> Result<T, PixivError>
+    ///
+    /// `pub(crate)`：csrf.rs 的主页 token 抓取复用同一闸门/限速语义。
+    pub(crate) async fn run_gated<T, F, Fut>(&self, mut attempt: F) -> Result<T, PixivError>
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<T, PixivError>>,
@@ -263,7 +265,9 @@ impl PixivClient {
 
     /// 发 ajax GET（带 Cookie 头）。非 200 走 classify_status 分类；
     /// 429 额外触发全队列暂停。
-    async fn send_ajax(&self, url: &str) -> Result<wreq::Response, PixivError> {
+    ///
+    /// `pub(crate)`：csrf.rs 的主页 token 抓取（HTML 响应）复用同一发送语义。
+    pub(crate) async fn send_ajax(&self, url: &str) -> Result<wreq::Response, PixivError> {
         let mut req = self.http.get(url);
         if let Some(cookie) = self.cookie_header.as_deref() {
             req = req.header("cookie", cookie);
@@ -307,6 +311,53 @@ impl PixivClient {
         let text = self
             .run_gated(|| async {
                 let resp = self.send_ajax(&url).await?;
+                let text = resp.text().await.map_err(|e| network_err(e, &url))?;
+                Ok::<String, PixivError>(text)
+            })
+            .await?;
+        let body: Value = serde_json::from_str(&text)
+            .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
+        extract_ajax_body(body)
+    }
+
+    /// POST `{BASE_URL}{path}`（JSON body + `x-csrf-token` 头，镜像 get_json 的
+    /// cookie/闸门/重试/限速/error-body 语义；浏览层 street 接口专用）。
+    ///
+    /// - `csrf_token`：来自主站 `__NEXT_DATA__` 的会话令牌（browse_api 层缓存）。
+    ///   wreq 的 `.header()` 为替换语义，会覆盖默认 header 里的旧 x-csrf-token。
+    /// - JSON 解析与 error/body 提取在重试管线之外（对齐 get_json）。
+    pub async fn post_json(
+        &self,
+        path: &str,
+        csrf_token: &str,
+        body: &Value,
+    ) -> Result<Value, PixivError> {
+        let url = format!("{BASE_URL}{path}");
+        let payload = serde_json::to_vec(body)
+            .map_err(|e| PixivError::Client(format!("请求体序列化失败: {e}")))?;
+        let text = self
+            .run_gated(|| async {
+                let mut req = self
+                    .http
+                    .post(&url)
+                    .header("content-type", "application/json")
+                    .header("x-csrf-token", csrf_token);
+                if let Some(cookie) = self.cookie_header.as_deref() {
+                    req = req.header("cookie", cookie);
+                }
+                let resp = req
+                    .body(payload.clone())
+                    .send()
+                    .await
+                    .map_err(|e| network_err(e, &url))?;
+                let status = resp.status().as_u16();
+                log::info!("POST {} → {status}", mask_url(&url));
+                if let Some(err) = classify_status(status) {
+                    if status == 429 {
+                        self.trigger_global_pause();
+                    }
+                    return Err(err);
+                }
                 let text = resp.text().await.map_err(|e| network_err(e, &url))?;
                 Ok::<String, PixivError>(text)
             })
