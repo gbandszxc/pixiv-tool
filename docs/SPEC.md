@@ -1,7 +1,8 @@
 # Pixiv Tool · 技术规格书（SPEC）
 
-> **状态**：v1.1 · Tauri 2 + Rust 全量重构（ADR 0008）· 2026-08-20
+> **状态**：v1.2 · Tauri 2 + Rust 全量重构（ADR 0008）· 2026-10-01
 > **真相源**：本文档是项目开发的唯一真相源。任何架构变更须先更新本文档（或追加 ADR），再改代码。
+> v1.2：新增浏览模式（自有 UI 代理 pixiv 只读浏览，ADR 0012）。
 
 ---
 
@@ -120,7 +121,8 @@ pixiv-tool/
 │  └─ src/
 │     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、关闭确认）
 │     ├─ state.rs               # AppState：paths/settings/db/cookies/tasks
-│     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话探测）
+│     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话探测）、browse_api（浏览端点）、
+│     │                         # image_proxy（pixiv-img 协议核心，协议注册在 lib.rs）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）
 │     ├─ commands/              # 25 个 #[tauri::command]（auth/tasks/settings/history/misc）
@@ -451,6 +453,19 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 | 任务 | `/tasks`（支持小说/插画分类筛选） | ✅ |
 | 历史 | `/history`（支持小说/插画分类切换） | ✅ |
 | 设置 | `/settings` | ✅ |
+| 浏览-首页 | `/browse/home`（推荐流，换一批去重追加） | ✅ |
+| 浏览-频道 | `/browse/illustration` `/browse/manga` `/browse/novel`（关注新作/推荐/排行/热门标签板块） | ✅ |
+| 浏览-发现 | `/browse/discover`（按历史推荐，前端去重无限滚动） | ✅ |
+| 浏览-动态 | `/browse/feed`（关注的新作品：插画/小说 × 全部/R-18） | ✅ |
+| 浏览-搜索 | `/browse/search`（类型 tab + 排序/对象/匹配 + ID/链接直达） | ✅ |
+| 浏览-排行榜 | `/browse/ranking`（插画/漫画/动图/小说 × 周期 + 日期导航） | ✅ |
+| 作品查看器 | `/browse/work/illust|:kind=illust|manga>/:id`（多页翻页、R-18 遮罩、相关推荐） | ✅ |
+| 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航） | ✅ |
+| 系列目录 | `/browse/series/:id`（游标加载） | ✅ |
+| 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说 tab） | ✅ |
+
+侧边栏分组为「工具」（既有 5 项 + Pixiv 浏览器）与「浏览」8 项；分组标题 12px/600。
+浏览模式详见 §6.4 与 ADR 0012。
 
 ### 6.2 i18n
 
@@ -467,6 +482,25 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   Naive UI `n-config-provider` 注入 `theme-overrides`（pixiv 蓝主色）
 - 现状：深色主题尚未接线——App.vue 当前固定浅色（`theme = null`），
   dark / auto 选项仅保存配置不生效
+
+### 6.4 浏览模式（browse，ADR 0012）
+
+自有 UI 只读浏览 pixiv：8 个列表页 + 作品查看器 / 小说阅读器 / 系列目录 / 作者页，
+路由见 §6.1。数据层要点：
+
+- **接口**：全部走 `www.pixiv.net/ajax/*` 同源 GET + 既有 `PixivClient` 限速；
+  端点与响应结构真相源为 `docs/research/pixiv-browse-api.md`（2026-10-01 实测，
+  含失效端点勘误）。唯一例外是首页 street 流（POST，需 csrf token，见 ADR 0012 §3）。
+- **IPC 契约**：11 个命令（§7），返回体统一 `BrowseWorkItem` 卡片结构
+  （id/kind/title/author/cover/page_count/x_restrict/tags/series…），前端契约类型与
+  mock 层在 `frontend/src/api/browse.ts`（非 Tauri 环境返回确定性样例数据，供浏览器
+  视觉验收；生产不受影响）。
+- **图片**：`<img>` 一律经自定义协议 `pixiv-img`（§3.1、ADR 0012 §2），磁盘缓存
+  `<data>/cache/img/`（1GB 上限按 mtime 淘汰），前端 `pxSrc()` 封装。
+- **分页**：统一收敛为 `next_page` / `is_last_page` / `next_last_order`（游标）语义；
+  发现页与首页推荐无服务端翻页，前端重复调用按 id 去重。
+- **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图
+  （`[pixivimage:]`）显示占位块；评论不展示。
 
 ---
 
@@ -495,6 +529,22 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
 | `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位 |
+| `browse_home_feed` | 首页推荐流（street POST + csrf token，进程内 30min 缓存） |
+| `browse_channel(kind)` | 频道仪表盘：关注新作/推荐/排行/最新投稿/热门标签（/ajax/top/*） |
+| `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |
+| `browse_follow_latest(kind, mode, page)` | 关注的新作品（p + isLastPage） |
+| `browse_search(kind, word, order, mode, s_mode, type, page)` | 插画/漫画/小说搜索（total + lastPage） |
+| `browse_ranking(kind, mode, page, date)` | 排行榜：illust/manga/ugoira 走 ranking.php?format=json，novel 走 /ajax/ranking/novel（每页 50，含 prev/next_date） |
+| `browse_work_detail(kind, id)` | 作品详情：illust+pages+ugoira_meta / novel 全文（含 series 导航） |
+| `browse_related(kind, id, limit)` | 相关推荐一次性池（recommend/init，page 参数无效） |
+| `browse_user_profile(id)` | 作者资料（/ajax/user/{id}?full=1） |
+| `browse_user_works(id, kind, page)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量 |
+| `browse_novel_series(id, last_order)` | 系列元数据 + 目录（last_order 游标） |
+
+以上命令实现于 `commands/browse_api_cmds.rs`，公共登录守卫 `build_browse_api`：
+无 PHPSESSID 一律 `Err("未登录或登录态已失效，请先登录")`（前端据此弹登录窗）。
+图片经 `pixiv-img` 自定义协议（`image_proxy.rs`，白名单 `*.pximg.net`，磁盘缓存
+1GB，CDN 并发 6 不占 ajax 限速），不走 invoke。
 
 目录选择不走命令：前端直接用 `@tauri-apps/plugin-dialog` 的
 `open({directory: true})`。
@@ -615,6 +665,7 @@ GitCode 托管无流水线，`.github/workflows/release.yml` 已移除。**打�
 | 0006 | 真实 Chromium 登录 + macOS Keychain | [adr/0006-browser-login-keychain.md](adr/0006-browser-login-keychain.md) |
 | 0007 | 插画抓取（原图/ugoira） | [adr/0007-illustration-crawling.md](adr/0007-illustration-crawling.md) |
 | 0008 | 全量重构为 Tauri 2 + Rust，移除 Python 后端 | [adr/0008-tauri-rewrite.md](adr/0008-tauri-rewrite.md) |
+| 0012 | 浏览模式：自有 UI 代理 pixiv 只读接口（内嵌浏览器保留） | [adr/0012-browse-mode-own-ui.md](adr/0012-browse-mode-own-ui.md) |
 
 ADR 按需追加，不强制一次性写完。
 
@@ -628,5 +679,5 @@ ADR 按需追加，不强制一次性写完。
 - 任务启动弹窗恢复（"上次任务进行到 80/200，是否继续"）
 - 安装器（NSIS / Inno Setup）
 - 自动更新
-- 搜索 / 收藏 / 用户主页浏览
+- 搜索 / ~~收藏 / 用户主页浏览~~（搜索与用户主页已于 v1.2 随浏览模式落地，ADR 0012；收藏夹浏览与浏览态写操作仍待定）
 - 小说内嵌图片下载

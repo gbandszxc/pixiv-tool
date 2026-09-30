@@ -122,6 +122,17 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 - 左侧导航：图标加文字，hover 使用 8% primary 的状态层，active 使用 primary-container。账号区位于侧栏底部，原生 `details` 菜单向上弹出。
 - alert、状态 pill、表格和表单卡是小型本地样式，复用 M3 颜色角色和上述 shape/spacing，不另建组件库。
 
+### 浏览模式组件（ADR 0012）
+
+浏览（browse）页面在既有 M3 体系上新增以下本地组件，全部复用现有颜色角色与间距刻度，不引入新 token：
+
+- **作品卡 WorkCard**：封面圆角 `--radius-control`（12px）、无阴影；标题 14px/600 最多两行省略，作者 12px on-surface-variant；左上角完整胶囊徽标（999px、12px/600）：页数（surface-container/ink，>1 时显示「12P」）与 R-18/R-18G（ink 底/surface 字，同时出现时 R 系优先）；小说封面右下角 12px 小书角标。hover 为 8% primary 状态层，focus-visible 环保留。
+- **作品网格 WorkGrid**：`repeat(auto-fill, minmax(160px,1fr))`，gap 12/16px（紧凑相关推荐变体 120px）；骨架为纯 surface-container 色块（**不做闪烁动画**）；空态带插画占位与引导文案；错误态给可读文案 + 重试；「没有更多」收尾。
+- **分区与 Tab**：频道页分区标题 16px/600 on-surface-variant；类型/周期切换用 md-tabs（secondary），排行前三名徽标用 primary-container 突出。
+- **查看器舞台**：整页路由，图片区以中性近黑 `rgb(0 0 0 / 0.78)` 为底（深浅色一致），图片 object-contain 居中；R-18 遮罩为 `blur(24px)` + 中央文案 + filled「显示」按钮，确认后本会话记忆。近黑底是查看器的既定例外，不得扩散到普通内容容器。
+- **小说阅读器**：正文列 max 720px、14px/1.8 on-surface；`[chapter:]` 渲染为 16px/700 章节标题；翻页器 sticky 底部（surface 底 + 上缘 divider），页码可下拉直选；系列目录为 48px+ 行式列表（序号/标题/元信息右对齐），非卡片网格。
+- **登录守卫联动**：浏览命令未登录返回固定文案并自动打开既有登录弹窗；浏览页面本身不重复实现登录 UI。
+
 **The Native-First Rule.** 已由 Material Web 覆盖的按钮、输入、选择、复选、单选、标签页和进度条不重写外观；原生 `dialog`、`details` 和表格只补充当前实现所需的容器样式。
 
 设置页的主题与配色可即时预览，但只在保存后写入设置；带有未保存预览时离开页面，恢复已保存主题并显示全局 Snackbar。
