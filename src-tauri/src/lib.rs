@@ -8,11 +8,12 @@
 
 pub mod accounts;
 pub mod auth;
-pub mod commands;
 pub mod browse;
+pub mod commands;
 pub mod cookies;
 pub mod core;
 pub mod db;
+pub mod image_proxy;
 pub mod logging;
 pub mod paths;
 pub mod pixiv;
@@ -21,7 +22,6 @@ pub mod settings;
 pub mod state;
 
 use tauri::{Emitter, Manager};
-
 
 use crate::db::Db;
 use crate::paths::app_paths;
@@ -72,6 +72,21 @@ pub fn run() {
                 }
             }
         })
+        // 图片代理协议：前端 convertFileSrc(encodeURIComponent(pximgUrl), "pixiv-img")。
+        // pximg 防盗链需 Referer，走后端代下 + 磁盘缓存（data/cache/img）。
+        // 异步注册不阻塞主线程；缓存目录从 AppState.paths 取（AppState 未就绪时
+        // 兜底临时目录，正常时序下不会发生）。
+        .register_asynchronous_uri_scheme_protocol("pixiv-img", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let cache_dir = app
+                    .try_state::<AppState>()
+                    .map(|state| state.paths.data_dir.join("cache").join("img"))
+                    .unwrap_or_else(|| std::env::temp_dir().join("pixiv-tool-img-cache"));
+                let response = image_proxy::handle_image_request(request, &cache_dir).await;
+                responder.respond(response);
+            });
+        })
         .setup(move |app| {
             let settings = Settings::load_or_init(&paths.config_dir);
             let db = Db::open(&paths.data_dir.join("app.db"))?;
@@ -114,6 +129,18 @@ pub fn run() {
             commands::browse_cmds::browse_go_back,
             commands::browse_cmds::browse_sync_login,
             commands::browse_cmds::browse_inject_login,
+            // 浏览数据
+            commands::browse_api_cmds::browse_home_feed,
+            commands::browse_api_cmds::browse_channel,
+            commands::browse_api_cmds::browse_discover,
+            commands::browse_api_cmds::browse_follow_latest,
+            commands::browse_api_cmds::browse_search,
+            commands::browse_api_cmds::browse_ranking,
+            commands::browse_api_cmds::browse_work_detail,
+            commands::browse_api_cmds::browse_related,
+            commands::browse_api_cmds::browse_user_profile,
+            commands::browse_api_cmds::browse_user_works,
+            commands::browse_api_cmds::browse_novel_series,
             // tasks
             commands::task_cmds::tasks_list,
             commands::task_cmds::task_create,
@@ -147,7 +174,10 @@ pub fn run() {
         .run(|app_handle, event| {
             // Cmd+Q / 菜单 Quit 走 ExitRequested（不触发窗口 CloseRequested）；
             // code=None 才拦（app_exit 的 exit(0) 是 code=Some，放行避免死循环）
-            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = event {
+            if let tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } = event
+            {
                 api.prevent_exit();
                 let _ = app_handle.emit("app://confirm-exit", ());
             }
@@ -184,7 +214,11 @@ fn setup_app_menu(app: &tauri::App) {
     let zh = language != "en-US";
     let quit = MenuItemBuilder::with_id(
         "app-quit",
-        if zh { "退出 Pixiv Tool" } else { "Quit Pixiv Tool" },
+        if zh {
+            "退出 Pixiv Tool"
+        } else {
+            "Quit Pixiv Tool"
+        },
     )
     .accelerator("CmdOrCtrl+Q")
     .build(app)
