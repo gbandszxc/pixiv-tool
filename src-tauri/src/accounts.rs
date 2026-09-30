@@ -163,9 +163,7 @@ impl AccountManager {
 
     /// 当前激活账号（索引 active）。
     pub fn active(&self) -> Option<String> {
-        self.load_index()
-            .active
-            .filter(|id| !id.is_empty())
+        self.load_index().active.filter(|id| !id.is_empty())
     }
 
     /// 已保存账号列表（登记顺序）。
@@ -235,7 +233,10 @@ impl AccountManager {
                 } else {
                     info.avatar_file.clone()
                 };
-                *existing = AccountInfo { avatar_file, ..info };
+                *existing = AccountInfo {
+                    avatar_file,
+                    ..info
+                };
             }
             None => idx.accounts.push(info),
         }

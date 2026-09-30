@@ -429,7 +429,10 @@ pub async fn auth_logout(
 /// 已保存账号列表（含当前激活标记与本地头像协议 URL）。
 #[tauri::command]
 pub async fn auth_accounts_list(state: State<'_, AppState>) -> Result<Value, String> {
-    Ok(account_list_body(state.accounts.active(), state.accounts.list()))
+    Ok(account_list_body(
+        state.accounts.active(),
+        state.accounts.list(),
+    ))
 }
 
 /// 切换当前账号：
@@ -550,7 +553,10 @@ mod tests {
         let items = body["accounts"].as_array().unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["user_id"], json!("100"));
-        assert_eq!(items[0]["avatar_url"], json!(avatar_scheme_url("100_50.jpg")));
+        assert_eq!(
+            items[0]["avatar_url"],
+            json!(avatar_scheme_url("100_50.jpg"))
+        );
         assert_eq!(items[0]["saved_at"], json!(123));
         // 无头像缓存的账号不带 avatar_url 键（前端回退首字母）
         assert!(items[1].get("avatar_url").is_none());

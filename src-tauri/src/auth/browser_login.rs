@@ -299,7 +299,9 @@ pub fn pixiv_session_cookie_keys(items: &[Value]) -> Vec<(String, String, String
 /// 删除走「同名过期覆盖」（expires=0 的 Set-Cookie 语义），浏览器级 CDP
 /// 即可完成，无需 page session。返回清理条数。
 async fn clear_pixiv_session(cdp: &mut CdpClient) -> Result<usize> {
-    let result = cdp.call("Storage.getCookies", serde_json::json!({})).await?;
+    let result = cdp
+        .call("Storage.getCookies", serde_json::json!({}))
+        .await?;
     let items = result
         .get("cookies")
         .and_then(Value::as_array)
@@ -598,9 +600,21 @@ mod tests {
         assert_eq!(
             keys,
             vec![
-                ("PHPSESSID".to_string(), ".pixiv.net".to_string(), "/".to_string()),
-                ("PHPSESSID".to_string(), "www.pixiv.net".to_string(), "/".to_string()),
-                ("PHPSESSID".to_string(), "..pixiv.net".to_string(), "/sub".to_string()),
+                (
+                    "PHPSESSID".to_string(),
+                    ".pixiv.net".to_string(),
+                    "/".to_string()
+                ),
+                (
+                    "PHPSESSID".to_string(),
+                    "www.pixiv.net".to_string(),
+                    "/".to_string()
+                ),
+                (
+                    "PHPSESSID".to_string(),
+                    "..pixiv.net".to_string(),
+                    "/sub".to_string()
+                ),
             ]
         );
         assert!(pixiv_session_cookie_keys(&[]).is_empty());
@@ -613,10 +627,8 @@ mod tests {
     #[ignore = "依赖本机 Chrome/Edge/Chromium，仅在环境可控时手工跑"]
     async fn clear_pixiv_session_roundtrip() {
         let browser = find_login_browser().expect("需要本机 Chrome/Edge/Chromium");
-        let dir = std::env::temp_dir().join(format!(
-            "pixiv-tool-cdp-clear-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("pixiv-tool-cdp-clear-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let port = free_port().unwrap();
         // headless 临时 profile：不闪窗、不触真实账号数据
@@ -664,7 +676,10 @@ mod tests {
                 .await
                 .unwrap();
             let left = pixiv_session_cookie_keys(raw["cookies"].as_array().unwrap());
-            assert!(left.is_empty(), "PHPSESSID 应已被过期覆盖删除，残留 {left:?}");
+            assert!(
+                left.is_empty(),
+                "PHPSESSID 应已被过期覆盖删除，残留 {left:?}"
+            );
             cdp
         }
         .await;

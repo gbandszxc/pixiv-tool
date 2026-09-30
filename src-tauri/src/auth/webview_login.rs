@@ -237,8 +237,8 @@ mod tests {
 
     #[test]
     fn reset_login_profile_removes_directory() {
-        let dir = std::env::temp_dir()
-            .join(format!("pixiv-tool-wv-reset-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("pixiv-tool-wv-reset-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("Default")).unwrap();
         std::fs::write(dir.join("Default").join("Cookies"), b"x").unwrap();
 

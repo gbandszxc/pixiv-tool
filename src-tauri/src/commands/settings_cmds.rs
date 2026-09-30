@@ -234,8 +234,12 @@ mod tests {
     fn patch_rejects_unknown_theme_color() {
         let data_dir = temp_data_dir("palette");
         assert_eq!(
-            apply_settings_patch(&Settings::default(), &json!({"theme_color": "neon"}), &data_dir)
-                .unwrap_err(),
+            apply_settings_patch(
+                &Settings::default(),
+                &json!({"theme_color": "neon"}),
+                &data_dir
+            )
+            .unwrap_err(),
             "主题色板无效"
         );
         cleanup(&data_dir);
