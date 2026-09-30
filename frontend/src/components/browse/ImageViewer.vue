@@ -85,16 +85,9 @@ watch(
 <template>
   <div class="viewer">
     <div class="stage">
-      <!-- 加载占位 / 失败重试（遮罩态下图片照常加载，覆盖层负责呈现） -->
-      <div v-if="imgState !== 'ok' && !restricted" class="stage-state">
-        <div v-if="imgState === 'loading'" class="loading-block" aria-hidden="true"></div>
-        <template v-else>
-          <p class="stage-text">{{ t("common.browseLoadFailed") }}</p>
-          <md-outlined-button @click="retry">{{ t("common.retry") }}</md-outlined-button>
-        </template>
-      </div>
+      <!-- 加载占位 / 失败重试（覆盖层；img 常驻渲染，避免「等 load 才渲染 img」的死锁） -->
       <img
-        v-else
+        v-show="imgState === 'ok' || restricted"
         :key="`${src}#${retryTick}`"
         class="stage-img"
         :class="{ blurred: restricted }"
@@ -103,6 +96,13 @@ watch(
         @load="onImgLoad"
         @error="onImgError"
       />
+      <div v-if="imgState !== 'ok' && !restricted" class="stage-state">
+        <div v-if="imgState === 'loading'" class="loading-block" aria-hidden="true"></div>
+        <template v-else>
+          <p class="stage-text">{{ t("common.browseLoadFailed") }}</p>
+          <md-outlined-button @click="retry">{{ t("common.retry") }}</md-outlined-button>
+        </template>
+      </div>
 
       <!-- R-18 遮罩 -->
       <div v-if="restricted" class="restrict-overlay">
