@@ -125,7 +125,7 @@ pub(crate) fn parse_novel_data(novel_id: i64, body: &Value) -> NovelData {
 
 /// `/ajax/novel/series_content/{id}` body → Vec<(novel_id, contentOrder)>（纯函数）。
 ///
-/// `body.page.seriesContents[]`：`{"id":"27466576","series":{"contentOrder":1}}`。
+/// `body.page.seriesContents[]`：`{"id":"9000012","series":{"contentOrder":1}}`。
 /// id 字符串转 i64（非法跳过）；contentOrder 从 1 开始，缺失时用遍历顺序
 /// （1-based）兜底——签名固定为 (i64, i64)，无法表达 None。
 pub(crate) fn parse_series_content(body: &Value) -> Vec<(i64, i64)> {
@@ -339,8 +339,8 @@ mod tests {
             "content": "正文[line]",
             "seriesNavData": {"seriesId": 1093870, "title": "系列名"}
         });
-        let d = parse_novel_data(27466576, &body);
-        assert_eq!(d.novel_id, 27466576);
+        let d = parse_novel_data(9000012, &body);
+        assert_eq!(d.novel_id, 9000012);
         assert_eq!(d.title, "相対性理論");
         assert_eq!(d.user_id, 28640, "userId 是字符串也能解析");
         assert_eq!(d.user_name, "作者");
@@ -368,8 +368,8 @@ mod tests {
         let body = serde_json::json!({
             "page": {
                 "seriesContents": [
-                    {"id": "27466576", "series": {"contentOrder": 1}, "title": "第1话"},
-                    {"id": "28625793", "series": {"contentOrder": 2}, "title": "第2话"},
+                    {"id": "9000012", "series": {"contentOrder": 1}, "title": "第1话"},
+                    {"id": "9000013", "series": {"contentOrder": 2}, "title": "第2话"},
                     {"id": "1001", "title": "缺 contentOrder"},
                     {"id": "not-a-number", "series": {"contentOrder": 9}}
                 ]
@@ -378,7 +378,7 @@ mod tests {
         let items = parse_series_content(&body);
         assert_eq!(
             items,
-            vec![(27466576, 1), (28625793, 2), (1001, 3)],
+            vec![(9000012, 1), (9000013, 2), (1001, 3)],
             "缺 contentOrder 用 1-based 遍历序兜底；非法 id 跳过"
         );
     }

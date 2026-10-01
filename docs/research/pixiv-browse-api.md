@@ -274,7 +274,7 @@
 #### `/ajax/illust/{id}/pages` 响应
 
 Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, height }`。
-示例（original）：`https://i.pximg.net/img-original/img/2026/09/28/15/06/28/150209107_p0.jpg`，页码后缀 `_p{n}` 从 0 开始。
+示例（original，示意数据）：`https://i.pximg.net/img-original/img/2021/01/01/00/00/00/9000012_p0.jpg`，页码后缀 `_p{n}` 从 0 开始。
 
 #### `/ajax/illust/{id}/ugoira_meta` 响应（body 直接平铺）
 
@@ -449,7 +449,7 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 
 ## 11. 收藏（Bookmark）接口（v1 实测）
 
-> 调研方式：2026-10-01 晚对已登录会话（uid 19509348，非 Premium）先在官方收藏页/作品页**真实点击抓包**，再用页内 `fetch()` 复现验证参数边界。
+> 调研方式：2026-10-01 晚对已登录会话（uid <uid>，非 Premium）先在官方收藏页/作品页**真实点击抓包**，再用页内 `fetch()` 复现验证参数边界。
 > 写操作严格按「add→delete 配对」执行：插画、小说各一次私密收藏（restrict=1）+ 立即删除，实测后已确认还原（详情 `bookmarkData` 回到 null、计数复原）。
 > 本节 csrf token 记录为 `ed5…f6b`（打码）；任何 Cookie 值不落盘。
 
@@ -479,9 +479,9 @@ query 参数语义（均实测）：
 | 参数 | 合法值 | 说明 |
 |---|---|---|
 | `tag` | 标签名（URL 编码）或空 | 按收藏标签过滤；不存在的标签 → 正常响应 `total:0, works:[]` |
-| `offset` | 0..total | 超界（如 1000 > 545）→ `works:[]`，`total` 照常返回，无错误 |
+| `offset` | 0..total | 超界（如 1000 > total）→ `works:[]`，`total` 照常返回，无错误 |
 | `limit` | 实测 10/48/100 均可 | 官方页 artworks=48、novels=30；自定义值服务端接受 |
-| `rest` | `show`（公开）/ `hide`（非公开） | **自己**：缺省等价 `show`；`hide` 返回私密收藏（实测 24 条）。**他人**：必须显式 `rest=show`（缺省报「不正确的请求。」），`rest=hide` 报「没有权限。」 |
+| `rest` | `show`（公开）/ `hide`（非公开） | **自己**：缺省等价 `show`；`hide` 返回私密收藏（条数与该模式下的 `total` 一致）。**他人**：必须显式 `rest=show`（缺省报「不正确的请求。」），`rest=hide` 报「没有权限。」 |
 | `order` | `desc` | **只支持 desc**（最新收藏在前）。`asc` 返回 `works:[]`（静默空列表，不报错） |
 | `mode` | `all` | **只支持 all**。`illust`/`manga`/`ugoira` 均报 error「不正确的请求。」——即插画/漫画/动图混排一个列表，类型过滤靠前端 |
 
@@ -489,11 +489,11 @@ query 参数语义（均实测）：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `total` | number | **有 total**（实测公开 545、私密 24）——分页总数直接可用 |
+| `total` | number | **有 total**（公开与私密模式各返回各自总数）——分页总数直接可用 |
 | `works` | Array[≤limit] | 作品索引表项（字段同 §2 缩略结构），**另带 `bookmarkData`** |
-| `works[].bookmarkData` | Object/null | 当前查看者的收藏态：`{id:"38982536074", private:false}`——**id 即 bookmarkId**，取消收藏直接用它，无需再查详情 |
+| `works[].bookmarkData` | Object/null | 当前查看者的收藏态：`{id:"31000000001", private:false}`——**id 即 bookmarkId**，取消收藏直接用它，无需再查详情 |
 | `works[].illustType` | number | 0/1/2 混排（前 300 条实测见 0 与 2；ugoira 不拆分列表） |
-| `bookmarkTags` | Array | 内联标签列表（实测本账号为空数组；显式打了标签的收藏才会出现在这里） |
+| `bookmarkTags` | Array | 内联标签列表（账号未打收藏标签时为空数组；显式打了标签的收藏才会出现在这里） |
 | `lastMonthAllBookmarkCount` | number | 近 30 天收藏总数（装饰性统计） |
 
 **分页语义**：`offset` 按 works 条数推进（`next = offset + works.length`），终止条件 `offset >= total` 或 `works.length < limit`。没有 cursor/isLastPage 字段。
@@ -507,7 +507,7 @@ query 参数语义（均实测）：
 
 - **路径勘误**：旧资料流传的 `/ajax/user/{uid}/illust-bookmark-tags` 不存在（404「无法找到您所请求的页面」）；正确路径是 `illusts/bookmark/tags`（`illusts` 复数 + `/bookmark/tags` 子路径）。无 `rest` 参数。
 - 响应 `body`：`{public: [{tag, cnt}], private: [{tag, cnt}], tooManyBookmark: bool, tooManyBookmarkTags: bool}`——一次返回公开与非公开两组，无需分别请求。
-- 未打标签的收藏聚合在系统标签「未分類」下（实测 public 未分類 cnt=545 与列表 total 一致）。`cnt` 可直接做标签下拉的计数徽标。
+- 未打标签的收藏聚合在系统标签「未分類」下（实测 public「未分類」cnt 与列表 total 一致）。`cnt` 可直接做标签下拉的计数徽标。
 
 ### 11.3 `/ajax/user/extra`（登录用户菜单）
 
@@ -522,8 +522,8 @@ query 参数语义（均实测）：
 
 | 方法 | URL | 请求头 | 请求体 |
 |---|---|---|---|
-| POST | `/ajax/illusts/bookmarks/add` | `x-csrf-token: {token}` + `Content-Type: application/json; charset=utf-8` + `Accept: application/json` | **JSON**：`{"illust_id":"114226327","restrict":1,"comment":"","tags":[]}` |
-| POST | `/ajax/novels/bookmarks/add` | 同上 | **JSON**：`{"novel_id":"29271217","restrict":1,"comment":"","tags":[]}` |
+| POST | `/ajax/illusts/bookmarks/add` | `x-csrf-token: {token}` + `Content-Type: application/json; charset=utf-8` + `Accept: application/json` | **JSON**：`{"illust_id":"9000021","restrict":1,"comment":"","tags":[]}` |
+| POST | `/ajax/novels/bookmarks/add` | 同上 | **JSON**：`{"novel_id":"9000012","restrict":1,"comment":"","tags":[]}` |
 
 | 参数 | 类型 | 说明 |
 |---|---|---|
@@ -536,9 +536,9 @@ query 参数语义（均实测）：
 
 ```json
 // 插画：body 是对象
-{"error":false,"message":"","body":{"last_bookmark_id":"39079976043","stacc_status_id":null}}
+{"error":false,"message":"","body":{"last_bookmark_id":"31000000001","stacc_status_id":null}}
 // 小说：body 直接是 bookmarkId 字符串
-{"error":false,"message":"","body":"3688006889"}
+{"error":false,"message":"","body":"3100000001"}
 ```
 
 **路径勘误**：旧资料的 `/ajax/illust/{id}/bookmark/add`、`/ajax/novel/{id}/bookmark/add`（按作品分的端点）已不存在——现行 pixiv-web-next 用**全局端点** + id 进请求体。且请求体是 **JSON**（旧资料的 `application/x-www-form-urlencoded` + `illust_id=...` form 形态已过时）。
@@ -573,10 +573,10 @@ query 参数语义（均实测）：
 | 状态 | 形状 | 实测样例 |
 |---|---|---|
 | 未收藏 | `null`（**字段存在，值为 null**） | `bookmarkData: null` |
-| 已收藏（公开） | `{id, private:false}` | 插画 `{id:"38982536074", private:false}` |
-| 已收藏（非公开） | `{id, private:true}` | 插画 `{id:"38359200349", private:true}`；小说 `{id:3688006889, private:true}` |
+| 已收藏（公开） | `{id, private:false}` | 插画 `{id:"31000000001", private:false}` |
+| 已收藏（非公开） | `{id, private:true}` | 插画 `{id:"31000000002", private:true}`；小说 `{id:3100000001, private:true}` |
 
-- **id 类型不稳定**：插画收藏的 id 是字符串，小说收藏的 id 实测出现过 number（`3604941309`）——解析时统一 `String(bookmarkData.id)` 再用。
+- **id 类型不稳定**：插画收藏的 id 是字符串，小说收藏的 id 实测出现过 number（如 `3100000001`）——解析时统一 `String(bookmarkData.id)` 再用。
 - `likeData`：未点赞时为 `false`（布尔，不是 null）。
 - 匿名访问时 `bookmarkData` 恒为 null（个人态字段），登录后才反映真实收藏态。
 

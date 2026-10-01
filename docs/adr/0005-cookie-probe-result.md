@@ -11,7 +11,7 @@
 
 R1（最高风险）：SPEC §4.1 的 A 方案依赖 pywebview `window.get_cookies()` 读到 HttpOnly 的 `PHPSESSID`。读不到就要退 C 兜底（手动粘 PHPSESSID）。
 
-通过 `spike/cookie_probe/probe.py` 实测验证（2026-07-19），登录真实 pixiv 账号 `gbandszxc`（user_id `19509348`），跑完 6 个验证点。
+通过 `spike/cookie_probe/probe.py` 实测验证（2026-07-19），登录真实 pixiv 账号（账号名与 UID 属个人数据，开源版已脱敏），跑完 6 个验证点。
 
 ## 结论
 
@@ -28,12 +28,12 @@ R1（最高风险）：SPEC §4.1 的 A 方案依赖 pywebview `window.get_cooki
 phpsessid_found: true
 phpsessid_is_httponly: true
 phpsessid_is_secure: true
-phpsessid_value_preview: 19509348...
+phpsessid_value_preview: <UID>_…（已脱敏）
 persisted_across_read: true
-csrf_token_found: true (2fbbbdae8ffd...)
+csrf_token_found: true（32 位 hex，已脱敏）
 is_logged_in: true
-user_id: 19509348
-user_pixiv_id: gbandszxc
+user_id: <uid>
+user_pixiv_id: <pixiv 账号名>
 ```
 
 ## 调查中发现并修复的 5 个 bug

@@ -39,7 +39,7 @@ bindgen），增量秒级。
 
 ```bash
 export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc
-export LIBCLANG_PATH="<LLVM 安装路径>\bin"        # 本机：C:\Users\gbandszxc\scoop\apps\llvm\current\bin
+export LIBCLANG_PATH="<LLVM 安装路径>\bin"        # 例（scoop）：C:\Users\<用户名>\scoop\apps\llvm\current\bin
 export CMAKE_GENERATOR="Visual Studio 17 2022"    # 避免 MSYS Makefiles 误选
 ```
 

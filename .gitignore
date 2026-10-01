@@ -93,4 +93,10 @@ __pycache__/
 .venv/
 .pytest_cache/
 
+# ===== 本地工具运行状态（开源前审计补充） =====
+# 本地 dev server 日志 / pid 文件（此前仅靠 *.log 顺带覆盖 logs 子目录）
+.dev/
+# impeccable 设计工具的本机运行状态；design.json 是设计规范文档，保留入库
+.impeccable/live/
+
 .codegraph/

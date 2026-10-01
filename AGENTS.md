@@ -94,7 +94,7 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 - **Windows 一律用 MSVC 工具链**：默认 `windows-gnu` 的 cdylib 链接会超 mingw ld 导出上限（"export ordinal too large"）。所有 cargo 命令前设置：
   ```bash
   export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc
-  export LIBCLANG_PATH="C:\Users\gbandszxc\scoop\apps\llvm\current\bin"
+  export LIBCLANG_PATH="<LLVM 安装路径>\bin"
   export CMAKE_GENERATOR="Visual Studio 17 2022"
   ```
   MSVC 链接器缺失时包一层 `cmd /c "call <vs路径>VC\Auxiliary\Build\vcvars64.bat && cargo ..."`

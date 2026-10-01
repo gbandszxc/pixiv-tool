@@ -87,13 +87,13 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_work_detail_impl(&state, "novel", 27466576)
+        browse_work_detail_impl(&state, "novel", 9000012)
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_related_impl(&state, "manga", 131592804, Some(10))
+        browse_related_impl(&state, "manga", 9000021, Some(10))
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
@@ -115,13 +115,13 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_work_comments_impl(&state, "manga", 131592804, 10)
+        browse_work_comments_impl(&state, "manga", 9000021, 10)
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_comment_replies_impl(&state, "novel", "194911294", 1)
+        browse_comment_replies_impl(&state, "novel", "900000001", 1)
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
@@ -146,19 +146,19 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_bookmark_add_impl(&state, "illust", 131592804, 1, &["風景".to_string()])
+        browse_bookmark_add_impl(&state, "illust", 9000021, 1, &["風景".to_string()])
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_bookmark_add_impl(&state, "novel", 27466576, 0, &[])
+        browse_bookmark_add_impl(&state, "novel", 9000012, 0, &[])
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_bookmark_remove_impl(&state, "novel", 27466576, "3688006889")
+        browse_bookmark_remove_impl(&state, "novel", 9000012, "3100000001")
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
