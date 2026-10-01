@@ -10,7 +10,8 @@ const viewerPrefs = { spread: false, rtl: true };
  *   `width`/`height` 预留纵横比的纯色占位块（缺省 2:3），加载完成不产生跳动；
  * - 点击任意页进入全屏浮层并定位到该页，左右切换只发生在浮层内（‹ › / 键盘 ←/→ 与
  *   右侧胶卷缩略图）；上一页/下一页的滚动对齐由舞台内的 ←/→ 完成；浮层内另有
- *   双图（跨页）模式与阅读方向（从右往左 / 从左往右），会话内记忆；
+ *   双图（跨页）模式与阅读方向（从右往左 / 从左往右），会话内记忆——从右往左时
+ *   翻页组整组镜像（前进在左、箭头朝左）且键盘 ← 为前进，与跨页阅读方向一致；
  * - 浮层图片按可用高度与页面纵横比撑满，控制条与关闭按钮 hover（或键盘聚焦）才显现，
  *   胶卷缩略图常驻；
  * - 档位：主图 thumb_quality_detail（默认 medium = 接口 regular 原样，URL 与改造前逐字一致），
@@ -269,6 +270,8 @@ watch(rtl, (v) => (viewerPrefs.rtl = v));
 
 /** 双图仅对多页作品生效（单页作品没有可跨的页） */
 const spreadOn = computed(() => spread.value && multi.value);
+/** 阅读方向生效：仅双图模式（单页一屏一张，方向不改变页面顺序与翻页朝向） */
+const rtlActive = computed(() => spreadOn.value && rtl.value);
 /** 翻页步进：双图一屏两张，步进 2 */
 const pageStep = computed(() => (spreadOn.value ? 2 : 1));
 
@@ -410,8 +413,8 @@ function isTypingEvent(e: KeyboardEvent): boolean {
 }
 
 /**
- * 浮层键盘：Esc 关闭、←/→ 翻页。capture 阶段监听并 stopImmediatePropagation，
- * 阻止 BrowseWorkView 的 bubble 监听把同一次 Esc 变成路由返回。
+ * 浮层键盘：Esc 关闭、←/→ 翻页（从右往左时 ← 为前进）。capture 阶段监听并
+ * stopImmediatePropagation，阻止 BrowseWorkView 的 bubble 监听把同一次 Esc 变成路由返回。
  * 纵向模式下 ←/→ 为「跳上一页/下一页」（滚动对齐页顶），同样在此拦截。
  */
 function onKeydown(e: KeyboardEvent): void {
@@ -424,7 +427,9 @@ function onKeydown(e: KeyboardEvent): void {
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
       e.stopImmediatePropagation();
-      stepPage(e.key === "ArrowLeft" ? -1 : 1);
+      // 从右往左时跨页向左推进，方向键跟着翻页组的镜像走
+      const leftDelta = rtlActive.value ? 1 : -1;
+      stepPage(e.key === "ArrowLeft" ? leftDelta : -leftDelta);
     }
     return;
   }
@@ -626,13 +631,17 @@ watch(
         <!-- 底部控制条：默认隐藏，指针进入底部热区或键盘聚焦时显现 -->
         <div class="fs-chrome fs-chrome-bottom">
           <div v-if="multi" class="fs-controls">
-            <md-icon-button :disabled="!canPrev" :aria-label="t('browse.work.prevPage')" :title="t('browse.work.prevPage')" @click="stepPage(-1)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
-            </md-icon-button>
-            <span class="fs-label" aria-live="polite">{{ pageLabel }}</span>
-            <md-icon-button :disabled="!canNext" :aria-label="t('browse.work.nextPage')" :title="t('browse.work.nextPage')" @click="stepPage(1)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
-            </md-icon-button>
+            <!-- 翻页组：从右往左时整组镜像（前进按钮落到左侧、箭头改为朝左），与跨页
+                 阅读方向一致；双图 / 方向开关不是方向性控件，不参与镜像 -->
+            <div class="fs-pager" :class="{ 'is-rtl': rtlActive }">
+              <md-icon-button :disabled="!canPrev" :aria-label="t('browse.work.prevPage')" :title="t('browse.work.prevPage')" @click="stepPage(-1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline :points="rtlActive ? '9 18 15 12 9 6' : '15 18 9 12 15 6'" /></svg>
+              </md-icon-button>
+              <span class="fs-label" aria-live="polite">{{ pageLabel }}</span>
+              <md-icon-button :disabled="!canNext" :aria-label="t('browse.work.nextPage')" :title="t('browse.work.nextPage')" @click="stepPage(1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline :points="rtlActive ? '15 18 9 12 15 6' : '9 18 15 12 9 6'" /></svg>
+              </md-icon-button>
+            </div>
             <span class="fs-divider" aria-hidden="true"></span>
             <!-- 双图（跨页）开关 -->
             <md-icon-button
@@ -974,6 +983,17 @@ watch(
   padding: var(--space-xxs) var(--space-sm);
   border-radius: 999px;
   background: rgb(0 0 0 / 0.78);
+}
+
+/* 翻页组：从右往左时整组镜像——前进落到左侧（箭头同步改为朝左），后退落到右侧 */
+.fs-pager {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.fs-pager.is-rtl {
+  flex-direction: row-reverse;
 }
 
 .fs-divider {
