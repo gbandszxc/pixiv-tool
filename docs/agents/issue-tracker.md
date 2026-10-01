@@ -31,6 +31,18 @@
 
 ## 当前进度
 
-- **当前 feature**：`pixiv-tool-v1`（路径 `.scratch/pixiv-tool-v1/`；slug 沿用旧栈命名，新 ticket 继续在此递增编号。`01`~`18` 属 pywebview 旧栈、已归档，`19` 起是 Tauri 时代。`.scratch/pixiv-tool-v2/` 为已关闭的旧栈 backlog）
+- **当前 feature**：`pixiv-tool-v1`（路径 `.scratch/pixiv-tool-v1/`；slug 沿用旧栈命名，新 ticket 继续在此递增编号）
 - **上游 spec**：`docs/SPEC.md`（13 章）
 - **关联 ADR**：`docs/adr/0001` ~ `0012`
+
+## 版本控制
+
+`.scratch/` **不入库**（见 `.gitignore`）——它是本机的 local markdown tracker，
+换台机器 clone 不到 ticket，属预期行为。
+
+pywebview 旧栈的内容已于 2026-10-01 移出 git：`.scratch/pixiv-tool-v1` 的
+`DISPATCH.md` / `SESSION-2026-07-19.md` / `spec.md` / `issues/01`~`18`、整个
+`.scratch/pixiv-tool-v2/`，以及 `.zcode/plans/` 下的旧栈规划，均归档至
+`.archive/pywebview-era/`（同样不入库，见其 README）。它们描述的是已不存在的
+`backend/`、`dev.ps1`、pywebview 登录窗与 PyInstaller 链路，不构成项目文档。
+

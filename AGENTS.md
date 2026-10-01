@@ -12,7 +12,7 @@
 
 ### Issue tracker
 
-**Local markdown**：ticket 存为 `.scratch/<feature-slug>/issues/<NN>-<slug>.md`。当前活跃 tracker 是 `.scratch/pixiv-tool-v1/`——slug 沿用旧栈命名，但新 ticket 继续在此递增编号（`01`~`18` 属 pywebview 旧栈、已归档，`19` 起是 Tauri 时代）。`.scratch/pixiv-tool-v2/` 是已关闭的旧栈 backlog，不再新增。详见 `docs/agents/issue-tracker.md`。
+**Local markdown**：ticket 存为 `.scratch/<feature-slug>/issues/<NN>-<slug>.md`。活跃 tracker 是 `.scratch/pixiv-tool-v1/`（slug 沿用旧栈命名，新 ticket 继续在此递增编号）。`.scratch/` **不入库**（见 `.gitignore`），是本机的 ticket 存放处。pywebview 旧栈的 ticket、spec 索引与调度协议已移出 git 并归档至 `.archive/pywebview-era/`（同样不入库，**不构成项目文档索引**）。详见 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 
@@ -94,4 +94,4 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 
 - 登录态存于系统凭据存储（macOS Keychain / Windows Credential Manager / Linux Secret Service），**绝不入库**；`config/` 下不得出现任何 cookie 文件
 - `data/app.db` 是用户数据，**绝不入库**
-- spike 代码已随 Python 栈移除，结论存档于 ADR 0004/0005（登录态方案、cookie 探测）
+- spike 代码已随 Python 栈移除，结论存档于 ADR 0004/0005（登录态方案、cookie 探测）；旧栈工作文档（ticket / 会话报告 / 调度协议）归档在 `.archive/pywebview-era/`，不入库

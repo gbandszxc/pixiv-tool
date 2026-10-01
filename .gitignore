@@ -75,6 +75,9 @@ temp/
 downloads/
 .scratch/
 
+# ===== 旧栈文档归档（pywebview 时代，见 .archive/pywebview-era/README.md） =====
+.archive/
+
 # ===== AI 辅助工具会话产物（本地规划文档，不入库） =====
 .zcode/
 .subdriver/
