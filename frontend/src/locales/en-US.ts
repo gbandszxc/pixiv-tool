@@ -57,6 +57,8 @@ export default {
     login: "Log in",
     loggingIn: "Logging in",
     logout: "Logout",
+    logoutConfirmTitle: "Log out?",
+    logoutConfirmText: "This clears the account's saved credentials and removes it from the account list. You will need to sign in again.",
     logoutFailed: "Logout failed",
     loginDialogTitle: "Log in to Pixiv",
     cookieLoginTab: "Paste session",

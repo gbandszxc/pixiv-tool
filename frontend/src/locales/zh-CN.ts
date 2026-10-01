@@ -57,6 +57,8 @@ export default {
     login: "登录",
     loggingIn: "登录中",
     logout: "退出登录",
+    logoutConfirmTitle: "确认退出登录？",
+    logoutConfirmText: "将清除当前账号的登录凭据并从账号列表中移除，之后需要重新登录。",
     logoutFailed: "退出登录失败",
     loginDialogTitle: "登录 Pixiv",
     cookieLoginTab: "粘贴 Session",

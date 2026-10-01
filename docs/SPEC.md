@@ -502,7 +502,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 菜单**（`AccountMenu`：轻量 popover，宽 264px、surface-container 底、12px 圆角、
 既有轻阴影；透明遮罩点击外部或 Esc 关闭，无深色 scrim）；内容 = 账号列表（当前
 账号 ✓，点击切换）/ 添加账号（复用 LoginDialog）+ 分隔线 + **「设置」入口**与
-**退出登录**（danger 色，未登录置灰）。设置入口点击后关菜单并打开**设置弹窗**
+**退出登录**（danger 色，未登录置灰；点击后经原生 confirm 弹窗确认才执行）。设置入口点击后关菜单并打开**设置弹窗**
 （`SettingsDialog`：原生 dialog、宽 `min(600px, 92vw)`、表单区自身滚动、
 Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主题实时预览；
 关闭弹窗时若预览未保存则恢复已保存主题并提示，设置项增多时在弹窗内分组扩展。

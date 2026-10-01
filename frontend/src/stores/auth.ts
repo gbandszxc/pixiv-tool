@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { isTauri, invoke } from "../api/tauri";
-import { mockAuthAccountsList, mockAuthStatus } from "../api/devMock";
+import { mockAuthAccountsList, mockAuthLogout, mockAuthStatus } from "../api/devMock";
 import type {
   AccountEntry,
   AuthAccountsResponse,
@@ -175,7 +175,9 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   async function logout() {
-    await invoke("auth_logout");
+    // 非 Tauri（浏览器视觉验收）：mock 退出登录，见 api/devMock.ts。
+    if (!isTauri()) mockAuthLogout();
+    else await invoke("auth_logout");
     // 有剩余账号时后端已回退到首个登录态；无账号时状态自然变为未登录。
     await checkStatus();
     await fetchAccounts();
