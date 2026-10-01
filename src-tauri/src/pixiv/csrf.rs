@@ -205,7 +205,14 @@ pub(crate) fn parse_next_data_token(html: &str) -> Option<String> {
     let script_body = &after_marker[gt + 1..];
     let end = script_body.find("</script>")?;
     let json: Value = serde_json::from_str(script_body[..end].trim()).ok()?;
-    let token = json.pointer("/props/pageProps/serverSerializedPreloadedState/api/token")?;
+    // 实测（2026-10-01 登录态）serverSerializedPreloadedState 是**JSON 字符串**，
+    // 需再 parse 一次才是状态对象；历史/部分场景也曾直接下发对象，两种都兼容。
+    let state_raw = json.pointer("/props/pageProps/serverSerializedPreloadedState")?;
+    let state: Value = match state_raw {
+        Value::String(s) => serde_json::from_str(s).ok()?,
+        v => v.clone(),
+    };
+    let token = state.pointer("/api/token")?;
     token.as_str().filter(|t| !t.is_empty()).map(String::from)
 }
 
@@ -397,6 +404,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_next_data_token_string_wrapped_state() {
+        // 2026-10-01 登录态实测：serverSerializedPreloadedState 是 JSON 字符串，需再 parse 一次
+        let inner = serde_json::json!({"api": {"token": "ed56bce3"}, "ads": {}});
+        let html = format!(
+            r#"<script id="__NEXT_DATA__">{{"props":{{"pageProps":{{"serverSerializedPreloadedState":{}}}}}}}</script>"#,
+            serde_json::to_string(&serde_json::to_string(&inner).unwrap()).unwrap()
+        );
+        assert_eq!(parse_next_data_token(&html).as_deref(), Some("ed56bce3"));
+    }
+
+    #[test]
     fn parse_next_data_token_missing_or_broken() {
         // 无 __NEXT_DATA__ script
         assert_eq!(parse_next_data_token("<html><body>403</body></html>"), None);
@@ -408,5 +426,8 @@ mod tests {
         assert_eq!(parse_next_data_token(html), None);
         // token 为空串视为缺失
         assert_eq!(parse_next_data_token(&next_data_html("")), None);
+        // 内层字符串不是合法 JSON
+        let html = r#"<script id="__NEXT_DATA__">{"props":{"pageProps":{"serverSerializedPreloadedState":"not json"}}}</script>"#;
+        assert_eq!(parse_next_data_token(html), None);
     }
 }

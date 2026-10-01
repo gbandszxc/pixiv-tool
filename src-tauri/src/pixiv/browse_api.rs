@@ -353,6 +353,9 @@ fn parse_work_thumb(v: &Value, fallback_kind: &str) -> Option<BrowseWorkItem> {
     let id = v.get("id").and_then(as_i64_loose)?;
     let kind = kind_of(v, fallback_kind);
     let is_novel = kind == "novel";
+    // 封面兜底链：索引表/搜索项用顶层 `url`；详情 urls 用 `square`/`medium`；
+    // street 卡片（2026-10-01 实测）无 url/urls，封面在 pages[0].urls，
+    // 键名为尺寸（"540x540" / "360x360" / "1200x1200_standard"）。
     let cover = str_field(v, "url")
         .or_else(|| {
             v.pointer("/urls/square")
@@ -363,6 +366,14 @@ fn parse_work_thumb(v: &Value, fallback_kind: &str) -> Option<BrowseWorkItem> {
             v.pointer("/urls/medium")
                 .and_then(Value::as_str)
                 .map(String::from)
+        })
+        .or_else(|| {
+            let urls = v.pointer("/pages/0/urls")?;
+            ["540x540", "360x360", "1200x1200_standard"]
+                .iter()
+                .find_map(|k| urls.get(k).and_then(Value::as_str))
+                .map(String::from)
+                .or_else(|| urls.as_object()?.values().find_map(Value::as_str).map(String::from))
         });
     let text_length = if is_novel {
         v.get("textCount")
@@ -1462,6 +1473,33 @@ mod tests {
         assert_eq!(item.author_id, 0);
         assert!(item.cover.is_none());
         assert!(item.tags.is_none());
+    }
+
+    #[test]
+    fn parse_work_thumb_street_pages_urls() {
+        // 2026-10-01 street 实测：插画/漫画缩略无 url/urls，封面在 pages[0].urls，
+        // 键名为尺寸字符串；优先 540x540。
+        let item = parse_work_thumb(
+            &json!({
+                "id": 149279618_i64, "type": "manga", "title": "街卡漫画",
+                "userId": "10", "userName": "甲",
+                "pages": [{"width": 1200, "height": 800, "urls": {
+                    "1200x1200_standard": "https://i.pximg.net/c/1200/img-master/big.jpg",
+                    "540x540": "https://i.pximg.net/c/540x540/img-master/mid.jpg",
+                    "360x360": "https://i.pximg.net/c/360x360/img-master/small.jpg"
+                }}]
+            }),
+            "illust",
+        )
+        .unwrap();
+        assert_eq!(item.cover.as_deref(), Some("https://i.pximg.net/c/540x540/img-master/mid.jpg"));
+        // 只有 1200 档时也能取到
+        let item2 = parse_work_thumb(
+            &json!({"id": 1, "pages": [{"urls": {"1200x1200_standard": "https://i.pximg.net/big.jpg"}}]}),
+            "illust",
+        )
+        .unwrap();
+        assert!(item2.cover.is_some());
     }
 
     // ---- 索引表 + id 映射 ----

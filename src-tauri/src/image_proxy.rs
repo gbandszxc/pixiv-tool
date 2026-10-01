@@ -25,7 +25,7 @@ use std::time::{Duration, SystemTime};
 
 use tauri::http::{Request, Response};
 
-use crate::pixiv::client::{PixivClient, PixivError};
+use crate::pixiv::client::{PixivClient, PixivError, mask_url};
 
 /// CDN 图片并发上限（独立于 ajax 限速，browse 页面网格加载的合理水位）。
 const CDN_MAX_CONCURRENT_DOWNLOADS: usize = 6;
@@ -313,6 +313,7 @@ pub fn trim_cache(dir: &Path, keep: &Path, max_bytes: u64) {
 /// 无 cookie 构造 PixivClient 走 CDN 下载（`send_download` 自带
 /// `Referer: https://www.pixiv.net/` 过 pximg 防盗链）。每次调用各建
 /// client：互不共享 ajax 限速闸门，并发由静态 CDN_GATE 收敛到 6。
+/// CDN 偶发抖动实测约 5%（列表并发加载时），失败自动重试一次。
 async fn download_via_cdn(url: &str) -> Result<Vec<u8>, PixivError> {
     let client = PixivClient::new(&HashMap::new())
         .map_err(|err| PixivError::Network(format!("构造 HTTP 客户端失败: {err}")))?;
@@ -320,15 +321,20 @@ async fn download_via_cdn(url: &str) -> Result<Vec<u8>, PixivError> {
         .acquire()
         .await
         .map_err(|_| PixivError::Network("CDN 并发闸门已关闭".into()))?;
-    match tokio::time::timeout(
-        Duration::from_secs(DOWNLOAD_TIMEOUT_SECS),
-        client.download_bytes(url),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(_) => Err(PixivError::Network("图片下载超时".into())),
+    let attempt = || async {
+        tokio::time::timeout(
+            Duration::from_secs(DOWNLOAD_TIMEOUT_SECS),
+            client.download_bytes(url),
+        )
+        .await
+        .unwrap_or_else(|_| Err(PixivError::Network("图片下载超时".into())))
+    };
+    let first = attempt().await;
+    if first.is_ok() {
+        return first;
     }
+    log::debug!("图片下载失败将重试一次: {}", mask_url(url));
+    attempt().await
 }
 
 async fn write_cache_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
