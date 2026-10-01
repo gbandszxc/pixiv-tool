@@ -234,6 +234,11 @@
 
 **分页**：`p` 递增（novel 榜 rank 1-50 → 51-100 实测正确）；插画榜响应 `next` 字段指示下一页。每页均 50 条。
 
+> **R-18 判据（2026-10-01 实测）**：插画/漫画/动图榜的 `contents[]` 条目**没有顶层
+> `x_restrict`**，R-18 标记在 `illust_content_type.sexual`（`0` 一般 / `1` R-18 /
+> `2` R-18G）；`is_masked` 语义不明，不作判据。小说榜的
+> `display_a.rank_a[]` 条目自带顶层 `x_restrict`。详见 §9。
+
 ## 7. 作品详情
 
 ### 7.1 插画 / 漫画 / 动图
@@ -428,6 +433,24 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 - **待实测**：`novel-cover` 路径使用 `540x540_70` / `600x1200_90`，以及
   `img-master` 使用 `600x1200_90`，均属本项目新增用法（官方页面未见过这两组
   组合），需实机确认返回 200 且尺寸/裁切符合预期。
+
+### ranking.php 的 R-18 判据（2026-10-01 实测）
+
+- `ranking.php?format=json`（插画/漫画/动图）的 `contents[]` 条目**没有顶层
+  `x_restrict`**；R-18 标记在 `illust_content_type.sexual`：`0` = 一般向、
+  `1` = R-18、`2` = R-18G。
+- 本项目据此刻画排行榜条目的 `x_restrict`（`parse_ranking_illust`）：
+  `illust_content_type.sexual` 优先，缺失时回退顶层 `x_restrict`；
+  **不采用 `is_masked`**——其语义不明（是否与 R-18 等价未验证）。
+  由此排行榜网格才能与其他列表一样参与全局 `show_r18` 过滤。
+- 小说排行 `/ajax/ranking/novel` 的 `display_a.rank_a[]` 条目自带顶层
+  `x_restrict`（§6 字段表），无需补字段。
+- ugoira 榜存在 `illust_content_type` 为空数组的条目（`sexual` 无从取得；2026-10-01
+  工作包实测 ugoira 榜 50 条中 3 条），这类条目 `x_restrict` 为空。项目侧按
+  fail-closed 处理：关闭全局 `show_r18` 时隐藏（仅在「全部」档显示），不当作一般向放行。
+- **待实测**：`daily_r18` / `weekly_r18` 榜单条目是否恒有 `sexual >= 1`
+  （过滤逻辑不依赖该假设，仅影响 R-18 榜单独查看时的直观一致性）。
+
 ## 10. 风险与备注
 
 ### 登录要求

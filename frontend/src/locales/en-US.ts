@@ -21,6 +21,7 @@ export default {
     browseReaderTitle: "Novel Reader",
     browseSeriesTitle: "Series",
     browseAuthorTitle: "Artist",
+    browseR18Hidden: "{count} R-18 works hidden",
   },
   app: {
     exitConfirmTitle: "Quit Pixiv Tool?",
@@ -233,6 +234,10 @@ export default {
       newPost: "Latest Posts",
       trendingTags: "Trending Tags",
       viewFullRanking: "View full ranking",
+      r18FilterLabel: "Content filter",
+      r18All: "All",
+      r18Safe: "General",
+      r18Only: "R-18",
     },
     ranking: {
       kindIllust: "Illustration",

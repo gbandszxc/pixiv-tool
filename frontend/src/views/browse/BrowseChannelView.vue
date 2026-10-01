@@ -14,12 +14,17 @@ import {
   type BrowseChannel as ChannelSnapshot,
   type BrowseWorkItem,
 } from "../../api/browse";
+import R18FilterBar from "../../components/browse/R18FilterBar.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
+import { filterByR18, useChannelR18Filter } from "../../components/browse/r18Filter";
 
 const props = defineProps<{ kind: "illustration" | "manga" | "novel" }>();
 
 const { t } = useI18n();
 const router = useRouter();
+
+/** 频道档 R-18 过滤：默认跟随全局，手动切换只在当前频道页生效（按 kind 分档，见 r18Filter.ts）。 */
+const { filter, setFilter } = useChannelR18Filter(() => props.kind);
 
 const data = shallowRef<ChannelSnapshot | null>(null);
 const loading = ref(false);
@@ -54,14 +59,32 @@ const title = computed(() => {
   return t("nav.browseNovel");
 });
 
-/** 每板块最多展示 12 条（完整流量交给各独立页面）。 */
+/** 每板块最多展示 12 条（完整流量交给各独立页面）；先按档位过滤再截断。 */
 const SECTION_LIMIT = 12;
 
-const followItems = computed<BrowseWorkItem[]>(() => data.value?.follow.items.slice(0, SECTION_LIMIT) ?? []);
-const recommendItems = computed<BrowseWorkItem[]>(() => data.value?.recommend.items.slice(0, SECTION_LIMIT) ?? []);
-const rankingItems = computed<BrowseWorkItem[]>(() => data.value?.ranking.items.slice(0, SECTION_LIMIT) ?? []);
-const newPostItems = computed<BrowseWorkItem[]>(() => data.value?.new_post.items.slice(0, SECTION_LIMIT) ?? []);
+const followItems = computed<BrowseWorkItem[]>(() =>
+  filterByR18(data.value?.follow.items ?? [], filter.value).slice(0, SECTION_LIMIT)
+);
+const recommendItems = computed<BrowseWorkItem[]>(() =>
+  filterByR18(data.value?.recommend.items ?? [], filter.value).slice(0, SECTION_LIMIT)
+);
+const rankingItems = computed<BrowseWorkItem[]>(() =>
+  filterByR18(data.value?.ranking.items ?? [], filter.value).slice(0, SECTION_LIMIT)
+);
+const newPostItems = computed<BrowseWorkItem[]>(() =>
+  filterByR18(data.value?.new_post.items ?? [], filter.value).slice(0, SECTION_LIMIT)
+);
 const trendingTags = computed(() => data.value?.trending_tags ?? []);
+
+/** 当前档位下四板块合计隐藏的 R-18 条数（按快照全量计，不受 12 条展示上限影响）。 */
+const hiddenCount = computed(() => {
+  const snapshot = data.value;
+  if (!snapshot) return 0;
+  return [snapshot.follow, snapshot.recommend, snapshot.ranking, snapshot.new_post].reduce(
+    (sum, list) => sum + list.items.length - filterByR18(list.items, filter.value).length,
+    0
+  );
+});
 /** 榜单板块日期（YYYYMMDD → YYYY-MM-DD，缺失为空）。 */
 const rankingDate = computed(() => formatYmd(data.value?.ranking_date));
 /** 已关注板块仅在「已加载且为空」时整体隐藏；加载中仍显示骨架。 */
@@ -95,6 +118,9 @@ function openTag(name: string): void {
   <div class="page-view browse-channel">
     <h1 class="page-title">{{ title }}</h1>
 
+    <!-- 档位切换为纯 computed：不重新请求快照；计数提示统一在筛选条右侧 -->
+    <R18FilterBar :model-value="filter" :hidden-count="hiddenCount" @update:model-value="setFilter" />
+
     <!-- 整页错误（快照尚未到手）→ 文案 + 重试 -->
     <div v-if="error && !data" class="channel-state" role="alert">
       <p class="state-text">{{ error }}</p>
@@ -106,14 +132,14 @@ function openTag(name: string): void {
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.followNew") }}</h2>
         </div>
-        <WorkGrid :items="followItems" :loading="loading" hooks @select="openWork" />
+        <WorkGrid :items="followItems" :loading="loading" hooks hide-r18-hint @select="openWork" />
       </section>
 
       <section class="channel-section">
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.recommend") }}</h2>
         </div>
-        <WorkGrid :items="recommendItems" :loading="loading" hooks @select="openWork" />
+        <WorkGrid :items="recommendItems" :loading="loading" hooks hide-r18-hint @select="openWork" />
       </section>
 
       <section class="channel-section">
@@ -124,14 +150,14 @@ function openTag(name: string): void {
             <md-text-button @click="openRanking">{{ t("browse.channel.viewFullRanking") }}</md-text-button>
           </div>
         </div>
-        <WorkGrid :items="rankingItems" :loading="loading" hooks @select="openWork" />
+        <WorkGrid :items="rankingItems" :loading="loading" hooks hide-r18-hint @select="openWork" />
       </section>
 
       <section class="channel-section">
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.newPost") }}</h2>
         </div>
-        <WorkGrid :items="newPostItems" :loading="loading" hooks @select="openWork" />
+        <WorkGrid :items="newPostItems" :loading="loading" hooks hide-r18-hint @select="openWork" />
       </section>
 
       <section v-if="trendingTags.length" class="channel-section">

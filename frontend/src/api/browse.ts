@@ -7,12 +7,14 @@
  * - 13 个命令的 invoke 封装（v2 的 11 个 + v2.1 评论补充的 2 个；
  *   未登录错误 → 派发 `pixiv-tool:open-login` 事件，App.vue 负责弹登录窗）
  * - pxSrc()：pximg 封面 URL → `pixiv-img://` 代理协议（Tauri 环境）
+ * - thumbSrc()：按档位改写尺寸段后再走 pxSrc（组件层唯一的缩略图出口）
  * - mock 层：`!isTauri()`（普通浏览器直接打开 dev 页）时返回样例数据，
  *   仅供浏览器内视觉验收使用；Tauri 生产环境完全不走 mock。
  *   除 browse_discover（每次调用换种子，配合「重复调用 + 按 id 去重」）外均为确定性数据。
  */
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { errorMessage, invoke, isTauri } from "./tauri";
+import { thumbUrl, type ThumbTier } from "../utils/thumb";
 
 // 复用 tauri.ts 的基础封装，下游浏览相关组件可只 import 本文件。
 export { errorMessage, invoke, isTauri };
@@ -831,7 +833,7 @@ async function mockSeriesDetail(id: number, lastOrder = 0): Promise<BrowseSeries
         series_order: order,
         text_length: 1500 + Math.floor(rand() * 6000),
         update_date: `2026-09-${pad2(1 + (order % 28))}`,
-        x_restrict: rand() < 0.15 ? 1 : undefined,
+        x_restrict: rand() < 0.15 ? 1 : 0,
       };
     }),
     next_last_order: next,

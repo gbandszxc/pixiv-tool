@@ -119,7 +119,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 45 个 #[tauri::command]（auth 6 / browse_api 17 / tasks 9 / settings 3 / history 1 / misc 8 / app 1）
+│     ├─ commands/              # 46 个 #[tauri::command]（auth 6 / browse_api 18 / tasks 9 / settings 3 / history 1 / misc 8 / app 1）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
@@ -531,6 +531,19 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   前缀插入 `/c/<尺寸段>/`**；`/img-original/`、`/img-zip-ugoira/`、`/user-profile/`
   等其它路径与 `original` 档一律原样返回（头像保留接口给的 `_50`/`_170` 后缀）。
   **绝不构造 `{datePath}` 与文件名**（拼错即 404）。
+- **R-18 显示**：全局开关 `show_r18`（§5.2）关闭后，各列表在**渲染期**过滤
+  `x_restrict >= 1` 的作品——只隐藏已取得的条目，**不重新请求**；`x_restrict`
+  缺失（无法判定）的条目按 fail-closed 处理：仅在「全部」档可见，一般向与
+  R-18 档都不收录。整页被滤空也不改变
+  分页判定，仍按服务端返回的 `total` / `lastPage` / `next` 继续翻页。详情页仍可访问
+  并保留模糊遮罩。频道页顶部另有 R-18 快捷筛选（全部 / 一般向 / R18）：默认跟随全局
+  设置，手动选择只覆盖当前频道页（插画 / 漫画 / 小说三档各自独立、不串档）、
+  不改写设置。排行榜的插画/漫画/动图条目在接口里
+  **没有顶层 `x_restrict`**，由 `illust_content_type.sexual`（0 一般 / 1 R-18 /
+  2 R-18G）补入 `x_restrict`（实测见 `docs/research/pixiv-browse-api.md` §9，
+  部分 ugoira 条目的 `illust_content_type` 为空数组、无从判定，同样按 fail-closed
+  在关闭 R-18 时隐藏），
+  因此与其它列表同样参与过滤；小说排行条目自带顶层 `x_restrict`，无需补字段。
 - **分页**：统一收敛为 `next_page` / `is_last_page` / `next_last_order`（游标）语义；
   发现页与首页推荐无服务端翻页，前端重复调用按 id 去重。
 - **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图

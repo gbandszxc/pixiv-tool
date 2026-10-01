@@ -3,9 +3,10 @@
  * 作品网格：auto-fill 自适应列 + 骨架屏（纯色块、无动画）+ 空态 / 错误态 + 无限滚动。
  * 滚动接近底部（IntersectionObserver）时 emit load-more；错误由父级 retry。
  */
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import WorkCard from "./WorkCard.vue";
+import { filterByR18, useGlobalR18Filter } from "./r18Filter";
 import type { BrowseWorkItem } from "../../api/browse";
 
 const props = withDefaults(
@@ -25,8 +26,19 @@ const props = withDefaults(
     hooks?: boolean;
     /** 卡片显示「取消收藏」动作（收藏页）；无 bookmarkId 的条目自动隐藏 */
     removable?: boolean;
+    /** 隐藏网格内的 R-18 计数提示（频道页自带的筛选条已在页级显示同一口径计数） */
+    hideR18Hint?: boolean;
   }>(),
-  { loading: false, error: "", loadingMore: false, hasMore: true, skeletonCount: 12, hooks: false, removable: false }
+  {
+    loading: false,
+    error: "",
+    loadingMore: false,
+    hasMore: true,
+    skeletonCount: 12,
+    hooks: false,
+    removable: false,
+    hideR18Hint: false,
+  }
 );
 
 const emit = defineEmits<{
@@ -38,9 +50,15 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
+/** R-18 过滤只读全局开关；频道页的手动档位在传入前已生效，不会因此泄漏到其它列表。 */
+const r18Filter = useGlobalR18Filter();
+const visibleItems = computed(() => filterByR18(props.items, r18Filter.value));
+const hiddenCount = computed(() => props.items.length - visibleItems.value.length);
+
 const sentinel = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 
+/** 仍按未过滤的 props.items 判断：R-18 全量过滤时保持翻页（可能短暂出现空态继续拉取）。 */
 function maybeLoadMore(): void {
   if (!props.hasMore || props.loading || props.loadingMore || props.error || !props.items.length) return;
   emit("load-more");
@@ -80,7 +98,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="work-grid-wrap">
     <!-- 首屏骨架：纯 surface-container 色块，不做闪烁动画（DESIGN.md 克制动效 / reduced-motion） -->
-    <div v-if="loading && !items.length" class="work-grid" aria-hidden="true">
+    <div v-if="loading && !visibleItems.length" class="work-grid" aria-hidden="true">
       <div v-for="n in skeletonCount" :key="n" class="skeleton-card">
         <div class="skeleton-cover" :class="{ portrait: n % 5 === 0 }"></div>
         <div class="skeleton-line w70"></div>
@@ -89,13 +107,13 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 错误态：文案 + 重试 -->
-    <div v-else-if="error && !items.length" class="grid-state" role="alert">
+    <div v-else-if="error && !visibleItems.length" class="grid-state" role="alert">
       <p class="state-text">{{ error }}</p>
       <md-outlined-button @click="emit('retry')">{{ t("common.retry") }}</md-outlined-button>
     </div>
 
     <!-- 空态：插画占位 + 引导文案 + 可选 action -->
-    <div v-else-if="!items.length" class="grid-state">
+    <div v-else-if="!visibleItems.length" class="grid-state">
       <svg class="empty-art" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="3.5" y="5" width="17" height="14" rx="2" />
         <circle cx="9" cy="10" r="1.5" />
@@ -103,13 +121,14 @@ onBeforeUnmount(() => {
       </svg>
       <p class="state-text strong">{{ t("common.browseEmpty") }}</p>
       <p class="state-text">{{ t("common.browseEmptyHint") }}</p>
+      <p v-if="hiddenCount > 0 && !hideR18Hint" class="state-text">{{ t("common.browseR18Hidden", { count: hiddenCount }) }}</p>
       <div v-if="$slots.action" class="empty-action"><slot name="action" /></div>
     </div>
 
     <template v-else>
       <div class="work-grid">
         <WorkCard
-          v-for="item in items"
+          v-for="item in visibleItems"
           :key="`${item.kind}:${item.id}`"
           :item="item"
           :hooks="hooks"

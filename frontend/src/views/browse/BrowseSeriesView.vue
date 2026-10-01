@@ -15,6 +15,7 @@ import {
   thumbSrc,
   type BrowseSeriesDetail,
 } from "../../api/browse";
+import { filterByR18, useGlobalR18Filter } from "../../components/browse/r18Filter";
 import { useThumbTier } from "../../composables/useThumbTier";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
@@ -94,6 +95,10 @@ const cover = computed(() =>
 function onCoverError(): void {
   coverFailed.value = true;
 }
+
+/** 全局 R-18 过滤：只作用于目录行（统计行 / 头部保持服务端口径）。 */
+const r18Filter = useGlobalR18Filter();
+const visibleContents = computed(() => filterByR18(contents.value, r18Filter.value));
 
 /** caption 剥 HTML 标签为纯文本（简介里的排版标记不渲染）。 */
 const caption = computed(() => (seriesInfo.value?.caption ?? "").replace(/<[^>]*>/g, "").trim());
@@ -191,10 +196,10 @@ function openInPixiv(): void {
         </div>
       </header>
 
-      <!-- 目录列表（行式，整行 router-link） -->
-      <nav v-if="contents.length" class="series-list" :aria-label="t('browse.series.listLabel')">
+      <!-- 目录列表（行式，整行 router-link）；R-18 行按全局开关隐藏，加载更多仍按服务端游标 -->
+      <nav v-if="visibleContents.length" class="series-list" :aria-label="t('browse.series.listLabel')">
         <router-link
-          v-for="ep in contents"
+          v-for="ep in visibleContents"
           :key="ep.id"
           class="series-row"
           :to="`/browse/work/novel/${ep.id}`"

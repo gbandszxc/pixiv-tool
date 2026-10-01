@@ -17,6 +17,7 @@ import {
 import SectionTabs, { type SectionTab } from "../../components/browse/SectionTabs.vue";
 import WorkCard from "../../components/browse/WorkCard.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
+import { filterByR18, useGlobalR18Filter } from "../../components/browse/r18Filter";
 
 const { t } = useI18n();
 const route = useRoute();
@@ -164,6 +165,14 @@ const rangeLabel = computed(() => {
   return t("browse.ranking.pageRange", { from, to: Math.max(to, from) });
 });
 
+/**
+ * 全局 R-18 过滤：后端 parse_ranking_illust / parse_ranking_novel 已补 x_restrict
+ * （illust_content_type.sexual 优先，顶层 x_restrict 兜底），故与其它列表同口径。
+ * 过滤只影响渲染，名次与分页仍按服务端口径（rangeLabel / 页码不变）。
+ */
+const r18Filter = useGlobalR18Filter();
+const visibleItems = computed(() => filterByR18(items.value, r18Filter.value));
+
 /** YYYYMMDD → YYYY-MM-DD（非法格式原样返回）。 */
 function formatYmd(ymd: string): string {
   if (!/^\d{8}$/.test(ymd)) return ymd;
@@ -213,9 +222,9 @@ function openWork(item: BrowseWorkItem): void {
     </div>
 
     <!-- 骨架 / 错误重试 / 空态交给 WorkGrid；条目分支自绘单元格以叠加 rank 徽标 -->
-    <WorkGrid v-if="loading || error || !items.length" :items="[]" :loading="loading" :error="error" @retry="load" />
+    <WorkGrid v-if="loading || error || !visibleItems.length" :items="[]" :loading="loading" :error="error" @retry="load" />
     <div v-else class="ranking-grid">
-      <div v-for="item in items" :key="`${item.kind}:${item.id}`" class="rank-cell">
+      <div v-for="item in visibleItems" :key="`${item.kind}:${item.id}`" class="rank-cell">
         <span
           v-if="item.rank != null"
           class="rank-badge"

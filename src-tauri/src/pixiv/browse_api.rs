@@ -814,6 +814,16 @@ fn parse_ranking_illust(body: &Value, page: i64) -> BrowseRanking {
                             .get("illust_page_count")
                             .and_then(as_i64_loose)
                             .unwrap_or(1),
+                        // ranking.php 无顶层 x_restrict 字段，R-18 标记在
+                        // illust_content_type.sexual（0 一般 | 1 R-18 | 2 R-18G）；
+                        // 不采用语义不明的 is_masked 作判据。ugoira 榜存在
+                        // illust_content_type 为空数组的条目（sexual 无从取得），
+                        // 此时与两者都缺一样留 None，由前端按 fail-closed 处理：
+                        // 关闭 R-18 时只在「全部」档可见。
+                        x_restrict: c
+                            .pointer("/illust_content_type/sexual")
+                            .and_then(as_i64_loose)
+                            .or_else(|| c.get("x_restrict").and_then(as_i64_loose)),
                         tags: parse_tags(c.get("tags")),
                         create_date: str_field(c, "date"),
                         ..BrowseWorkItem::default()
@@ -2369,6 +2379,62 @@ mod tests {
         // 缺 next 键 → 50 条估算有下一页
         let r = parse_ranking_illust(&json!({"contents": items}), 1);
         assert_eq!(r.next_page, Some(2));
+    }
+
+    #[test]
+    fn parse_ranking_illust_reads_r18_flag() {
+        fn entry(extra: Value) -> Value {
+            let mut c = json!({
+                "rank": 1, "illust_id": "100", "title": "T", "date": "2026-09-28",
+                "tags": ["tag1"], "url": "https://i.pximg.net/t.jpg",
+                "illust_type": 0, "illust_page_count": 1,
+                "user_id": "7", "user_name": "u", "profile_img": "https://i.pximg.net/p.jpg"
+            });
+            if let Some(extra_obj) = extra.as_object() {
+                c.as_object_mut().unwrap().extend(extra_obj.clone());
+            }
+            c
+        }
+        fn first_x_restrict(content: Value) -> Option<i64> {
+            parse_ranking_illust(&json!({"contents": [content]}), 1).items[0].x_restrict
+        }
+
+        // illust_content_type.sexual：1 R-18 / 2 R-18G / 0 一般向
+        assert_eq!(
+            first_x_restrict(entry(json!({"illust_content_type": {"sexual": 1}}))),
+            Some(1)
+        );
+        assert_eq!(
+            first_x_restrict(entry(json!({"illust_content_type": {"sexual": 2}}))),
+            Some(2)
+        );
+        assert_eq!(
+            first_x_restrict(entry(json!({"illust_content_type": {"sexual": 0}}))),
+            Some(0)
+        );
+        // sexual 优先于顶层 x_restrict
+        assert_eq!(
+            first_x_restrict(entry(
+                json!({"illust_content_type": {"sexual": 2}, "x_restrict": 0})
+            )),
+            Some(2)
+        );
+        // 字段缺失 → 顶层 x_restrict 兜底；两者都缺 → None
+        assert_eq!(first_x_restrict(entry(json!({"x_restrict": 1}))), Some(1));
+        assert_eq!(first_x_restrict(entry(json!({}))), None);
+        // ugoira 榜实测形态：illust_content_type 为空数组 → sexual 无从取得 → None
+        assert_eq!(
+            first_x_restrict(entry(json!({"illust_content_type": []}))),
+            None
+        );
+        // is_masked 不参与判定（语义不明，不据此标 R-18）
+        assert_eq!(
+            first_x_restrict(entry(
+                json!({"illust_content_type": {"sexual": 0}, "is_masked": true})
+            )),
+            Some(0)
+        );
+        assert_eq!(first_x_restrict(entry(json!({"is_masked": true}))), None);
     }
 
     #[test]

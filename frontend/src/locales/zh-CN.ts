@@ -21,6 +21,7 @@ export default {
     browseReaderTitle: "小说阅读",
     browseSeriesTitle: "系列目录",
     browseAuthorTitle: "作者主页",
+    browseR18Hidden: "已隐藏 {count} 件 R-18 作品",
   },
   app: {
     exitConfirmTitle: "确认退出 Pixiv Tool 吗？",
@@ -234,6 +235,10 @@ export default {
       newPost: "最新投稿",
       trendingTags: "热门标签",
       viewFullRanking: "查看完整榜单",
+      r18FilterLabel: "内容筛选",
+      r18All: "全部",
+      r18Safe: "一般向",
+      r18Only: "R-18",
     },
     ranking: {
       kindIllust: "插画",

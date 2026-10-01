@@ -4,11 +4,13 @@
  * WorkGrid 固定 minmax(160px, 1fr) 且无紧凑变体 prop（复用边界见单元 assumptions），
  * 故此处用本地样式网格承载 WorkCard；自带独立加载骨架 / 小错误态，不阻塞主视图。
  */
+import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import WorkCard from "./WorkCard.vue";
+import { filterByR18, useGlobalR18Filter } from "./r18Filter";
 import type { BrowseWorkItem } from "../../api/browse";
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     items: BrowseWorkItem[];
     loading?: boolean;
@@ -24,23 +26,27 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+/** 与 WorkGrid 同口径：只读全局 show_r18，隐藏后不额外提示（紧凑区块不占文案位）。 */
+const r18Filter = useGlobalR18Filter();
+const visibleItems = computed(() => filterByR18(props.items, r18Filter.value));
 </script>
 
 <template>
-  <section v-if="loading || items.length || error" class="related">
+  <section v-if="loading || visibleItems.length || error" class="related">
     <h2 class="related-title">{{ t("browse.work.relatedTitle") }}</h2>
 
     <!-- 加载骨架：纯色块（与 WorkGrid 同风格，无动画） -->
-    <div v-if="loading && !items.length" class="related-grid" aria-hidden="true">
+    <div v-if="loading && !visibleItems.length" class="related-grid" aria-hidden="true">
       <div v-for="n in 6" :key="n" class="skeleton-card">
         <div class="skeleton-cover" :class="{ portrait: n % 5 === 0 }"></div>
         <div class="skeleton-line"></div>
       </div>
     </div>
 
-    <div v-else-if="items.length" class="related-grid">
+    <div v-else-if="visibleItems.length" class="related-grid">
       <WorkCard
-        v-for="item in items"
+        v-for="item in visibleItems"
         :key="`${item.kind}:${item.id}`"
         :item="item"
         @click="emit('select', item)"
