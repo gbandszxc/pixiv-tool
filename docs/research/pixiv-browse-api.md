@@ -444,3 +444,180 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 2. 图片一律走本地代理：后端请求 i.pximg.net 时固定加 `Referer: https://www.pixiv.net/`，落盘缓存（CDN 本身允许长期缓存）。
 3. 列表页统一用「id 列表 + 索引表（thumbnails/users）」模型渲染；详情页用 `/ajax/illust/{id}` + `/pages`（动图加 `ugoira_meta`）、`/ajax/novel/{id}`。
 4. 分页统一模型：`p`+`isLastPage`（follow_latest）、`lastPage`+`total`（search）、`last_order`（novel series）、重复调用去重（discovery/street）。
+
+---
+
+## 11. 收藏（Bookmark）接口（v1 实测）
+
+> 调研方式：2026-10-01 晚对已登录会话（uid 19509348，非 Premium）先在官方收藏页/作品页**真实点击抓包**，再用页内 `fetch()` 复现验证参数边界。
+> 写操作严格按「add→delete 配对」执行：插画、小说各一次私密收藏（restrict=1）+ 立即删除，实测后已确认还原（详情 `bookmarkData` 回到 null、计数复原）。
+> 本节 csrf token 记录为 `ed5…f6b`（打码）；任何 Cookie 值不落盘。
+
+### 11.0 概览
+
+| 功能 | 接口 | 方法 | 关键说明 |
+|---|---|---|---|
+| 插画/漫画收藏列表 | `/ajax/user/{uid}/illusts/bookmarks` | GET | `tag/offset/limit/rest/order/mode`；有 `total`；works[] 带 `bookmarkData.id` |
+| 小说收藏列表 | `/ajax/user/{uid}/novels/bookmarks` | GET | 参数同上；官方页每页 30 |
+| 收藏标签（插画） | `/ajax/user/{uid}/illusts/bookmark/tags` | GET | 一次返回 public+private；**路径是 `illusts/bookmark/tags`** |
+| 收藏标签（小说） | `/ajax/user/{uid}/novels/bookmark/tags` | GET | 同上 |
+| 登录用户菜单 | `/ajax/user/extra` | GET | 只有 following/followers/mypixivCount/background，**无 uid、无收藏计数** |
+| 添加插画收藏 | `/ajax/illusts/bookmarks/add` | POST | **JSON 体**（非 form）；需 `x-csrf-token` |
+| 取消插画收藏 | `/ajax/illusts/bookmarks/delete` | POST | **form 体** `bookmark_id=`（与 add 不对称） |
+| 添加小说收藏 | `/ajax/novels/bookmarks/add` | POST | JSON 体；响应 body 直接是 bookmarkId 字符串 |
+| 取消小说收藏 | `/novel/bookmark_setting.php` | POST | 旧式表单（`tt`+`book_id[]`+`del=1`）；新式 ajax 端点参数形状未破解 |
+
+### 11.1 收藏列表（自己：插画/漫画）
+
+| 方法 | URL 模式 | 关键参数 | 实测说明 |
+|---|---|---|---|
+| GET | `/ajax/user/{uid}/illusts/bookmarks?tag=&offset=0&limit=48&rest=show&order=desc&mode=all&lang=zh` | 见下 | 官方插画·漫画收藏页真实请求（每页 48） |
+| GET | `/ajax/user/{uid}/novels/bookmarks?tag=&offset=0&limit=30&rest=show&order=desc&mode=all&lang=zh` | 同上 | 官方小说收藏页真实请求（每页 30） |
+
+query 参数语义（均实测）：
+
+| 参数 | 合法值 | 说明 |
+|---|---|---|
+| `tag` | 标签名（URL 编码）或空 | 按收藏标签过滤；不存在的标签 → 正常响应 `total:0, works:[]` |
+| `offset` | 0..total | 超界（如 1000 > 545）→ `works:[]`，`total` 照常返回，无错误 |
+| `limit` | 实测 10/48/100 均可 | 官方页 artworks=48、novels=30；自定义值服务端接受 |
+| `rest` | `show`（公开）/ `hide`（非公开） | **自己**：缺省等价 `show`；`hide` 返回私密收藏（实测 24 条）。**他人**：必须显式 `rest=show`（缺省报「不正确的请求。」），`rest=hide` 报「没有权限。」 |
+| `order` | `desc` | **只支持 desc**（最新收藏在前）。`asc` 返回 `works:[]`（静默空列表，不报错） |
+| `mode` | `all` | **只支持 all**。`illust`/`manga`/`ugoira` 均报 error「不正确的请求。」——即插画/漫画/动图混排一个列表，类型过滤靠前端 |
+
+响应 `body` 顶层键：`works, total, zoneConfig, extraData, lastMonthAllBookmarkCount, bookmarkTags`。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `total` | number | **有 total**（实测公开 545、私密 24）——分页总数直接可用 |
+| `works` | Array[≤limit] | 作品索引表项（字段同 §2 缩略结构），**另带 `bookmarkData`** |
+| `works[].bookmarkData` | Object/null | 当前查看者的收藏态：`{id:"38982536074", private:false}`——**id 即 bookmarkId**，取消收藏直接用它，无需再查详情 |
+| `works[].illustType` | number | 0/1/2 混排（前 300 条实测见 0 与 2；ugoira 不拆分列表） |
+| `bookmarkTags` | Array | 内联标签列表（实测本账号为空数组；显式打了标签的收藏才会出现在这里） |
+| `lastMonthAllBookmarkCount` | number | 近 30 天收藏总数（装饰性统计） |
+
+**分页语义**：`offset` 按 works 条数推进（`next = offset + works.length`），终止条件 `offset >= total` 或 `works.length < limit`。没有 cursor/isLastPage 字段。
+
+### 11.2 收藏标签
+
+| 方法 | URL 模式 | 说明 |
+|---|---|---|
+| GET | `/ajax/user/{uid}/illusts/bookmark/tags?lang=zh` | 插画/漫画收藏标签 |
+| GET | `/ajax/user/{uid}/novels/bookmark/tags?lang=zh` | 小说收藏标签 |
+
+- **路径勘误**：旧资料流传的 `/ajax/user/{uid}/illust-bookmark-tags` 不存在（404「无法找到您所请求的页面」）；正确路径是 `illusts/bookmark/tags`（`illusts` 复数 + `/bookmark/tags` 子路径）。无 `rest` 参数。
+- 响应 `body`：`{public: [{tag, cnt}], private: [{tag, cnt}], tooManyBookmark: bool, tooManyBookmarkTags: bool}`——一次返回公开与非公开两组，无需分别请求。
+- 未打标签的收藏聚合在系统标签「未分類」下（实测 public 未分類 cnt=545 与列表 total 一致）。`cnt` 可直接做标签下拉的计数徽标。
+
+### 11.3 `/ajax/user/extra`（登录用户菜单）
+
+`GET /ajax/user/extra?is_smartphone=0&lang=zh` → `body: {following, followers, mypixivCount, background}`。
+
+**修正预期**：该接口**没有** uid、头像、收藏计数（旧资料如此描述）。获取自己 uid 的可靠途径：
+
+1. 任意 pixiv-web-next 页面 `__NEXT_DATA__` → `props.pageProps.serverSerializedPreloadedState`（JSON 字符串二次 parse）→ `userData.self.id`（同处还有 `name/pixivId/premium/xRestrict/adult` 等登录态画像）；
+2. 访问 `bookmark.php`，跟随 302 后的 URL `/users/{uid}/bookmarks/artworks` 提取（见 §11.8）。
+
+### 11.4 添加收藏（插画/漫画/动图）
+
+| 方法 | URL | 请求头 | 请求体 |
+|---|---|---|---|
+| POST | `/ajax/illusts/bookmarks/add` | `x-csrf-token: {token}` + `Content-Type: application/json; charset=utf-8` + `Accept: application/json` | **JSON**：`{"illust_id":"114226327","restrict":1,"comment":"","tags":[]}` |
+| POST | `/ajax/novels/bookmarks/add` | 同上 | **JSON**：`{"novel_id":"29271217","restrict":1,"comment":"","tags":[]}` |
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `illust_id` / `novel_id` | string | 作品 id（JSON 里是字符串） |
+| `restrict` | number | `0`=公开（官方心形默认）、`1`=非公开（实测用 1） |
+| `comment` | string | 收藏评论（实测空串） |
+| `tags` | string[] | 收藏标签数组（实测 `[]`；带标签的具体格式未验证——写操作受配对限制） |
+
+响应（两者形状**不同**）：
+
+```json
+// 插画：body 是对象
+{"error":false,"message":"","body":{"last_bookmark_id":"39079976043","stacc_status_id":null}}
+// 小说：body 直接是 bookmarkId 字符串
+{"error":false,"message":"","body":"3688006889"}
+```
+
+**路径勘误**：旧资料的 `/ajax/illust/{id}/bookmark/add`、`/ajax/novel/{id}/bookmark/add`（按作品分的端点）已不存在——现行 pixiv-web-next 用**全局端点** + id 进请求体。且请求体是 **JSON**（旧资料的 `application/x-www-form-urlencoded` + `illust_id=...` form 形态已过时）。
+
+### 11.5 取消收藏（插画/漫画）
+
+| 方法 | URL | 请求头 | 请求体 |
+|---|---|---|---|
+| POST | `/ajax/illusts/bookmarks/delete` | `x-csrf-token` + **`Content-Type: application/x-www-form-urlencoded`** | form：`bookmark_id={last_bookmark_id}` |
+
+响应：`{"error":false,"message":"","body":[]}`。实测用 add 返回的 `last_bookmark_id` 删除后，详情 `bookmarkData` 回到 `null`、计数复原。
+
+- **注意与 add 不对称**：add 是 JSON、delete 是 form。delete 若用 JSON 体 `{bookmark_ids:[...]}` 会报「不正确的请求。」（无副作用）。
+- 旧式 `/ajax/illust/{id}/bookmark/delete` → 404「无法找到您所请求的页面」。
+
+### 11.6 取消收藏（小说）——新式端点未破解，用旧式表单
+
+`POST /ajax/novels/bookmarks/delete` 端点存在（报错与 404 不同，是「不正确的请求。」），但实测 5 种参数形状全部失败：JSON `{novel_id}` / JSON `{bookmark_ids:[...]}` / form `bookmark_id=` / form `bookmark_ids=` / form `novel_id=`。官方小说删除 UI 实际走**旧式表单**（novel/bookmark_add.php 编辑页的「取消收藏」按钮，前端有 confirm 对话框，API 本身无需）：
+
+| 方法 | URL | 请求头 | 请求体（form-urlencoded） |
+|---|---|---|---|
+| POST | `/novel/bookmark_setting.php` | 无需 x-csrf-token 头；`Content-Type: application/x-www-form-urlencoded` | `tt={csrf token}&p=1&untagged=0&rest=show&book_id%5B%5D={bookmarkId}&del=1` |
+
+- `tt` = csrf token（与 `api.token` 同值，放表单字段而非请求头）；`book_id[]` = 要删的 bookmarkId（实测单个）；`del=1` 固定。
+- 成功响应：302 → `/novel/bookmark.php?rest=show&p=1` → 302 → `/users/{uid}/bookmarks/novels`（follow redirects 即可，最终页 200）。实测删除生效。
+- **客户端建议**：小说取消收藏直接用此表单端点（同源带 Cookie + tt）；不要依赖 `/ajax/novels/bookmarks/delete`。
+
+### 11.7 详情响应中的收藏态（三态实测）
+
+`/ajax/illust/{id}` 与 `/ajax/novel/{id}` 的 `body.bookmarkData`：
+
+| 状态 | 形状 | 实测样例 |
+|---|---|---|
+| 未收藏 | `null`（**字段存在，值为 null**） | `bookmarkData: null` |
+| 已收藏（公开） | `{id, private:false}` | 插画 `{id:"38982536074", private:false}` |
+| 已收藏（非公开） | `{id, private:true}` | 插画 `{id:"38359200349", private:true}`；小说 `{id:3688006889, private:true}` |
+
+- **id 类型不稳定**：插画收藏的 id 是字符串，小说收藏的 id 实测出现过 number（`3604941309`）——解析时统一 `String(bookmarkData.id)` 再用。
+- `likeData`：未点赞时为 `false`（布尔，不是 null）。
+- 匿名访问时 `bookmarkData` 恒为 null（个人态字段），登录后才反映真实收藏态。
+
+### 11.8 他人公开收藏
+
+| 场景 | 请求 | 结果 |
+|---|---|---|
+| 他人插画收藏 | `GET /ajax/user/{otherUid}/illusts/bookmarks?tag=&offset=0&limit=24&rest=show&order=desc&mode=all` | 可用，形状与自己的一致（`total`/`works`），实测样例 uid 公开收藏 total=1 |
+| 他人小说收藏 | `GET /ajax/user/{otherUid}/novels/bookmarks?...&rest=show` | 同上可用 |
+| 他人不带 rest | 缺省 rest | 「不正确的请求。」（**必须显式 rest=show**） |
+| 他人 rest=hide | 想看私密 | 「没有权限。」 |
+
+他人列表项的 `bookmarkData` 语义 = **当前查看者**对该作品的收藏态（null 表示「我」没收藏过它），不是列表主人的收藏行为。官方对应页面 `/users/{uid}/bookmarks/artworks` 对所有人共用同一接口。
+
+### 11.9 官方收藏页 URL 形态
+
+| 旧 URL | 实际行为 |
+|---|---|
+| `https://www.pixiv.net/bookmark.php` | 302 → `/users/{uid}/bookmarks/artworks`（插画·漫画收藏页，可从中提取自己 uid） |
+| `https://www.pixiv.net/novel/bookmark.php?rest=show&p=1` | 302 → `/users/{uid}/bookmarks/novels`（小说收藏页） |
+| `/bookmark_add.php?type=illust&illust_id=` | 旧版收藏编辑页（未收藏时心形即链到这里） |
+| `/novel/bookmark_add.php?id=`、`/novel/bookmark_detail.php?id=` | 小说收藏编辑/详情页（旧版页面，删除按钮所在） |
+
+官方收藏页（pixiv-web-next）的筛选 UI：排序（按最新收藏排序）、公开范围（仅限公开收藏 下拉）、年龄限制、收藏标签、作品标签（Premium）、收藏时间（Premium）。新版把标签做成了筛选下拉而非侧栏。
+
+### 11.10 顺带发现的辅助接口与请求头
+
+- `GET /ajax/user/{uid}/bookmarks/sync_status`：收藏同步状态（官方收藏页加载时调用）。
+- `GET /ajax/illusts/bookmarks/rename_tag_progress`、`GET /ajax/novels/bookmarks/rename_tag_progress`：批量改标签进度轮询。
+- **`x-user-id` 请求头**：官方前端对 `/ajax/user/{uid}/...` 请求统一带 `x-user-id: {自己uid}`（响应 `vary: X-UserId` 提示服务端缓存按其区分）。实测 GET 不带也能正确返回；客户端建议统一带上以贴近官方行为。
+
+### 11.11 契约建议（pixiv-tool 收藏页落地）
+
+1. **分页**：offset/limit 显式传（建议 artworks 48/页、novels 30/页，与官方一致）；`total` 在 `body.total`；`next = offset + works.length`；终止 `offset >= total || works.length < limit`；offset 超界安全（空数组不报错），可直接用「滚动加载 + total 判断到底」。
+2. **列表项自带收藏态**：`works[].bookmarkData.id` 即 bookmarkId、`.private` 即公开/私密——收藏页卡片「直接取消收藏」无需先请求详情；私密收藏卡片要标「非公开」徽标。
+3. **add/delete 精确参数**：
+   - 插画 add：全局 JSON 端点 `/ajax/illusts/bookmarks/add`（`illust_id/restrict/comment/tags`，restrict 1=私密）；返回 `last_bookmark_id`（对象）。
+   - 插画 delete：`/ajax/illusts/bookmarks/delete` **form** `bookmark_id=`；返回 `body:[]`。
+   - 小说 add：`/ajax/novels/bookmarks/add` JSON（`novel_id/...`）；返回 body 为 bookmarkId **字符串**。
+   - 小说 delete：旧式表单 `/novel/bookmark_setting.php`（`tt/p/untagged/rest/book_id[]/del=1`），302 跳转即成功。
+4. **详情收藏态**：统一判 `bookmarkData == null`（未收藏）→ `{id, private}`（已收藏）；id 做 String 归一化。
+5. **标签**：用 `/ajax/user/{uid}/(illusts|novels)/bookmark/tags` 一次拿 `{public, private}` 两组；「未分類」是聚合标签名，前端需本地化显示。
+6. **参数红线**：order 只用 `desc`（asc 静默空列表）、mode 只用 `all`（其余报错）、他人列表必须显式 `rest=show`。
+7. **写操作安全**：所有 POST 需登录 Cookie + token（JSON 端点走 `x-csrf-token` 头，旧式表单走 `tt` 字段）；建议客户端对 add/delete 做节流（实测间隔 >2s 无任何风控提示，但高频仍有 Cloudflare 风险）。
