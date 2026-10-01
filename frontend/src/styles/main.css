@@ -111,8 +111,11 @@ textarea {
   padding: var(--space-xl);
 }
 
+/* 内容列宽度：窗口宽高比 ≤16:9 时不设上限，铺满可用宽度（列表/网格自适应向右补满）；
+ * 只有比 16:9 更宽的超宽窗口才按「视口高 × 16/9」封顶并居中，避免内容被拉得过散、卡片过大。 */
 .page-view {
-  width: min(100%, 1120px);
+  width: min(100%, calc(100vh * 16 / 9));
+  margin-inline: auto;
 }
 
 .page-title {
