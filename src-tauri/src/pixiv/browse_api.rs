@@ -1,7 +1,8 @@
 //! 浏览模式 ajax 接口层（browse-ui-v1，IPC 契约 v2，13 个命令）。
 //!
 //! 为契约 v2 的 13 个 browse 命令 + 契约 v3.1 的 4 个收藏（bookmark）命令 +
-//! 追更列表（browse_watchlist，§12）提供 `PixivApi` 方法（跨文件固有实现块），
+//! 追更列表（browse_watchlist，§12）+ 系列分集（browse_illust_series，§13）
+//! 提供 `PixivApi` 方法（跨文件固有实现块），
 //! 全部返回 `serde_json::Value`（结构已按契约组装，命令层原样透传前端）。
 //!
 //! 端点与响应形状真相源：`docs/research/pixiv-browse-api.md`（2026-10-01 实测）。
@@ -348,6 +349,66 @@ pub struct BrowseSeriesDetail {
     pub contents: Vec<BrowseSeriesContent>,
     /// 游标：下一批传回；null=到底。
     pub next_last_order: Option<i64>,
+}
+
+/// 插画/漫画系列分集条目（契约：contents[]；作品字段来自 thumbnails.illust
+/// 同 id 条目，话数来自 page.series[].order，见 docs/research/pixiv-browse-api.md §13）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseIllustSeriesEntry {
+    pub id: i64,
+    /// 恒 "illust"：illustType 0/1/2 均入此 kind，进详情页后再分
+    pub kind: String,
+    pub title: String,
+    /// pixiv urls.360x360 优先，回退顶层 url（官方卡片档）；两者皆缺时空串
+    pub cover: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_count: Option<i64>,
+    /// 1=R-18（条目级口径，系列头无 xRestrict；全局过滤 filterByR18 用）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x_restrict: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_date: Option<String>,
+    /// 话数 1..total（page.series[].order；UI #N 徽标同源）
+    pub series_order: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_type: Option<i64>,
+}
+
+/// 插画/漫画系列目录（/ajax/series/{id}，页码制每页恒 12 条，恒话数降序）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseIllustSeriesDetail {
+    pub id: i64,
+    pub title: String,
+    pub user_id: i64,
+    pub user_name: String,
+    /// users[] 按 userId 映射，imageBig 优先回退 image
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_avatar: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    /// illustSeries[0].url；空 = 未设自定义封面（isSetCover=false 恒 null），
+    /// 前端回退 contents[0].cover
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
+    /// page.total（系列总话数）
+    pub total: i64,
+    /// pixiv 无漫画/插画系列完结标记（illustSeries[0] 无 isConcluded），恒 false
+    pub is_concluded: bool,
+    /// 当前登录用户是否已追更（illustSeries[0].isWatched，回退 page.isWatched）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_watched: Option<bool>,
+    /// illustSeries[0].updateDate（ISO 含时区）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_date: Option<String>,
+    /// 本页分集，series_order 降序（pixiv page.series[] 与 thumbnails.illust
+    /// 同序一一对应，实现按 workId → 缩略项 id 映射，正常数据下与按位一致）
+    pub contents: Vec<BrowseIllustSeriesEntry>,
+    /// 当前页码回显（从 1 起）
+    pub page: i64,
+    /// ceil(total/12)
+    pub total_pages: i64,
+    /// page < total_pages ? page+1 : null（pixiv 超页返回空数组不报错，等价到底）
+    pub next_page: Option<i64>,
 }
 
 /// 收藏列表（契约 v3.1：{ items, total, next }）。
@@ -1382,6 +1443,94 @@ fn parse_novel_series_detail(
 }
 
 // ----------------------------------------------------------------------
+// 插画/漫画系列分集（browse_illust_series，§13）parse（纯函数）
+// ----------------------------------------------------------------------
+
+/// 系列分集每页条数（pixiv /ajax/series 端点恒定值，§13.3）。
+pub const ILLUST_SERIES_PAGE_SIZE: i64 = 12;
+
+/// GET /ajax/series/{id} body → BrowseIllustSeriesDetail（§13.2）。
+/// `page.series[]{workId, order}` 提供本页分集顺序与话数，`thumbnails.illust`
+/// 同 id 条目提供作品字段（实测同序一一对应；按 workId 映射在缺项时逐条跳过，
+/// 正常数据下与按位映射一致）。系列元数据取 `illustSeries[0]`；作者名/头像
+/// 按 users[]（数组形状，同 §12）userId 映射。缺板块 / 空 series / 缺 id
+/// 条目 → 空目录或逐条跳过，不报错；`page` 回显入参并推出 next_page。
+fn parse_illust_series(body: &Value, id: i64, page: i64) -> BrowseIllustSeriesDetail {
+    let empty = Value::Null;
+    let meta = body.pointer("/illustSeries/0").unwrap_or(&empty);
+    let user_id = meta.get("userId").and_then(as_i64_loose).unwrap_or(0);
+    let mut user_name = str_field(meta, "userName");
+    let mut user_avatar = str_field(meta, "profileImageUrl");
+    // 作者名/头像兜底 users 索引表（/ajax/series 的 users 是数组形状，§13.2）
+    if let Some(u) = users_index_array(body).get(&user_id) {
+        if user_name.is_none() {
+            user_name = str_field(u, "name");
+        }
+        if user_avatar.is_none() {
+            user_avatar = str_field(u, "imageBig").or_else(|| str_field(u, "image"));
+        }
+    }
+    let total = body
+        .pointer("/page/total")
+        .and_then(as_i64_loose)
+        .or_else(|| meta.get("total").and_then(as_i64_loose))
+        .unwrap_or(0);
+    let total_pages = (total + ILLUST_SERIES_PAGE_SIZE - 1) / ILLUST_SERIES_PAGE_SIZE;
+    let index = parse_index(body, "illust");
+    let contents = body
+        .pointer("/page/series")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| {
+                    let wid = s.get("workId").and_then(as_i64_loose)?;
+                    let thumb = index.get(&wid)?;
+                    Some(BrowseIllustSeriesEntry {
+                        id: wid,
+                        kind: "illust".to_string(),
+                        title: title_field(thumb, wid),
+                        // 封面兜底链：官方卡片档 urls.360x360 优先，回退顶层 url
+                        cover: thumb
+                            .pointer("/urls/360x360")
+                            .and_then(Value::as_str)
+                            .or_else(|| thumb.get("url").and_then(Value::as_str))
+                            .unwrap_or_default()
+                            .to_string(),
+                        page_count: thumb.get("pageCount").and_then(as_i64_loose),
+                        x_restrict: thumb.get("xRestrict").and_then(as_i64_loose),
+                        update_date: str_field(thumb, "updateDate"),
+                        // pixiv 恒返回 order（1..total 降序）；0 仅异常数据兜底
+                        series_order: s.get("order").and_then(as_i64_loose).unwrap_or(0),
+                        ai_type: thumb.get("aiType").and_then(as_i64_loose),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    BrowseIllustSeriesDetail {
+        id: meta.get("id").and_then(as_i64_loose).unwrap_or(id),
+        title: str_field(meta, "title").unwrap_or_default(),
+        user_id,
+        user_name: user_name.unwrap_or_default(),
+        user_avatar,
+        caption: str_field(meta, "caption"),
+        cover: str_field(meta, "url"),
+        total,
+        // illustSeries[0] 无 isConcluded 字段（§13.2 实测），契约锁定恒 false
+        is_concluded: false,
+        is_watched: meta
+            .get("isWatched")
+            .and_then(as_bool_loose)
+            .or_else(|| body.pointer("/page/isWatched").and_then(as_bool_loose)),
+        update_date: str_field(meta, "updateDate"),
+        contents,
+        page,
+        total_pages,
+        next_page: (page < total_pages).then(|| page + 1),
+    }
+}
+
+// ----------------------------------------------------------------------
 // 评论（roots / replies）parse（纯函数）
 // ----------------------------------------------------------------------
 
@@ -2065,6 +2214,18 @@ impl PixivApi {
         Ok(to_value(&parse_novel_series_detail(
             id, &meta, &content, LIMIT,
         )))
+    }
+
+    /// 插画/漫画系列分集：/ajax/series/{id}?p={page}&lang=zh（§13）。
+    /// 页码制：每页恒 12 条、恒话数降序，无游标/排序参数；
+    /// 超页返回空 series 不报错（next_page=null，等价到底）。
+    pub async fn get_illust_series(&self, id: i64, page: i64) -> Result<Value, PixivError> {
+        let page = page.max(1);
+        let body = self
+            .client()
+            .get_json(&format!("/ajax/series/{id}?p={page}&lang=zh"))
+            .await?;
+        Ok(to_value(&parse_illust_series(&body, id, page)))
     }
 
     /// 作品评论根列表：/ajax/illusts|novels/comments/roots（manga 走 illusts 端点）。
@@ -3197,6 +3358,202 @@ mod tests {
         assert_eq!(contents.len(), 2);
         assert_eq!(contents[0].series_order, 1, "缺 contentOrder 用遍历序兜底");
         assert_eq!(contents[1].series_order, 9);
+    }
+
+    // ---- illust series（§13 系列分集）----
+
+    #[test]
+    fn parse_illust_series_maps_series_and_contents() {
+        // 形状照 §13.2 实测：page.series[]{workId, order} + thumbnails.illust
+        // 同序映射 + illustSeries[0] 元数据 + users[] 数组（同 §12）。
+        let body = json!({
+            "page": {
+                "series": [
+                    {"workId": "149896311", "order": 14},
+                    {"workId": "149798080", "order": 13}
+                ],
+                "total": 14,
+                "seriesId": "344074",
+                "isSetCover": false,
+                "otherSeriesId": "341166",
+                "recentUpdatedWorkIds": [],
+                "isWatched": true,
+                "isNotifying": false
+            },
+            "thumbnails": {"illust": [
+                {"id": "149896311", "title": "第14话", "illustType": 1,
+                 "pageCount": 30, "xRestrict": 1,
+                 "seriesId": "344074", "seriesTitle": "测试系列",
+                 "url": "https://i.pximg.net/c/250x250_80_a2/custom-thumb/a.jpg",
+                 "urls": {
+                     "250x250": "https://i.pximg.net/c/250x250_80_a2/custom-thumb/a.jpg",
+                     "360x360": "https://i.pximg.net/c/360x360/custom-thumb/a.jpg",
+                     "540x540": "https://i.pximg.net/c/540x540/custom-thumb/a.jpg"
+                 },
+                 "tags": [{"name": "R-18"}], "aiType": 1, "sl": 2,
+                 "userId": "1101", "userName": "画师A",
+                 "createDate": "2026-09-20T20:57:00+09:00",
+                 "updateDate": "2026-09-20T20:57:00+09:00",
+                 "bookmarkData": null, "isUnlisted": false, "isMasked": false},
+                {"id": "149798080", "title": "第13话", "illustType": 1,
+                 "pageCount": 12, "xRestrict": 0,
+                 "seriesId": "344074", "seriesTitle": "测试系列",
+                 "url": "https://i.pximg.net/c/250x250_80_a2/custom-thumb/b.jpg",
+                 "aiType": 2, "sl": 2,
+                 "userId": "1101", "userName": "画师A",
+                 "updateDate": "2026-09-01T12:00:00+09:00"}
+            ]},
+            "illustSeries": [
+                {"id": "344074", "userId": "1101", "title": "测试系列",
+                 "description": "", "caption": "系列简介", "total": 14,
+                 "firstIllustId": "149798080", "latestIllustId": "149896311",
+                 "createDate": "2026-08-01T10:00:00+09:00",
+                 "updateDate": "2026-09-20T20:57:00+09:00",
+                 "content_order": null, "url": null, "coverImageSl": null,
+                 "watchCount": null, "isWatched": true, "isNotifying": false},
+                {"id": "341166", "userId": "1101", "title": "其他系列", "total": 3}
+            ],
+            "users": [
+                {"userId": "1101", "name": "画师A",
+                 "image": "https://i.pximg.net/a50.jpg",
+                 "imageBig": "https://i.pximg.net/a170.jpg",
+                 "premium": false, "isFollowed": true}
+            ]
+        });
+        // 系列 url 实测 isSetCover=false 时恒 null（cover 省略）；此处单独给
+        // 一个带自定义封面的元数据验证映射路径（isSetCover=true 形状未采样，
+        // 合理假设 url 为字符串）。
+        let mut with_cover = body.clone();
+        with_cover["illustSeries"][0]["url"] =
+            json!("https://i.pximg.net/series-cover/master/x.jpg");
+
+        let d = parse_illust_series(&body, 344074, 1);
+        assert_eq!(d.id, 344074);
+        assert_eq!(d.title, "测试系列");
+        assert_eq!(d.user_id, 1101);
+        assert_eq!(d.user_name, "画师A", "作者名来自 users[] 数组映射");
+        assert_eq!(
+            d.user_avatar.as_deref(),
+            Some("https://i.pximg.net/a170.jpg"),
+            "头像 imageBig 优先"
+        );
+        assert_eq!(d.caption.as_deref(), Some("系列简介"));
+        assert!(d.cover.is_none(), "isSetCover=false 时 url=null → 省略");
+        assert_eq!(d.total, 14, "total 取 page.total");
+        assert!(!d.is_concluded, "pixiv 无完结标记，契约锁定恒 false");
+        assert_eq!(d.is_watched, Some(true));
+        assert_eq!(d.update_date.as_deref(), Some("2026-09-20T20:57:00+09:00"));
+        // 分集：同序按位（workId 映射），order 降序保序
+        assert_eq!(
+            d.contents.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![149896311, 149798080]
+        );
+        let first = &d.contents[0];
+        assert_eq!(first.kind, "illust", "illustType 0/1/2 均入此 kind");
+        assert_eq!(first.title, "第14话");
+        assert_eq!(
+            first.cover,
+            "https://i.pximg.net/c/360x360/custom-thumb/a.jpg",
+            "urls.360x360 优先"
+        );
+        assert_eq!(first.page_count, Some(30));
+        assert_eq!(first.x_restrict, Some(1));
+        assert_eq!(
+            first.update_date.as_deref(),
+            Some("2026-09-20T20:57:00+09:00")
+        );
+        assert_eq!(first.series_order, 14, "order 原样（降序保序）");
+        assert_eq!(first.ai_type, Some(1));
+        // 第二条：无 urls 档 → 回退顶层 url（官方卡片档回退）
+        assert_eq!(
+            d.contents[1].cover,
+            "https://i.pximg.net/c/250x250_80_a2/custom-thumb/b.jpg"
+        );
+        assert_eq!(d.contents[1].series_order, 13);
+        // 翻页：page 回显 + ceil(14/12)=2 + next
+        assert_eq!(d.page, 1);
+        assert_eq!(d.total_pages, 2);
+        assert_eq!(d.next_page, Some(2));
+
+        // 自定义封面路径 + 封面空值对照
+        let covered = parse_illust_series(&with_cover, 344074, 1);
+        assert_eq!(
+            covered.cover.as_deref(),
+            Some("https://i.pximg.net/series-cover/master/x.jpg"),
+            "cover = illustSeries[0].url"
+        );
+    }
+
+    #[test]
+    fn parse_illust_series_empty_and_overpage_semantics() {
+        // 全缺：无 illustSeries / 无 page → 空目录不报错，id 回显入参
+        let d = parse_illust_series(&json!({}), 42, 1);
+        assert!(d.contents.is_empty());
+        assert_eq!(d.id, 42);
+        assert_eq!(d.title, "");
+        assert_eq!(d.user_name, "");
+        assert_eq!(d.total, 0);
+        assert!(!d.is_concluded);
+        assert_eq!(d.page, 1);
+        assert_eq!(d.total_pages, 0, "total=0 → ceil(0/12)=0");
+        assert_eq!(d.next_page, None);
+
+        // 超页（§13.3）：空 series + total 照常 → 空目录，翻页按 total 判定
+        let over = json!({
+            "page": {"series": [], "total": 14, "seriesId": "344074"},
+            "thumbnails": {"illust": []},
+            "illustSeries": [
+                {"id": "344074", "userId": "1101", "title": "测试系列",
+                 "total": 14, "url": null, "isWatched": false}
+            ],
+            "users": []
+        });
+        let p1 = parse_illust_series(&over, 344074, 1);
+        assert_eq!(p1.total_pages, 2);
+        assert_eq!(p1.next_page, Some(2));
+        let p2 = parse_illust_series(&over, 344074, 2);
+        assert_eq!(p2.next_page, None, "page == total_pages → 到底");
+        let p3 = parse_illust_series(&over, 344074, 3);
+        assert!(p3.contents.is_empty());
+        assert_eq!(p3.next_page, None, "超页静默空页，等价到底");
+        assert_eq!(
+            p3.is_watched,
+            Some(false),
+            "meta.isWatched 优先；本例 meta 有值"
+        );
+
+        // 页容量边界：total=12 → 1 页无 next；total=13 → 2 页有 next
+        let mk = |total: i64| {
+            json!({
+                "page": {"series": [], "total": total},
+                "illustSeries": [{"id": "7", "userId": "1", "title": "S", "total": total}]
+            })
+        };
+        assert_eq!(parse_illust_series(&mk(12), 7, 1).next_page, None);
+        assert_eq!(
+            parse_illust_series(&mk(13), 7, 1).next_page,
+            Some(2),
+            "ceil(13/12)=2"
+        );
+
+        // 缺 id / 孤儿 workId 逐条跳过（有缩略项的才输出）
+        let partial = json!({
+            "page": {"series": [
+                {"workId": "1", "order": 3},
+                {"order": 2},
+                {"workId": "999", "order": 1}
+            ], "total": 3},
+            "thumbnails": {"illust": [
+                {"id": "1", "title": "第3话", "illustType": 0,
+                 "url": "https://i.pximg.net/a.jpg"}
+            ]},
+            "illustSeries": [{"id": "7", "userId": "1", "title": "S", "total": 3}]
+        });
+        let d = parse_illust_series(&partial, 7, 1);
+        assert_eq!(d.contents.len(), 1, "缺 workId 与孤儿 workId 跳过");
+        assert_eq!(d.contents[0].id, 1);
+        assert_eq!(d.contents[0].series_order, 3);
+        assert_eq!(d.contents[0].kind, "illust");
     }
 
     // ---- comments ----

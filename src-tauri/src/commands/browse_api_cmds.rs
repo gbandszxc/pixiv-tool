@@ -1,5 +1,6 @@
 //! 浏览命令层（browse-ui-v1，IPC 契约 v2，13 个命令；bookmark-ui-v1 契约
-//! v3.1 追加 4 个收藏命令，watchlist-ui-v1 追加 1 个追更列表命令，共 18 个）。
+//! v3.1 追加 4 个收藏命令，watchlist-ui-v1 追加 1 个追更列表命令，
+//! series-episode-ui 追加 1 个系列分集命令，共 19 个）。
 //!
 //! 形状约定与 history_cmds 一致：`#[tauri::command]` 薄壳 +
 //! `*_impl(&AppState, ...)` 可离线调用，业务失败统一 `Err(中文文案)`。
@@ -476,6 +477,25 @@ pub async fn browse_novel_series_impl(
     }
     build_browse_api(state)?
         .get_novel_series(id, last_order)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// 插画/漫画系列目录（页码制分页，每页恒 12 条，恒话数降序）。
+#[tauri::command]
+pub async fn browse_illust_series(
+    state: State<'_, AppState>,
+    id: i64,
+    page: i64,
+) -> Result<Value, String> {
+    browse_illust_series_impl(&state, id, page).await
+}
+
+pub async fn browse_illust_series_impl(state: &AppState, id: i64, page: i64) -> Result<Value, String> {
+    validate_id(id, "系列")?;
+    validate_page(page)?;
+    build_browse_api(state)?
+        .get_illust_series(id, page)
         .await
         .map_err(|err| err.to_string())
 }

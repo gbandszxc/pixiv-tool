@@ -23,9 +23,9 @@ use pixiv_tool_lib::commands::browse_api_cmds::{
     NOT_LOGGED_IN, browse_bookmark_add_impl, browse_bookmark_list_impl, browse_bookmark_remove_impl,
     browse_bookmark_tags_impl, browse_channel_impl, browse_comment_replies_impl,
     browse_discover_impl, browse_follow_latest_impl, browse_home_feed_impl,
-    browse_novel_series_impl, browse_ranking_impl, browse_related_impl, browse_search_impl,
-    browse_user_profile_impl, browse_user_works_impl, browse_watchlist_impl, browse_work_comments_impl,
-    browse_work_detail_impl, build_browse_api,
+    browse_illust_series_impl, browse_novel_series_impl, browse_ranking_impl, browse_related_impl,
+    browse_search_impl, browse_user_profile_impl, browse_user_works_impl, browse_watchlist_impl,
+    browse_work_comments_impl, browse_work_detail_impl, build_browse_api,
 };
 use pixiv_tool_lib::cookies::CookieStore;
 use pixiv_tool_lib::db::Db;
@@ -120,6 +120,11 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         browse_novel_series_impl(&state, 1093870, Some(30))
             .await
             .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    // 系列分集（series-episode-ui）：合法参数 → 统一登录守卫拦截
+    assert_eq!(
+        browse_illust_series_impl(&state, 1, 1).await.unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
@@ -309,6 +314,11 @@ async fn invalid_params_rejected_before_login_guard() {
             .unwrap_err(),
         "页码必须从 1 开始"
     );
+    // 系列分集：page<1 在登录守卫之前被拒
+    assert_eq!(
+        browse_illust_series_impl(&state, 1, 0).await.unwrap_err(),
+        "页码必须从 1 开始"
+    );
 
     // id 数字域越界（非数字 id 在 IPC 反序列化层即被拒，见文件头说明）
     assert_eq!(
@@ -341,6 +351,11 @@ async fn invalid_params_rejected_before_login_guard() {
     );
     assert_eq!(
         browse_novel_series_impl(&state, 0, None).await.unwrap_err(),
+        "系列 ID 必须为正整数"
+    );
+    // 系列分集：id 数字域越界同文案（系列 ID）
+    assert_eq!(
+        browse_illust_series_impl(&state, 0, 1).await.unwrap_err(),
         "系列 ID 必须为正整数"
     );
 
