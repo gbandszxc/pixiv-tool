@@ -629,14 +629,15 @@ cargo tauri dev        # 仓库根执行；等价 cd frontend && pnpm tauri dev
 3. 图标：`cargo tauri icon frontend/src/assets/icon.png`（已生成于
    `src-tauri/icons/`）
 
-### 8.4 发布方式（仅本地打包）
+### 8.4 发布方式（GitHub Actions 发版 CI）
 
-GitCode 托管无流水线，`.github/workflows/release.yml` 已移除。**打包只在本地
-按需执行**：`cargo tauri build`（release，出平台安装包）或
-`cargo tauri build --debug --no-bundle`（调试二进制），命令见 §8.3 与
-`docs/PACKAGING.md`。三平台安装包需分别在对应系统本地构建。版本以
-`src-tauri/tauri.conf.json` 的 `version` 为准，tag（`v*`）仅作版本标记，
-不触发任何自动化。
+发版走 GitHub Actions `release` 工作流（`.github/workflows/release.yml`）：
+Actions 页手动触发（workflow_dispatch），输入 semver 版本号——构建前写入
+`tauri.conf.json` / `Cargo.toml`（不回写仓库），四路并行出 Windows x64 MSI、
+macOS universal/aarch64 DMG、Linux x64 AppImage，最后**幂等覆盖**式发布
+`v<版本>` Release（先删旧 Release/Tag 再重建，可对同版本号重复执行）。
+产物未签名。本地 `cargo tauri build`（§8.3）保留，与 CI 独立；详见
+`docs/PACKAGING.md` §6。
 
 ---
 

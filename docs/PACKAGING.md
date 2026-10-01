@@ -79,15 +79,22 @@ cargo tauri icon frontend/src/assets/icon.png
 登录态不在文件系统：macOS Keychain / Windows Credential Manager /
 Linux Secret Service（service `pixiv-tool.cookies`，account `default`）。
 
-## 6. 发布方式（仅本地打包）
+## 6. 发布方式（GitHub Actions 发版 CI）
 
-GitCode 托管无流水线，`tauri-action` release CI 已移除（2026-08-21）。
-**打包只在本地按需执行**：
+GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`，2026-10-01
+随迁移 GitHub 重新引入；此前的 GitCode 本地打包时代结束）：
 
-- release 安装包：`cargo tauri build`（产物在本目录 `bundle/` 下）
-- 调试二进制：`cargo tauri build --debug --no-bundle`
+1. 仓库 **Actions → Release → Run workflow** 手动触发，输入版本号（semver，
+   格式非法会在构建前置校验阶段直接失败）
+2. 版本号写入 `src-tauri/tauri.conf.json` 与 `src-tauri/Cargo.toml`
+   （仅本次构建环境内，不回写仓库）
+3. 四路并行构建：Windows x64 **MSI** / macOS **universal DMG** /
+   macOS **aarch64 DMG** / Linux x64 **AppImage**
+4. **幂等覆盖**：发布阶段先删除同名 `v<版本>` Release 与 Tag 再重建，
+   同版本号重复执行总是覆盖；版本号不变时无需清理即可重发
 
-三平台安装包分别在对应系统本地构建；tag（`v*`）仅作版本标记，不触发自动化。
+产物为未签名包（macOS ad-hoc，无 Developer ID 公证；本机自签名方案见 §7，
+对外分发签名另议）。本地 `cargo tauri build`（§1）仍然可用，与 CI 互相独立。
 
 ## 7. macOS 签名与 Keychain 授权弹窗（重要）
 

@@ -1,0 +1,183 @@
+# 发版流水线：手动触发、指定版本号、幂等覆盖、三平台安装包
+# 用法：仓库 Actions → Release → Run workflow → 输入版本号（semver，如 1.0.0）
+# 产物：Windows x64 MSI / macOS universal + aarch64 DMG / Linux x64 AppImage
+# 幂等：同版本号重复执行会先删除旧 v<版本> Release 与 Tag，再重建并覆盖产物
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（semver，如 1.0.0）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  VERSION: ${{ github.event.inputs.version }}
+
+jobs:
+  validate:
+    name: 校验版本号
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - name: semver 校验（不合法直接失败，避免白跑 40 分钟构建）
+        run: |
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::版本号不合法：'$VERSION'（期望 semver，如 1.0.0）"
+            exit 1
+          fi
+          echo "本次发布：v$VERSION"
+
+  build:
+    name: 构建（${{ matrix.id }}）
+    needs: validate
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64-msi
+            os: windows-latest
+            rust_targets: ''
+            tauri_target: ''
+            bundles: msi
+          - id: macos-universal-dmg
+            os: macos-latest
+            rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+            tauri_target: universal-apple-darwin
+            bundles: dmg
+          - id: macos-aarch64-dmg
+            os: macos-latest
+            rust_targets: 'aarch64-apple-darwin'
+            tauri_target: aarch64-apple-darwin
+            bundles: dmg
+          - id: linux-x64-appimage
+            os: ubuntu-22.04
+            rust_targets: ''
+            tauri_target: ''
+            bundles: appimage
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.id }}
+
+      - name: 安装 Linux 系统依赖（webkit2gtk-4.1 / libclang 等）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev libclang-dev
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: 写入版本号（tauri.conf.json + Cargo.toml，仅本次构建，不回写仓库）
+        shell: bash
+        run: |
+          python3 - <<'EOF'
+          import json, re, os
+          v = os.environ["VERSION"]
+          p = "src-tauri/tauri.conf.json"
+          with open(p, encoding="utf-8") as f:
+              c = json.load(f)
+          c["version"] = v
+          with open(p, "w", encoding="utf-8") as f:
+              f.write(json.dumps(c, indent=2) + "\n")
+          p = "src-tauri/Cargo.toml"
+          with open(p, encoding="utf-8") as f:
+              t = f.read()
+          t = re.sub(r'(?m)^version = ".*?"', f'version = "{v}"', t, count=1)
+          with open(p, "w", encoding="utf-8") as f:
+              f.write(t)
+          EOF
+          grep '"version"' src-tauri/tauri.conf.json
+          grep -m1 '^version' src-tauri/Cargo.toml
+
+      - name: tauri build
+        shell: bash
+        working-directory: frontend
+        run: |
+          # Windows 与本机约定一致：MSVC 生成器 + runner 自带 LLVM 的 libclang
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export LIBCLANG_PATH="C:\Program Files\LLVM\bin"
+            export CMAKE_GENERATOR="Visual Studio 17 2022"
+          fi
+          args=(--bundles "${{ matrix.bundles }}")
+          [ -n "${{ matrix.tauri_target }}" ] && args+=(--target "${{ matrix.tauri_target }}")
+          pnpm tauri build "${args[@]}"
+
+      - name: 收集安装包
+        shell: bash
+        run: |
+          mkdir -p dist
+          find src-tauri/target -path '*/bundle/*' -type f \
+            \( -name '*.msi' -o -name '*.dmg' -o -name '*.AppImage' \) \
+            -exec cp -v {} dist/ \;
+          [ -n "$(ls -A dist)" ] || { echo "::error::未找到任何安装包产物"; exit 1; }
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.id }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: 发布 Release（幂等覆盖）
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 覆盖式发布 v${{ env.VERSION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="v$VERSION"
+          # 幂等：先删同名 Release（连带 Tag），同版本号重复执行即整体覆盖
+          gh release delete "$TAG" --yes --cleanup-tag || true
+          git push origin ":refs/tags/$TAG" || true
+          sleep 3
+          ls -la dist/
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "Pixiv Tool v$VERSION" \
+            --notes "$(printf 'GitHub Actions 自动构建。\n\n- Windows x64：*.msi\n- macOS 通用（Intel + Apple Silicon）：*_universal.dmg\n- macOS Apple Silicon：*_aarch64.dmg\n- Linux x64：*_amd64.AppImage\n\n安装包未做代码签名：macOS 首次打开需右键→打开；Windows SmartScreen 提示属正常现象。')" \
+            dist/*
