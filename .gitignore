@@ -81,3 +81,11 @@ downloads/
 
 # --- 前端构建产物（tauri build 自动生成） ---
 frontend/dist/
+
+# ===== Python 临时产物 =====
+# 项目本体已无 Python 源（旧栈随 ADR 0008 移除），此处仅防临时脚本
+# 运行产生的缓存污染工作树
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
