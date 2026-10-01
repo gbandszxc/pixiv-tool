@@ -433,6 +433,19 @@ impl PixivClient {
         Ok(bytes)
     }
 
+    /// 与 [`Self::download_bytes`] 同体（带 Referer、不带 cookie、空 body →
+    /// Client 错误），但**不经 `run_gated`**：不占 ajax 信号量、不等 429 暂停
+    /// 闸门、不做请求间隔限速。调用方（image_proxy 的 CDN 代理）用独立闸门与
+    /// 自己的重试/退避策略约束并发，故需要这条不排队 ajax 限速的通道。
+    pub(crate) async fn download_bytes_ungated(&self, url: &str) -> Result<Vec<u8>, PixivError> {
+        let resp = self.send_download(url).await?;
+        let bytes = resp.bytes().await.map_err(|e| network_err(e, url))?;
+        if bytes.is_empty() {
+            return Err(PixivError::Client(format!("响应无内容: {}", mask_url(url))));
+        }
+        Ok(bytes.to_vec())
+    }
+
     /// 登录态探测专用：GET JSON 但保留 HTTP 状态码（csrf.rs 需要按精确状态码
     /// 分类 Invalid/Csrf，不能走 get_json 的 Auth/NotFound 映射）。
     /// 任何 HTTP 响应（含 4xx/5xx）都作为 Ok 返回 `(status, 解析后的 JSON)`，

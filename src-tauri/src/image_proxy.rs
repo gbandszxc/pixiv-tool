@@ -6,21 +6,30 @@
 //!
 //! 协议处理器（lib.rs 注册）把请求转交 [`handle_image_request`]：
 //! 路径 percent-decode（兼容编码与未编码两种形态）→ pximg 白名单校验 →
-//! 磁盘缓存（`<data>/cache/img/`）命中直接回读；未命中则经 PixivClient
-//! 无 cookie 代下（`send_download` 自带 Referer 过防盗链）→ 落盘缓存 →
-//! 回传字节（Content-Type 按扩展名，Cache-Control 一天）。
+//! 磁盘缓存（`<data>/cache/img/`）命中直接回读；未命中则经进程级共享的
+//! 无 cookie PixivClient 代下（`send_download` 自带 Referer 过防盗链）→
+//! 落盘缓存 → 回传字节（Content-Type 按扩展名，成功响应统一
+//! `Cache-Control: public, max-age=31536000, immutable`——pximg 路径是稳定的
+//! 内容寻址，同 URL 内容不变，命中与回源共用同一响应头）。
 //!
 //! 设计约束：
 //! - 本模块不依赖 AppState：缓存目录由调用方传入，纯逻辑均可离线单测；
-//! - CDN 下载不受 ajax 限速器约束（每次请求各建 client，互不排队），
-//!   用静态 Semaphore 把全局并发放宽到 6；
-//! - 日志纪律：不打印任何 cookie；pximg URL 只在 debug 级出现，
-//!   warn/info 只记状态、计数与缓存路径。
+//! - CDN 下载不受 ajax 限速器约束：共享 client 只构造一次（省掉每张图重建
+//!   TLS 会话与 ajax 的 400ms 请求间隔），用静态 Semaphore 把全局并发放宽到 10；
+//!   同一 URL 的并发冷启动由单飞合并成一次下载（见 `coalesce_download_with`）；
+//! - 单个逻辑下载（含全部重试与退避）受 DOWNLOAD_TIMEOUT_SECS 总预算约束：
+//!   首次失败后按 DOWNLOAD_RETRY_DELAYS_MS 短退避，最多 3 次尝试；
+//!   404 / 401 / 429 为终止态不重试。CDN 的 429 无跨请求退避：`send_download`
+//!   触发的 60s 暂停闸门属于共享 client，而 CDN 路径不经 `run_gated`，该闸门
+//!   无人消费（改造前每请求各建 client，同样无人消费）——本次立即落 502，
+//!   不重试，避免在 15s 预算内空转放大失败；
+//! - 日志纪律：不打印任何 cookie；pximg URL 只在 debug 级出现且一律经
+//!   `mask_url` 剥掉查询串，warn/info 只记状态、计数与缓存路径。
 
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use tauri::http::{Request, Response};
@@ -28,9 +37,11 @@ use tauri::http::{Request, Response};
 use crate::pixiv::client::{PixivClient, PixivError, mask_url};
 
 /// CDN 图片并发上限（独立于 ajax 限速，browse 页面网格加载的合理水位）。
-const CDN_MAX_CONCURRENT_DOWNLOADS: usize = 6;
-/// 单张图片下载整体超时（秒），覆盖 client 内部的重试与退避。
+const CDN_MAX_CONCURRENT_DOWNLOADS: usize = 10;
+/// 单张图片下载的总预算（秒）：覆盖全部重试与退避（超时 → 网络错误）。
 const DOWNLOAD_TIMEOUT_SECS: u64 = 15;
+/// 首次失败后的重试退避（毫秒），按重试序号取；长度即额外重试次数。
+const DOWNLOAD_RETRY_DELAYS_MS: [u64; 2] = [200, 500];
 /// 图片磁盘缓存总大小上限（字节）：1GB，超出按 mtime 从旧到新清理。
 const IMAGE_CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -310,31 +321,210 @@ pub fn trim_cache(dir: &Path, keep: &Path, max_bytes: u64) {
 // 下载与请求处理
 // ----------------------------------------------------------------------
 
-/// 无 cookie 构造 PixivClient 走 CDN 下载（`send_download` 自带
-/// `Referer: https://www.pixiv.net/` 过 pximg 防盗链）。每次调用各建
-/// client：互不共享 ajax 限速闸门，并发由静态 CDN_GATE 收敛到 6。
-/// CDN 偶发抖动实测约 5%（列表并发加载时），失败自动重试一次。
-async fn download_via_cdn(url: &str) -> Result<Vec<u8>, PixivError> {
-    let client = PixivClient::new(&HashMap::new())
-        .map_err(|err| PixivError::Network(format!("构造 HTTP 客户端失败: {err}")))?;
+/// 进程级共享的无 cookie client：CDN 下载与登录态无关，`send_download` 自带
+/// `Referer: https://www.pixiv.net/` 过 pximg 防盗链。只构造一次以复用 TLS
+/// 会话；构造失败缓存错误串（OnceLock 只初始化一次，后续调用拿到同一错误）。
+static CDN_CLIENT: OnceLock<Result<PixivClient, String>> = OnceLock::new();
+
+fn cdn_client() -> Result<&'static PixivClient, PixivError> {
+    CDN_CLIENT
+        .get_or_init(|| PixivClient::new(&HashMap::new()).map_err(|err| err.to_string()))
+        .as_ref()
+        .map_err(|err| PixivError::Network(format!("构造 HTTP 客户端失败: {err}")))
+}
+
+/// 终止态（不重试）：404 资源不存在、401/403 认证失败、429 限流。
+/// CDN 侧的 429 不做跨请求退避（见模块头注释），直接落 502。
+fn should_retry(err: &PixivError) -> bool {
+    !matches!(
+        err,
+        PixivError::NotFound | PixivError::Auth | PixivError::RateLimit
+    )
+}
+
+/// 单飞合并的失败结果：只保留影响状态码语义的两类（404 / 其余 → 502）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DownloadFailure {
+    NotFound,
+    Other,
+}
+
+impl From<&PixivError> for DownloadFailure {
+    fn from(err: &PixivError) -> Self {
+        match err {
+            PixivError::NotFound => Self::NotFound,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// 同一 URL 的在途下载（单飞 cell）：首个调用者的 future 负责取数，其余
+/// 等待者共享同一结果（失败也共享给等待者）。
+type InflightCell = Arc<tokio::sync::OnceCell<Result<Arc<Vec<u8>>, DownloadFailure>>>;
+
+/// 在途条目：cell 承载结果，`refs` 是本条目的调用者引用计数（首个调用者与
+/// 每个等待者各计一次）。计数用于区分「已无人关心」与「只是首个调用者被取消」：
+/// tokio OnceCell 在初始化 future 被取消时会唤醒某个等待者重跑初始化（见
+/// once_cell.rs 的取消语义），此时条目必须留在表里，否则新调用者会另建 cell、
+/// 对同一 URL 发起第二次并发下载。
+struct InflightEntry {
+    cell: InflightCell,
+    refs: std::sync::atomic::AtomicUsize,
+}
+
+/// url → 在途条目。条目在初始化落定（成功或失败）后、或所有持有者都已
+/// 退出且初始化尚未发生（首个调用者在取数前被取消）时移除，表不会无限增长。
+static IN_FLIGHT: LazyLock<Mutex<HashMap<String, Arc<InflightEntry>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn inflight_map() -> std::sync::MutexGuard<'static, HashMap<String, Arc<InflightEntry>>> {
+    IN_FLIGHT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 从在途表移除条目：仅当表里仍是同一个 Arc 时删除，不会误删同 key 后来
+/// 重建的条目；幂等，任何持有者都可调用。
+fn retire_inflight(key: &str, entry: &Arc<InflightEntry>) {
+    let mut map = inflight_map();
+    if map
+        .get(key)
+        .is_some_and(|current| Arc::ptr_eq(current, entry))
+    {
+        map.remove(key);
+    }
+}
+
+/// 测试访问器：在途表是否仍登记该 key（并行用例各用 uuid 键隔离）。
+#[cfg(test)]
+fn inflight_contains(key: &str) -> bool {
+    inflight_map().contains_key(key)
+}
+
+/// 测试访问器：该 key 现存条目的调用者引用计数。
+#[cfg(test)]
+fn inflight_refs(key: &str) -> Option<usize> {
+    inflight_map()
+        .get(key)
+        .map(|entry| entry.refs.load(std::sync::atomic::Ordering::Acquire))
+}
+
+/// 在途条目清理守卫：每个调用者持有一份，退出（正常返回或 future 被取消）
+/// 时递减引用计数。初始化已在途时释放条目是错误行为——tokio OnceCell 会把
+/// 初始化权移交给某个等待者，条目仍需为后续调用者合并请求；只有计数归零且
+/// 初始化从未发生时（所有人都取消了）条目才失去意义，可以移除。
+struct InflightGuard {
+    key: String,
+    entry: Arc<InflightEntry>,
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        use std::sync::atomic::Ordering;
+        let remaining = self.entry.refs.fetch_sub(1, Ordering::AcqRel) - 1;
+        if remaining == 0 && !self.entry.cell.initialized() {
+            retire_inflight(&self.key, &self.entry);
+        }
+    }
+}
+
+/// 单飞合并：同一 URL 只跑一个 `fetch`，其余调用者等同一个结果；
+/// 若初始化者的 future 在取数途中被取消，等待者会接管初始化，条目保持
+/// 登记以便新调用者继续合并（最后一个退出的持有者负责回收）。
+/// 取到 cell 后立即释放 std 锁（持锁跨 await 会串行化全部下载）。
+async fn coalesce_download_with<F, Fut>(
+    url: &str,
+    fetch: F,
+) -> Result<Arc<Vec<u8>>, DownloadFailure>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<Vec<u8>, DownloadFailure>>,
+{
+    let entry = {
+        let mut map = inflight_map();
+        match map.get(url) {
+            Some(entry) => {
+                entry.refs.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                Arc::clone(entry)
+            }
+            None => {
+                let entry = Arc::new(InflightEntry {
+                    cell: Arc::new(tokio::sync::OnceCell::new()),
+                    refs: std::sync::atomic::AtomicUsize::new(1),
+                });
+                map.insert(url.to_string(), Arc::clone(&entry));
+                entry
+            }
+        }
+    };
+    let _guard = InflightGuard {
+        key: url.to_string(),
+        entry: Arc::clone(&entry),
+    };
+    // cell 存 `Arc<Vec<u8>>`（等待者共享同一份字节），fetch 产出裸 `Vec<u8>`，
+    // 故在初始化闭包里包一层 Arc。
+    let result = entry
+        .cell
+        .get_or_init(move || async move { fetch().await.map(Arc::new) })
+        .await;
+    // 初始化已落定（成功或失败都写进 cell）：回收条目，后续同 URL 请求
+    // 重新取数。若本 future 在 await 中被取消则到不了这里，由守卫兜底。
+    retire_inflight(url, &entry);
+    match result {
+        Ok(bytes) => Ok(Arc::clone(bytes)),
+        Err(err) => Err(*err),
+    }
+}
+
+/// 读空时的回源：单飞合并同一 URL，成功后落盘并修剪缓存；失败不写盘、
+/// 不记忆失败（下一次调用重新取数）。
+async fn coalesce_image(url: &str, cache_dir: &Path) -> Result<Arc<Vec<u8>>, DownloadFailure> {
+    coalesce_download_with(url, || async {
+        let bytes = download_with_retry(url).await.map_err(|err| {
+            log::debug!("pixiv-img 下载失败详情: {err}");
+            DownloadFailure::from(&err)
+        })?;
+        let cache_path = cache_dir.join(cache_key(url));
+        match write_cache_file(&cache_path, &bytes).await {
+            Ok(()) => {
+                trim_cache(cache_dir, &cache_path, IMAGE_CACHE_MAX_BYTES);
+                log::info!("图片已缓存: {}", cache_path.display());
+            }
+            Err(err) => log::warn!("图片缓存写入失败（仍返回字节）: {err}"),
+        }
+        Ok(bytes)
+    })
+    .await
+}
+
+/// 单个逻辑下载：占一个 CDN 许可（覆盖全部重试与退避），最多 3 次尝试
+/// （首次 + DOWNLOAD_RETRY_DELAYS_MS 给出的两次重试），全程受
+/// DOWNLOAD_TIMEOUT_SECS 总预算约束；终止态错误立即返回。
+async fn download_with_retry(url: &str) -> Result<Vec<u8>, PixivError> {
+    let client = cdn_client()?;
     let _permit = CDN_GATE
         .acquire()
         .await
         .map_err(|_| PixivError::Network("CDN 并发闸门已关闭".into()))?;
-    let attempt = || async {
-        tokio::time::timeout(
-            Duration::from_secs(DOWNLOAD_TIMEOUT_SECS),
-            client.download_bytes(url),
-        )
-        .await
-        .unwrap_or_else(|_| Err(PixivError::Network("图片下载超时".into())))
-    };
-    let first = attempt().await;
-    if first.is_ok() {
-        return first;
-    }
-    log::debug!("图片下载失败将重试一次: {}", mask_url(url));
-    attempt().await
+    let attempts = DOWNLOAD_RETRY_DELAYS_MS.len() + 1;
+    tokio::time::timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS), async {
+        let mut last_err: Option<PixivError> = None;
+        for idx in 0..attempts {
+            if idx > 0 {
+                let delay = DOWNLOAD_RETRY_DELAYS_MS[idx - 1];
+                log::debug!("图片下载失败，{delay}ms 后重试: {}", mask_url(url));
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            match client.download_bytes_ungated(url).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(err) if should_retry(&err) => last_err = Some(err),
+                Err(err) => return Err(err),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| PixivError::Network("图片下载失败".into())))
+    })
+    .await
+    .unwrap_or_else(|_| Err(PixivError::Network("图片下载超时".into())))
 }
 
 async fn write_cache_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -355,7 +545,7 @@ pub async fn handle_image_request(
         log::warn!("pixiv-img 403：目标不在 pximg 白名单");
         return error_response(403);
     };
-    log::debug!("pixiv-img 目标: {url}");
+    log::debug!("pixiv-img 目标: {}", mask_url(&url));
 
     let key = cache_key(&url);
     let cache_path = cache_dir.join(&key);
@@ -371,23 +561,13 @@ pub async fn handle_image_request(
         Err(_) => {}
     }
 
-    match download_via_cdn(&url).await {
-        Ok(bytes) => {
-            if let Err(err) = write_cache_file(&cache_path, &bytes).await {
-                log::warn!("图片缓存写入失败（仍返回字节）: {err}");
-            } else {
-                trim_cache(cache_dir, &cache_path, IMAGE_CACHE_MAX_BYTES);
-            }
-            log::info!("图片已缓存: {}", cache_path.display());
-            image_response(&key, bytes)
-        }
-        Err(err @ PixivError::NotFound) => {
-            log::debug!("pixiv-img 404 详情: {err}");
+    match coalesce_image(&url, cache_dir).await {
+        Ok(bytes) => image_response(&key, bytes.as_ref().clone()),
+        Err(DownloadFailure::NotFound) => {
             log::warn!("pixiv-img 404：CDN 无此文件");
             error_response(404)
         }
-        Err(err) => {
-            log::debug!("pixiv-img 下载失败详情: {err}");
+        Err(DownloadFailure::Other) => {
             log::warn!("pixiv-img 502：图片下载失败");
             error_response(502)
         }
@@ -398,7 +578,8 @@ fn image_response(filename: &str, bytes: Vec<u8>) -> Response<Cow<'static, [u8]>
     Response::builder()
         .status(200)
         .header("Content-Type", mime_for_filename(filename))
-        .header("Cache-Control", "public, max-age=86400")
+        // pximg 路径内容稳定：一年 + immutable，命中与回源一致
+        .header("Cache-Control", "public, max-age=31536000, immutable")
         .body(Cow::Owned(bytes))
         .expect("静态成功响应构造不会失败")
 }
@@ -624,8 +805,298 @@ mod tests {
         .await;
         assert_eq!(response.status(), 200);
         assert_eq!(response.headers()["Content-Type"], "image/jpeg");
-        assert_eq!(response.headers()["Cache-Control"], "public, max-age=86400");
+        assert_eq!(
+            response.headers()["Cache-Control"],
+            "public, max-age=31536000, immutable"
+        );
         assert_eq!(response.body().as_ref(), b"JPEGBYTES".as_slice());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn image_response_sets_immutable_long_cache() {
+        let response = image_response("abc.jpg", b"x".to_vec());
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["Content-Type"], "image/jpeg");
+        assert_eq!(
+            response.headers()["Cache-Control"],
+            "public, max-age=31536000, immutable"
+        );
+        // 错误响应仍不可缓存
+        let error = error_response(502);
+        assert_eq!(error.status(), 502);
+        assert_eq!(error.headers()["Cache-Control"], "no-store");
+    }
+
+    #[test]
+    fn should_retry_skips_terminal_errors() {
+        for terminal in [
+            PixivError::NotFound,
+            PixivError::Auth,
+            PixivError::RateLimit,
+        ] {
+            assert!(!should_retry(&terminal), "{terminal} 不应重试");
+        }
+        for retryable in [
+            PixivError::Server,
+            PixivError::Client("HTTP 400".into()),
+            PixivError::Client("响应无内容: https://i.pximg.net/a.jpg".into()),
+            PixivError::Network("超时".into()),
+        ] {
+            assert!(should_retry(&retryable), "{retryable} 应重试");
+        }
+    }
+
+    #[test]
+    fn failure_mapping_splits_not_found_from_other() {
+        assert_eq!(
+            DownloadFailure::from(&PixivError::NotFound),
+            DownloadFailure::NotFound
+        );
+        for other in [
+            PixivError::Auth,
+            PixivError::RateLimit,
+            PixivError::Server,
+            PixivError::Client("HTTP 400".into()),
+            PixivError::Network("超时".into()),
+        ] {
+            assert_eq!(
+                DownloadFailure::from(&other),
+                DownloadFailure::Other,
+                "{other} 应映射为 Other（502）"
+            );
+        }
+    }
+
+    /// 每个用例独立的 pximg URL（uuid 键，避免并行用例看到彼此的在途条目）。
+    fn uuid_url(tag: &str) -> String {
+        format!(
+            "https://i.pximg.net/test/{tag}/{}.jpg",
+            uuid::Uuid::new_v4()
+        )
+    }
+
+    #[tokio::test]
+    async fn coalesce_shares_one_fetch_among_concurrent_callers() {
+        const CALLERS: usize = 4;
+        let url = uuid_url("share");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..CALLERS {
+            let url = url.clone();
+            let calls = calls.clone();
+            handles.push(tokio::spawn(async move {
+                coalesce_download_with(&url, || async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    // 让出一次：其余调用者先登记到同一 cell 的等待队列
+                    tokio::task::yield_now().await;
+                    Ok(Vec::from(&b"IMG"[..]))
+                })
+                .await
+            }));
+        }
+        for handle in handles {
+            let bytes = handle
+                .await
+                .expect("合并任务不应 panic")
+                .expect("取数应成功");
+            assert_eq!(bytes.as_slice(), b"IMG".as_slice());
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "同一 URL 的并发调用只应触发一次取数"
+        );
+        assert!(!inflight_contains(&url), "结束后在途条目应被回收");
+    }
+
+    #[tokio::test]
+    async fn coalesce_propagates_failure_to_waiters() {
+        const CALLERS: usize = 4;
+        let url = uuid_url("fail");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..CALLERS {
+            let url = url.clone();
+            let calls = calls.clone();
+            handles.push(tokio::spawn(async move {
+                coalesce_download_with(&url, || async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    tokio::task::yield_now().await;
+                    Err(DownloadFailure::NotFound)
+                })
+                .await
+            }));
+        }
+        for handle in handles {
+            assert_eq!(
+                handle.await.expect("合并任务不应 panic"),
+                Err(DownloadFailure::NotFound),
+                "失败结果应共享给所有等待者"
+            );
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(!inflight_contains(&url), "失败结束后在途条目应被回收");
+    }
+
+    #[tokio::test]
+    async fn coalesce_different_urls_are_independent() {
+        let url_a = uuid_url("indep-a");
+        let url_b = uuid_url("indep-b");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (a, b) = tokio::join!(
+            coalesce_download_with(&url_a, || async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec![b'A'])
+            }),
+            coalesce_download_with(&url_b, || async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec![b'B'])
+            }),
+        );
+        assert_eq!(a.expect("A 应成功").as_slice(), b"A".as_slice());
+        assert_eq!(b.expect("B 应成功").as_slice(), b"B".as_slice());
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "不同 URL 各自取数，不互相合并"
+        );
+        assert!(!inflight_contains(&url_a) && !inflight_contains(&url_b));
+    }
+
+    #[tokio::test]
+    async fn coalesce_refetches_after_completion() {
+        let url = uuid_url("refetch");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for expected in 1..=2u8 {
+            let bytes = coalesce_download_with(&url, || async {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec![expected])
+            })
+            .await
+            .expect("取数应成功");
+            assert_eq!(bytes.as_slice(), [expected].as_slice());
+            assert!(!inflight_contains(&url), "完成后在途条目应被回收");
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "完成后新调用应重新取数"
+        );
+    }
+
+    #[tokio::test]
+    async fn coalesce_cleans_up_when_caller_cancelled() {
+        let url = uuid_url("cancel");
+        let started = Arc::new(tokio::sync::Notify::new());
+        let handle = {
+            let url = url.clone();
+            let started = started.clone();
+            tokio::spawn(async move {
+                coalesce_download_with(&url, || async move {
+                    started.notify_one();
+                    // 挂起直到调用方取消（合并任务被 abort）
+                    std::future::pending::<()>().await;
+                    unreachable!("pending 不会就绪")
+                })
+                .await
+            })
+        };
+        started.notified().await;
+        assert!(inflight_contains(&url), "取数在途期间应登记在表中");
+        handle.abort();
+        let join = handle.await;
+        assert!(join.expect_err("abort 后应为 JoinError").is_cancelled());
+        assert!(
+            !inflight_contains(&url),
+            "调用方被取消后条目必须回收（Drop 守卫）"
+        );
+    }
+
+    /// 首个调用者在取数途中被取消、等待者接管初始化时，条目必须留在表里：
+    /// 否则第三个调用者会另建 cell，对同一 URL 发起第二次并发下载。
+    #[tokio::test]
+    async fn coalesce_keeps_entry_when_initializer_cancelled_with_waiters() {
+        let url = uuid_url("cancel-handoff");
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let started_a = Arc::new(tokio::sync::Notify::new());
+        let started_b = Arc::new(tokio::sync::Notify::new());
+        let release_b = Arc::new(tokio::sync::Notify::new());
+
+        // A：首个调用者，取数挂起后被 abort（初始化尝试随之取消）
+        let a = {
+            let url = url.clone();
+            let calls = calls.clone();
+            let started_a = started_a.clone();
+            tokio::spawn(async move {
+                coalesce_download_with(&url, || async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    started_a.notify_one();
+                    std::future::pending::<()>().await;
+                    unreachable!("pending 不会就绪")
+                })
+                .await
+            })
+        };
+        started_a.notified().await;
+
+        // B：等待者；A 取消后由它接管初始化，停在 release_b
+        let b = {
+            let url = url.clone();
+            let calls = calls.clone();
+            let started_b = started_b.clone();
+            let release_b = release_b.clone();
+            tokio::spawn(async move {
+                coalesce_download_with(&url, || async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    started_b.notify_one();
+                    release_b.notified().await;
+                    Ok(Vec::from(&b"IMG"[..]))
+                })
+                .await
+            })
+        };
+        tokio::task::yield_now().await; // 让 B 先登记为等待者
+        assert_eq!(inflight_refs(&url), Some(2), "B 应已合并到在途条目");
+        a.abort();
+        started_b.notified().await; // B 已接管初始化
+
+        // C：初始化进行中到达的新调用者，必须合并到同一 cell 而不是另起下载
+        let c = {
+            let url = url.clone();
+            let calls = calls.clone();
+            tokio::spawn(async move {
+                coalesce_download_with(&url, || async move {
+                    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(vec![b'C'])
+                })
+                .await
+            })
+        };
+        for _ in 0..100 {
+            if inflight_refs(&url) == Some(2) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(inflight_refs(&url), Some(2), "C 应已合并到同一在途条目");
+        release_b.notify_one();
+
+        let (ra, rb, rc) = tokio::join!(a, b, c);
+        assert!(ra.expect_err("A 应被取消").is_cancelled());
+        assert_eq!(
+            rb.expect("B 不应 panic").expect("B 应成功").as_slice(),
+            b"IMG".as_slice()
+        );
+        assert_eq!(
+            rc.expect("C 不应 panic").expect("C 应成功").as_slice(),
+            b"IMG".as_slice()
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "取消移交后不应出现第三次下载"
+        );
+        assert!(!inflight_contains(&url), "全部结束后在途条目应被回收");
     }
 }

@@ -124,7 +124,7 @@ pixiv-tool/
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
 │     ├─ accounts.rs            # 多账号索引（accounts.json）+ 每账号凭据条目
-│     ├─ image_proxy.rs         # pixiv-img 协议核心（磁盘缓存 + CDN 并发闸门）
+│     ├─ image_proxy.rs         # pixiv-img 协议核心（磁盘缓存 + CDN 并发闸门 + 同 URL 在途合并 + immutable 长缓存响应头）
 │     ├─ menu_bar.rs            # Windows 菜单栏默认隐藏 / Alt 唤出（AcceleratorKeyPressed + WM_EXITMENULOOP 收回）
 │     └─ paths.rs / platform.rs / logging.rs
 ├─ frontend/                    # Vue3 + TS + Vite + Material Web（M3）
@@ -583,7 +583,11 @@ Alt+F4 / 标题栏关闭）与 Edit 项（撤销/剪切/复制/粘贴/全选，W
 以上数据命令实现于 `commands/browse_api_cmds.rs`，公共登录守卫 `build_browse_api`：
 无 PHPSESSID 一律 `Err("未登录或登录态已失效，请先登录")`（前端据此弹登录窗）。
 图片经 `pixiv-img` 自定义协议（`image_proxy.rs`，白名单 `*.pximg.net`，磁盘缓存
-1GB，CDN 并发 6 不占 ajax 限速），不走 invoke。
+1GB，CDN 并发 10、同 URL 在途合并，单个逻辑下载含全部重试与退避受 15s 总预算
+约束（`DOWNLOAD_TIMEOUT_SECS`），失败 200/500ms 短退避后重试至多 3 次，命中与
+回源统一 `Cache-Control: public, max-age=31536000, immutable`），不走 invoke。
+CDN 下载不占 ajax 限速与 400ms 请求间隔；CDN 侧的 429 不重试、立即回落 502，
+无跨请求退避（与改造前一致的既有边界）。
 
 目录选择不走命令：前端直接用 `@tauri-apps/plugin-dialog` 的
 `open({directory: true})`。
@@ -694,7 +698,7 @@ macOS universal/aarch64 DMG、Linux x64 AppImage，最后**幂等覆盖**式发�
 | # | 风险 | 等级 | 缓解 |
 |---|---|---|---|
 | ~~R1~~ | ~~旧栈 pywebview `get_cookies()` 拿不到 HttpOnly PHPSESSID~~（历史，已随旧栈移除） | **✅ 已解决** | 旧栈 Spike 验证通过见 ADR 0005；现行方案为真实浏览器 CDP（ADR 0006/0008） |
-| R2 | pixiv 接口变动或加强风控 | 中 | 限速保守（2 并发 + 0.4s）；429 暂停 60s |
+| R2 | pixiv 接口变动或加强风控 | 中 | 限速保守（2 并发 + 0.4s）；429 暂停 60s；图片 CDN 走独立闸门（10 并发 + 同 URL 在途合并，不占 ajax 限速；CDN 侧 429 不重试、立即 502、无跨请求退避），遇风控可把 `CDN_MAX_CONCURRENT_DOWNLOADS` 调回 6 |
 | R3 | WebView2 runtime 未预装（少数 Win10） | 低 | Tauri Windows 安装包默认 downloadBootstrapper 模式联网安装 |
 | R4 | Linux WebKitGTK（webkit2gtk-4.1）缺失或版本过旧 | 中 | README 注明系统依赖，无法绕过 |
 | ~~R5~~ | ~~PyInstaller hidden import 漏配~~（历史） | **✅ 已消除** | 随 Python 旧栈整体移除（ADR 0008），无打包 spec 需维护 |

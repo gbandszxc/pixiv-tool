@@ -36,10 +36,15 @@ i.pximg.net 校验 `Referer: https://www.pixiv.net/`（缺省 403），WebView �
   解码；预编码会造成双重编码、白名单解析失败（pixiv-img 403，修复见 commit 9063b46）；
 - 后端 `register_asynchronous_uri_scheme_protocol`：白名单（https + `*.pximg.net`）
   → 磁盘缓存命中回读（`<data>/cache/img/<sha256>.<ext>`，上限 1GB 按 mtime 淘汰）
-  → 未命中经无 cookie `PixivClient::download_bytes`（自带 Referer）下载落盘回传；
-- CDN 下载**不走 ajax 限速器**（图片非接口请求），独立 `Semaphore(6)` 闸门；
-- 响应带 `Content-Type` 与 `Cache-Control: public, max-age=86400`（CDN 本身
-  max-age=31536000，落盘缓存安全）。
+  → 未命中经进程级共享的无 cookie `PixivClient` + `download_bytes_ungated`
+  （自带 Referer、不占 ajax 限速与 400ms 间隔）下载落盘回传；同一 URL 的并发
+  冷启动合并为一次在途下载；
+- CDN 下载**不走 ajax 限速器**（图片非接口请求），独立 `Semaphore(10)` 闸门；
+- 单个逻辑下载（含全部重试与退避）受 15s 总预算约束（`DOWNLOAD_TIMEOUT_SECS`）：
+  首次失败后按 200/500ms 短退避，最多 3 次尝试；404 / 401 / 429 为终止态不重试，
+  CDN 侧 429 无跨请求退避、立即回落 502；
+- 响应带 `Content-Type` 与 `Cache-Control: public, max-age=31536000, immutable`
+  （pximg 路径内容寻址、同 URL 内容不变，命中与回源共用同一响应头）。
 
 ### 3. 首页 street 的 csrf token 策略
 
@@ -69,8 +74,8 @@ street 无翻页参数（前端重复调用 + 按 id 去重）；相关推荐为
 - 内嵌浏览器保留原样（`/pixiv`）；浏览页的打开动作走系统默认浏览器（`tauri-plugin-opener`），
   不依赖 `/pixiv`；浏览菜单为内嵌浏览器（计划后续版本移除）的替代方向。
   （2026-10-01 追加：过渡已完成——内嵌浏览器已随 [ADR 0013](0013-remove-embedded-browser.md) 整体移除。）
-- 限速继承既有保守参数（R2 风险不放大）；图片 CDN 并发独立放宽至 6，缓存落盘
-  `data/cache/img/`（该目录已在 gitignore 的 data/cache/ 规则内）。
+- 限速继承既有保守参数（R2 风险不放大）；图片 CDN 并发独立放宽至 10 并对同一 URL
+  在途合并，缓存落盘 `data/cache/img/`（该目录已在 gitignore 的 data/cache/ 规则内）。
 - V1 限制：ugoira 只显示封面帧；小说内嵌图（`[pixivimage:]`）显示占位块；
   写操作、评论浏览、收藏夹浏览留待 V2。
 - 测试：全部接口解析为离线单测（内嵌样例 JSON），命令层离线冒烟
