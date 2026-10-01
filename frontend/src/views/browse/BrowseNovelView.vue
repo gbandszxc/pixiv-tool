@@ -10,6 +10,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
+import AppPagination from "../../components/common/AppPagination.vue";
 import NovelContent from "../../components/browse/NovelContent.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
@@ -97,10 +98,6 @@ function gotoPage(target: number): void {
   page.value = clamped;
   // 切页回到正文顶部；默认瞬时滚动，自动跟随系统「减少动态效果」偏好。
   window.scrollTo(0, 0);
-}
-
-function onPageSelect(event: Event): void {
-  gotoPage(Number((event.target as HTMLSelectElement).value));
 }
 
 /** 键盘 ←/→ 翻页；焦点在表单控件时交给控件自身。 */
@@ -328,37 +325,14 @@ function openInPixiv(): void {
         </section>
       </div>
 
-      <!-- 翻页器：底部居中吸底 -->
-      <div v-if="hasContent" class="pager">
-        <div class="pager-inner">
-          <md-icon-button
-            :aria-label="t('browse.novel.prevPage')"
-            :title="t('browse.novel.prevPage')"
-            :disabled="page <= 1"
-            @click="gotoPage(page - 1)"
-          >
-            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
-          </md-icon-button>
-          <select
-            class="page-select"
-            :value="page"
-            :aria-label="t('browse.novel.pageSelect')"
-            @change="onPageSelect"
-          >
-            <option v-for="n in totalPages" :key="n" :value="n">
-              {{ t("browse.novel.pageInfo", { current: n, total: totalPages }) }}
-            </option>
-          </select>
-          <md-icon-button
-            :aria-label="t('browse.novel.nextPage')"
-            :title="t('browse.novel.nextPage')"
-            :disabled="page >= totalPages"
-            @click="gotoPage(page + 1)"
-          >
-            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
-          </md-icon-button>
-        </div>
-      </div>
+      <!-- 翻页器：底部居中吸底（AppPagination reader 变体）；键盘 ←/→ 翻页仍由本视图层监听 -->
+      <AppPagination
+        v-if="hasContent"
+        variant="reader"
+        :current-page="page"
+        :total-pages="totalPages"
+        @update:currentPage="gotoPage"
+      />
     </template>
   </div>
 </template>
@@ -633,41 +607,7 @@ function openInPixiv(): void {
   line-height: 1.4;
 }
 
-/* ===== 翻页器（底部居中吸底） ===== */
-
-.pager {
-  position: sticky;
-  bottom: 0;
-  z-index: 10;
-  display: flex;
-  justify-content: center;
-  padding: var(--space-sm) var(--space-md);
-  background: var(--surface);
-  border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
-}
-
-.pager-inner {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.page-select {
-  max-width: 200px;
-  padding: var(--space-xs) var(--space-lg) var(--space-xs) var(--space-sm);
-  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 45%, transparent);
-  border-radius: var(--radius-control);
-  background: var(--md-sys-color-surface-container);
-  color: var(--ink);
-  font-size: 13px;
-  text-align: center;
-  cursor: pointer;
-}
-
-.page-select:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: 2px;
-}
+/* ===== 翻页器（AppPagination reader 变体自带吸底样式，此处无本地翻页器样式） ===== */
 
 .bar-icon {
   width: 20px;

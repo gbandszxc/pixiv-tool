@@ -579,8 +579,9 @@ Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主�
   图标动作统一 `md-icon-button`（40×40、无描边、20px 线性自绘 SVG，stroke 1.8），
   顺序为「收藏 / 评论 / 返填表单 / 在浏览器中打开」；**不再用只有图标的
   `md-outlined-button`**（左右各 24px 内距会把单个图标撑成约 66px 宽的胶囊），
-  也不再用 `‹ › ✕` 文本字形充当图标——浏览页的分页器与排行榜日期切换同规
-  （`md-icon-button` + 20px chevron）。顶栏评论按钮（toggle + selected，标签在
+  也不再用 `‹ › ✕` 文本字形充当图标——页码翻页器统一为公共 AppPagination
+  （`components/common/`，自绘 chevron 同 20px 线性规格），排行榜日期切换用
+  `md-icon-button` + 20px chevron，同规。顶栏评论按钮（toggle + selected，标签在
   「查看评论」/「返回相关推荐」间切换）切换查看器右列下段与阅读器正文列下段的
   面板：默认「相关推荐」，切到「评论」时 `CommentsSection` 才挂载并拉第一页
   （roots 沿用「加载更多评论」offset 分页、回复展开后按页续拉），切换时把面板
@@ -602,7 +603,10 @@ Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主�
   在关闭 R-18 时隐藏），
   因此与其它列表同样参与过滤；小说排行条目自带顶层 `x_restrict`，无需补字段。
 - **分页**：统一收敛为 `next_page` / `is_last_page` / `next_last_order`（游标）语义；
-  发现页与首页推荐无服务端翻页，前端重复调用按 id 去重。
+  发现页与首页推荐无服务端翻页，前端重复调用按 id 去重。页码翻页 UI（历史 / 任务 /
+  排行榜 / 系列分集 / 小说阅读器）统一收敛到 `components/common/AppPagination`
+  （历史、任务为 default 变体，排行榜走未知总页数模式，系列与阅读器为
+  `variant="reader"`）；游标 / 无限滚动调用点不使用该组件。
 - **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图
   （`[pixivimage:]`）显示占位块；评论只在详情页面板内按需加载（只读，无评论/回复发布）。
 - **打开原页 / 返填**：浏览页的「在浏览器中打开」走系统默认浏览器

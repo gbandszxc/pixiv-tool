@@ -134,7 +134,6 @@ export default {
   tasks: {
     title: "任务",
     empty: "暂无任务",
-    pageSize: "每页条数",
     category: {
       all: "全部",
       novel: "小说",
@@ -168,7 +167,6 @@ export default {
   },
   history: {
     title: "历史",
-    pageSize: "每页条数",
     category: {
       all: "全部",
       novel: "小说",
@@ -391,8 +389,6 @@ export default {
       nextEpisode: "下一话",
       relatedTitle: "相关小说推荐",
       emptyContent: "本篇没有正文内容",
-      prevPage: "上一页",
-      nextPage: "下一页",
       pageInfo: "第 {current} / {total} 页",
       pageSelect: "跳转到页",
       imagePlaceholder: "内嵌图片（去 Pixiv 查看）",

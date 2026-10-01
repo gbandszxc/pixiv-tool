@@ -21,9 +21,9 @@ import {
   type BrowseIllustSeriesDetail,
   type BrowseSeriesDetail,
 } from "../../api/browse";
+import AppPagination from "../../components/common/AppPagination.vue";
 import SeriesEpisodeGrid from "../../components/browse/SeriesEpisodeGrid.vue";
 import SeriesEpisodeList from "../../components/browse/SeriesEpisodeList.vue";
-import SeriesPager from "../../components/browse/SeriesPager.vue";
 import ViewModeToggle from "../../components/browse/ViewModeToggle.vue";
 import { filterByR18, useGlobalR18Filter } from "../../components/browse/r18Filter";
 import { useSeriesViewMode, type SeriesEpisodeView, type SeriesKind } from "../../components/browse/seriesView";
@@ -298,8 +298,13 @@ function openInPixiv(): void {
         <p class="state-text strong">{{ t("browse.series.emptyList") }}</p>
       </div>
 
-      <!-- 页码翻页器（sticky 底部，复用小说阅读器 recipe） -->
-      <SeriesPager :page="page" :total-pages="totalPages" @change="changePage" />
+      <!-- 页码翻页器（AppPagination reader 变体：sticky 底部吸底居中；受控页码经 update:currentPage 回流 changePage 守卫） -->
+      <AppPagination
+        variant="reader"
+        :current-page="page"
+        :total-pages="totalPages"
+        @update:currentPage="changePage"
+      />
     </template>
   </div>
 </template>

@@ -14,6 +14,7 @@ import {
   type RankingKind,
   type RankingMode,
 } from "../../api/browse";
+import AppPagination from "../../components/common/AppPagination.vue";
 import SectionTabs, { type SectionTab } from "../../components/browse/SectionTabs.vue";
 import WorkCard from "../../components/browse/WorkCard.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
@@ -239,28 +240,18 @@ function openWork(item: BrowseWorkItem): void {
       </div>
     </div>
 
-    <nav class="pager" :aria-label="t('nav.browseRanking')">
-      <span class="pager-range">{{ rangeLabel }}</span>
-      <div class="pager-buttons">
-        <md-icon-button
-          :disabled="page <= 1 || loading"
-          :aria-label="t('browse.novel.prevPage')"
-          :title="t('browse.novel.prevPage')"
-          @click="goPage(page - 1)"
-        >
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
-        </md-icon-button>
-        <span class="pager-num">{{ page }}</span>
-        <md-icon-button
-          :disabled="nextPage === null || loading"
-          :aria-label="t('browse.novel.nextPage')"
-          :title="t('browse.novel.nextPage')"
-          @click="goPage(page + 1)"
-        >
-          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
-        </md-icon-button>
-      </div>
-    </nav>
+    <!-- 分页：AppPagination 未知总页数模式（pixiv 只回 next_page 链），名次区间入 #start 插槽；goPage 守卫语义不变 -->
+    <AppPagination
+      class="pager"
+      :current-page="page"
+      :has-next="nextPage !== null"
+      :disabled="loading"
+      @update:currentPage="goPage"
+    >
+      <template #start>
+        <span class="pager-range">{{ rangeLabel }}</span>
+      </template>
+    </AppPagination>
   </div>
 </template>
 
@@ -343,12 +334,8 @@ function openWork(item: BrowseWorkItem): void {
   color: var(--md-sys-color-on-primary-container);
 }
 
+/* AppPagination 落位：仅负责与网格的间距，行内布局由组件自身承担 */
 .pager {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-sm) var(--space-md);
   margin-top: var(--space-lg);
 }
 
@@ -356,19 +343,6 @@ function openWork(item: BrowseWorkItem): void {
   color: var(--ink-muted);
   font-size: 12px;
   font-weight: 600;
-}
-
-.pager-buttons {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xxs);
-}
-
-.pager-num {
-  min-width: 1.5em;
-  color: var(--ink);
-  font-size: 14px;
-  text-align: center;
 }
 
 @media (max-width: 640px) {

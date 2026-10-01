@@ -133,7 +133,6 @@ export default {
   tasks: {
     title: "Tasks",
     empty: "No tasks",
-    pageSize: "Rows per page",
     category: {
       all: "All",
       novel: "Novel",
@@ -167,7 +166,6 @@ export default {
   },
   history: {
     title: "History",
-    pageSize: "Rows per page",
     category: {
       all: "All",
       novel: "Novel",
@@ -390,8 +388,6 @@ export default {
       nextEpisode: "Next episode",
       relatedTitle: "Related novels",
       emptyContent: "This novel has no text content",
-      prevPage: "Previous page",
-      nextPage: "Next page",
       pageInfo: "Page {current} / {total}",
       pageSelect: "Jump to page",
       imagePlaceholder: "Embedded image — view on Pixiv",
