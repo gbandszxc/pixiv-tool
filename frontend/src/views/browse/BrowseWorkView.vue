@@ -26,6 +26,7 @@ import {
   type ListWorkKind,
 } from "../../api/browse";
 import ImageViewer from "../../components/browse/ImageViewer.vue";
+import CommentsSection from "../../components/browse/CommentsSection.vue";
 import RelatedGrid from "../../components/browse/RelatedGrid.vue";
 
 const props = defineProps<{
@@ -348,6 +349,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
             @retry="loadRelated"
             @select="openRelated"
           />
+
+          <!-- 评论（V1 只读；kind/id 变化时组件内部自重置） -->
+          <CommentsSection :kind="kind" :id="id" />
         </template>
       </aside>
     </div>

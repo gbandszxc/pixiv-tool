@@ -10,6 +10,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vu
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import NovelContent from "../../components/browse/NovelContent.vue";
+import CommentsSection from "../../components/browse/CommentsSection.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import {
   browseRelated,
@@ -264,6 +265,9 @@ function openInPixiv(): void {
             @select="goRelated"
           />
         </section>
+
+        <!-- 评论（V1 只读；id 变化时组件内部自重置） -->
+        <CommentsSection kind="novel" :id="id" />
       </div>
 
       <!-- 翻页器：底部居中吸底 -->

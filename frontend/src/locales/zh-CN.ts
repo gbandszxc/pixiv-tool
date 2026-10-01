@@ -365,5 +365,15 @@ export default {
       loadMore: "加载更多",
       emptyList: "这个系列还没有内容",
     },
+    comments: {
+      title: "评论",
+      viewReplies: "查看回复",
+      moreReplies: "更多回复",
+      loadMore: "加载更多评论",
+      noMore: "没有更多了",
+      empty: "还没有评论",
+      replyTo: "回复 {'@'}{name}",
+      stampAlt: "表情贴图",
+    },
   },
 };

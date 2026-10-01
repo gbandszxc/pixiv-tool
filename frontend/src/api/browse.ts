@@ -4,7 +4,8 @@
  *
  * 组成：
  * - 契约类型（snake_case，与 Rust browse 命令返回体一致）
- * - 11 个命令的 invoke 封装（未登录错误 → 派发 `pixiv-tool:open-login` 事件，App.vue 负责弹登录窗）
+ * - 13 个命令的 invoke 封装（v2 的 11 个 + v2.1 评论补充的 2 个；
+ *   未登录错误 → 派发 `pixiv-tool:open-login` 事件，App.vue 负责弹登录窗）
  * - pxSrc()：pximg 封面 URL → `pixiv-img://` 代理协议（Tauri 环境）
  * - mock 层：`!isTauri()`（普通浏览器直接打开 dev 页）时返回样例数据，
  *   仅供浏览器内视觉验收使用；Tauri 生产环境完全不走 mock。
@@ -169,6 +170,35 @@ export interface BrowseSeriesDetail {
   next_last_order?: number | null;
 }
 
+// ===== 评论契约（v2.1，2026-10-01 实机实测）=====
+
+/** 浏览评论条目（roots 与 replies 同构）。 */
+export interface BrowseComment {
+  id: string;
+  user_id: number;
+  user_name: string;
+  /** 后端补全 https:// 前缀（pixiv 返回无协议）；前端经 pxSrc() 代理显示 */
+  profile_img?: string;
+  /** 纯文本原样；表情（stamp）评论为空 */
+  content?: string;
+  /** stampId → 生成图 URL；有值时正文以表情图渲染（content 为空） */
+  stamp_url?: string;
+  /** commentDate 原样（"2026-10-01 08:15"） */
+  date?: string;
+  has_replies?: boolean;
+  /** 仅回复列表（replyToUserName）：被回复者昵称 */
+  reply_to_user_name?: string;
+}
+
+/**
+ * browse_work_comments / browse_comment_replies 返回体。
+ * 接口无 total；next 为续拉游标（roots：下一批 offset；replies：下一页 page），null = 到底。
+ */
+export interface BrowseComments {
+  comments: BrowseComment[];
+  next?: number | null;
+}
+
 // ===== 图片代理 helper =====
 
 /**
@@ -311,6 +341,28 @@ export async function browseUserWorks(
 export async function browseNovelSeries(id: number, lastOrder = 0): Promise<BrowseSeriesDetail> {
   if (!isTauri()) return mockSeriesDetail(id, lastOrder);
   return invokeBrowse<BrowseSeriesDetail>("browse_novel_series", { id, lastOrder });
+}
+
+/** browse_work_comments：评论 roots（offset 游标，limit=10；接口无 total，next=null 到底）。 */
+export async function browseWorkComments(params: {
+  kind: ListWorkKind;
+  id: number;
+  offset?: number;
+}): Promise<BrowseComments> {
+  const { kind, id, offset = 0 } = params;
+  if (!isTauri()) return mockComments(kind, id, offset);
+  return invokeBrowse<BrowseComments>("browse_work_comments", { kind, id, offset });
+}
+
+/** browse_comment_replies：评论回复（page 从 1 起；next=null 到底）。 */
+export async function browseCommentReplies(params: {
+  kind: ListWorkKind;
+  commentId: string;
+  page?: number;
+}): Promise<BrowseComments> {
+  const { kind, commentId, page = 1 } = params;
+  if (!isTauri()) return mockReplies(kind, commentId, page);
+  return invokeBrowse<BrowseComments>("browse_comment_replies", { kind, commentId, page });
 }
 
 function channelKindToWork(kind: ChannelKind): WorkKind {
@@ -670,4 +722,108 @@ async function mockSeriesDetail(id: number, lastOrder = 0): Promise<BrowseSeries
     }),
     next_last_order: next,
   };
+}
+
+// ===== 评论 mock =====
+
+/** roots 每页条数（契约 limit=10）。 */
+const MOCK_COMMENT_PAGE = 10;
+
+const MOCK_COMMENT_TEXTS = [
+  "神回！构图和配色都太舒服了",
+  "收藏了，期待更多作品～",
+  "这光影处理绝了，请问用什么笔刷？",
+  "每天来看一眼已经成为习惯了",
+  "太强了，膜拜大佬",
+  "氛围感拉满，颜色好温柔\n已转发给朋友安利",
+  "第一次评论：每次更新都会第一时间点开",
+  "这个角度的光很难画吧，控制得真好",
+  "角色表情好生动，仿佛能听到声音",
+  "水面的反光细节太讲究了",
+  "昨晚蹲到更新，果然没让我失望！",
+  "构图参考价值很高，学习了",
+];
+
+const MOCK_COMMENT_URL_TEXTS = [
+  "参考了这张的构图 https://www.pixiv.net/artworks/9000012 受益匪浅",
+  "做成手机壁纸了，出处 https://www.pixiv.net/artworks/9000015",
+  "系列前三话也超好看：\nhttps://www.pixiv.net/novel/series/700012",
+];
+
+/** 表情评论占位 stamp：内联 SVG data-URI（圆形笑脸，色相区分）。 */
+function mockStamp(hue: number): string {
+  const s = 96;
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">` +
+    `<rect width="${s}" height="${s}" rx="20" fill="hsl(${hue} 75% 86%)"/>` +
+    `<circle cx="${s * 0.5}" cy="${s * 0.5}" r="${s * 0.3}" fill="hsl(${hue} 78% 60%)"/>` +
+    `<circle cx="${s * 0.42}" cy="${s * 0.44}" r="${s * 0.045}" fill="#1c1b22"/>` +
+    `<circle cx="${s * 0.6}" cy="${s * 0.44}" r="${s * 0.045}" fill="#1c1b22"/>` +
+    `<path d="M${s * 0.38} ${s * 0.58} Q ${s * 0.51} ${s * 0.7} ${s * 0.64} ${s * 0.58}" stroke="#1c1b22" stroke-width="4" fill="none" stroke-linecap="round"/>` +
+    `</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** 确定性 roots 全集：10-25 条混合（纯文本 / URL / 表情 / 2-3 条带 has_replies）。 */
+function mockCommentRoots(kind: ListWorkKind, id: number): BrowseComment[] {
+  const rand = mulberry32(seedFrom(`comments:${kind}:${id}`));
+  const total = 10 + Math.floor(rand() * 16); // 10-25
+  return Array.from({ length: total }, (_, i) => {
+    const authorIndex = Math.floor(rand() * MOCK_AUTHORS.length);
+    const isStamp = rand() < 0.15;
+    const isUrl = !isStamp && rand() < 0.18;
+    const isMultiline = !isStamp && !isUrl && rand() < 0.2;
+    const content = isStamp
+      ? ""
+      : isUrl
+        ? MOCK_COMMENT_URL_TEXTS[Math.floor(rand() * MOCK_COMMENT_URL_TEXTS.length)]
+        : isMultiline
+          ? `${MOCK_COMMENT_TEXTS[Math.floor(rand() * MOCK_COMMENT_TEXTS.length)]}\n（补充：第二行文本用于验收 pre-wrap 换行）`
+          : MOCK_COMMENT_TEXTS[Math.floor(rand() * MOCK_COMMENT_TEXTS.length)];
+    // has_replies 固定命中 2-3 条（total≥10 保证前两处必中；total>12 追加第三处）
+    const hasReplies = i === 1 || i === 4 || (i === 9 && total > 12);
+    const comment: BrowseComment = {
+      id: String(Number(id) * 100 + i),
+      user_id: 100001 + authorIndex,
+      user_name: MOCK_AUTHORS[authorIndex],
+      profile_img: mockCover((id * 7 + i * 41) % 360, "square"),
+      date: `2026-09-${pad2(1 + Math.floor(rand() * 28))} ${pad2(Math.floor(rand() * 24))}:${pad2(Math.floor(rand() * 60))}`,
+    };
+    if (isStamp) comment.stamp_url = mockStamp(Math.floor(rand() * 360));
+    else comment.content = content;
+    if (hasReplies) comment.has_replies = true;
+    return comment;
+  });
+}
+
+/** 评论 roots：offset 游标切片，next = hasNext ? offset+len : null。 */
+async function mockComments(kind: ListWorkKind, id: number, offset = 0): Promise<BrowseComments> {
+  await mockDelay();
+  const roots = mockCommentRoots(kind, id);
+  const slice = roots.slice(offset, offset + MOCK_COMMENT_PAGE);
+  const hasNext = offset + slice.length < roots.length;
+  return { comments: slice, next: hasNext ? offset + slice.length : null };
+}
+
+/** 评论回复：每组确定性 1-3 条，单页装下（≤10/页），next 恒为 null；第 2 条起带 reply_to。 */
+async function mockReplies(kind: ListWorkKind, commentId: string, page = 1): Promise<BrowseComments> {
+  await mockDelay();
+  const rand = mulberry32(seedFrom(`replies:${kind}:${commentId}`));
+  const count = 1 + Math.floor(rand() * 3); // 1-3 条
+  const firstIndex = Math.floor(rand() * MOCK_AUTHORS.length);
+  const replies: BrowseComment[] = Array.from({ length: count }, (_, i) => {
+    const authorIndex = i === 0 ? firstIndex : Math.floor(rand() * MOCK_AUTHORS.length);
+    const reply: BrowseComment = {
+      id: `${commentId}-r${i + 1}`,
+      user_id: 100001 + authorIndex,
+      user_name: MOCK_AUTHORS[authorIndex],
+      profile_img: mockCover((commentId.length * 13 + i * 57) % 360, "square"),
+      date: `2026-09-${pad2(2 + Math.floor(rand() * 27))} ${pad2(Math.floor(rand() * 24))}:${pad2(Math.floor(rand() * 60))}`,
+      content: MOCK_COMMENT_TEXTS[Math.floor(rand() * MOCK_COMMENT_TEXTS.length)],
+    };
+    if (i > 0) reply.reply_to_user_name = MOCK_AUTHORS[firstIndex];
+    return reply;
+  });
+  // page 从 1 起；每组 ≤3 条单页装下，第 1 页即到底
+  return { comments: page <= 1 ? replies : [], next: null };
 }

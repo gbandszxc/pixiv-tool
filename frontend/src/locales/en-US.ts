@@ -364,5 +364,15 @@ export default {
       loadMore: "Load more",
       emptyList: "This series has no episodes yet",
     },
+    comments: {
+      title: "Comments",
+      viewReplies: "View replies",
+      moreReplies: "More replies",
+      loadMore: "Load more comments",
+      noMore: "No more comments",
+      empty: "No comments yet",
+      replyTo: "Reply {'@'}{name}",
+      stampAlt: "Stamp",
+    },
   },
 };
