@@ -85,6 +85,6 @@ onBeforeRouteLeave(() => { if (savedSnapshot.value && savedSnapshot.value !== sn
 .field-hint { color: var(--ink-muted); font-size: 12px; }
 .danger-button { --md-text-button-label-text-color: #ba1a1a; }
 .dialog-actions { justify-content: flex-end; }
-.palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }.palette-pixiv { background: #006eaf; }.palette-indigo { background: #475d92; }.palette-jade { background: #006c4d; }.palette-violet { background: #6f4a72; }.palette-amber { background: #8f4e00; }
+.palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
 @media (max-width: 640px) { .settings-path-row { align-items: stretch; flex-direction: column; } }
 </style>
