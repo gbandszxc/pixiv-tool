@@ -209,6 +209,18 @@ pub fn assert_yyyymmdd(value: &Value, field: &str) {
     );
 }
 
+/// 两次**独立请求**拿到的同一 total：pixiv 语料持续新增投稿（实测同日两次调用
+/// 差 1：20841521 vs 20841522），等值断言会抖动。用「小容差」校验字段映射是否
+/// 正确（映射错时差值是数量级级别的，容差挡不住真问题），而不是追求数值相等。
+pub fn assert_same_total(raw_total: i64, contract_total: i64, field: &str) {
+    const TOLERANCE: i64 = 20;
+    let delta = (raw_total - contract_total).abs();
+    assert!(
+        delta <= TOLERANCE,
+        "{field}（{raw_total}）与契约 total（{contract_total}）差 {delta}，超过容差 {TOLERANCE}——字段映射可能不对"
+    );
+}
+
 /// 作品条目最低语义：id 正整数、标题非空、kind 在白名单、作者 id 为正。
 pub fn assert_work_item(item: &Value, what: &str, expect_kind: Option<&str>) {
     assert!(id_of(item) > 0, "{what}.id 应为正整数，实际: {}", item["id"]);

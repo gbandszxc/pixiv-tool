@@ -384,7 +384,9 @@ async fn live_search_artworks_novels() {
         .and_then(common::as_i64_loose)
         .expect("illustManga.lastPage 应为整数");
     assert!(raw_last_page >= 1, "illustManga.lastPage 应 >= 1");
-    assert_eq!(raw_total, total, "原始 total 与契约 total 应一致");
+    // 字段映射校验（illustManga.total → 契约 total）。两次请求之间 pixiv 语料会继续
+    // 新增投稿（实测同一天两次调用差 1：20841521 vs 20841522），故不能做等值断言。
+    common::assert_same_total(raw_total, total, "illustManga.total");
     assert_eq!(
         raw_art
             .pointer("/illustManga/data")
@@ -423,12 +425,14 @@ async fn live_search_artworks_novels() {
         .and_then(common::as_i64_loose)
         .expect("novel.lastPage 应为整数");
     assert!(raw_novel_last >= 1, "novel.lastPage 应 >= 1");
-    assert_eq!(
+    // 同上：两次请求之间语料会增长，用容差比较（novel.total → 契约 total 的映射校验）
+    common::assert_same_total(
         raw_novel
             .pointer("/novel/total")
-            .and_then(common::as_i64_loose),
-        Some(novel_total),
-        "原始 novel.total 与契约 total 应一致"
+            .and_then(common::as_i64_loose)
+            .expect("novel.total 应为整数"),
+        novel_total,
+        "novel.total",
     );
 
     // ③ 非 ASCII 词（日文标签，真实使用场景）
