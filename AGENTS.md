@@ -81,13 +81,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 
 ## 开发命令
 
-```bash
-cd frontend && pnpm install   # 一次性
-cargo tauri dev               # 仓库根：Vite(9961) + Rust 热重载 + 窗口
-cd src-tauri && cargo test    # 后端测试（单测 + IPC 冒烟）
-cd frontend && pnpm build     # 前端类型检查 + 构建
-cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
-```
+开发操作优先使用仓库根目录的 `dev.ps1`（Windows）或 `dev.sh`（Bash）。AI 开始开发操作前，先在仓库根运行 `.\dev.ps1 -h` 或 `bash ./dev.sh -h`，获取当前命令用法；完整用法以脚本帮助为准，不在本文重复维护命令表。
 
 - Vite 仅 dev 期占用 9961（strictPort）
 - 系统依赖：cmake + LLVM/libclang（wreq 编译 BoringSSL，btls-sys 用 bindgen 生成绑定，全平台都需要），见 `docs/PACKAGING.md`

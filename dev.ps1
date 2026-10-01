@@ -10,8 +10,8 @@ function Show-Help {
 Usage: ./dev.ps1 <command>
        ./dev.ps1 -h | --help
 
-  dev                     Tauri dev: Vite + Rust hot reload + desktop window
-  frontend                Vite only, http://localhost:9961 (no Tauri IPC)
+  dev [start|stop|restart]       Desktop dev service (default: start)
+  frontend [start|stop|restart]  Vite service on 9961 (default: start)
   build [release|debug]   Package installers; default: release
   install                 Install frontend dependencies (frozen lockfile)
   check                   Frontend type check/build + cargo check
@@ -24,8 +24,9 @@ Commands run from the repository, regardless of your current directory.
 Console logs: .dev/logs/<command>.log (overwritten on each invocation).
 App logs: data/logs/app.log (debug/dev data only).
 Windows: auto-configure MSVC, Visual Studio and LLVM. Set LIBCLANG_PATH
-or VSINSTALLDIR to override discovery. Ctrl+C stops foreground commands.
-Examples: ./dev.ps1 dev; ./dev.ps1 build debug; ./dev.ps1 logs dev -f
+or VSINSTALLDIR to override discovery. Services run in the background.
+Use stop to end services; logs COMMAND -f watches their output.
+Examples: ./dev.ps1 dev start; ./dev.ps1 frontend restart; ./dev.ps1 dev stop
 '@ | Write-Host
 }
 
@@ -101,6 +102,147 @@ function Invoke-Logged([string]$executable, [string[]]$arguments, [string]$direc
     }
     if ($code -ne 0) { exit $code }
 }
+function Get-ServiceRecord([string]$name) {
+    $path = Join-Path $root ".dev/pids/$name.json"
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    $record = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($record.pid)"
+    if (-not $process -or "$($process.CreationDate.ToUniversalTime().Ticks)" -ne "$($record.created)") {
+        Remove-Item -LiteralPath $path
+        return $null
+    }
+    $line = "$($process.CommandLine)".Replace('\', '/')
+    if ($record.external) {
+        if ($line -notmatch 'vite/bin/vite\.js') { throw "Refusing to stop changed process $($record.pid)." }
+    } elseif ($line.IndexOf("$root/dev.ps1".Replace('\', '/'), [StringComparison]::OrdinalIgnoreCase) -lt 0 -or $line -notmatch "__run $name(?:\s|$)") {
+        throw "Service record does not match its process: $path"
+    }
+    return $record
+}
+
+function Save-ServiceRecord([string]$name, $process, [bool]$external, [bool]$ownsFrontend = $false) {
+    $record = @{
+        pid = $process.ProcessId
+        created = "$($process.CreationDate.ToUniversalTime().Ticks)"
+        external = $external
+        ownsFrontend = $ownsFrontend
+    }
+    [IO.File]::WriteAllText((Join-Path $root ".dev/pids/$name.json"), ($record | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+}
+
+function Get-FrontendProcess {
+    $listeners = @(Get-NetTCPConnection -LocalPort 9961 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($listeners.Count -eq 0) { return $null }
+    if ($listeners.Count -ne 1) { throw 'Port 9961 has multiple owners; refusing to manage it.' }
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($listeners[0])"
+    if (-not $process -or "$($process.CommandLine)".Replace('\', '/') -notmatch 'vite/bin/vite\.js') {
+        throw "Port 9961 belongs to another program (PID $($listeners[0])); refusing to stop it."
+    }
+    # Vite started through pnpm can have only relative paths in its command line.
+    # Verify both its served source and access to this repository's package file.
+    $response = Invoke-WebRequest 'http://localhost:9961/src/main.ts' -UseBasicParsing -TimeoutSec 3
+    if ($response.Content -notmatch 'sourceMappingURL=data:application/json;base64,([A-Za-z0-9+/=]+)') {
+        throw 'Port 9961 is not a verifiable repository Vite server.'
+    }
+    $map = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($matches[1])) | ConvertFrom-Json
+    $sourceText = [IO.File]::ReadAllText((Join-Path $root 'frontend/src/main.ts')).Replace("`r`n", "`n").Trim()
+    if (-not (@($map.sourcesContent) | Where-Object { $_.Replace("`r`n", "`n").Trim() -ceq $sourceText })) {
+        throw 'Port 9961 serves another repository; refusing to manage it.'
+    }
+    $packagePath = "$root/frontend/package.json".Replace('\', '/')
+    $package = Invoke-WebRequest ("http://localhost:9961/@fs/" + [Uri]::EscapeUriString($packagePath)) -UseBasicParsing -TimeoutSec 3
+    if (($package.Content | ConvertFrom-Json).name -ne 'pixiv-tool-frontend') {
+        throw 'Port 9961 cannot serve this repository package; refusing to manage it.'
+    }
+    return $process
+}
+
+function Stop-ServiceTree([string]$name) {
+    $record = Get-ServiceRecord $name
+    if (-not $record -and $name -eq 'frontend') {
+        $vite = Get-FrontendProcess
+        if ($vite) { Save-ServiceRecord 'frontend' $vite $true; $record = Get-ServiceRecord 'frontend' }
+    }
+    if (-not $record) { Write-Host "$name is not running."; return }
+    # Re-check identity immediately before terminating the entire owned tree.
+    $record = Get-ServiceRecord $name
+    if (-not $record) { return }
+    & taskkill.exe /PID $record.pid /T /F | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Cannot stop $name (PID $($record.pid))." }
+    Remove-Item -LiteralPath (Join-Path $root ".dev/pids/$name.json")
+    if ($name -eq 'dev' -and $record.ownsFrontend) { Stop-ServiceTree 'frontend' }
+    if ($name -eq 'frontend') {
+        $deadline = (Get-Date).AddSeconds(10)
+        while (Get-NetTCPConnection -LocalPort 9961 -State Listen -ErrorAction SilentlyContinue) {
+            if ((Get-Date) -ge $deadline) { throw 'Port 9961 did not become free after stopping frontend.' }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    Write-Host "Stopped $name (PID $($record.pid))."
+}
+
+function Start-ServiceWorker([string]$name, [bool]$ownsFrontend = $false) {
+    $executable = (Get-Process -Id $PID).Path
+    $worker = Start-Process -FilePath $executable -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$root/dev.ps1`"", '__run', $name) -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput (Join-Path $root ".dev/logs/$name.stdout.log") -RedirectStandardError (Join-Path $root ".dev/logs/$name.stderr.log") -PassThru
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($worker.Id)"
+    if (-not $process) { throw "$name worker exited during startup; see .dev/logs/$name.stderr.log." }
+    Save-ServiceRecord $name $process $false $ownsFrontend
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        Start-Sleep -Milliseconds 300
+        if ($worker.HasExited) {
+            Remove-Item -LiteralPath (Join-Path $root ".dev/pids/$name.json") -ErrorAction SilentlyContinue
+            throw "$name exited during startup; see .dev/logs/$name.log and $name.stderr.log."
+        }
+        if ($name -eq 'dev') { break }
+        if ((Get-NetTCPConnection -LocalPort 9961 -State Listen -ErrorAction SilentlyContinue) -and (Get-FrontendProcess)) { break }
+        if ((Get-Date) -ge $deadline) { Stop-ServiceTree $name; throw 'Frontend startup timed out.' }
+    } while ($true)
+    Write-Host "Started $name (PID $($worker.Id)). Log: .dev/logs/$name.log"
+}
+
+function Start-ManagedService([string]$name) {
+    $existing = Get-ServiceRecord $name
+    if ($existing) { Write-Host "$name is already running (PID $($existing.pid))."; return }
+    $vite = Get-FrontendProcess
+    if ($name -eq 'frontend' -and $vite) {
+        Save-ServiceRecord 'frontend' $vite $true
+        Write-Host "frontend is already running (adopted repository Vite PID $($vite.ProcessId))."
+        return
+    }
+    Require-Command pnpm
+    if ($name -eq 'dev') {
+        Initialize-Rust
+        if (-not (Test-Path -LiteralPath (Join-Path $root 'frontend/node_modules/.bin/tauri.cmd'))) { throw 'Local Tauri CLI missing. Run ./dev.ps1 install first.' }
+        $frontendRecord = Get-ServiceRecord 'frontend'
+        $ownsFrontend = -not $vite -and -not $frontendRecord
+        Start-ManagedService 'frontend'
+        try { Start-ServiceWorker 'dev' $ownsFrontend }
+        catch { if ($ownsFrontend) { Stop-ServiceTree 'frontend' }; throw }
+    } else { Start-ServiceWorker 'frontend' }
+}
+
+function Manage-Service([string]$name, [string]$action) {
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Use dev.sh for service management on macOS/Linux.' }
+    New-Item -ItemType Directory -Force -Path (Join-Path $root '.dev/pids'), (Join-Path $root '.dev/logs') | Out-Null
+    $hash = [Security.Cryptography.SHA256]::Create()
+    try { $key = [BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($root.ToLowerInvariant()))).Replace('-', '') }
+    finally { $hash.Dispose() }
+    $mutex = [Threading.Mutex]::new($false, "Local\pixiv-dev-$key")
+    $locked = $false
+    try {
+        try { $locked = $mutex.WaitOne(30000) } catch [Threading.AbandonedMutexException] { $locked = $true }
+        if (-not $locked) { throw 'Another service operation is still running.' }
+        if ($action -in @('stop', 'restart')) { Stop-ServiceTree $name }
+        if ($action -in @('start', 'restart')) { Start-ManagedService $name }
+    } finally {
+        if ($locked) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
+}
+
+$workerMode = $cliArgs.Count -eq 2 -and $cliArgs[0] -ceq '__run' -and $cliArgs[1] -cin @('dev', 'frontend')
+if ($workerMode) { $cliArgs = @($cliArgs[1]) }
 
 if ($cliArgs.Count -eq 0 -or ($cliArgs.Count -eq 1 -and $cliArgs[0] -cin @('-h', '--help'))) {
     Show-Help
@@ -112,7 +254,12 @@ $invalid = $command -cnotin $valid
 $mode = 'release'
 $source = 'app'
 $follow = $false
-if ($command -ceq 'build') {
+$action = 'start'
+if ($command -cin @('dev', 'frontend')) {
+    if ($cliArgs.Count -gt 2) { $invalid = $true }
+    if ($cliArgs.Count -eq 2) { $action = $cliArgs[1] }
+    if ($action -cnotin @('start', 'stop', 'restart')) { $invalid = $true }
+} elseif ($command -ceq 'build') {
     if ($cliArgs.Count -gt 2) { $invalid = $true }
     if ($cliArgs.Count -eq 2) { $mode = $cliArgs[1] }
     if ($mode -cnotin @('release', 'debug')) { $invalid = $true }
@@ -134,6 +281,10 @@ if ($invalid) {
 }
 
 try {
+    if ($command -cin @('dev', 'frontend') -and -not $workerMode) {
+        Manage-Service $command $action
+        exit 0
+    }
     if ($command -ceq 'logs') {
         $path = if ($source -ceq 'app') { Join-Path $root 'data/logs/app.log' } else { Join-Path $root ".dev/logs/$source.log" }
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Log not found: $path. Run the corresponding command first." }
@@ -156,7 +307,7 @@ try {
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $tauri += '.cmd' }
     if ($command -cin @('dev', 'build') -and -not (Test-Path -LiteralPath $tauri)) { throw 'Local Tauri CLI missing. Run ./dev.ps1 install first.' }
     switch -CaseSensitive ($command) {
-        'dev' { Invoke-Logged $tauri @('dev') $root }
+        'dev' { Invoke-Logged $tauri @('dev', '--config', '{"build":{"beforeDevCommand":""}}') $root }
         'frontend' { Invoke-Logged 'pnpm' @('dev') $frontend }
         'build' {
             $buildArgs = @('build')
