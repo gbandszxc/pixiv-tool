@@ -1,7 +1,8 @@
 //! 浏览模式 ajax 接口层（browse-ui-v1，IPC 契约 v2，13 个命令）。
 //!
-//! 为契约 v2 的 13 个 browse 命令提供 `PixivApi` 方法（跨文件固有实现块），
-//! 全部返回 `serde_json::Value`（结构已按契约组装，命令层原样透传前端）。
+//! 为契约 v2 的 13 个 browse 命令 + 契约 v3.1 的 4 个收藏（bookmark）命令
+//! 提供 `PixivApi` 方法（跨文件固有实现块），全部返回 `serde_json::Value`
+//! （结构已按契约组装，命令层原样透传前端）。
 //!
 //! 端点与响应形状真相源：`docs/research/pixiv-browse-api.md`（2026-10-01 实测）。
 //! 两类响应形状统一 parse：
@@ -86,6 +87,14 @@ pub struct BrowseWorkItem {
     /// novel：阅读时长（分钟）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reading_time: Option<i64>,
+    // ---- 以下为收藏列表项扩展（契约 v3.1，wire 名为 camelCase）----
+    /// 收藏列表项：当前查看者的 bookmarkData.id（小说实测出现过数字 id，
+    /// 统一 String 化）；取消收藏直接用它。非收藏列表无此键 → None。
+    #[serde(rename = "bookmarkId", skip_serializing_if = "Option::is_none")]
+    pub bookmark_id: Option<String>,
+    /// 收藏可见性：0 公开 | 1 非公开（bookmarkData.private）。
+    #[serde(rename = "bookmarkRestrict", skip_serializing_if = "Option::is_none")]
+    pub bookmark_restrict: Option<i64>,
 }
 
 /// 通用列表返回。
@@ -171,6 +180,16 @@ pub struct BrowseSeriesRef {
     pub next_id: Option<i64>,
 }
 
+/// 详情体 bookmarkData 的收藏态（契约 v3.1：bookmarkState）。
+/// 未收藏（null/缺失）时整个字段省略，不做「空对象」表达。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseBookmarkState {
+    #[serde(rename = "bookmarkId")]
+    pub bookmark_id: String,
+    /// 0 公开 | 1 非公开（bookmarkData.private）。
+    pub restrict: i64,
+}
+
 /// 插画/漫画/动图详情（顶层带 detail_kind: "illust"）。
 #[derive(Debug, Clone, Serialize)]
 pub struct BrowseIllustDetail {
@@ -180,6 +199,9 @@ pub struct BrowseIllustDetail {
     pub pages: Vec<BrowseIllustPage>,
     pub ugoira: Option<BrowseUgoira>,
     pub series: Option<BrowseSeriesRef>,
+    /// 当前查看者的收藏态（bookmarkData 三态；未收藏省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bookmark_state: Option<BrowseBookmarkState>,
 }
 
 /// 小说详情（顶层带 detail_kind: "novel"）。
@@ -190,6 +212,9 @@ pub struct BrowseNovelDetail {
     /// 全文，保留 [newpage]/[chapter:]/[rb:]/[pixivimage:] 原始标记，前端切分。
     pub content: String,
     pub series: Option<BrowseSeriesRef>,
+    /// 当前查看者的收藏态（bookmarkData 三态；未收藏省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bookmark_state: Option<BrowseBookmarkState>,
 }
 
 /// 作者信息（/ajax/user/{id}?full=1）。
@@ -279,6 +304,33 @@ pub struct BrowseSeriesDetail {
     pub next_last_order: Option<i64>,
 }
 
+/// 收藏列表（契约 v3.1：{ items, total, next }）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseBookmarkList {
+    /// 插画/漫画/动图混排（官方每页 48）或小说（每页 30）。
+    pub items: Vec<BrowseWorkItem>,
+    /// 收藏总数（实测公开/私密各自返回自己的 total；缺失容错为 null）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<i64>,
+    /// offset 游标：下一页传回；null=到底（沿用 browse 命令惯例）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<i64>,
+}
+
+/// 单个收藏标签（契约 {name, count}；空名 = 「未分类」聚合标签，前端 i18n）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseBookmarkTag {
+    pub name: String,
+    pub count: i64,
+}
+
+/// 收藏标签分组（契约 { public, private }，一次请求返回两组）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseBookmarkTags {
+    pub public: Vec<BrowseBookmarkTag>,
+    pub private: Vec<BrowseBookmarkTag>,
+}
+
 // ----------------------------------------------------------------------
 // 主站 csrf token（street POST 需要 x-csrf-token）进程级 TTL 缓存
 // ----------------------------------------------------------------------
@@ -311,6 +363,58 @@ fn cached_web_csrf() -> Option<String> {
 /// token 失效自愈：street 认证/业务失败后清缓存，下次调用重新抓取。
 fn invalidate_web_csrf() {
     if let Some(cache) = WEB_CSRF_CACHE.get() {
+        if let Ok(mut guard) = cache.lock() {
+            *guard = None;
+        }
+    }
+}
+
+/// 自 uid 缓存：进程级单条 + 30 分钟 TTL（与 token 缓存同策略）。
+/// 复用 csrf.rs 的 /ajax/user/self 探测（parse_self_response），避免每次
+/// 收藏列表/标签请求都多打一发 self 探测。
+static SELF_UID_CACHE: OnceLock<Mutex<Option<(i64, Instant)>>> = OnceLock::new();
+const SELF_UID_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// 取登录用户 uid：缓存命中直接用；否则 GET /ajax/user/self 解析 userData.id。
+/// 复用 [`csrf::parse_self_response`] 的登录态分类：登录失效 → `Auth`，
+/// 响应异常 → `Client`（保留中文文案）。
+async fn self_user_id(client: &PixivClient) -> Result<i64, PixivError> {
+    if let Some(uid) = cached_self_uid().map(|(uid, _)| uid) {
+        log::debug!("自 uid 缓存命中");
+        return Ok(uid);
+    }
+    // get_json 成功即 HTTP 200（非 200 已按 Auth/NotFound/... 分类）；
+    // /ajax/user/self 是扁平结构，extract_ajax_body 无 body 键时原样返回。
+    let body = client.get_json(csrf::SELF_PATH).await?;
+    let probe = csrf::parse_self_response(200, Some(body)).map_err(|err| match err {
+        csrf::ProbeError::Invalid(_) => PixivError::Auth,
+        csrf::ProbeError::Csrf(msg) => PixivError::Client(msg),
+    })?;
+    let user = probe
+        .user
+        .ok_or_else(|| PixivError::Auth)?;
+    let uid: i64 = user
+        .user_id
+        .parse()
+        .map_err(|_| PixivError::Client("自 uid 解析失败".into()))?;
+    let cache = SELF_UID_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some((uid, Instant::now()));
+    }
+    Ok(uid)
+}
+
+fn cached_self_uid() -> Option<(i64, Instant)> {
+    let cache = SELF_UID_CACHE.get()?;
+    let guard = cache.lock().ok()?;
+    let (uid, at) = guard.as_ref()?;
+    (at.elapsed() < SELF_UID_TTL).then(|| (*uid, *at))
+}
+
+/// 自 uid 失效自愈：收藏接口 404/400（uid 失效极罕见）或登录切换后可清缓存。
+#[allow(dead_code)]
+fn invalidate_self_uid() {
+    if let Some(cache) = SELF_UID_CACHE.get() {
         if let Ok(mut guard) = cache.lock() {
             *guard = None;
         }
@@ -425,6 +529,12 @@ fn parse_work_thumb(v: &Value, fallback_kind: &str) -> Option<BrowseWorkItem> {
         None
     };
     let create_date = str_field(v, "createDate").or_else(|| str_field(v, "updateDate"));
+    // 收藏列表项自带当前查看者的收藏态（bookmarkData）；其他列表无此键 → None。
+    let bookmark = parse_bookmark_data(v.get("bookmarkData"));
+    let (bookmark_id, bookmark_restrict) = match bookmark {
+        Some(state) => (Some(state.bookmark_id), Some(state.restrict)),
+        None => (None, None),
+    };
     Some(BrowseWorkItem {
         id,
         rank: v.get("rank").and_then(as_i64_loose),
@@ -444,6 +554,8 @@ fn parse_work_thumb(v: &Value, fallback_kind: &str) -> Option<BrowseWorkItem> {
             .and_then(as_i64_loose)
             .filter(|sid| *sid != 0),
         series_title: str_field(v, "seriesTitle"),
+        bookmark_id,
+        bookmark_restrict,
         ..BrowseWorkItem::default()
     })
 }
@@ -1105,6 +1217,109 @@ fn parse_comments_replies(body: &Value, page: i64) -> BrowseComments {
 }
 
 // ----------------------------------------------------------------------
+// 收藏（bookmark）parse（纯函数；端点实测 docs/research/pixiv-browse-api.md §11）
+// ----------------------------------------------------------------------
+
+/// bookmarkData 三态解析（实测 §11.7）：
+/// - 未收藏：null / 键缺失 / id 缺失或空 → None；
+/// - 已收藏：`{id, private}` → 状态。id 数字/字符串两形态统一 String 化
+///   （小说实测出现过数字 id）；private 兼容 bool 与 "true"/"false" 字符串。
+fn parse_bookmark_data(v: Option<&Value>) -> Option<BrowseBookmarkState> {
+    let data = v?;
+    let id = match data.get("id") {
+        Some(Value::String(s)) if !s.is_empty() => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => return None,
+    };
+    let private = data.get("private").and_then(as_bool_loose).unwrap_or(false);
+    Some(BrowseBookmarkState {
+        bookmark_id: id,
+        restrict: i64::from(private),
+    })
+}
+
+/// /ajax/user/{uid}/(illusts|novels)/bookmarks body → BrowseBookmarkList。
+/// 分页语义（实测 §11.1）：next = offset + works.len()；终止条件
+/// works.len() < limit 或 offset + works.len() >= total（total 缺失时只按
+/// 满页判断；works[] 缺 id 的条目跳过但按原条数推进游标，与服务端分页一致）。
+fn parse_bookmark_list(
+    body: &Value,
+    fallback_kind: &str,
+    offset: i64,
+    limit: i64,
+) -> BrowseBookmarkList {
+    let works = body.get("works").and_then(Value::as_array);
+    let items: Vec<BrowseWorkItem> = works
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|w| parse_work_thumb(w, fallback_kind))
+                .collect()
+        })
+        .unwrap_or_default();
+    let total = body.get("total").and_then(as_i64_loose);
+    let next = match works {
+        Some(arr) if (arr.len() as i64) >= limit => {
+            let candidate = offset + arr.len() as i64;
+            match total {
+                Some(t) => (candidate < t).then_some(candidate),
+                None => Some(candidate),
+            }
+        }
+        _ => None,
+    };
+    BrowseBookmarkList {
+        items,
+        total,
+        next,
+    }
+}
+
+/// 收藏标签数组 `[{tag, cnt}]` → Vec（空 tag 名原样保留：「未分类」聚合标签
+/// 的本地化展示由前端 i18n 负责；cnt 缺失容错为 0）。
+fn parse_bookmark_tag_group(v: Option<&Value>) -> Vec<BrowseBookmarkTag> {
+    v.and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| {
+                    let name = t.get("tag").and_then(Value::as_str)?;
+                    Some(BrowseBookmarkTag {
+                        name: name.to_string(),
+                        count: t.get("cnt").and_then(as_i64_loose).unwrap_or(0),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// /ajax/user/{uid}/(illusts|novels)/bookmark/tags body → BrowseBookmarkTags
+/// （实测 §11.2：一次返回 public/private 两组；缺键容错为空组）。
+fn parse_bookmark_tags(body: &Value) -> BrowseBookmarkTags {
+    BrowseBookmarkTags {
+        public: parse_bookmark_tag_group(body.get("public")),
+        private: parse_bookmark_tag_group(body.get("private")),
+    }
+}
+
+/// add 响应 → bookmarkId（实测 §11.4，两端点响应形状不同）：
+/// - 插画：body 是对象，取 `last_bookmark_id`；
+/// - 小说：body 直接是 bookmarkId 字符串。
+/// 两种形状统一兼容（字符串 body / 对象 body 互为兜底），空 id 视为失败。
+fn parse_bookmark_add_id(body: &Value) -> Result<String, PixivError> {
+    let id = match body {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        v => v
+            .get("last_bookmark_id")
+            .map(|id| match id {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .filter(|s| !s.is_empty()),
+    };
+    id.ok_or_else(|| PixivError::Client("收藏响应缺少 bookmark id".into()))
+}
+
+// ----------------------------------------------------------------------
 // 参数校验与 URL 组装（纯函数，离线可测）
 // ----------------------------------------------------------------------
 
@@ -1209,6 +1424,55 @@ fn validate_ranking_date(date: Option<&str>) -> Result<(), PixivError> {
         Some(d) if d.len() == 8 && d.chars().all(|c| c.is_ascii_digit()) => Ok(()),
         Some(d) => Err(PixivError::Client(format!("date 格式应为 yyyymmdd: {d}"))),
     }
+}
+
+/// percent-encode：RFC 3986 unreserved（字母数字 `-_.~`）之外的 UTF-8 字节
+/// 编码为大写 `%XX`。用于收藏接口的 query tag 值与 form 体字段值
+/// （标签名可含非 ASCII 与 `&` 等保留字符，直接拼接会破坏 URL/form 结构）。
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// 收藏列表请求路径（§11.1 实测参数全集；order 只支持 desc、mode 只支持
+/// all，写死；tag 缺省传空串与官方请求一致）。
+fn bookmark_list_path(
+    uid: i64,
+    kind: &str,
+    rest: &str,
+    tag: Option<&str>,
+    offset: i64,
+    limit: i64,
+) -> String {
+    let seg = if kind == "novel" { "novels" } else { "illusts" };
+    let tag_enc = percent_encode(tag.unwrap_or(""));
+    format!(
+        "/ajax/user/{uid}/{seg}/bookmarks?tag={tag_enc}&offset={offset}&limit={limit}&rest={rest}&order=desc&mode=all&lang=zh"
+    )
+}
+
+/// 取消收藏（插画）form 体：`bookmark_id=`（实测 §11.5，与 add 的 JSON 体不对称）。
+fn illust_delete_form(bookmark_id: &str) -> String {
+    format!("bookmark_id={}", percent_encode(bookmark_id))
+}
+
+/// 取消收藏（小说）form 体（旧式表单端点，实测 §11.6）：
+/// `tt`=csrf token（放表单字段而非请求头）+ 固定分页参数 +
+/// `book_id%5B%5D`={bookmarkId}（`[]` 按实测做百分号编码）+ `del=1`。
+fn novel_delete_form(csrf_token: &str, bookmark_id: &str) -> String {
+    format!(
+        "tt={}&p=1&untagged=0&rest=show&book_id%5B%5D={}&del=1",
+        percent_encode(csrf_token),
+        percent_encode(bookmark_id)
+    )
 }
 
 // ----------------------------------------------------------------------
@@ -1370,6 +1634,8 @@ impl PixivApi {
             pages,
             ugoira,
             series,
+            // 详情体 bookmarkData 三态：null/缺失 → 字段省略
+            bookmark_state: parse_bookmark_data(main.get("bookmarkData")),
         }))
     }
 
@@ -1551,6 +1817,175 @@ impl PixivApi {
             ))
             .await?;
         Ok(to_value(&parse_comments_replies(&body, page)))
+    }
+}
+
+// ----------------------------------------------------------------------
+// 收藏（bookmark）方法（契约 v3.1；端点实测 docs/research §11）
+// ----------------------------------------------------------------------
+
+/// 收藏列表每页默认条数：插画/漫画官方 48、小说官方 30（§11.1）。
+const BOOKMARK_PAGE_ILLUST: i64 = 48;
+const BOOKMARK_PAGE_NOVEL: i64 = 30;
+/// 自定义 limit 上限（实测 10/48/100 服务端均接受，取 100 封顶防误用）。
+const BOOKMARK_LIMIT_MAX: i64 = 100;
+
+impl PixivApi {
+    /// 收藏列表：GET /ajax/user/{uid}/(illusts|novels)/bookmarks（§11.1）。
+    /// 自 uid 走 /ajax/user/self 探测缓存；rest: show=公开 / hide=非公开；
+    /// order 写死 desc（asc 静默空列表）、mode 写死 all（其余值报错）；
+    /// 项内带 bookmarkData 收藏态（bookmarkId/bookmarkRestrict）。
+    pub async fn bookmark_list(
+        &self,
+        kind: &str,
+        rest: &str,
+        tag: Option<&str>,
+        offset: i64,
+        limit: Option<i64>,
+    ) -> Result<Value, PixivError> {
+        if !matches!(kind, "illust" | "novel") {
+            return Err(PixivError::Client(format!("不支持的收藏类型: {kind}")));
+        }
+        if !matches!(rest, "show" | "hide") {
+            return Err(PixivError::Client(format!("不支持的可见范围: {rest}")));
+        }
+        let offset = offset.max(0);
+        let default_limit = if kind == "novel" {
+            BOOKMARK_PAGE_NOVEL
+        } else {
+            BOOKMARK_PAGE_ILLUST
+        };
+        let limit = limit.unwrap_or(default_limit).clamp(1, BOOKMARK_LIMIT_MAX);
+        let client = self.client();
+        let uid = self_user_id(client).await?;
+        let body = client
+            .get_json(&bookmark_list_path(uid, kind, rest, tag, offset, limit))
+            .await?;
+        let fallback = if kind == "novel" { "novel" } else { "illust" };
+        Ok(to_value(&parse_bookmark_list(
+            &body, fallback, offset, limit,
+        )))
+    }
+
+    /// 收藏标签（一次返回 public/private 两组）：
+    /// GET /ajax/user/{uid}/(illusts|novels)/bookmark/tags（§11.2，
+    /// 注意路径是 `bookmark/tags` 单数子路径，无 rest 参数）。
+    pub async fn bookmark_tags(&self, kind: &str) -> Result<Value, PixivError> {
+        let seg = match kind {
+            "illust" => "illusts",
+            "novel" => "novels",
+            other => return Err(PixivError::Client(format!("不支持的收藏类型: {other}"))),
+        };
+        let client = self.client();
+        let uid = self_user_id(client).await?;
+        let body = client
+            .get_json(&format!("/ajax/user/{uid}/{seg}/bookmark/tags?lang=zh"))
+            .await?;
+        Ok(to_value(&parse_bookmark_tags(&body)))
+    }
+
+    /// 添加收藏（全局 JSON 端点，§11.4）：
+    /// POST /ajax/(illusts|novels)/bookmarks/add，体为
+    /// `{illust_id|novel_id, restrict, comment, tags}`（id 实测为字符串）。
+    /// restrict: 0=公开 / 1=非公开。返回 `{ bookmarkId }`
+    /// （插画取 body.last_bookmark_id，小说 body 即 id 字符串）。
+    /// token 失效自愈策略与 street 一致（Auth/Client 失败后清缓存）。
+    pub async fn bookmark_add(
+        &self,
+        kind: &str,
+        id: i64,
+        restrict: i64,
+        tags: &[String],
+    ) -> Result<Value, PixivError> {
+        if !matches!(kind, "illust" | "novel") {
+            return Err(PixivError::Client(format!("不支持的收藏类型: {kind}")));
+        }
+        if !matches!(restrict, 0 | 1) {
+            return Err(PixivError::Client(format!(
+                "restrict 只能是 0（公开）或 1（非公开）: {restrict}"
+            )));
+        }
+        let client = self.client();
+        let token = web_csrf_token(client).await?;
+        let (path, payload) = if kind == "illust" {
+            (
+                "/ajax/illusts/bookmarks/add",
+                json!({
+                    "illust_id": id.to_string(),
+                    "restrict": restrict,
+                    "comment": "",
+                    "tags": tags,
+                }),
+            )
+        } else {
+            (
+                "/ajax/novels/bookmarks/add",
+                json!({
+                    "novel_id": id.to_string(),
+                    "restrict": restrict,
+                    "comment": "",
+                    "tags": tags,
+                }),
+            )
+        };
+        match client.post_json(path, &token, &payload).await {
+            Ok(body) => {
+                let bookmark_id = parse_bookmark_add_id(&body)?;
+                Ok(json!({ "bookmarkId": bookmark_id }))
+            }
+            Err(err) => {
+                if matches!(err, PixivError::Auth | PixivError::Client(_)) {
+                    invalidate_web_csrf();
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// 取消收藏（§11.5/§11.6）。`id` 仅作契约参数保留（删除按 bookmark_id
+    /// 定位，端点不接受作品 id）：
+    /// - 插画：POST /ajax/illusts/bookmarks/delete，form 体 `bookmark_id=`
+    ///   （与 add 的 JSON 体不对称），响应 `{"error":false,"body":[]}`；
+    /// - 小说：POST /novel/bookmark_setting.php 旧式表单（token 放 `tt`
+    ///   表单字段而非请求头），成功以 302 跳转表示（post_form 对 2xx/3xx
+    ///   放行，最终页是 HTML 无需解析）。
+    pub async fn bookmark_remove(
+        &self,
+        kind: &str,
+        id: i64,
+        bookmark_id: &str,
+    ) -> Result<Value, PixivError> {
+        let _ = id;
+        if !matches!(kind, "illust" | "novel") {
+            return Err(PixivError::Client(format!("不支持的收藏类型: {kind}")));
+        }
+        if bookmark_id.trim().is_empty() {
+            return Err(PixivError::Client("收藏 ID 不能为空".into()));
+        }
+        let client = self.client();
+        let token = web_csrf_token(client).await?;
+        if kind == "illust" {
+            let text = client
+                .post_form(
+                    "/ajax/illusts/bookmarks/delete",
+                    Some(&token),
+                    &illust_delete_form(bookmark_id),
+                )
+                .await?;
+            // 响应错误信标（error 真值 → API error）在重试管线之外解析
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
+            super::client::extract_ajax_body(value).map(|_| Value::Null)
+        } else {
+            client
+                .post_form(
+                    "/novel/bookmark_setting.php",
+                    None,
+                    &novel_delete_form(&token, bookmark_id),
+                )
+                .await?;
+            Ok(Value::Null)
+        }
     }
 }
 

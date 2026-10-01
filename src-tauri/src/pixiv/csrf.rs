@@ -16,7 +16,8 @@ use serde_json::Value;
 use super::client::{PixivClient, PixivError, json_truthy, mask_url};
 
 pub const PIXIV_SELF_URL: &str = "https://www.pixiv.net/ajax/user/self?lang=zh";
-const SELF_PATH: &str = "/ajax/user/self?lang=zh";
+/// 相对路径形式（browse 层复用同一端点取自 uid，走 PixivApi 的 get_json）。
+pub(crate) const SELF_PATH: &str = "/ajax/user/self?lang=zh";
 
 /// 登录用户信息（字段与旧 Python 版一致，全字符串）。
 #[derive(Debug, Clone, Default, Serialize)]

@@ -367,6 +367,55 @@ impl PixivClient {
         extract_ajax_body(body)
     }
 
+    /// POST `{BASE_URL}{path}` form 体（`application/x-www-form-urlencoded`），
+    /// 镜像 post_json 的 cookie/闸门/重试/限速语义。收藏删除接口专用：
+    /// - 插画 `/ajax/illusts/bookmarks/delete`：ajax 端点，`csrf_token` 传 Some
+    ///   附加 `x-csrf-token` 头，响应为 JSON（解析交调用方走 extract_ajax_body）；
+    /// - 小说 `/novel/bookmark_setting.php`：旧式表单端点，token 放表单 `tt`
+    ///   字段，`csrf_token` 传 None 不加头；成功以 302 跳转表示（wreq 自动跟随
+    ///   重定向，最终落 200 HTML）。因此本方法对 2xx/3xx 一律放行，返回响应
+    ///   文本，是否按 JSON 解析由调用方决定。
+    pub async fn post_form(
+        &self,
+        path: &str,
+        csrf_token: Option<&str>,
+        form: &str,
+    ) -> Result<String, PixivError> {
+        let url = format!("{BASE_URL}{path}");
+        let text = self
+            .run_gated(|| async {
+                let mut req = self
+                    .http
+                    .post(&url)
+                    .header("content-type", "application/x-www-form-urlencoded");
+                if let Some(token) = csrf_token {
+                    req = req.header("x-csrf-token", token);
+                }
+                if let Some(cookie) = self.cookie_header.as_deref() {
+                    req = req.header("cookie", cookie);
+                }
+                let resp = req
+                    .body(form.to_string())
+                    .send()
+                    .await
+                    .map_err(|e| network_err(e, &url))?;
+                let status = resp.status().as_u16();
+                log::info!("POST {} → {status}", mask_url(&url));
+                // 2xx/3xx 放行（3xx = 旧式表单端点的成功跳转，wreq 会跟随到最终页）
+                if !(200..400).contains(&status) {
+                    if status == 429 {
+                        self.trigger_global_pause();
+                    }
+                    return Err(classify_status(status)
+                        .unwrap_or_else(|| PixivError::Client(format!("HTTP {status}"))));
+                }
+                let text = resp.text().await.map_err(|e| network_err(e, &url))?;
+                Ok::<String, PixivError>(text)
+            })
+            .await?;
+        Ok(text)
+    }
+
     /// 下载二进制（i.pximg.net 原图 / ugoira zip）。额外带
     /// `Referer: https://www.pixiv.net/`（pximg 防盗链校验）。
     /// 与 get_json 共用限速/重试/429 暂停。空 body → Client 错误。
