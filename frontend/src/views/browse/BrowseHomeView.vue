@@ -65,9 +65,14 @@ onMounted(initialLoad);
   <div class="page-view browse-home">
     <div class="home-header">
       <h1 class="page-title">{{ t("nav.browseHome") }}</h1>
-      <md-outlined-button :disabled="loading || refreshing || exhausted" @click="shuffle">
+      <!-- 换一批降为文字按钮 + 线性刷新图标，弱化头部主次层级（图标风格对齐 HistoryView .row-actions） -->
+      <md-text-button :disabled="loading || refreshing || exhausted" @click="shuffle">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+          <path d="M21 3v5h-5" />
+        </svg>
         {{ refreshing ? t("browse.home.refreshing") : t("browse.home.refresh") }}
-      </md-outlined-button>
+      </md-text-button>
     </div>
 
     <WorkGrid
@@ -93,5 +98,18 @@ onMounted(initialLoad);
 
 .home-header .page-title {
   margin: 0;
+}
+
+/* 刷新图标：线性描边（fill:none / stroke:currentColor / stroke-width:2），尺寸对齐 HistoryView .row-actions svg */
+.home-header md-text-button svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  vertical-align: middle;
+  margin-right: var(--space-xxs);
 }
 </style>

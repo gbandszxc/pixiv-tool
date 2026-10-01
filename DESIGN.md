@@ -134,6 +134,7 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 - **分区与 Tab**：频道页分区标题 16px/600 on-surface-variant；类型/周期切换用 md-tabs（secondary），排行前三名徽标用 primary-container 突出。
 - **查看器舞台**：整页路由，图片区以中性近黑 `rgb(0 0 0 / 0.78)` 为底（深浅色一致），图片 object-contain 居中；R-18 遮罩为 `blur(24px)` + 中央文案 + filled「显示」按钮，确认后本会话记忆。近黑底是查看器的既定例外，不得扩散到普通内容容器。
 - **小说阅读器**：正文列 max 720px、14px/1.8 on-surface；`[chapter:]` 渲染为 16px/700 章节标题；翻页器 sticky 底部（surface 底 + 上缘 divider），页码可下拉直选；系列目录为 48px+ 行式列表（序号/标题/元信息右对齐），非卡片网格。
+- **首页头部**：页面标题与「换一批」同行两端对齐、垂直居中；辅助刷新操作固定为 text 按钮级（`md-text-button` + 18px 线性刷新图标），不升到 outlined / filled，保持标题行的主次层级。
 - **登录守卫联动**：浏览命令未登录返回固定文案并自动打开既有登录弹窗；浏览页面本身不重复实现登录 UI。
 
 **The Native-First Rule.** 已由 Material Web 覆盖的按钮、输入、选择、复选、单选、标签页和进度条不重写外观；原生 `dialog`、`details` 和表格只补充当前实现所需的容器样式。

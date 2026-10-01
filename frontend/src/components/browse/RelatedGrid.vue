@@ -56,10 +56,12 @@ const { t } = useI18n();
 </template>
 
 <style scoped>
+/* 分区标题：16px/600 on-surface-variant（DESIGN.md 浏览模式·分区与 Tab），
+ * 避免错误态的 primary 文字按钮比标题更抢眼 */
 .related-title {
   margin: 0 0 var(--space-sm);
-  color: var(--ink);
-  font-size: 14px;
+  color: var(--ink-muted);
+  font-size: 16px;
   font-weight: 600;
   line-height: 1.4;
 }
