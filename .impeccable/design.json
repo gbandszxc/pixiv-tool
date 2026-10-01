@@ -27,7 +27,7 @@
       "label": { "displayName": "Label", "purpose": "Table headers, status pills and compact metadata." }
     },
     "shadows": [
-      { "name": "overlay-only", "value": "0 4px 12px/14px rgb(0 0 0 / 18%)", "purpose": "Account menu and snackbar only." }
+      { "name": "overlay-only", "value": "0 4px 12px rgb(0 0 0 / 18%)", "purpose": "Account menu and snackbar only (the only legal overlay shadow value)." }
     ],
     "motion": [
       { "name": "reduced-motion", "value": "0.01ms", "purpose": "Global reduced-motion override for transitions and animations." }
@@ -41,7 +41,7 @@
     { "name": "Outlined Button", "kind": "button", "refersTo": "button-outlined", "description": "Material Web secondary action such as browse, sync or batch delete." },
     { "name": "Form Controls", "kind": "input", "refersTo": "md-outlined-text-field, md-outlined-select, md-radio, md-checkbox", "description": "Material Web controls for source IDs, settings and selection." },
     { "name": "Sidebar Navigation", "kind": "nav", "refersTo": "navigation-item-active", "description": "256px left navigation that collapses to 72px; active item uses primary-container." },
-    { "name": "Dialog", "kind": "dialog", "refersTo": "m3-dialog", "description": "Native dialog styled with surface-container, 28px radius and a scrim." },
+    { "name": "Dialog", "kind": "dialog", "refersTo": "native-dialog", "description": "Native dialog styled with surface-container, 28px radius and a scrim; no Material Web dialog component is imported." },
     { "name": "Task Progress", "kind": "custom", "refersTo": "md-linear-progress", "description": "Material Web linear progress paired with text-first status and metadata." }
     ,{ "name": "Snackbar", "kind": "feedback", "refersTo": "m3-snackbar", "description": "Global top-right notification that disappears after 3.2 seconds." }
     ,{ "name": "Pagination", "kind": "navigation", "refersTo": "page-size", "description": "History and task lists offer 20, 50, or 100 rows per page." }
@@ -49,6 +49,8 @@
     ,{ "name": "Work Grid", "kind": "custom", "refersTo": "work-grid", "description": "auto-fill minmax(160px,1fr) grid with static skeleton blocks (no shimmer), empty/error/retry states and no-more footer." }
     ,{ "name": "Viewer Stage", "kind": "custom", "refersTo": "viewer-stage", "description": "Full-page artwork viewer stage on neutral near-black rgb(0 0 0 / 0.78); R-18 blur(24px) mask with confirm button remembered per session." }
     ,{ "name": "Novel Reader", "kind": "custom", "refersTo": "novel-reader", "description": "720px column, 14px/1.8 body, chapter headings 16px/700, sticky pager with page select; series table rows 48px+." }
+    ,{ "name": "Section Tabs", "kind": "navigation", "refersTo": "md-tabs, section-heading", "description": "Channel section headings are 16px/600 on-surface-variant; kind/period switches use secondary md-tabs; top-three ranking badges use primary-container." }
+    ,{ "name": "Login Guard", "kind": "custom", "refersTo": "browse-login-guard", "description": "Browse commands on a logged-out session return a fixed message and open the existing login dialog; browse views never re-implement login UI." }
   ],
   "narrative": {
     "northStar": "Material 3 Web local task workspace",
@@ -56,7 +58,10 @@
     "keyCharacteristics": ["M3 tonal surfaces", "Compact task-first layout", "System-aware dark and reduced-motion behavior"],
     "rules": [
       { "name": "The Material Role Rule", "body": "Use existing M3 color roles rather than a second color system.", "section": "colors" },
+      { "name": "The Semantic State Rule", "body": "Primary never means success, failure or warning; error, warning, progress and task states always pair a readable label with the color.", "section": "colors" },
+      { "name": "The Truncation Rule", "body": "History table titles and authors ellipsize and keep a title attribute; other long text must not shrink in font size to buy space.", "section": "typography" },
       { "name": "The Overlay-Only Shadow Rule", "body": "Shadows identify menus and snackbar overlays, not routine cards.", "section": "elevation" },
+      { "name": "The Compact Task Rule", "body": "Alignment, whitespace and wrapping serve scannability of tasks, history and settings rather than manufacturing large empty areas.", "section": "layout" },
       { "name": "The Native-First Rule", "body": "Reuse Material Web and native semantics before adding local component styles.", "section": "components" }
     ],
     "dos": ["Use Material Web controls and M3 color roles.", "Keep task state textual as well as colored.", "Preserve the 640px responsive rules and reduced-motion override."],

@@ -26,7 +26,9 @@ Keychain 登录态。**V1 不做写操作**（点赞/收藏/关注/评论），�
 i.pximg.net 校验 `Referer: https://www.pixiv.net/`（缺省 403），WebView 内 `<img>`
 无法直连。新增自定义 URI scheme：
 
-- 前端 `convertFileSrc(encodeURIComponent(pximgUrl), "pixiv-img")`；
+- 前端 `convertFileSrc(pximgUrl, "pixiv-img")` —— **传原始 URL，不要预编码**：
+  `convertFileSrc` 在 Windows 侧会做一次 `encodeURIComponent`，后端按「单次编码」
+  解码；预编码会造成双重编码、白名单解析失败（pixiv-img 403，修复见 commit 9063b46）；
 - 后端 `register_asynchronous_uri_scheme_protocol`：白名单（https + `*.pximg.net`）
   → 磁盘缓存命中回读（`<data>/cache/img/<sha256>.<ext>`，上限 1GB 按 mtime 淘汰）
   → 未命中经无 cookie `PixivClient::download_bytes`（自带 Referer）下载落盘回传；
@@ -38,9 +40,12 @@ i.pximg.net 校验 `Referer: https://www.pixiv.net/`（缺省 403），WebView �
 
 登录后首页混合流 `POST /ajax/street/v2/main` 需 `x-csrf-token`，token 无法从静态
 HTML 常规位置提取，藏在 `__NEXT_DATA__` 的
-`props.pageProps.serverSerializedPreloadedState.api.token`。实现为：GET 主站 HTML
-解析该字段（`pixiv/csrf.rs::fetch_web_csrf_token`），进程内 TTL 缓存 30 分钟，
-Auth/Client 失败自动失效自愈。其余浏览接口全部为 GET，无此依赖。
+`props.pageProps.serverSerializedPreloadedState`。实测（2026-10-01）该节点是
+**JSON 字符串**，需再 parse 一次才拿到 `api.token`（历史/部分场景直接下发对象，
+两种都兼容）。实现为：GET 主站 HTML 解析该字段
+（`pixiv/csrf.rs::fetch_web_csrf_token`），进程内 TTL 缓存 30 分钟位于
+`pixiv/browse_api.rs::web_csrf_token`（`WEB_CSRF_TTL`），Auth/Client 失败时自动
+失效自愈。其余浏览接口全部为 GET，无此依赖。
 
 ### 4. 分页范式映射
 

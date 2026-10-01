@@ -3,6 +3,7 @@
 **状态**：被 ADR 0006 取代 · **日期**：2026-07-19 · **关联 SPEC**：§4.1
 
 > 状态补充（2026-08-20）：手动 PHPSESSID 兜底与主登录方案仍有效并由 Rust 实现承接；「pywebview 回退登录窗」路径已在 [ADR 0008](0008-tauri-rewrite.md) 裁剪（缺浏览器时改用手动 Cookie 登录）。
+> 状态补充（2026-10-01）：上一条的「回退登录窗已裁剪」已被 [ADR 0009](0009-webview-login-fallback.md) 推翻——缺浏览器时改为回退 Tauri 原生 webview 登录窗（现行流程见 SPEC §4.1），「无回退窗」的表述作废。
 
 > 2026-07-23：Pixiv 的 reCAPTCHA Enterprise 在 macOS WKWebView 中出现图片
 > 验证循环，登录主路径改为真实 Chromium；本 ADR 的 pywebview 实现仅保留为回退。

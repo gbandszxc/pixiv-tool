@@ -2,6 +2,11 @@
 
 **状态**：已接受 · **日期**：2026-07-19 · **关联**：SPEC §4.1、ADR 0002、风险登记 R1
 
+> 状态补充（2026-10-01）：本文是 pywebview 旧栈的 spike 存档，**只有「R1 已解决」这一结论仍然有效**（现行 R1 见 SPEC §11）。
+> 正文引用的 `spike/cookie_probe/probe.py`、`result.json`、`backend/auth/`、`backend/storage/` 以及末尾「spike → 主代码复用清单」
+> 随 Python 栈一并移除（ADR 0008），**不要照清单复用代码**；现行的 csrf 与登录实现见
+> `src-tauri/src/pixiv/csrf.rs`、`src-tauri/src/auth/`。
+
 ## 背景
 
 R1（最高风险）：SPEC §4.1 的 A 方案依赖 pywebview `window.get_cookies()` 读到 HttpOnly 的 `PHPSESSID`。读不到就要退 C 兜底（手动粘 PHPSESSID）。

@@ -37,7 +37,7 @@
 ### 设计系统维护
 
 - `DESIGN.md` 是前端视觉与交互规范的真相源；其中的色彩、字号、间距、圆角、层级、动效与组件约束优先于临时页面样式。
-- 做前端样式或组件改动时，优先复用 `DESIGN.md` 已定义的 token 和 Naive UI 主题配置；不要在页面中新增无来源的颜色、圆角、阴影或动效字面值。
+- 做前端样式或组件改动时，优先复用 `DESIGN.md` 已定义的 token、Material Web 组件与 M3 颜色角色；不要在页面中新增无来源的颜色、圆角、阴影或动效字面值。
 - 如果实现需要新增或调整设计 token、组件规则或视觉方向，必须在同一变更中同步更新 `DESIGN.md` 和 `.impeccable/design.json`；二者应保持一致。
 - 需要重新提炼或大幅刷新设计规范时，使用 `$impeccable:impeccable document`；已有 `DESIGN.md` 不得静默覆盖，先与用户确认合并或刷新范围。
 - 前端视觉验收应至少覆盖默认、hover、focus、disabled、loading、error 状态，并检查长文本、窄窗口与“减少动态效果”偏好。
@@ -47,7 +47,7 @@
 | 层 | 选型 |
 |---|---|
 | 桌面外壳 + 后端 | Tauri 2（Rust，`#[tauri::command]` IPC） |
-| 前端 | Vue 3.4+ · TypeScript · Vite 5 · Naive UI |
+| 前端 | Vue 3.4+ · TypeScript · Vite 5 · Vue Router 4 · Pinia · **@material/web（Material 3）** |
 | HTTP 抓取 | wreq 6（Chrome147 指纹伪装；版本锁定，见 ADR 0008） |
 | 数据库 | SQLite（rusqlite，schema 兼容旧版） |
 | 依赖 | cargo（后端）+ pnpm（前端） |
@@ -71,7 +71,8 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
   export LIBCLANG_PATH="C:\Users\gbandszxc\scoop\apps\llvm\current\bin"
   export CMAKE_GENERATOR="Visual Studio 17 2022"
   ```
-  MSVC 链接器缺失时包一层 `cmd /c "call <vs路径>VC\Auxiliary\Build\vcvars64.bat && cargo ..."`。`tauri` CLI 在 frontend devDependencies（`./frontend/node_modules/.bin/tauri`），仓库根跑 `tauri dev` 需 `--config '{"build":{"beforeDevCommand":""}}'` 并自起 Vite。
+  MSVC 链接器缺失时包一层 `cmd /c "call <vs路径>VC\Auxiliary\Build\vcvars64.bat && cargo ..."`。
+- **tauri CLI 来源**：`cargo tauri` 需要全局 `cargo install tauri-cli`；本机默认没装，改用仓库内 CLI——`cd frontend && pnpm tauri dev`（或 `./frontend/node_modules/.bin/tauri dev`）。若从仓库根直接调本地 CLI 遇到 Vite 未自动拉起，可加 `--config '{"build":{"beforeDevCommand":""}}'` 并自行启动 Vite（正常路径下 `beforeDevCommand` 会以 `frontend/` 为 CWD 自动执行，见 docs/PACKAGING.md）。
 
 ### Git 约定
 
@@ -84,7 +85,8 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 
 1. 替换源图 `docs/icon/raw_icon.png`（正方形最佳；非正方形脚本会居中裁方）
 2. `./scripts/make_icon.sh`——生成 1024×1024 源图到 `frontend/src/assets/icon.png`
-   （兼作 UI 侧栏图标与 tauri icon 输入；macOS 用自带 sips，无第三方依赖）
+   （兼作 UI 侧栏图标与 tauri icon 输入）。**仅 macOS 可直接跑**（依赖自带 sips）；
+   Windows 无该脚本等价路径，需自行裁方缩放后覆盖 `frontend/src/assets/icon.png`
 3. `cargo tauri icon frontend/src/assets/icon.png`——生成 `src-tauri/icons/` 全平台
    图标集，再 `cargo tauri build` 生效
 

@@ -43,7 +43,7 @@
 |---|---|
 | 桌面外壳 + 后端 | **Tauri 2（Rust）**，单进程，IPC 通信（见 ADR 0008） |
 | 前端 | **Vue 3.4+ · TypeScript · Vite 5 · Vue Router 4（hash） · Pinia · @tauri-apps/api** |
-| UI 组件库 | **Naive UI** |
+| UI 组件库 | **@material/web（Material 3）** |
 | CSS | 原生 CSS + CSS Variables + Vue `<style scoped>` |
 | HTTP 客户端 | **wreq 6（Chrome147 指纹伪装，BoringSSL）** |
 | 数据库 | **SQLite（rusqlite）**，schema 与旧 Python 版逐字兼容 |
@@ -58,7 +58,7 @@
 - ~~**pywebview 原生 JS API**：同步阻塞、无 devtools 网络面板~~ —— 旧栈（ADR 0001/0002）的历史理由，已随 ADR 0008 作废。
 - **WebSocket**：进度推送用 Tauri 事件（`emit` / `listen`）已足够，双向通信是过度设计。
 - **Tailwind / UnoCSS**：5 个页面用不上原子化 CSS 的扩展性。
-- **Element Plus / Ant Design Vue**：TS 类型与按需引入不如 Naive UI。
+- **Naive UI / Element Plus / Ant Design Vue**：整库自带一套视觉语言，与「自有 M3 设计系统」冲突（需整体覆盖主题）；@material/web 只提供 M3 原语，间距、布局与圆角由 `DESIGN.md` 自持。（本文档早期版本曾写 Naive UI，已作废。）
 - **Poetry / pip / Python**：全栈已于 2026-08 迁往 Rust（ADR 0008），Python 后端已删除。
 
 ---
@@ -117,31 +117,36 @@ pixiv-tool/
 │  ├─ Cargo.toml                # wreq 6（指纹伪装，锁版本）/ rusqlite / keyring / tokio
 │  ├─ tauri.conf.json           # devUrl 9961、frontendDist ../frontend/dist
 │  ├─ capabilities/default.json # IPC 权限（core + dialog）
-│  ├─ tests/smoke_commands.rs   # IPC 层集成冒烟（cargo 集成测试）
+│  ├─ tests/                    # smoke_commands.rs（IPC 冒烟）/ browse_smoke.rs（浏览命令离线冒烟）
 │  └─ src/
-│     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、关闭确认）
-│     ├─ state.rs               # AppState：paths/settings/db/cookies/tasks
-│     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话探测）、browse_api（浏览端点）、
-│     │                         # image_proxy（pixiv-img 协议核心，协议注册在 lib.rs）
+│     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、pixiv-img 协议、关闭确认）
+│     ├─ state.rs               # AppState：paths/settings/db/cookies/tasks/accounts
+│     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
+│     ├─ browse/                # 内嵌 Pixiv 子 WebView 生命周期（域白名单 / URL 轮询 / 登录注入）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
-│     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）
-│     ├─ commands/              # 25 个 #[tauri::command]（auth/tasks/settings/history/misc）
+│     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
+│     ├─ commands/              # 49 个 #[tauri::command]（auth 6 / browse 10 / browse_api 11 / tasks 9 / settings 3 / history 1 / misc 8 / app 1）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
+│     ├─ accounts.rs            # 多账号索引（accounts.json）+ 每账号凭据条目
+│     ├─ image_proxy.rs         # pixiv-img 协议核心（磁盘缓存 + CDN 并发闸门）
 │     └─ paths.rs / platform.rs / logging.rs
-├─ frontend/                    # Vue3 + TS + Vite
+├─ frontend/                    # Vue3 + TS + Vite + Material Web（M3）
 │  ├─ src/
-│  │  ├─ views/                 # CrawlView / IllustrationView / TasksView / HistoryView / SettingsView
-│  │  ├─ components/
+│  │  ├─ views/                 # CrawlView / IllustrationView / TasksView / HistoryView / SettingsView / PixivView
+│  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking + Work/Series/Author/Novel
+│  │  ├─ components/            # auth/ navigation/ browse/（WorkCard / WorkGrid / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
+│  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
+│  │  ├─ api/browse.ts          # 浏览契约类型 + 非 Tauri 环境的确定性 mock 层
 │  │  ├─ locales/               # zh-CN.ts / en-US.ts
-│  │  ├─ styles/                # 全局 CSS Variables
-│  │  ├─ router/                # hash 模式
-│  │  └─ App.vue
+│  │  ├─ styles/                # 全局 CSS Variables（--md-sys-color-* 等）
+│  │  └─ router/                # hash 模式
 │  └─ vite.config.ts            # port 9961 + strictPort（无 proxy）
-├─ docs/                        # 本文档与 ADR
+├─ docs/                        # 本文档与 ADR、调研、agents 约定
+├─ scripts/                     # make_icon.sh（macOS 图标生成）
 └─ README.md
 ```
 
@@ -361,7 +366,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   source_type TEXT NOT NULL,               -- 'single' | 'series' | 'user'
   source_id   TEXT NOT NULL,
   category    TEXT NOT NULL DEFAULT 'novel',  -- 'novel' | 'illustration'
-  status      TEXT NOT NULL,               -- 'pending'|'running'|'paused'|'done'|'failed'|'canceled'
+  status      TEXT NOT NULL DEFAULT 'pending',  -- 'pending'|'running'|'paused'|'done'|'failed'|'canceled'
   total       INTEGER DEFAULT 0,
   done        INTEGER DEFAULT 0,
   skipped     INTEGER DEFAULT 0,
@@ -397,6 +402,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "output_formats": ["txt", "markdown"],
   "language": "zh-CN",
   "theme": "auto",
+  "theme_color": "pixiv",
   "backend_port": null,
   "max_wait_seconds": 180
 }
@@ -413,6 +419,9 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   兼容旧配置文件（仍在 `settings_save` 白名单内），无实际作用。
 - `max_wait_seconds`：任务最大运行时长（秒），默认 180，合法区间 30~86400，
   设置页可配；任务运行超过该时长自动标记为 failed（**不含暂停时间**）。
+- `theme` / `theme_color`：主题模式（`light`/`dark`/`auto`）与色板（`pixiv` 默认 /
+  `indigo` / `jade` / `violet` / `amber`），实现见 §6.3。两个键都在
+  `settings_save` 白名单内。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
 
@@ -433,7 +442,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   抓取客户端 / auth_status / webview 自动注入等读取方零感知；每账号另存
   独立条目 `u-<user_id>`（分片规则同上）；账号索引
   `config/accounts.json` **只存用户元信息**（user_id / pixiv_id / name /
-  头像缓存文件名），**任何 cookie 都不落 config**。显式登录与
+  profile_img 原始头像 URL / avatar_file 本地缓存文件名 / saved_at 登记时间），
+  **任何 cookie 都不落 config**。显式登录与
   browse_sync_login 成功时双写镜像/账号条目，auth_status 只刷新
   索引元信息（旧单账号首次校验仍补建账号条目），避免启动时重复访问 Keychain；
   退出登录移除当前账号（镜像 + 条目 + 索引项），有剩余账号时自动激活列表
@@ -453,6 +463,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 | 任务 | `/tasks`（支持小说/插画分类筛选） | ✅ |
 | 历史 | `/history`（支持小说/插画分类切换） | ✅ |
 | 设置 | `/settings` | ✅ |
+| Pixiv 浏览器 | `/pixiv`（内嵌子 WebView 直连 pixiv 主站，与自有浏览模式互补，ADR 0012） | ✅ |
 | 浏览-首页 | `/browse/home`（推荐流，换一批去重追加） | ✅ |
 | 浏览-频道 | `/browse/illustration` `/browse/manga` `/browse/novel`（关注新作/推荐/排行/热门标签板块） | ✅ |
 | 浏览-发现 | `/browse/discover`（按历史推荐，前端去重无限滚动） | ✅ |
@@ -472,16 +483,21 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 - 框架：**vue-i18n**
 - 语言：**简体中文（默认）+ 英文**
 - 文件：`src/locales/zh-CN.ts` / `en-US.ts`
-- 设置页可切，记忆到 `settings.json`
+- 设置页可切；启动期以 `localStorage["pixiv-tool-lang"]` 为准，settings.json 的
+  `language` 加载后回填并向 localStorage 同步（两处同写，避免首屏语言闪变）
 
 ### 6.3 主题
 
-- 选项：浅色 / 深色 / 跟随系统（设置页下拉，持久化到 settings.json）
-- 实现：CSS Variables（`frontend/src/styles/main.css` 根 token：`--pixiv-blue`、
-  `--surface`、`--ink` 系、`--divider`、`--radius-control`、`--space-*`）+
-  Naive UI `n-config-provider` 注入 `theme-overrides`（pixiv 蓝主色）
-- 现状：深色主题尚未接线——App.vue 当前固定浅色（`theme = null`），
-  dark / auto 选项仅保存配置不生效
+- 选项：浅色 / 深色 / 跟随系统（设置页下拉，持久化到 `settings.json` 的 `theme`）
+- 实现：`frontend/src/styles/main.css` 定义 M3 颜色角色（`--md-sys-color-*`）与
+  `--surface` / `--ink` / `--space-*` / `--radius-*` 别名；`dark`，或 `auto` 且
+  系统 `prefers-color-scheme: dark` 时，`App.vue` 给 `<html>` 加 `.dark` 类并调
+  `setWindowTheme`（主题确已接线，旧描述"深色未生效"已作废）
+- 色板：`theme_color` 五档（pixiv 默认 / indigo / jade / violet / amber）经
+  `html[data-palette]` 覆盖 primary / secondary 及其 on/container 角色，
+  `html.dark[data-palette]` 提供配对深色值
+- UI 层为 `@material/web`（M3 原语），视觉规范的真相源是根目录 `DESIGN.md`，
+  `.impeccable/design.json` 与其保持同步
 
 ### 6.4 浏览模式（browse，ADR 0012）
 
@@ -523,7 +539,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 6 键 + 校验） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 7 键 + 校验，含 `theme_color`） |
 | `clear_logs` | 清空 app.log |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
@@ -540,8 +556,23 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_user_profile(id)` | 作者资料（/ajax/user/{id}?full=1） |
 | `browse_user_works(id, kind, page)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量 |
 | `browse_novel_series(id, last_order)` | 系列元数据 + 目录（last_order 游标） |
+| `app_exit` | 退出应用（前端确认框确认后调用，与 Cmd+Q 路径一致） |
 
-以上命令实现于 `commands/browse_api_cmds.rs`，公共登录守卫 `build_browse_api`：
+**内嵌 Pixiv 子 WebView 控制命令**（`commands/browse_cmds.rs`，10 个，服务于 `/pixiv` 路由）：
+
+| 命令 | 说明 |
+|---|---|
+| `browse_open` | 创建并显示子 WebView（已存在则复用；按离开时记录的最后 URL 恢复） |
+| `browse_show` / `browse_hide` | 临时弹窗只隐藏不销毁 |
+| `browse_set_bounds(rect)` | 随布局与窗口尺寸同步 WebView 矩形 |
+| `browse_navigate(url)` | 地址栏跳转（域白名单内） |
+| `browse_go_back` | 后退 |
+| `browse_deactivate` | 离开 `/pixiv`：记录最后 URL 并销毁实例、停止 URL 轮询 |
+| `browse_set_theme(dark)` | 同步站点页面深浅色 |
+| `browse_sync_login` | 登录态变更（切换/退出账号）后同步子 WebView |
+| `browse_inject_login` | 注入当前账号 Cookie 并回首页 |
+
+以上数据命令实现于 `commands/browse_api_cmds.rs`，公共登录守卫 `build_browse_api`：
 无 PHPSESSID 一律 `Err("未登录或登录态已失效，请先登录")`（前端据此弹登录窗）。
 图片经 `pixiv-img` 自定义协议（`image_proxy.rs`，白名单 `*.pximg.net`，磁盘缓存
 1GB，CDN 并发 6 不占 ajax 限速），不走 invoke。
@@ -603,7 +634,7 @@ cargo tauri dev        # 仓库根执行；等价 cd frontend && pnpm tauri dev
 
 1. `cargo tauri build`（自动 `pnpm build` 前端 → 嵌入 → bundler 产出安装包）
 2. 调试产物：`cargo tauri build --debug --no-bundle` →
-   `src-tauri/target/debug/pixiv-tool`
+   `src-tauri/target/debug/pixiv-tool`（Windows 为 `pixiv-tool.exe`）
 3. 图标：`cargo tauri icon frontend/src/assets/icon.png`（已生成于
    `src-tauri/icons/`）
 
@@ -670,6 +701,9 @@ GitCode 托管无流水线，`.github/workflows/release.yml` 已移除。**打�
 | 0006 | 真实 Chromium 登录 + macOS Keychain | [adr/0006-browser-login-keychain.md](adr/0006-browser-login-keychain.md) |
 | 0007 | 插画抓取（原图/ugoira） | [adr/0007-illustration-crawling.md](adr/0007-illustration-crawling.md) |
 | 0008 | 全量重构为 Tauri 2 + Rust，移除 Python 后端 | [adr/0008-tauri-rewrite.md](adr/0008-tauri-rewrite.md) |
+| 0009 | 恢复 Webview 登录回退窗（Tauri 原生实现） | [adr/0009-webview-login-fallback.md](adr/0009-webview-login-fallback.md) |
+| 0010 | 多账号登录态存储与切换 | [adr/0010-multi-account-login.md](adr/0010-multi-account-login.md) |
+| 0011 | 登录窗必然以未登录态打开 | [adr/0011-fresh-login-window.md](adr/0011-fresh-login-window.md) |
 | 0012 | 浏览模式：自有 UI 代理 pixiv 只读接口（内嵌浏览器保留） | [adr/0012-browse-mode-own-ui.md](adr/0012-browse-mode-own-ui.md) |
 
 ADR 按需追加，不强制一次性写完。

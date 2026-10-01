@@ -11,11 +11,11 @@ cargo tauri build
 
 # 只要调试二进制（不出安装包，日常验证用）
 cargo tauri build --debug --no-bundle
-# 产物：src-tauri/target/debug/pixiv-tool
+# 产物：src-tauri/target/debug/pixiv-tool（Windows 为 pixiv-tool.exe）
 ```
 
 产物位置：`src-tauri/target/release/bundle/`（dmg/app on macOS、nsis/msi on
-Windows、deb/appimage on Linux）。
+Windows、deb/rpm/appimage on Linux——`tauri.conf.json` 的 `targets` 为 `all`）。
 
 注意：`beforeDevCommand` / `beforeBuildCommand` 以 **`frontend/`** 为 CWD
 执行（tauri-cli 2.x 实测行为；配置里写 `pnpm build`，不是

@@ -7,7 +7,7 @@
 | 层 | 选型 |
 |---|---|
 | 桌面外壳 + 后端 | Tauri 2（Rust，IPC 通信，无本地 HTTP 服务） |
-| 前端 | Vue 3.4+ · TypeScript · Vite 5 · Naive UI |
+| 前端 | Vue 3.4+ · TypeScript · Vite 5 · Material Web（Material 3） |
 | HTTP 抓取 | wreq 6（Chrome147 TLS/HTTP2 指纹伪装） |
 | 数据库 | SQLite（rusqlite，schema 兼容旧 Python 版数据） |
 | 依赖 | cargo（后端）+ pnpm（前端） |
@@ -16,9 +16,12 @@
 
 ### 前置条件
 
-- Rust 1.85+（edition 2024）+ [Tauri CLI](https://tauri.app/)（`cargo install tauri-cli`）
+- Rust 1.85+（edition 2024）+ Tauri CLI —— 安装方式二选一：
+  `cargo install tauri-cli`（全局，之后可用 `cargo tauri`），
+  或用仓库内已声明的本地 CLI（`cd frontend && pnpm tauri ...`，无需全局安装）
 - Node.js 18+ + [pnpm](https://pnpm.io/)
 - **cmake**（全平台：wreq 现场编译 BoringSSL；macOS `brew install cmake`）
+- **LLVM/libclang**（Windows 构建必需，btls-sys 用 bindgen 生成绑定：`winget install LLVM.LLVM`）
 - Windows 10+ 或 macOS 12+；Linux 需 webkit2gtk（见下）
 
 ### 启动开发

@@ -32,8 +32,8 @@ wreq 6.0.0-rc.31 + wreq-util 3.0.0-rc.14，Chrome147 emulation 匿名访问
 | 数据库 | sqlite3 | rusqlite（schema 逐字兼容，旧 app.db 可直接打开） |
 | 打包 | PyInstaller | Tauri bundler |
 
-前端 Vue3 + Naive UI 保留，api 层从 axios/EventSource 改为 invoke/listen
-（26 处调用逐条对账迁移）。
+前端 Vue3 保留（UI 层其后由 Naive UI 换为 `@material/web`，见 ADR 0001 状态补充），
+api 层从 axios/EventSource 改为 invoke/listen（26 处调用逐条对账迁移）。
 
 ## 语义保持与有意变更
 
@@ -49,6 +49,8 @@ max_wait 排除暂停时长）、DB schema、settings.json 键与迁移逻辑、
 2. **回退登录窗裁剪**：pywebview 缺浏览器时的登录回退窗不复存在。Tauri 下
    WKWebView/WebView2 无统一 Cookie 读取 API（PHPSESSID 是 HttpOnly）。缺
    Chrome/Edge/Chromium 时提示改用手动 Cookie 登录。
+   **⚠ 此条已于 2026-08-21 被 [ADR 0009](0009-webview-login-fallback.md) 推翻**：
+   缺浏览器时改为回退 Tauri 原生 webview 登录窗，不再只提示手动 Cookie。
 3. Windows Cookie 从 DPAPI 文件（cookies.dat）改为系统 Credential Manager；
    macOS Keychain service/account 不变，与旧版登录态互读兼容。
 4. 路由改 hash 模式（Tauri 自定义协议下无服务端 fallback）。
@@ -57,7 +59,8 @@ max_wait 排除暂停时长）、DB schema、settings.json 键与迁移逻辑、
 
 ## 后果
 
-- 单二进制 + 前端资源，分发体积与依赖面显著下降；无端口、无本地 HTTP 面。
+- 单二进制 + 前端资源，分发体积与依赖面显著下降；应用自身无 HTTP 服务、无监听端口
+  （登录期由**外部浏览器**占用一个随机 `127.0.0.1` 调试端口，非应用监听）。
 - 浏览器指纹伪装锁定 wreq 6.0.0-rc.31 / wreq-util 3.0.0-rc.14（**必须 ≥
   3.0.0-rc.12**，更早版本 GPL-3.0 传染）。升级需重新验证风控通过性。
 - 构建 macOS/Linux 需 cmake（BoringSSL 现场编译）。

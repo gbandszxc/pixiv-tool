@@ -2,6 +2,10 @@
 
 **状态**：已接受 · **日期**：2026-08-02 · **关联 SPEC**：§4.2、§4.4、§5.1
 
+> 状态补充（2026-10-01）：本文写于 Python 栈时期，正文的 `IllustSource`(ABC)、`SSE 进度机制`、`PixivClient._request`、`Source 子类`
+> 均为旧实现措辞；决策语义（插画来源分类、`novel/` 与 `pic/` 分域、ugoira 取 `originalSrc`、`tasks.category` 列）
+> 由 Rust 版承接（`src-tauri/src/core/sources.rs`、`core/illust_crawler.rs`）。§「浏览器实测结论」的接口事实仍然有效。
+
 ## 背景
 
 V1 聚焦小说抓取。用户要求新增插画抓取（单作品 / 多页作品 / 用户全集），
