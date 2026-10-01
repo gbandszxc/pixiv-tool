@@ -150,15 +150,23 @@ jobs:
             [ -n "$VSPATH" ] || VSPATH=$("$VSWHERE" -latest -products '*' -property installationPath | tr -d '\r' | head -1)
             echo "VS 安装路径: $VSPATH"
             [ -n "$VSPATH" ] || { echo "::error::vswhere 未找到 MSVC 工具链"; exit 1; }
-            VCVARS_WIN="${VSPATH}\\VC\\Auxiliary\\Build\\vcvars64.bat"
-            # vcvars 后的全量环境落到文件再转 bash export；失败时输出 stderr 便于诊断
-            cmd //c "call \"$VCVARS_WIN\" && set" > msvc_env.raw 2> msvc_env.err || {
+            # 引号无法穿越 MSYS→cmd 参数边界（\" 会被 cmd 当成字面量），改为生成
+            # 临时批处理执行，引号写在文件内容里由 cmd 原生解析
+            printf '@echo off\r\ncall "%s\\VC\\Auxiliary\\Build\\vcvars64.bat"\r\nset\r\n' "$VSPATH" > import_msvc.cmd
+            cmd //c import_msvc.cmd > msvc_env.raw 2> msvc_env.err || {
               echo "::error::vcvars64.bat 调用失败"; tail -20 msvc_env.err; exit 1;
             }
-            eval "$(grep -aE '^[A-Za-z_][A-Za-z0-9_]*=' msvc_env.raw \
-              | awk -F= '{ printf "export %s=\"%s\"\n", $1, substr($0, length($1)+2) }')"
-            # INCLUDE/LIB 保持 Windows 格式供 cl.exe 使用；PATH 单独转成 MSYS 冒号格式
-            WINPATH=$(grep -a '^PATH=' msvc_env.raw | head -1 | cut -d= -f2-)
+            if ! grep -aq '^INCLUDE=' msvc_env.raw; then
+              echo "::error::vcvars 未生成 INCLUDE（MSVC 环境不完整）"; tail -5 msvc_env.err; exit 1
+            fi
+            # 导出为单引号字面量（Windows 环境值可能以反斜杠结尾，双引号会被转义
+            # 吞掉收尾引号）；INCLUDE/LIB 保持 Windows 格式供 cl.exe 使用
+            grep -aE '^[A-Za-z_][A-Za-z0-9_]*=' msvc_env.raw | grep -av '^PATH=' \
+              | awk -F= '{ v=substr($0, length($1)+2); sub(/\r$/, "", v); gsub(/\047/, "\047\\\\\047\047", v); printf "export %s=\047%s\047\n", $1, v }' \
+              > msvc_exports.sh
+            source msvc_exports.sh
+            # PATH 单独转成 MSYS 冒号格式（分号格式 bash 无法用于命令查找）
+            WINPATH=$(grep -a '^PATH=' msvc_env.raw | head -1 | cut -d= -f2- | tr -d '\r')
             export PATH="$(printf '%s' "$WINPATH" | tr ';' '\n' | sed '/^$/d' | cygpath -u -f - | paste -sd: -):$PATH"
             command -v cl.exe >/dev/null 2>&1 || { echo "::error::MSVC 环境导入失败（cl.exe 不在 PATH）"; exit 1; }
             cl.exe 2>&1 | head -1 || true
