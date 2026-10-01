@@ -13,24 +13,42 @@ macOS / Linux / Git Bash 使用 `bash ./dev.sh`。无参数、`-h` 或 `--help`
 | 子命令（两份脚本一致） | 行为 |
 |---|---|
 | `install` | `pnpm install --frozen-lockfile`，安装前端及本地 Tauri CLI |
-| `dev` | 从仓库根调用本地 Tauri CLI，启动 Vite + Rust 热重载 + 桌面窗口 |
-| `frontend` | 仅启动 Vite（9961，strictPort），浏览器内不提供 Tauri IPC |
+| `dev [start\|stop\|restart]` | 管理后台桌面开发服务（默认 `start`），复用或启动本仓库 Vite，再启动 Rust 热重载 + 桌面窗口 |
+| `frontend [start\|stop\|restart]` | 管理后台 Vite 服务（默认 `start`，9961，strictPort），浏览器内不提供 Tauri IPC |
 | `build` / `build release` | 前端构建 + Rust release + 平台安装包 |
 | `build debug` | 前端构建 + Rust debug + 平台安装包，**不**附加 `--no-bundle` |
 | `check` | 前端类型检查及生产构建，再执行 `cargo check --locked` |
 | `test` | `cargo test --locked`（单元与集成测试） |
 | `logs [app\|dev\|frontend\|build\|install\|check\|test] [-f\|--follow]` | 默认读取开发态 `data/logs/app.log` 最后 100 行；指定子命令读取其控制台日志；跟随模式等待追加内容，Ctrl+C 退出 |
 
-每次执行操作覆盖 `.dev/logs/<子命令>.log`，操作内部的多个阶段追加到同一份
+每次启动服务或执行前台操作覆盖 `.dev/logs/<子命令>.log`，操作内部的多个阶段追加到同一份
 UTF-8 日志，合并保存子进程 stdout / stderr（含警告与空行）；该目录已忽略，
 不入库。`logs app` 不查找 release 安装后的日志。
 未知命令、多余参数、非法构建模式退出码为 2；缺工具或日志不存在为 1；
-子进程失败保留其退出码。命令前台运行，Ctrl+C 停止；不会关闭现有开发进程、
-清除数据或改用其他端口。`dev` 与 `frontend` 都使用 9961，不应同时启动。
+子进程失败保留其退出码。`dev` / `frontend` 后台运行，使用对应 `stop` 停止，
+关闭调用终端不会停止服务；其他操作仍在前台运行，Ctrl+C 停止。
+
+服务身份保存在 `.dev/pids/`（Windows 为 JSON，Unix 为 PID + 启动时间记录），
+停止前核对 PID、启动时间和命令，清理过期记录，拒绝终止无关进程。`start`
+重复执行不重复启动；`restart` 先停止再启动。可接管确认属于本仓库的已运行
+Vite（Windows 核对命令、源映射内容及仓库 package 路径；Unix 核对命令和工作目录），
+不会按端口盲杀。9961 被其他程序占用时明确失败，不自动换端口。
+
+`dev` 先确保前端可用，运行时通过 `.dev/tauri-dev.json`（Windows）或等价
+CLI 配置禁用重复的 `beforeDevCommand`。如果前端由这次 `dev start` 创建，
+`dev stop` 同时停止该前端；复用的已有前端则保留。`frontend stop/restart`
+仅作用于前端，已运行的桌面开发进程不会被连带停止。启动返回表示已创建后台
+开发进程，Rust 编译及桌面窗口启动进度通过 `logs dev -f` 查看。
+进程树停止是强制终止，不等同于应用内的正常退出；操作前确保无需要保留的运行中任务。
 
 ```powershell
 .\dev.ps1 install
-.\dev.ps1 dev
+.\dev.ps1 dev start
+.\dev.ps1 dev restart
+.\dev.ps1 dev stop
+.\dev.ps1 frontend start
+.\dev.ps1 frontend restart
+.\dev.ps1 frontend stop
 .\dev.ps1 build release
 .\dev.ps1 build debug
 .\dev.ps1 logs dev -f
@@ -45,7 +63,9 @@ Windows 的 PowerShell 入口自动使用 MSVC Rust stable 工具链、Visual St
 脚本不会下载 Rust / Visual Studio / LLVM。LLVM 自动查找 Scoop 的
 `~/scoop/apps/llvm/current/bin` 与 `%ProgramFiles%/LLVM/bin`，可通过
 `LIBCLANG_PATH` 指定其他目录；`VSINSTALLDIR` 可覆盖 VS 2022 的自动发现。
-macOS / Linux 直接使用当前 cargo 工具链与环境，系统依赖仍按下文安装。
+macOS / Linux 直接使用当前 cargo 工具链与环境，服务管理另需 `lsof`，
+系统依赖仍按下文安装。Unix 操作以 `.dev/pids/operation.lock` 目录串行化；
+若控制进程被强杀，确认无启动/停止操作正在执行后可删除该空锁目录再试。
 
 ### 直接调用 CLI
 

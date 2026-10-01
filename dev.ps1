@@ -106,6 +106,7 @@ function Get-ServiceRecord([string]$name) {
     $path = Join-Path $root ".dev/pids/$name.json"
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     $record = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    if ("$($record.pid)" -notmatch '^[1-9][0-9]*$') { throw "Invalid service record: $path" }
     $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($record.pid)"
     if (-not $process -or "$($process.CreationDate.ToUniversalTime().Ticks)" -ne "$($record.created)") {
         Remove-Item -LiteralPath $path
@@ -114,6 +115,8 @@ function Get-ServiceRecord([string]$name) {
     $line = "$($process.CommandLine)".Replace('\', '/')
     if ($record.external) {
         if ($line -notmatch 'vite/bin/vite\.js') { throw "Refusing to stop changed process $($record.pid)." }
+        $verified = Get-FrontendProcess
+        if (-not $verified -or $verified.ProcessId -ne $record.pid) { throw 'Adopted frontend no longer matches this repository.' }
     } elseif ($line.IndexOf("$root/dev.ps1".Replace('\', '/'), [StringComparison]::OrdinalIgnoreCase) -lt 0 -or $line -notmatch "__run $name(?:\s|$)") {
         throw "Service record does not match its process: $path"
     }
@@ -307,7 +310,12 @@ try {
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $tauri += '.cmd' }
     if ($command -cin @('dev', 'build') -and -not (Test-Path -LiteralPath $tauri)) { throw 'Local Tauri CLI missing. Run ./dev.ps1 install first.' }
     switch -CaseSensitive ($command) {
-        'dev' { Invoke-Logged $tauri @('dev', '--config', '{"build":{"beforeDevCommand":""}}') $root }
+        'dev' {
+            # A file avoids cmd.exe stripping quotes from inline JSON on PS 5.1.
+            $devConfig = Join-Path $root '.dev/tauri-dev.json'
+            [IO.File]::WriteAllText($devConfig, '{"build":{"beforeDevCommand":""}}', [Text.UTF8Encoding]::new($false))
+            Invoke-Logged $tauri @('dev', '--config', $devConfig) $root
+        }
         'frontend' { Invoke-Logged 'pnpm' @('dev') $frontend }
         'build' {
             $buildArgs = @('build')
