@@ -96,6 +96,10 @@ jobs:
             libxdo-dev libssl-dev libayatana-appindicator3-dev \
             librsvg2-dev libclang-dev
 
+      - name: 安装 NASM（windows-2025-vs2026 镜像未预装，BoringSSL 汇编需要）
+        if: runner.os == 'Windows'
+        run: choco install nasm -y --no-progress
+
       - name: 安装前端依赖
         working-directory: frontend
         run: pnpm install --frozen-lockfile
@@ -133,14 +137,21 @@ jobs:
           # frontend/ 下的本地 CLI；beforeBuildCommand 由上一步显式完成，这里清空
           if [ "$RUNNER_OS" = "Windows" ]; then
             export LIBCLANG_PATH="C:\Program Files\LLVM\bin"
-            # btls-sys 的 cmake 用 Ninja 生成器（VS 生成器在 runner 上实例探测不稳），
-            # Ninja 需要 cl.exe，故先导入 MSVC 环境再构建
+            # windows-latest 已切到 windows-2025-vs2026 镜像（VS2026，无 VS2022 实例、
+            # 未预装 NASM）。btls-sys 的 cmake 用 Ninja 生成器 + vswhere 动态发现
+            # VS 路径导入 MSVC 环境；BoringSSL 另需 NASM（汇编）与 Go（镜像已带 Go）
             export CMAKE_GENERATOR="Ninja"
-            VCVARS="C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-            [ -f "$VCVARS" ] || VCVARS="C:\Program Files (x86)\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-            [ -f "$VCVARS" ] || { echo "::error::未找到 vcvars64.bat"; exit 1; }
+            export PATH="/c/Program Files/NASM:$PATH"
+            command -v nasm >/dev/null 2>&1 || { echo "::error::NASM 不可用"; exit 1; }
+            command -v go >/dev/null 2>&1 || { echo "::error::Go 不可用（BoringSSL 需要）"; exit 1; }
+            VSWHERE="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+            [ -f "$VSWHERE" ] || { echo "::error::未找到 vswhere"; exit 1; }
+            VSPATH=$("$VSWHERE" -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | tr -d '\r' | head -1)
+            [ -n "$VSPATH" ] || VSPATH=$("$VSWHERE" -latest -products '*' -property installationPath | tr -d '\r' | head -1)
+            echo "VS 安装路径: $VSPATH"
+            [ -n "$VSPATH" ] || { echo "::error::vswhere 未找到 MSVC 工具链"; exit 1; }
             eval "$(
-              cmd //c "call \"$VCVARS\" >nul 2>&1 && set" \
+              cmd //c "call \"${VSPATH}\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul 2>&1 && set" \
                 | awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { printf "export %s=\"%s\"\n", $1, substr($0, length($1)+2) }'
             )"
             command -v cl.exe >/dev/null 2>&1 || { echo "::error::MSVC 环境导入失败（cl.exe 不在 PATH）"; exit 1; }
