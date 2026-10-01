@@ -33,6 +33,9 @@ export default {
       nextPage: "下一页",
       currentPage: "第 {n} 页",
       pageOf: "{current} / {total}",
+      jumpTo: "跳转至",
+      pageUnit: "页",
+      jumpToLabel: "跳转至指定页",
     },
   },
   app: {

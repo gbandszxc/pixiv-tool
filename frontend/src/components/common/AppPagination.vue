@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 公共分页组件（Material 3，跨域 common/）：对齐 Ant Design Pagination 的
- * 常用能力——总数回显 / 每页容量下拉 / prev-next / 页码按钮 + 省略号 / 响应式收缩。
+ * 常用能力——总数回显 / 每页容量下拉 / prev-next / 页码按钮 + 省略号 /
+ * 快捷跳页输入组（showQuickJumper）/ 响应式收缩。
  *
  * 数据模式：
  * - `total` 或 `totalPages` 二选一传入 → 内部换算 pageCount（已知总页数）；
@@ -17,7 +18,7 @@
  * （sticky 底部、surface 底 + 上缘 divider、md-icon-button + 跳页 select），
  * 不显示页码窗口与总数区，供系列页 / 阅读器迁移。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
 
 const props = withDefaults(
@@ -134,6 +135,21 @@ function onSizeChange(event: Event): void {
 function onReaderSelect(event: Event): void {
   goTo(Number((event.target as HTMLSelectElement).value));
 }
+
+/** 跳页输入框草稿（非受控：仅 Enter / blur 时解析，解析后无论是否导航都清空） */
+const jumpInput = ref("");
+
+/** 快捷跳页：parseInt 落在 1..pageCount 才 goTo；越界 / 非数字只清空不导航 */
+function onJump(): void {
+  const raw = jumpInput.value.trim();
+  jumpInput.value = "";
+  if (props.disabled || raw === "") return;
+  const count = pageCount.value;
+  if (count === null) return;
+  const page = Number.parseInt(raw, 10);
+  if (!Number.isFinite(page) || page < 1 || page > count) return;
+  goTo(page);
+}
 </script>
 
 <template>
@@ -172,7 +188,7 @@ function onReaderSelect(event: Event): void {
     </div>
   </nav>
 
-  <!-- default 变体：流内分页行三段式——左总数区（或 #start）→ 中右 prev+页码窗口+next → 最右容量下拉 -->
+  <!-- default 变体：流内分页行四段式——左总数区（或 #start）→ prev+页码窗口+next → 跳页输入组 → 最右容量下拉 -->
   <nav v-else class="app-pagination" :aria-label="t('common.pagination.navLabel')">
     <span v-if="$slots.start" class="pg-start"><slot name="start" /></span>
     <span v-else-if="total !== undefined" class="pg-total">{{ t("common.pagination.total", { count: total }) }}</span>
@@ -219,6 +235,25 @@ function onReaderSelect(event: Event): void {
     >
       <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
     </button>
+    <!-- 快捷跳页输入组（对齐 antd showQuickJumper）：已知总页数且 >1 才渲染，恒在容量下拉左侧 -->
+    <label
+      v-if="pageCount !== null && pageCount > 1"
+      class="pg-jump"
+      :class="{ 'is-disabled': disabled }"
+    >
+      <span class="pg-jump-text">{{ t("common.pagination.jumpTo") }}</span>
+      <input
+        v-model="jumpInput"
+        type="text"
+        inputmode="numeric"
+        class="pg-jump-input"
+        :disabled="disabled"
+        :aria-label="t('common.pagination.jumpToLabel')"
+        @keydown.enter.prevent="onJump"
+        @blur="onJump"
+      />
+      <span class="pg-jump-text">{{ t("common.pagination.pageUnit") }}</span>
+    </label>
     <!-- 容量下拉恒居翻页组右侧（margin-left auto 推至行尾）；自绘原生小号 select 保证 32px 控制高度 -->
     <select
       v-if="pageSizeOptions"
@@ -362,6 +397,55 @@ function onReaderSelect(event: Event): void {
   outline-offset: 2px;
 }
 
+/* 快捷跳页输入组：文案 + 输入框 + 「页」，行尾段（margin-left auto 与容量下拉成对）；
+   jump 存在时由它接管行尾推挤，紧邻的容量下拉取消 auto 保持贴合 */
+.pg-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: calc(var(--space-lg) * 2);
+  margin-left: auto;
+  color: var(--ink-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.pg-jump + .pg-size {
+  margin-left: 0;
+}
+
+.pg-jump.is-disabled {
+  color: var(--md-sys-color-outline);
+}
+
+.pg-jump-text {
+  display: inline-flex;
+  align-items: center;
+}
+
+.pg-jump-input {
+  box-sizing: border-box;
+  width: calc(var(--space-xl) * 2);
+  height: calc(var(--space-lg) * 2);
+  padding: 0 var(--space-xxs);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 45%, transparent);
+  border-radius: var(--radius-control);
+  background: var(--md-sys-color-surface-container);
+  color: var(--ink);
+  font-size: 13px;
+  text-align: center;
+}
+
+.pg-jump-input:disabled {
+  color: var(--ink-subtle);
+  cursor: default;
+}
+
+.pg-jump-input:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
 .pg-unknown-label {
   display: inline-flex;
   align-items: center;
@@ -421,7 +505,7 @@ function onReaderSelect(event: Event): void {
   stroke-width: 1.8;
 }
 
-/* compact 断点：隐藏页码窗口，显示「current / pageCount」；prev/next 与容量下拉保留，32px 高度同规 */
+/* compact 断点：隐藏页码窗口，显示「current / pageCount」；prev/next、跳页输入组与容量下拉保留（随 wrap 自然换行），32px 高度同规 */
 @media (max-width: 640px) {
   .pg-window {
     display: none;

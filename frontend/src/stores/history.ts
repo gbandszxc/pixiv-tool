@@ -11,7 +11,7 @@ export const useHistoryStore = defineStore("history", () => {
   const items = ref<HistoryItem[]>([]);
   const total = ref(0);
   const page = ref(1);
-  const pageSize = ref(50);
+  const pageSize = ref(20);
 
   async function fetchHistory(category: HistoryCategory, keyword?: string) {
     const data = await invoke<HistoryListResponse>("history_list", {

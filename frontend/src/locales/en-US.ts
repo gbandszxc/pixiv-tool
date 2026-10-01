@@ -33,6 +33,9 @@ export default {
       nextPage: "Next page",
       currentPage: "Page {n}",
       pageOf: "{current} / {total}",
+      jumpTo: "Go to",
+      pageUnit: "Page",
+      jumpToLabel: "Jump to page",
     },
   },
   app: {
