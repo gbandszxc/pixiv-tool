@@ -41,7 +41,7 @@
     { "name": "Outlined Button", "kind": "button", "refersTo": "button-outlined", "description": "Material Web secondary action such as browse, sync or batch delete." },
     { "name": "Form Controls", "kind": "input", "refersTo": "md-outlined-text-field, md-outlined-select, md-radio, md-checkbox", "description": "Material Web controls for source IDs, settings and selection." },
     { "name": "Sidebar Navigation", "kind": "nav", "refersTo": "navigation-item-active", "description": "256px left navigation that collapses to 72px; active item uses primary-container." },
-    { "name": "Dialog", "kind": "dialog", "refersTo": "native-dialog", "description": "Native dialog styled with surface-container, 28px radius and a scrim; no Material Web dialog component is imported." },
+    { "name": "Dialog", "kind": "dialog", "refersTo": "native-dialog", "description": "Native dialog styled with surface-container, 28px radius and a scrim; Material Web's dialog component is not used." },
     { "name": "Task Progress", "kind": "custom", "refersTo": "md-linear-progress", "description": "Material Web linear progress paired with text-first status and metadata." }
     ,{ "name": "Snackbar", "kind": "feedback", "refersTo": "m3-snackbar", "description": "Global top-right notification that disappears after 3.2 seconds." }
     ,{ "name": "Pagination", "kind": "navigation", "refersTo": "page-size", "description": "History and task lists offer 20, 50, or 100 rows per page." }
