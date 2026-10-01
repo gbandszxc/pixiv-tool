@@ -25,7 +25,8 @@ export default {
     browseR18Hidden: "已隐藏 {count} 件 R-18 作品",
   },
   app: {
-    exitConfirmTitle: "确认退出 Pixiv Tool 吗？",
+    exitConfirmTitle: "退出 Pixiv Tool？",
+    exitConfirmBody: "应用将完全退出，进行中的任务会被中断。",
     exit: "退出",
   },
   nav: {
@@ -47,8 +48,7 @@ export default {
     browseBookmark: "收藏",
   },
   auth: {
-    drawerTitle: "账号",
-    openAccountDrawer: "打开账号抽屉",
+    openAccountMenu: "打开账号菜单",
     notLoggedInHint: "尚未登录，添加账号后即可使用抓取与浏览功能",
     accounts: "账号",
     addAccount: "添加账号",

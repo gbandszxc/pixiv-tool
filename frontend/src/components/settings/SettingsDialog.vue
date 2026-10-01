@@ -10,7 +10,7 @@
 
 <script setup lang="ts">
 /**
- * 设置弹窗：账号抽屉「设置」入口打开的模态 dialog，承载 SettingsPanel（原
+ * 设置弹窗：账号菜单「设置」入口打开的模态 dialog，承载 SettingsPanel（原
  * SettingsView 完整表单）。设置项后续增多时在弹窗内分组扩展。✕ / Esc / 点
  * backdrop 关闭，关闭前经 SettingsPanel.beforeClose() 恢复未保存的主题预览。
  */

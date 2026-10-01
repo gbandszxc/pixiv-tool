@@ -60,7 +60,7 @@
 <script setup lang="ts">
 /**
  * 设置面板（可复用）：原 SettingsView 的完整表单迁入，承载于模态设置弹窗
- * （SettingsDialog，由账号抽屉的「设置」入口打开）。原「路由离开时恢复未保存
+ * （SettingsDialog，由账号菜单的「设置」入口打开）。原「路由离开时恢复未保存
  * 预览」的守卫改为暴露 beforeClose()，由弹窗关闭流程调用。
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
@@ -114,7 +114,6 @@ async function handleConfirm() { const action = confirmAction.value; closeConfir
 .settings-actions { margin-top: var(--space-xl); }
 .field-hint { color: var(--ink-muted); font-size: 12px; }
 .danger-button { --md-text-button-label-text-color: #ba1a1a; }
-.dialog-actions { justify-content: flex-end; }
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
 @media (max-width: 640px) { .settings-path-row { align-items: stretch; flex-direction: column; } }
 </style>

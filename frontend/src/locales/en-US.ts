@@ -26,6 +26,7 @@ export default {
   },
   app: {
     exitConfirmTitle: "Quit Pixiv Tool?",
+    exitConfirmBody: "The app will close and any running tasks will be interrupted.",
     exit: "Quit",
   },
   nav: {
@@ -47,8 +48,7 @@ export default {
     browseBookmark: "Bookmarks",
   },
   auth: {
-    drawerTitle: "Account",
-    openAccountDrawer: "Open account drawer",
+    openAccountMenu: "Open account menu",
     notLoggedInHint: "Not logged in yet — add an account to use crawl and browse features",
     accounts: "Account",
     addAccount: "Add account",

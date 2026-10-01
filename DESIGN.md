@@ -118,10 +118,10 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 - `md-filled-button`：主提交、恢复和确认操作；`md-outlined-button`：浏览、同步、批量删除等次要操作；`md-text-button`：取消、删除等低强调操作；`md-icon-button`：工具栏和行级图标动作。
 - `md-outlined-text-field`、`md-outlined-select`、`md-radio` 与 `md-checkbox`：所有可编辑字段和选择；字段以标签、12px–16px 间距和至少 40px 的 choice 行组织。
 - `md-tabs` / `md-primary-tab`：登录方式切换；`md-secondary-tab`（SectionTabs 封装）：浏览分区与工具页顶部页签（工具页页签即子路由导航）；`md-linear-progress`：任务进度。Material Web 负责它们的默认交互状态。
-- 原生 `dialog`：登录、危险操作确认与模态设置弹窗，采用 surface-container、28px 圆角及右对齐按钮行；自定义 `.m3-snackbar` 固定在右上角，通知在 3.2 秒后消失。页面不应另建成功提示条。
-- 左侧导航：扁平菜单、无分组标题——浏览区在上、一条分隔线、最后是「工具」单项；图标加文字，hover 使用 8% primary 的状态层，active 使用 primary-container。账号区位于侧栏底部，为头像 chip（头像 + 账号名 + 向上箭头，hover 8% primary 状态层；折叠态居中只显示头像），点击打开账号抽屉。
-- 账号抽屉：M3 modal drawer 形态——左侧滑出、scrim 为既定的 `rgb(0 0 0 / 35%)`、宽 `min(420px, 92vw)`、surface-container 底、右缘 16px 圆角；内容为账号区（列表切换 / 添加账号 / 退出登录）+ 分隔线 + 「设置」入口（图标 + 文案 + 右侧箭头，hover 8% primary 状态层）。Esc、点 scrim 或标题栏关闭按钮均可关闭；滑入过渡复用既有 0.15s ease（reduced-motion 由全局兜底），层级低于 snackbar。
-- 设置弹窗：账号抽屉「设置」入口打开的模态 `dialog`（打开时先关抽屉，同一时刻只留一层浮层）——宽 `min(600px, 92vw)`、最大高 `min(84vh, 100%)`、surface-container 底、28px 圆角与既定 scrim；头部为标题 + 关闭按钮，SettingsPanel 表单区自身滚动。Esc、点 backdrop 或标题栏 ✕ 均可关闭，关闭前恢复未保存的主题预览；设置项增多时在弹窗内新增分组。层级低于 snackbar。
+- 原生 `dialog`：登录、退出/删除确认与模态设置弹窗；容器与内部结构收敛于 `main.css` 的「原生 dialog 通用层」（`.m3-dialog`：surface-container、28px 圆角、24px 内边距、35% scrim、标题 18px/700；紧随标题的说明文字为 on-surface-variant，`.dialog-actions` 右对齐操作行、上间距 24px）。退出确认弹窗为「标题 + 说明」的 360px 窄弹窗；历史/任务的删除确认是无标题的单行正文式，正文保持主文案层级。自定义 `.m3-snackbar` 固定在右上角，通知在 3.2 秒后消失。页面不应另建成功提示条。
+- 左侧导航：扁平菜单、无分组标题——浏览区在上、一条分隔线、最后是「工具」单项；图标加文字，hover 使用 8% primary 的状态层，active 使用 primary-container。账号区位于侧栏底部，为头像 chip（头像 + 账号名 + 向上箭头，hover 8% primary 状态层；折叠态居中只显示头像），点击在 chip 上方弹出账号菜单。
+- 账号菜单：锚定头像 chip 上方的轻量 popover——宽 264px、surface-container 底、12px 圆角、既定轻阴影 `0 4px 12px rgb(0 0 0 / 18%)`，无深色 scrim，透明遮罩仅负责点击外部关闭（Esc 同效）；内容为账号列表（当前账号 ✓，点击切换）/ 添加账号 + 分隔线 + 「设置」入口（图标 + 文案 + 右侧箭头）与退出登录（danger 色文案，未登录置灰），菜单行高 40px、hover 8% primary 状态层。弹出过渡复用既有 0.15s ease、transform-origin 左下（reduced-motion 由全局兜底），层级低于 snackbar。
+- 设置弹窗：账号菜单「设置」入口打开的模态 `dialog`（菜单先自行关闭，同一时刻只留一层浮层）——宽 `min(600px, 92vw)`、最大高 `min(84vh, 100%)`、surface-container 底、28px 圆角与既定 scrim；头部为标题 + 关闭按钮，SettingsPanel 表单区自身滚动。Esc、点 backdrop 或标题栏 ✕ 均可关闭，关闭前恢复未保存的主题预览；设置项增多时在弹窗内新增分组。层级低于 snackbar。
 - alert、状态 pill、表格和表单卡是小型本地样式，复用 M3 颜色角色和上述 shape/spacing，不另建组件库。
 
 **控件密度.** Material Web 的 `md-outlined-text-field` 与 `md-outlined-select` 统一为 40px 高、14px 输入文字（组件默认 56px / 16px），与全局 14px 正文和 40px 的 choice 行对齐。实现只做尺寸 token 覆盖（`frontend/src/styles/main.css` 的「控件密度层」）：上下内距 8px（文本框 `--md-outlined-text-field-top/bottom-space`；选择器无容器高度 token，经内嵌 field 继承 `--md-outlined-field-top/bottom-space`）、输入字号 14px（选择器走 `--md-outlined-select-text-field-input-text-size`）、输入行高钉 24px（8 + 24 + 8 = 40px）。按钮维持 Material 默认的 40px 高 / 14px 标签字，不做覆盖。密度层不改颜色、圆角、描边、浮标等组件外观（Native-First Rule）。

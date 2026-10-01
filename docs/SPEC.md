@@ -71,7 +71,7 @@
 ┌─ pixiv-tool（Tauri 单进程）───────────────────────────────────┐
 │                                                                │
 │  ┌─ 主线程（tao 事件循环）─────────────────────────────┐      │
-│  │  窗口生命周期 + 关闭确认（plugin-dialog，按语言中英） │      │
+│  │  窗口生命周期 + 关闭确认（事件交前端确认框，按语言） │      │
 │  └──────────────────────────────────────────────────────┘      │
 │                                                                │
 │  ┌─ WebView（主窗）──────────────┐  ┌─ tokio runtime ─────┐   │
@@ -131,7 +131,7 @@ pixiv-tool/
 │  ├─ src/
 │  │  ├─ views/                 # ToolsView（工具页签壳）/ CrawlView / IllustrationView / TasksView / HistoryView
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark + Work/Series/Author/Novel
-│  │  ├─ components/            # auth/（LoginDialog / AccountDrawer）navigation/ settings/（SettingsPanel / SettingsDialog）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
+│  │  ├─ components/            # auth/（LoginDialog / AccountMenu）navigation/ settings/（SettingsPanel / SettingsDialog）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
@@ -492,19 +492,20 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 即子路由导航、与路由双向同步；`/tools` 重定向到 `/tools/novel`。旧路径 `/`、
 `/illustration`、`/tasks`、`/history` 保留为函数式 redirect，透传 query 与 hash
 （浏览页「返填表单」跳旧路径并带 `sourceType`/`sourceId` 预填，依赖此处）。
-`/settings` 路由已移除：账号抽屉只留「设置」入口，设置表单承载于模态设置弹窗（见下）。
+`/settings` 路由已移除：账号菜单只留「设置」入口，设置表单承载于模态设置弹窗（见下）。
 
 **侧边栏**：扁平菜单、无分组标题——浏览区（首页/插画/漫画/小说/发现/动态/搜索/
 排行榜/收藏）在上，其后一条分隔线，最后是「工具」单项（`/tools*` 前缀高亮，
 浏览项按路径精确匹配）。头部行 = logo + 标题 + 收起侧栏按钮（折叠态仅留展开按钮）；
 折叠态 72px 只显示图标，窗口高度不足时导航区自身滚动。侧栏底部为**头像 chip**
-（头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击打开**账号抽屉**：
-modal drawer 左侧滑出、带 scrim、宽 `min(420px, 92vw)`、Esc / 点 scrim / 标题栏
-✕ 关闭；内容 = 账号区（列表切换 / 添加账号复用 LoginDialog / 退出登录）+ 分隔线 +
-**「设置」入口**。入口点击后关抽屉并打开**设置弹窗**（`SettingsDialog`：原生
-dialog、宽 `min(600px, 92vw)`、表单区自身滚动、Esc / 点 backdrop / 标题栏 ✕ 关闭），
-表单为 SettingsPanel，含主题实时预览；关闭弹窗时若预览未保存则恢复已保存主题并提示，
-设置项增多时在弹窗内分组扩展。
+（头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击在 chip 上方弹出**账号
+菜单**（`AccountMenu`：轻量 popover，宽 264px、surface-container 底、12px 圆角、
+既有轻阴影；透明遮罩点击外部或 Esc 关闭，无深色 scrim）；内容 = 账号列表（当前
+账号 ✓，点击切换）/ 添加账号（复用 LoginDialog）+ 分隔线 + **「设置」入口**与
+**退出登录**（danger 色，未登录置灰）。设置入口点击后关菜单并打开**设置弹窗**
+（`SettingsDialog`：原生 dialog、宽 `min(600px, 92vw)`、表单区自身滚动、
+Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主题实时预览；
+关闭弹窗时若预览未保存则恢复已保存主题并提示，设置项增多时在弹窗内分组扩展。
 应用外壳恒为视口高，右侧内容区是唯一滚动容器，长内容不再拉长侧栏。
 
 浏览模式详见 §6.4 与 ADR 0012。
