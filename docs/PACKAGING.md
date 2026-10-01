@@ -4,6 +4,51 @@
 > 本文为现行 Tauri bundler 打包指引。旧 PyInstaller 历史见 git log。
 
 ## 1. 构建命令
+### 根目录开发脚本
+
+Windows 使用 `.\dev.ps1`（兼容 Windows PowerShell 5.1 / PowerShell 7）；
+macOS / Linux / Git Bash 使用 `bash ./dev.sh`。无参数、`-h` 或 `--help`
+显示帮助。脚本始终以自身目录定位仓库，不依赖调用者的当前目录。
+
+| 子命令（两份脚本一致） | 行为 |
+|---|---|
+| `install` | `pnpm install --frozen-lockfile`，安装前端及本地 Tauri CLI |
+| `dev` | 从仓库根调用本地 Tauri CLI，启动 Vite + Rust 热重载 + 桌面窗口 |
+| `frontend` | 仅启动 Vite（9961，strictPort），浏览器内不提供 Tauri IPC |
+| `build` / `build release` | 前端构建 + Rust release + 平台安装包 |
+| `build debug` | 前端构建 + Rust debug + 平台安装包，**不**附加 `--no-bundle` |
+| `check` | 前端类型检查及生产构建，再执行 `cargo check --locked` |
+| `test` | `cargo test --locked`（单元与集成测试） |
+| `logs [app\|dev\|frontend\|build\|install\|check\|test] [-f\|--follow]` | 默认读取开发态 `data/logs/app.log` 最后 100 行；指定子命令读取其控制台日志；跟随模式等待追加内容，Ctrl+C 退出 |
+
+每次执行操作覆盖 `.dev/logs/<子命令>.log`，操作内部的多个阶段追加到同一份
+UTF-8 日志，合并保存子进程 stdout / stderr（含警告与空行）；该目录已忽略，
+不入库。`logs app` 不查找 release 安装后的日志。
+未知命令、多余参数、非法构建模式退出码为 2；缺工具或日志不存在为 1；
+子进程失败保留其退出码。命令前台运行，Ctrl+C 停止；不会关闭现有开发进程、
+清除数据或改用其他端口。`dev` 与 `frontend` 都使用 9961，不应同时启动。
+
+```powershell
+.\dev.ps1 install
+.\dev.ps1 dev
+.\dev.ps1 build release
+.\dev.ps1 build debug
+.\dev.ps1 logs dev -f
+# 如果当前执行策略禁止脚本：
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 -h
+```
+
+对应 Bash 调用只需替换前缀，例如 `bash ./dev.sh build debug`。
+Windows 的 PowerShell 入口自动使用 MSVC Rust stable 工具链、Visual Studio
+2022 C++ 环境与 `Visual Studio 17 2022` CMake generator；Git Bash 入口委托
+同目录 `dev.ps1`，保持完全相同的工具链初始化行为。须提前安装工具链；
+脚本不会下载 Rust / Visual Studio / LLVM。LLVM 自动查找 Scoop 的
+`~/scoop/apps/llvm/current/bin` 与 `%ProgramFiles%/LLVM/bin`，可通过
+`LIBCLANG_PATH` 指定其他目录；`VSINSTALLDIR` 可覆盖 VS 2022 的自动发现。
+macOS / Linux 直接使用当前 cargo 工具链与环境，系统依赖仍按下文安装。
+
+### 直接调用 CLI
+
 
 ```bash
 # 生产打包（自动先跑前端 build（CWD=frontend/），再编 Rust、出平台安装包）

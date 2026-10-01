@@ -595,11 +595,9 @@ task://done       {task_id, status, done, total, failed, skipped}
 ### 8.1 开发模式
 
 ```bash
-# 前置（一次性）
-cd frontend && pnpm install
-
-# 一键启动（Vite 9961 + Rust 热重载 + 窗口）
-cargo tauri dev        # 仓库根执行；等价 cd frontend && pnpm tauri dev
+# 推荐入口（Windows 替换为 .\dev.ps1；无参数或 -h 显示帮助）
+bash ./dev.sh install
+bash ./dev.sh dev      # 仓库本地 Tauri CLI：Vite 9961 + Rust 热重载 + 窗口
 ```
 
 - 无后端进程/端口管理——`tauri dev` 拉起 Vite（9961，strictPort）并加载
@@ -612,6 +610,14 @@ cargo tauri dev        # 仓库根执行；等价 cd frontend && pnpm tauri dev
   cargo 命令前设置 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc`、
   `LIBCLANG_PATH`（LLVM 安装路径）、`CMAKE_GENERATOR="Visual Studio 17 2022"`；
   详见 AGENTS.md 开发命令一节
+- 根目录 `dev.ps1` / `dev.sh` 封装 `install`、`dev`、`frontend`、
+  `build [release|debug]`、`check`、`test`、`logs [app|子命令] [-f|--follow]`。
+  无参数或 `-h` / `--help` 显示帮助；脚本以自身位置定位仓库。操作控制台输出
+  写入 `.dev/logs/<子命令>.log`（UTF-8，每次覆盖），应用日志仍在 §9 的位置。
+  Windows 自动初始化 VS 2022 / MSVC / LLVM；Git Bash 委托 PowerShell 入口；
+  macOS / Linux 使用当前工具链。参数错误退出 2，前置条件错误退出 1，
+  子进程失败保留其退出码，不终止已有进程、不自动换端口。完整用法见
+  `docs/PACKAGING.md` §1。
 
 ### 8.2 依赖管理
 
@@ -628,6 +634,8 @@ cargo tauri dev        # 仓库根执行；等价 cd frontend && pnpm tauri dev
    `src-tauri/target/debug/pixiv-tool`（Windows 为 `pixiv-tool.exe`）
 3. 图标：`cargo tauri icon frontend/src/assets/icon.png`（已生成于
    `src-tauri/icons/`）
+4. 脚本 `build` / `build release` 生成 release 安装包，`build debug` 生成
+   debug 安装包（均调用本地 Tauri CLI，不使用 `--no-bundle`）。
 
 ### 8.4 发布方式（GitHub Actions 发版 CI）
 

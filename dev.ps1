@@ -1,0 +1,177 @@
+# Compatible with Windows PowerShell 5.1 and PowerShell 7.
+# Keep this file ASCII so Windows PowerShell does not require a UTF-8 BOM.
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$root = $PSScriptRoot
+$cliArgs = @($args)
+
+function Show-Help {
+    @'
+Usage: ./dev.ps1 <command>
+       ./dev.ps1 -h | --help
+
+  dev                     Tauri dev: Vite + Rust hot reload + desktop window
+  frontend                Vite only, http://localhost:9961 (no Tauri IPC)
+  build [release|debug]   Package installers; default: release
+  install                 Install frontend dependencies (frozen lockfile)
+  check                   Frontend type check/build + cargo check
+  test                    Rust unit and integration tests
+  logs [app|COMMAND] [-f]  Last 100 lines; -f/--follow watches new lines
+                          COMMAND: dev, frontend, build, install, check, test
+
+No arguments show help. Extra/unknown arguments are errors (exit 2).
+Commands run from the repository, regardless of your current directory.
+Console logs: .dev/logs/<command>.log (overwritten on each invocation).
+App logs: data/logs/app.log (debug/dev data only).
+Windows: auto-configure MSVC, Visual Studio and LLVM. Set LIBCLANG_PATH
+or VSINSTALLDIR to override discovery. Ctrl+C stops foreground commands.
+Examples: ./dev.ps1 dev; ./dev.ps1 build debug; ./dev.ps1 logs dev -f
+'@ | Write-Host
+}
+
+function Require-Command([string]$name) {
+    if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
+        throw "Missing command: $name. Install it and add it to PATH."
+    }
+}
+
+function Initialize-Rust {
+    Require-Command cargo
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return }
+    Require-Command rustup
+    $env:RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-msvc'
+    $toolchains = & rustup toolchain list
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot list Rust toolchains.' }
+    if (-not ($toolchains -match '^stable-x86_64-pc-windows-msvc(?:\s|$)')) {
+        throw 'Run: rustup toolchain install stable-x86_64-pc-windows-msvc'
+    }
+    if (-not $env:LIBCLANG_PATH) {
+        $candidates = @(
+            "$env:USERPROFILE/scoop/apps/llvm/current/bin",
+            "$env:ProgramFiles/LLVM/bin"
+        )
+        $env:LIBCLANG_PATH = $candidates | Where-Object {
+            Test-Path -LiteralPath (Join-Path $_ 'libclang.dll')
+        } | Select-Object -First 1
+    }
+    if (-not $env:LIBCLANG_PATH -or -not (Test-Path -LiteralPath (Join-Path $env:LIBCLANG_PATH 'libclang.dll'))) {
+        throw 'Set LIBCLANG_PATH to the LLVM bin directory containing libclang.dll.'
+    }
+    $env:CMAKE_GENERATOR = 'Visual Studio 17 2022'
+    # Import the complete VS environment, not just link.exe's directory.
+    if ($env:VSINSTALLDIR) {
+        $vs = $env:VSINSTALLDIR
+    } else {
+        $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+        if (-not (Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio 2022 C++ Build Tools (vswhere missing).' }
+        $vs = & $vswhere -latest -version '[17.0,18.0)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($LASTEXITCODE -ne 0 -or -not $vs) { throw 'Visual Studio 2022 C++ Build Tools not found.' }
+    }
+    $vcvars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+    if (-not (Test-Path -LiteralPath $vcvars)) { throw "Missing VS environment script: $vcvars" }
+    $environment = & $env:ComSpec /d /c "call `"$vcvars`" >nul && set"
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot initialize the Visual Studio environment.' }
+    foreach ($line in $environment) {
+        if ($line -match '^([^=]+)=(.*)$') {
+            [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+        }
+    }
+    Require-Command cmake
+}
+
+function Invoke-Logged([string]$executable, [string[]]$arguments, [string]$directory) {
+    Write-Host "> $executable $($arguments -join ' ')"
+    Push-Location -LiteralPath $directory
+    $writer = [IO.StreamWriter]::new($script:logPath, $true, [Text.UTF8Encoding]::new($false))
+    try {
+        # PS 5.1 converts native stderr into ErrorRecords. Preserve the native
+        # exit code instead of treating compiler progress as a terminating error.
+        $ErrorActionPreference = 'Continue'
+        & $executable @arguments 2>&1 | ForEach-Object {
+            # Empty native stderr lines stringify as the exception type on 5.1.
+            $text = if ($_ -is [Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+            $writer.WriteLine($text)
+            $writer.Flush()
+            Write-Host $text
+        }
+        $code = $LASTEXITCODE
+    } finally {
+        $writer.Dispose()
+        Pop-Location
+    }
+    if ($code -ne 0) { exit $code }
+}
+
+if ($cliArgs.Count -eq 0 -or ($cliArgs.Count -eq 1 -and $cliArgs[0] -cin @('-h', '--help'))) {
+    Show-Help
+    exit 0
+}
+$command = $cliArgs[0]
+$valid = @('dev', 'frontend', 'build', 'install', 'check', 'test', 'logs')
+$invalid = $command -cnotin $valid
+$mode = 'release'
+$source = 'app'
+$follow = $false
+if ($command -ceq 'build') {
+    if ($cliArgs.Count -gt 2) { $invalid = $true }
+    if ($cliArgs.Count -eq 2) { $mode = $cliArgs[1] }
+    if ($mode -cnotin @('release', 'debug')) { $invalid = $true }
+} elseif ($command -ceq 'logs') {
+    $rest = @($cliArgs | Select-Object -Skip 1)
+    if ($rest.Count -gt 0 -and $rest[-1] -cin @('-f', '--follow')) {
+        $follow = $true
+        $rest = @($rest | Select-Object -First ($rest.Count - 1))
+    }
+    if ($rest.Count -gt 1) { $invalid = $true }
+    if ($rest.Count -eq 1) { $source = $rest[0] }
+    if ($source -cnotin @('app', 'dev', 'frontend', 'build', 'install', 'check', 'test')) { $invalid = $true }
+} elseif ($cliArgs.Count -ne 1) {
+    $invalid = $true
+}
+if ($invalid) {
+    [Console]::Error.WriteLine('Invalid command or arguments. Run ./dev.ps1 -h.')
+    exit 2
+}
+
+try {
+    if ($command -ceq 'logs') {
+        $path = if ($source -ceq 'app') { Join-Path $root 'data/logs/app.log' } else { Join-Path $root ".dev/logs/$source.log" }
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Log not found: $path. Run the corresponding command first." }
+        Write-Host "Log: $path"
+        if ($follow) { Get-Content -LiteralPath $path -Encoding UTF8 -Tail 100 -Wait }
+        else { Get-Content -LiteralPath $path -Encoding UTF8 -Tail 100 }
+        exit 0
+    }
+    $logDir = Join-Path $root '.dev/logs'
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $script:logPath = Join-Path $logDir "$command.log"
+    # Explicit UTF-8, including on Windows PowerShell 5.1.
+    [IO.File]::WriteAllText($script:logPath, '', [Text.UTF8Encoding]::new($false))
+    Write-Host "Log: $script:logPath"
+    $frontend = Join-Path $root 'frontend'
+    $backend = Join-Path $root 'src-tauri'
+    if ($command -cin @('dev', 'frontend', 'build', 'install', 'check')) { Require-Command pnpm }
+    if ($command -cin @('dev', 'build', 'check', 'test')) { Initialize-Rust }
+    $tauri = Join-Path $frontend 'node_modules/.bin/tauri'
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $tauri += '.cmd' }
+    if ($command -cin @('dev', 'build') -and -not (Test-Path -LiteralPath $tauri)) { throw 'Local Tauri CLI missing. Run ./dev.ps1 install first.' }
+    switch -CaseSensitive ($command) {
+        'dev' { Invoke-Logged $tauri @('dev') $root }
+        'frontend' { Invoke-Logged 'pnpm' @('dev') $frontend }
+        'build' {
+            $buildArgs = @('build')
+            if ($mode -ceq 'debug') { $buildArgs += '--debug' }
+            Invoke-Logged $tauri $buildArgs $root
+        }
+        'install' { Invoke-Logged 'pnpm' @('install', '--frozen-lockfile') $frontend }
+        'check' {
+            Invoke-Logged 'pnpm' @('build') $frontend
+            Invoke-Logged 'cargo' @('check', '--locked') $backend
+        }
+        'test' { Invoke-Logged 'cargo' @('test', '--locked') $backend }
+    }
+    exit 0
+} catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    exit 1
+}
