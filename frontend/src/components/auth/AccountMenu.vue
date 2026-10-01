@@ -34,6 +34,13 @@
           <span class="menu-label">{{ t('settings.title') }}</span>
           <svg class="menu-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 6 6 6-6 6" /></svg>
         </button>
+        <hr class="menu-divider" />
+        <div class="menu-meta">
+          <span class="menu-version">{{ t('auth.versionLabel', { version: appVersion }) }}</span>
+          <button class="menu-github" :aria-label="t('auth.githubHome')" :title="t('auth.githubHome')" @click="openGitHub()">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" /></svg>
+          </button>
+        </div>
         <button role="menuitem" class="menu-item danger" :disabled="!authStore.isLoggedIn" @click="handleLogout()">
           <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H5v16h4" /><path d="m14 8-4 4 4 4" /><path d="M10 12h9" /></svg>
           <span class="menu-label">{{ t('auth.logout') }}</span>
@@ -56,10 +63,13 @@
  * 账号菜单：侧栏底部头像 chip + 锚定其上方的轻量弹出菜单（无深色 scrim，
  * 透明遮罩点击外部关闭，Esc 关闭）。内容 = 账号列表（当前 ✓，点击切换）/
  * 添加账号（emit 给 LoginDialog）+ 分隔线 + 「设置」入口（emit 出去由 App 打开
- * 模态设置弹窗）+ 退出登录。头像/首字母回退逻辑迁自原 AccountMenu 与抽屉。
+ * 模态设置弹窗）+ meta 行（版本回显 + GitHub 主页入口）+ 退出登录。
+ * 头像/首字母回退逻辑迁自原 AccountMenu 与抽屉。
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import SidebarIcon from "../navigation/SidebarIcon.vue";
 import { useAuthStore } from "../../stores/auth";
 import { errorMessage, type AccountEntry } from "../../api/tauri";
@@ -75,6 +85,12 @@ const avatarFailed = ref(false); const avatarSrc = computed(() => avatarFailed.v
 const accountLabel = computed(() => authStore.isLoggedIn ? authStore.pixivId || authStore.name : t("auth.accounts"));
 const chipInitial = computed(() => accountLabel.value.charAt(0).toUpperCase());
 watch(() => authStore.avatarUrl, () => { avatarFailed.value = false; });
+
+const GITHUB_HOME = "https://github.com/gbandszxc/pixiv-tool";
+/** 版本回显动态读真实 app 版本；非 Tauri 环境读不到时保持占位符。 */
+const appVersion = ref("--");
+onMounted(async () => { try { appVersion.value = await getVersion(); } catch { /* 非 Tauri 环境 */ } });
+async function openGitHub() { close(); try { await openUrl(GITHUB_HOME); } catch (error) { notify(errorMessage(error) || t("auth.githubOpenFailed")); } }
 
 function toggle() { show.value = !show.value; }
 function close() { show.value = false; }
@@ -118,6 +134,13 @@ async function confirmLogout() { logoutDialog.value?.close(); try { await authSt
 .menu-hint { margin: 0; padding: 0 var(--space-sm); color: var(--ink-muted); font-size: 12px; line-height: 40px; }
 /* danger 沿用 SettingsPanel .danger-button 的既有规范值 #ba1a1a */
 .menu-item.danger .menu-label { color: #ba1a1a; }
+/* 底部 meta 行：左对齐版本回显，右对齐 GitHub 主页入口（28px 圆形 hover 状态层） */
+.menu-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); min-height: 36px; padding: 0 var(--space-sm); }
+.menu-version { color: var(--ink-muted); font-size: 12px; }
+.menu-github { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; color: var(--ink-muted); background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+.menu-github svg { width: 16px; height: 16px; }
+.menu-github:hover { color: var(--ink); background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
+.menu-github:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
 /* 退出登录确认弹窗：基础 confirm 用更紧凑的 360px 宽（覆盖全局 .m3-dialog 的 min-width）；
  * 标题/正文/按钮行（.dialog-actions 右对齐）均走 main.css 的 .m3-dialog 全局规则 */
 dialog.logout-dialog { width: min(360px, 92vw); min-width: 0; }
