@@ -12,7 +12,7 @@
 
 ### Issue tracker
 
-**Local markdown**：ticket 存为 `.scratch/<feature-slug>/issues/<NN>-<slug>.md`。当前 feature 是 `pixiv-tool-v1`。详见 `docs/agents/issue-tracker.md`。
+**Local markdown**：ticket 存为 `.scratch/<feature-slug>/issues/<NN>-<slug>.md`。当前活跃 tracker 是 `.scratch/pixiv-tool-v1/`——slug 沿用旧栈命名，但新 ticket 继续在此递增编号（`01`~`18` 属 pywebview 旧栈、已归档，`19` 起是 Tauri 时代）。`.scratch/pixiv-tool-v2/` 是已关闭的旧栈 backlog，不再新增。详见 `docs/agents/issue-tracker.md`。
 
 ### Triage labels
 
@@ -29,7 +29,7 @@
 开工前先读：
 
 1. `docs/SPEC.md` —— 完整规格 + 风险登记
-2. `docs/adr/0001` ~ `0011` —— 关键架构决策（0008 为现行架构：Tauri 全量重构；0010 为多账号登录态；0011 为登录窗未登录态打开）
+2. `docs/adr/0001` ~ `0012` —— 关键架构决策（0008 为现行架构：Tauri 全量重构；0010 为多账号登录态；0011 为登录窗未登录态打开；0012 为浏览模式自有 UI）
 3. 你要动的 ticket（`.scratch/pixiv-tool-v1/issues/<NN>-xxx.md`）
 4. 涉及前端界面、组件、样式或交互时，必须先读根目录 `DESIGN.md`。
 5. 涉及打包/分发时，先读 `docs/PACKAGING.md`。

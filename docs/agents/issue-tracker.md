@@ -31,6 +31,6 @@
 
 ## 当前进度
 
-- **当前 feature**：`pixiv-tool-v1`（路径 `.scratch/pixiv-tool-v1/`）
+- **当前 feature**：`pixiv-tool-v1`（路径 `.scratch/pixiv-tool-v1/`；slug 沿用旧栈命名，新 ticket 继续在此递增编号。`01`~`18` 属 pywebview 旧栈、已归档，`19` 起是 Tauri 时代。`.scratch/pixiv-tool-v2/` 为已关闭的旧栈 backlog）
 - **上游 spec**：`docs/SPEC.md`（13 章）
-- **关联 ADR**：`docs/adr/0001` ~ `0011`
+- **关联 ADR**：`docs/adr/0001` ~ `0012`

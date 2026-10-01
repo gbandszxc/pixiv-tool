@@ -62,8 +62,7 @@ pixiv-tool/
 ├─ docs/        # SPEC + ADR + 打包指引
 ├─ scripts/     # make_icon.sh（图标生成）
 ├─ config/      # 用户配置（settings.json，dev 模式生效）
-├─ data/        # 用户数据（app.db，dev 模式生效）
-└─ spike/       # 探索性验证代码
+└─ data/        # 用户数据（app.db，dev 模式生效）
 ```
 
 ## 打包发布
