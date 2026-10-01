@@ -119,7 +119,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 41 个 #[tauri::command]（auth 6 / browse_api 13 / tasks 9 / settings 3 / history 1 / misc 8 / app 1）
+│     ├─ commands/              # 45 个 #[tauri::command]（auth 6 / browse_api 17 / tasks 9 / settings 3 / history 1 / misc 8 / app 1）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore

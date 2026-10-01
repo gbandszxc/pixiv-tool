@@ -1652,6 +1652,8 @@ impl PixivApi {
             item,
             content,
             series,
+            // 详情体 bookmarkData 三态：null/缺失 → 字段省略
+            bookmark_state: parse_bookmark_data(body.get("bookmarkData")),
         }))
     }
 
@@ -2879,5 +2881,226 @@ mod tests {
         assert!(parse_tags(Some(&json!([]))).is_none(), "空数组视为无标签");
         assert!(parse_tags(None).is_none());
         assert!(parse_tags(Some(&json!("not-array"))).is_none());
+    }
+
+    // ---- bookmark ----
+
+    #[test]
+    fn parse_bookmark_data_three_states() {
+        // 未收藏：null / 键缺失 / id 缺失或空 → None
+        assert!(parse_bookmark_data(Some(&Value::Null)).is_none());
+        assert!(parse_bookmark_data(None).is_none());
+        assert!(parse_bookmark_data(Some(&json!({}))).is_none());
+        assert!(parse_bookmark_data(Some(&json!({"id": ""}))).is_none());
+        // 已收藏（公开）：{id, private:false}（§11.7 实测形状）
+        let s =
+            parse_bookmark_data(Some(&json!({"id": "38982536074", "private": false}))).unwrap();
+        assert_eq!(s.bookmark_id, "38982536074");
+        assert_eq!(s.restrict, 0);
+        // 已收藏（非公开）
+        let s =
+            parse_bookmark_data(Some(&json!({"id": "38359200349", "private": true}))).unwrap();
+        assert_eq!(s.restrict, 1);
+        // 小说实测数字 id → 统一 String 化
+        let s =
+            parse_bookmark_data(Some(&json!({"id": 3688006889_i64, "private": true}))).unwrap();
+        assert_eq!(s.bookmark_id, "3688006889");
+        // private 字符串形态容错
+        let s = parse_bookmark_data(Some(&json!({"id": "1", "private": "true"}))).unwrap();
+        assert_eq!(s.restrict, 1);
+        let s = parse_bookmark_data(Some(&json!({"id": "1", "private": "false"}))).unwrap();
+        assert_eq!(s.restrict, 0);
+    }
+
+    #[test]
+    fn parse_bookmark_list_total_and_next_semantics() {
+        let work = |id: i64, bid: Value, private: bool| {
+            json!({
+                "id": id.to_string(), "illustType": 0,
+                "title": format!("t{id}"), "userId": "10", "userName": "甲",
+                "bookmarkData": {"id": bid, "private": private}
+            })
+        };
+        // 列表项映射：bookmarkData → bookmarkId/bookmarkRestrict；数字 id String 化
+        let body = json!({
+            "works": [work(1, json!("100"), false), work(2, json!(200), true)],
+            "total": 545
+        });
+        let list = parse_bookmark_list(&body, "illust", 0, 48);
+        assert_eq!(list.total, Some(545));
+        assert_eq!(list.items.len(), 2);
+        assert_eq!(list.items[0].bookmark_id.as_deref(), Some("100"));
+        assert_eq!(list.items[0].bookmark_restrict, Some(0));
+        assert_eq!(
+            list.items[1].bookmark_id.as_deref(),
+            Some("200"),
+            "小说/数字 id 统一字符串化"
+        );
+        assert_eq!(list.items[1].bookmark_restrict, Some(1));
+        // 未满页（works.len()=2 < limit=48）→ 到底
+        assert_eq!(list.next, None);
+
+        // 满页 48：next = offset + len
+        let works: Vec<_> = (0..48).map(|i| work(i, json!(1000 + i), false)).collect();
+        let full = json!({"works": works, "total": 100});
+        let list = parse_bookmark_list(&full, "illust", 0, 48);
+        assert_eq!(list.next, Some(48));
+        // offset 推进后越过 total → 到底
+        let list = parse_bookmark_list(&full, "illust", 96, 48);
+        assert_eq!(list.next, None, "96+48 >= total=100");
+        // total 缺失：满页 → 仅按 len 推进
+        let no_total = json!({"works": (0..48).map(|i| work(i, json!(i), false)).collect::<Vec<_>>()});
+        let list = parse_bookmark_list(&no_total, "illust", 48, 48);
+        assert_eq!(list.next, Some(96));
+
+        // 空 works / 缺 works / bookmarkData=null（他人列表语义）容错
+        let list = parse_bookmark_list(&json!({"works": [], "total": 0}), "novel", 0, 30);
+        assert!(list.items.is_empty());
+        assert_eq!(list.total, Some(0));
+        assert_eq!(list.next, None);
+        let list = parse_bookmark_list(&json!({}), "novel", 0, 30);
+        assert!(list.items.is_empty());
+        assert_eq!(list.total, None);
+        let body = json!({"works": [{"id": "1", "bookmarkData": null}], "total": 1});
+        let list = parse_bookmark_list(&body, "illust", 0, 48);
+        assert_eq!(list.items.len(), 1);
+        assert!(list.items[0].bookmark_id.is_none());
+    }
+
+    #[test]
+    fn parse_bookmark_tags_groups_and_empty_name_kept() {
+        // 实测形状（§11.2）：{public:[{tag,cnt}], private:[...]}，一次两组
+        let body = json!({
+            "public": [{"tag": "未分類", "cnt": 545}, {"tag": "風景", "cnt": 23}],
+            "private": [{"tag": "R-18", "cnt": 24}],
+            "tooManyBookmark": false,
+            "tooManyBookmarkTags": false
+        });
+        let tags = parse_bookmark_tags(&body);
+        assert_eq!(tags.public.len(), 2);
+        assert_eq!(tags.public[0].name, "未分類");
+        assert_eq!(tags.public[0].count, 545);
+        assert_eq!(tags.public[1].name, "風景");
+        assert_eq!(tags.private.len(), 1);
+        assert_eq!(tags.private[0].count, 24);
+        // 空 tag 名原样保留（未分类的本地化由前端 i18n）
+        let tags = parse_bookmark_tags(&json!({"public": [{"tag": "", "cnt": 3}], "private": []}));
+        assert_eq!(tags.public[0].name, "");
+        assert_eq!(tags.public[0].count, 3);
+        assert!(tags.private.is_empty());
+        // 缺键 → 空组；cnt 缺失 → 0；缺 tag 的条目跳过
+        let tags = parse_bookmark_tags(&json!({}));
+        assert!(tags.public.is_empty() && tags.private.is_empty());
+        let tags = parse_bookmark_tags(&json!({"public": [{"cnt": 9}, {"tag": "x"}]}));
+        assert_eq!(tags.public.len(), 1, "缺 tag 名的条目跳过");
+        assert_eq!(tags.public[0].count, 0);
+    }
+
+    #[test]
+    fn parse_bookmark_add_id_both_response_shapes() {
+        // 插画（§11.4）：body 是对象，取 last_bookmark_id
+        assert_eq!(
+            parse_bookmark_add_id(
+                &json!({"last_bookmark_id": "39079976043", "stacc_status_id": null})
+            )
+            .unwrap(),
+            "39079976043"
+        );
+        // 小说：body 直接是 bookmarkId 字符串
+        assert_eq!(
+            parse_bookmark_add_id(&json!("3688006889")).unwrap(),
+            "3688006889"
+        );
+        // 容错：last_bookmark_id 数字形态
+        assert_eq!(
+            parse_bookmark_add_id(&json!({"last_bookmark_id": 123})).unwrap(),
+            "123"
+        );
+        // 空 / 缺失 → Err
+        assert!(parse_bookmark_add_id(&json!({})).is_err());
+        assert!(parse_bookmark_add_id(&json!("")).is_err());
+        assert!(parse_bookmark_add_id(&json!(null)).is_err());
+    }
+
+    #[test]
+    fn bookmark_request_encoding_and_forms() {
+        // 列表路径：官方参数全集（order=desc / mode=all 写死），tag 缺省空串
+        assert_eq!(
+            bookmark_list_path(19509348, "novel", "show", None, 0, 30),
+            "/ajax/user/19509348/novels/bookmarks?tag=&offset=0&limit=30&rest=show&order=desc&mode=all&lang=zh"
+        );
+        // tag 值 percent-encode（日文 + 空格），illust → illusts
+        assert_eq!(
+            bookmark_list_path(1, "illust", "hide", Some("東方 Project"), 48, 48),
+            "/ajax/user/1/illusts/bookmarks?tag=%E6%9D%B1%E6%96%B9%20Project&offset=48&limit=48&rest=hide&order=desc&mode=all&lang=zh"
+        );
+        // 插画删除 form：bookmark_id=（与 add 不对称）
+        assert_eq!(illust_delete_form("39079976043"), "bookmark_id=39079976043");
+        // 小说删除 form：旧式表单（tt 字段 + book_id%5B%5D + del=1）
+        assert_eq!(
+            novel_delete_form("abc123def", "3688006889"),
+            "tt=abc123def&p=1&untagged=0&rest=show&book_id%5B%5D=3688006889&del=1"
+        );
+        // percent_encode 边界
+        assert_eq!(percent_encode("a b&c=1"), "a%20b%26c%3D1");
+        assert_eq!(percent_encode("AZaz09-_.~"), "AZaz09-_.~", "unreserved 原样");
+    }
+
+    #[test]
+    fn bookmark_wire_field_names_camel_case() {
+        // 契约 v3.1：扩展字段 wire 名为 camelCase（bookmarkId/bookmarkRestrict）
+        let item = BrowseWorkItem {
+            bookmark_id: Some("2".into()),
+            bookmark_restrict: Some(1),
+            ..BrowseWorkItem::default()
+        };
+        let v = serde_json::to_value(&item).unwrap();
+        assert_eq!(v.get("bookmarkId"), Some(&json!("2")));
+        assert_eq!(v.get("bookmarkRestrict"), Some(&json!(1)));
+        // 详情 bookmarkState：未收藏省略字段，已收藏 camelCase
+        let detail = BrowseIllustDetail {
+            detail_kind: "illust",
+            item: BrowseWorkItem::default(),
+            pages: vec![],
+            ugoira: None,
+            series: None,
+            bookmark_state: None,
+        };
+        let v = serde_json::to_value(&detail).unwrap();
+        assert!(v.get("bookmarkState").is_none(), "未收藏省略 bookmarkState");
+        let state = BrowseBookmarkState {
+            bookmark_id: "3".into(),
+            restrict: 1,
+        };
+        assert_eq!(
+            serde_json::to_value(&state).unwrap(),
+            json!({"bookmarkId": "3", "restrict": 1})
+        );
+    }
+
+    #[test]
+    fn parse_novel_detail_bookmark_state_numeric_id() {
+        // 小说详情：bookmarkData.id 数字形态 → bookmarkState 字符串化
+        let body = json!({
+            "id": "27466576", "title": "t", "content": "c",
+            "bookmarkData": {"id": 3688006889_i64, "private": true}
+        });
+        let (item, _) = parse_novel_detail(&body);
+        assert_eq!(item.bookmarked, Some(true));
+        let state = parse_bookmark_data(body.get("bookmarkData")).unwrap();
+        assert_eq!(state.bookmark_id, "3688006889");
+        assert_eq!(state.restrict, 1);
+    }
+
+    #[test]
+    fn self_uid_cache_roundtrip() {
+        // 缓存空 → 未命中；写入 → 命中；失效 → 未命中（与 token 缓存同策略）
+        invalidate_self_uid();
+        assert!(cached_self_uid().is_none());
+        let cache = SELF_UID_CACHE.get_or_init(|| Mutex::new(None));
+        *cache.lock().unwrap() = Some((19509348, Instant::now()));
+        assert_eq!(cached_self_uid().map(|(uid, _)| uid), Some(19509348));
+        invalidate_self_uid();
+        assert!(cached_self_uid().is_none());
     }
 }

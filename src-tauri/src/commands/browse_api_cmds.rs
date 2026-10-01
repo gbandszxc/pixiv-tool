@@ -1,4 +1,5 @@
-//! 浏览命令层（browse-ui-v1，IPC 契约 v2，13 个命令）。
+//! 浏览命令层（browse-ui-v1，IPC 契约 v2，13 个命令；bookmark-ui-v1 契约
+//! v3.1 追加 4 个收藏命令，共 17 个）。
 //!
 //! 形状约定与 history_cmds 一致：`#[tauri::command]` 薄壳 +
 //! `*_impl(&AppState, ...)` 可离线调用，业务失败统一 `Err(中文文案)`。
@@ -155,6 +156,45 @@ fn validate_comment_kind(kind: &str) -> Result<(), String> {
 fn validate_limit(limit: Option<i64>) -> Result<(), String> {
     if limit.is_some_and(|l| !(1..=30).contains(&l)) {
         return Err("limit 必须在 1~30 之间".to_string());
+    }
+    Ok(())
+}
+
+// ----------------------------------------------------------------------
+// 收藏（bookmark，契约 v3.1）参数粗校验
+// ----------------------------------------------------------------------
+
+/// 收藏 kind 白名单（契约只分 illust|novel；漫画/动图的收藏走 illust 端点，
+/// 由前端传 "illust"）。
+fn validate_bookmark_kind(kind: &str) -> Result<(), String> {
+    if !matches!(kind, "illust" | "novel") {
+        return Err(format!("不支持的收藏类型: {kind}"));
+    }
+    Ok(())
+}
+
+/// 收藏可见性 rest 白名单（show=公开 / hide=非公开；api 层同表）。
+fn validate_bookmark_rest(rest: &str) -> Result<(), String> {
+    if !matches!(rest, "show" | "hide") {
+        return Err(format!("不支持的可见范围: {rest}"));
+    }
+    Ok(())
+}
+
+/// 收藏列表 limit 区间（api 层 clamp 1~100：实测服务端接受 10/48/100）。
+fn validate_bookmark_limit(limit: Option<i64>) -> Result<(), String> {
+    if limit.is_some_and(|l| !(1..=100).contains(&l)) {
+        return Err("limit 必须在 1~100 之间".to_string());
+    }
+    Ok(())
+}
+
+/// 收藏可见性 restrict（0=公开 / 1=非公开，与 pixiv restrict 字段语义一致）。
+fn validate_bookmark_restrict(restrict: i64) -> Result<(), String> {
+    if !matches!(restrict, 0 | 1) {
+        return Err(format!(
+            "restrict 只能是 0（公开）或 1（非公开）: {restrict}"
+        ));
     }
     Ok(())
 }
@@ -470,6 +510,120 @@ pub async fn browse_comment_replies_impl(
     validate_page(page)?;
     build_browse_api(state)?
         .get_comment_replies(kind, comment_id, page)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+// ----------------------------------------------------------------------
+// 收藏命令（契约 v3.1；端点细节 docs/research/pixiv-browse-api.md §11）
+// ----------------------------------------------------------------------
+
+/// 收藏列表（插画/漫画混排或小说；tag 筛选 + 公开/私密筛选 + offset 分页，
+/// limit 缺省官方每页条数 illust 48 / novel 30）。自 uid 由后端探测，前端无需传。
+#[tauri::command]
+pub async fn browse_bookmark_list(
+    state: State<'_, AppState>,
+    kind: String,
+    rest: String,
+    tag: Option<String>,
+    offset: i64,
+    limit: Option<i64>,
+) -> Result<Value, String> {
+    browse_bookmark_list_impl(&state, &kind, &rest, tag.as_deref(), offset, limit).await
+}
+
+pub async fn browse_bookmark_list_impl(
+    state: &AppState,
+    kind: &str,
+    rest: &str,
+    tag: Option<&str>,
+    offset: i64,
+    limit: Option<i64>,
+) -> Result<Value, String> {
+    validate_bookmark_kind(kind)?;
+    validate_bookmark_rest(rest)?;
+    if offset < 0 {
+        return Err("offset 不能为负数".to_string());
+    }
+    validate_bookmark_limit(limit)?;
+    build_browse_api(state)?
+        .bookmark_list(kind, rest, tag, offset, limit)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// 收藏标签（一次返回 public/private 两组 {name,count}；空名 = 未分类，
+/// 前端 i18n）。
+#[tauri::command]
+pub async fn browse_bookmark_tags(
+    state: State<'_, AppState>,
+    kind: String,
+) -> Result<Value, String> {
+    browse_bookmark_tags_impl(&state, &kind).await
+}
+
+pub async fn browse_bookmark_tags_impl(state: &AppState, kind: &str) -> Result<Value, String> {
+    validate_bookmark_kind(kind)?;
+    build_browse_api(state)?
+        .bookmark_tags(kind)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// 添加收藏（restrict: 0=公开 / 1=非公开；tags 为收藏标签，可空）。
+/// 返回 `{ bookmarkId }`，取消收藏时原样传回。
+#[tauri::command]
+pub async fn browse_bookmark_add(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    restrict: i64,
+    tags: Option<Vec<String>>,
+) -> Result<Value, String> {
+    browse_bookmark_add_impl(&state, &kind, id, restrict, tags.as_deref().unwrap_or(&[])).await
+}
+
+pub async fn browse_bookmark_add_impl(
+    state: &AppState,
+    kind: &str,
+    id: i64,
+    restrict: i64,
+    tags: &[String],
+) -> Result<Value, String> {
+    validate_bookmark_kind(kind)?;
+    validate_id(id, "作品")?;
+    validate_bookmark_restrict(restrict)?;
+    build_browse_api(state)?
+        .bookmark_add(kind, id, restrict, tags)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// 取消收藏（bookmarkId 来自列表项 bookmarkData 或 add 返回值；小说走旧式
+/// 表单端点，302 跳转即成功）。id 仅作契约参数保留（端点按 bookmarkId 定位）。
+#[tauri::command]
+pub async fn browse_bookmark_remove(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    bookmark_id: String,
+) -> Result<Value, String> {
+    browse_bookmark_remove_impl(&state, &kind, id, &bookmark_id).await
+}
+
+pub async fn browse_bookmark_remove_impl(
+    state: &AppState,
+    kind: &str,
+    id: i64,
+    bookmark_id: &str,
+) -> Result<Value, String> {
+    validate_bookmark_kind(kind)?;
+    validate_id(id, "作品")?;
+    if bookmark_id.trim().is_empty() {
+        return Err("收藏 ID 不能为空".to_string());
+    }
+    build_browse_api(state)?
+        .bookmark_remove(kind, id, bookmark_id)
         .await
         .map_err(|err| err.to_string())
 }
