@@ -1,59 +1,85 @@
 # AGENTS.md
 
-本文件是给 AI agent（包括 ZCode、Claude Code 等）的入口指引。任何 agent 在动这个仓库前都应先读这里。
+AI agent 动本仓库前的入口。先读本文件，再按「文档地图」取用对应真相源。会话语言用中文。
 
-## 项目简介
+## 项目
 
-**pixiv-tool**：本地运行的 Pixiv 客户端工具，V1 聚焦 Pixiv 小说抓取（单篇 / 系列 / 用户全集），技术栈 Tauri 2（Rust 后端）+ Vue3，IPC 通信无本地 HTTP 服务。
+**pixiv-tool**：本地运行的 Pixiv 客户端。V1 = 小说抓取（单篇 / 系列 / 用户全集）+ 插画抓取（单幅 / 用户全集），v1.2 起增加只读浏览模式。
 
-详见 `docs/SPEC.md`。
+技术栈：Tauri 2（Rust 后端，`#[tauri::command]` IPC）+ Vue 3 / TypeScript / Vite 5 / **@material/web（Material 3）**。**无本地 HTTP 服务、无后端进程**，IPC 直连。
 
-## Agent skills
+真相源：`docs/SPEC.md`（单上下文仓库，不另设 `CONTEXT.md`）。
 
-### Issue tracker
+---
 
-**Local markdown**：ticket 存为 `.scratch/<feature-slug>/issues/<NN>-<slug>.md`。活跃 tracker 是 `.scratch/pixiv-tool-v1/`（slug 沿用旧栈命名，新 ticket 继续在此递增编号）。`.scratch/` **不入库**（见 `.gitignore`），是本机的 ticket 存放处。pywebview 旧栈的 ticket、spec 索引与调度协议已移出 git 并归档至 `.archive/pywebview-era/`（同样不入库，**不构成项目文档索引**）。详见 `docs/agents/issue-tracker.md`。
+## 硬约束
 
-### Triage labels
+### 1. 改代码必须同批改文档
 
-五个标准 role（`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`），作为 issue 文件顶部 `Status:` 行的值。详见 `docs/agents/triage-labels.md`。
+**同一次变更里代码与文档一起改，不留「下次再补」。** 高频对照：
 
-### Domain docs
+- 增删/改名 `#[tauri::command]` → `docs/SPEC.md` §7 命令表 + §3.4 命令计数
+- 改 SQLite schema → §5.1；改 `settings.json` 键 → §5.2
+- 增删页面 / 路由 → §6.1 + §3.4
+- 改登录、凭据存储、多账号 → §4.1 §5.3 + 受影响 ADR
+- 改任务事件 / payload → §3.2 + §7.1；改限速 / 超时 / 并发 → §4.3
+- 改主题、色板、token、组件规则 → §6.3 + `DESIGN.md` **与** `.impeccable/design.json`（同批，三者保持一致）
+- 改构建 / 打包 / 工具链 / 图标流程 → §8 + `docs/PACKAGING.md`
 
-单上下文仓库，真相源是 `docs/SPEC.md`（不是单独的 `CONTEXT.md`）。详见 `docs/agents/domain.md`。
+**推翻或改写任一 ADR 的决策时，新开一条 ADR，只改 SPEC 不算数。** 触发条件：换或加技术栈层、推翻既有 ADR、凭据落点变化、schema 结构变更、登录流程结构性变化、新增外部契约（URI scheme / IPC 契约 / 第三方 API 代理）、锁死版本敏感依赖、用户可见产物布局变化。反之，参数调优、端点勘误、加个页面、修 bug 只需改 SPEC。
 
-## 开发约定
+各真相源对应的维护时机见下方「文档地图」。
 
-### 必读
+### 2. 安全边界（不可协商）
 
-开工前先读：
+- 登录态只进系统凭据存储（macOS Keychain / Windows Credential Manager / Linux Secret Service）。**绝不入库**；`config/` 下不得出现任何 cookie 文件
+- `data/` 是用户数据（app.db、logs）。**绝不入库**
+- 界面、日志、报错中不得出现 Cookie / token / 登录凭据原文
+- `src-tauri/icons/` **必须入库**（tauri.conf.json 引用，缺失即构建失败）
 
-1. `docs/SPEC.md` —— 完整规格 + 风险登记
-2. `docs/adr/0001` ~ `0012` —— 关键架构决策（0008 为现行架构：Tauri 全量重构；0010 为多账号登录态；0011 为登录窗未登录态打开；0012 为浏览模式自有 UI）
-3. 你要动的 ticket（`.scratch/pixiv-tool-v1/issues/<NN>-xxx.md`）
-4. 涉及前端界面、组件、样式或交互时，必须先读根目录 `DESIGN.md`。
-5. 涉及打包/分发时，先读 `docs/PACKAGING.md`。
+### 3. 不做
 
-### 设计系统维护
+- 不引入本地 HTTP 服务、后端进程或固定端口
+- 不在页面里新增无来源的颜色 / 圆角 / 阴影 / 动效字面值——只用 `DESIGN.md` 的 token 与 M3 颜色角色
+- 不引用、复用、索引 `.scratch/` 与 `.archive/` 中的 pywebview 旧栈内容
+- 不同步改文档就改代码，反之亦然
 
-- `DESIGN.md` 是前端视觉与交互规范的真相源；其中的色彩、字号、间距、圆角、层级、动效与组件约束优先于临时页面样式。
-- 做前端样式或组件改动时，优先复用 `DESIGN.md` 已定义的 token、Material Web 组件与 M3 颜色角色；不要在页面中新增无来源的颜色、圆角、阴影或动效字面值。
-- 如果实现需要新增或调整设计 token、组件规则或视觉方向，必须在同一变更中同步更新 `DESIGN.md` 和 `.impeccable/design.json`；二者应保持一致。
-- 需要重新提炼或大幅刷新设计规范时，使用 `$impeccable:impeccable document`；已有 `DESIGN.md` 不得静默覆盖，先与用户确认合并或刷新范围。
-- 前端视觉验收应至少覆盖默认、hover、focus、disabled、loading、error 状态，并检查长文本、窄窗口与“减少动态效果”偏好。
+---
 
-### 技术栈
+## 文档地图（真相源 + 维护时机）
+
+| 文档 | 定位 | 何时更新 |
+|---|---|---|
+| `docs/SPEC.md` | 项目规格：范围 / 技术栈 / 架构 / 数据模型 / IPC 命令 / 风险登记 | 任何行为、契约、参数、目录职责变化（对照「硬约束 1」） |
+| `DESIGN.md` | 前端视觉与交互规范真相源：色彩 / 字号 / 间距 / 圆角 / 层级 / 动效 / 组件 | 改 token、组件规则或视觉方向时，与 `.impeccable/design.json` 同批更新 |
+| `.impeccable/design.json` | `DESIGN.md` 的结构化伴随视图（impeccable 工具消费） | 与 `DESIGN.md` 一一对应，同上 |
+| `docs/adr/` | 架构决策记录，当前 `0001` ~ `0012` | 满足「新开 ADR 触发条件」时追加；编号连续，旧档不删 |
+| `docs/PACKAGING.md` | 打包 / 分发 / 构建环境 / 三平台图标 / macOS 签名 | 改构建命令、工具链、Tauri 权限声明、图标流程、发布或签名策略 |
+| `docs/research/` | 外部接口调研（pixiv 只读浏览 API） | 接口行为、端点或分页语义变化，或引入新外部接口 |
+| `docs/agents/` | skills 配置：issue tracker / triage 标签 / domain 导航 | 改 issue 路径或编号规则、triage 标签、领域文档布局 |
+| `PRODUCT.md` | 产品定位、目标用户、范围边界 | 产品定位或用户可见范围变化 |
+| `.scratch/` · `.archive/pywebview-era/` | **非项目文档**：本机 issue tracker / 旧栈归档，被 `.gitignore` 忽略 | 不维护、不索引，换台机器 clone 不到 |
+
+**ADR 速查**：`0008` 是现行架构基座（Tauri 2 全量重构），`0009` / `0010` / `0011` / `0012` 是最新决策（webview 登录回退 / 多账号 / 登录窗未登录态 / 浏览模式）。`0001` / `0004` / `0005` 描述的是已废弃的 pywebview 旧栈，读其结论、不读其实现。
+
+**开工顺序**：任何改动先读 `docs/SPEC.md`；改前端加读 `DESIGN.md`；改打包加读 `docs/PACKAGING.md`；改浏览模式加读 `docs/research/pixiv-browse-api.md` + ADR 0012；本次 ticket 在 `.scratch/pixiv-tool-v1/issues/<NN>-<slug>.md`。
+
+---
+
+## 技术栈
 
 | 层 | 选型 |
 |---|---|
 | 桌面外壳 + 后端 | Tauri 2（Rust，`#[tauri::command]` IPC） |
-| 前端 | Vue 3.4+ · TypeScript · Vite 5 · Vue Router 4 · Pinia · **@material/web（Material 3）** |
+| 前端 | Vue 3.4+ · TypeScript · Vite 5 · Vue Router 4 · Pinia · @material/web（Material 3） |
 | HTTP 抓取 | wreq 6（Chrome147 指纹伪装；版本锁定，见 ADR 0008） |
 | 数据库 | SQLite（rusqlite，schema 兼容旧版） |
 | 依赖 | cargo（后端）+ pnpm（前端） |
 | 打包 | Tauri bundler |
 
-### 开发命令
+> 本仓库**不用 Naive UI**。「Material 3」指 `--md-sys-color-*` 颜色角色体系，详见 `DESIGN.md`。
+
+## 开发命令
 
 ```bash
 cd frontend && pnpm install   # 一次性
@@ -63,37 +89,36 @@ cd frontend && pnpm build     # 前端类型检查 + 构建
 cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 ```
 
-- 无后端进程/端口：IPC 直连，Vite 仅 dev 期占用 9961（strictPort）
-- 系统依赖：构建需 cmake + LLVM/libclang（wreq 编译 BoringSSL 的 btls-sys 用 bindgen 生成绑定，全平台都需要；Windows 装 LLVM.LLVM，macOS 随 Xcode CLT 自带），见 docs/PACKAGING.md
-- **Windows 工具链标准（本机实测，2026-10-01）**：默认 `stable-x86_64-pc-windows-gnu` 的 cdylib 链接会超 mingw ld 65535 导出上限（"export ordinal too large"），**一律改用 MSVC 工具链**。所有 cargo 命令前设置：
+- Vite 仅 dev 期占用 9961（strictPort）
+- 系统依赖：cmake + LLVM/libclang（wreq 编译 BoringSSL，btls-sys 用 bindgen 生成绑定，全平台都需要），见 `docs/PACKAGING.md`
+- **Windows 一律用 MSVC 工具链**：默认 `windows-gnu` 的 cdylib 链接会超 mingw ld 导出上限（"export ordinal too large"）。所有 cargo 命令前设置：
   ```bash
   export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc
   export LIBCLANG_PATH="C:\Users\gbandszxc\scoop\apps\llvm\current\bin"
   export CMAKE_GENERATOR="Visual Studio 17 2022"
   ```
-  MSVC 链接器缺失时包一层 `cmd /c "call <vs路径>VC\Auxiliary\Build\vcvars64.bat && cargo ..."`。
-- **tauri CLI 来源**：`cargo tauri` 需要全局 `cargo install tauri-cli`；本机默认没装，改用仓库内 CLI——`cd frontend && pnpm tauri dev`（或 `./frontend/node_modules/.bin/tauri dev`）。若从仓库根直接调本地 CLI 遇到 Vite 未自动拉起，可加 `--config '{"build":{"beforeDevCommand":""}}'` 并自行启动 Vite（正常路径下 `beforeDevCommand` 会以 `frontend/` 为 CWD 自动执行，见 docs/PACKAGING.md）。
+  MSVC 链接器缺失时包一层 `cmd /c "call <vs路径>VC\Auxiliary\Build\vcvars64.bat && cargo ..."`
+- **tauri CLI 用仓库内那份**：`cargo tauri` 需全局安装，本机通常没有；走 `cd frontend && pnpm tauri dev`（或 `./frontend/node_modules/.bin/tauri`）。从仓库根直接调本地 CLI 若 Vite 未自动拉起，加 `--config '{"build":{"beforeDevCommand":""}}'` 并自起 Vite
 
-### Git 约定
+## 工程约定
 
-- 提交信息格式：`<类型>([<范围>]): <中文改动说明>`。英文前缀（如 `feat`、`fix`、`refactor`、`docs`、`style`、`chore`、`perf`、`test`）表示改动大类，范围可选，中文部分写明改动内容和原因，避免过于简略。示例：`feat: 增加图片全屏预览`。
+### Git
+
+- 提交信息：`<类型>([<范围>]): <中文说明>`。前缀取 `feat` / `fix` / `refactor` / `docs` / `style` / `chore` / `perf` / `test`，范围可选。示例：`feat: 增加图片全屏预览`
 - 每完成一个 ticket 至少一次提交
+
+### 设计系统
+
+- 优先复用 `DESIGN.md` 已定义的 token 与 Material Web 组件；调整 token 必须回写 `DESIGN.md` + `.impeccable/design.json`
+- 大幅刷新规范用 `$impeccable:impeccable document`；已有 `DESIGN.md` 不得静默覆盖，先确认刷新范围
+- 视觉验收至少覆盖 default / hover / focus / disabled / loading / error，并检查长文本、窄窗口与 `prefers-reduced-motion`
+
+### Issue tracker 与 triage
+
+- ticket 存 `.scratch/pixiv-tool-v1/issues/<NN>-<slug>.md`，新 ticket 递增编号（当前至 `30`）；`.scratch/` 不入库
+- triage 五个 role 写在 issue 顶部 `Status:` 行：`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`
+- 详见 `docs/agents/issue-tracker.md`、`docs/agents/triage-labels.md`
 
 ### 应用图标
 
-换应用图标三步：
-
-1. 替换源图 `docs/icon/raw_icon.png`（正方形最佳；非正方形脚本会居中裁方）
-2. `./scripts/make_icon.sh`——生成 1024×1024 源图到 `frontend/src/assets/icon.png`
-   （兼作 UI 侧栏图标与 tauri icon 输入）。**仅 macOS 可直接跑**（依赖自带 sips）；
-   Windows 无该脚本等价路径，需自行裁方缩放后覆盖 `frontend/src/assets/icon.png`
-3. `cargo tauri icon frontend/src/assets/icon.png`——生成 `src-tauri/icons/` 全平台
-   图标集，再 `cargo tauri build` 生效
-
-`src-tauri/icons/` **必须入库**（tauri.conf.json 引用，缺失会构建失败）。
-
-### 安全边界
-
-- 登录态存于系统凭据存储（macOS Keychain / Windows Credential Manager / Linux Secret Service），**绝不入库**；`config/` 下不得出现任何 cookie 文件
-- `data/app.db` 是用户数据，**绝不入库**
-- spike 代码已随 Python 栈移除，结论存档于 ADR 0004/0005（登录态方案、cookie 探测）；旧栈工作文档（ticket / 会话报告 / 调度协议）归档在 `.archive/pywebview-era/`，不入库
+① 换源图 `docs/icon/raw_icon.png`（非正方形会居中裁方）→ ② `./scripts/make_icon.sh` 生成 1024×1024 的 `frontend/src/assets/icon.png`（**仅 macOS 可直接跑**，依赖自带 sips；Windows 需自行裁方缩放后覆盖）→ ③ `cargo tauri icon frontend/src/assets/icon.png` 生成 `src-tauri/icons/`。
