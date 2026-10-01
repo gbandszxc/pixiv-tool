@@ -390,9 +390,7 @@ async fn self_user_id(client: &PixivClient) -> Result<i64, PixivError> {
         csrf::ProbeError::Invalid(_) => PixivError::Auth,
         csrf::ProbeError::Csrf(msg) => PixivError::Client(msg),
     })?;
-    let user = probe
-        .user
-        .ok_or_else(|| PixivError::Auth)?;
+    let user = probe.user.ok_or(PixivError::Auth)?;
     let uid: i64 = user
         .user_id
         .parse()
@@ -408,7 +406,7 @@ fn cached_self_uid() -> Option<(i64, Instant)> {
     let cache = SELF_UID_CACHE.get()?;
     let guard = cache.lock().ok()?;
     let (uid, at) = guard.as_ref()?;
-    (at.elapsed() < SELF_UID_TTL).then(|| (*uid, *at))
+    (at.elapsed() < SELF_UID_TTL).then_some((*uid, *at))
 }
 
 /// 自 uid 失效自愈：收藏接口 404/400（uid 失效极罕见）或登录切换后可清缓存。
@@ -1304,6 +1302,7 @@ fn parse_bookmark_tags(body: &Value) -> BrowseBookmarkTags {
 /// add 响应 → bookmarkId（实测 §11.4，两端点响应形状不同）：
 /// - 插画：body 是对象，取 `last_bookmark_id`；
 /// - 小说：body 直接是 bookmarkId 字符串。
+///
 /// 两种形状统一兼容（字符串 body / 对象 body 互为兜底），空 id 视为失败。
 fn parse_bookmark_add_id(body: &Value) -> Result<String, PixivError> {
     let id = match body {
@@ -3081,12 +3080,14 @@ mod tests {
     #[test]
     fn parse_novel_detail_bookmark_state_numeric_id() {
         // 小说详情：bookmarkData.id 数字形态 → bookmarkState 字符串化
+        // （注：parse_novel_detail 的 item 历史上不填 bookmarked——novel 详情
+        // 契约无该字段；收藏态统一走顶层 bookmarkState）
         let body = json!({
             "id": "27466576", "title": "t", "content": "c",
             "bookmarkData": {"id": 3688006889_i64, "private": true}
         });
         let (item, _) = parse_novel_detail(&body);
-        assert_eq!(item.bookmarked, Some(true));
+        assert_eq!(item.bookmarked, None, "novel 详情 item 不含 bookmarked（现状）");
         let state = parse_bookmark_data(body.get("bookmarkData")).unwrap();
         assert_eq!(state.bookmark_id, "3688006889");
         assert_eq!(state.restrict, 1);
