@@ -252,6 +252,7 @@ export default {
       followNew: "已关注的新作",
       recommend: "为你推荐",
       dailyRanking: "每日排行",
+      tagRecommendSuffix: "的推荐插画作品",
       newPost: "最新投稿",
       trendingTags: "热门标签",
       viewFullRanking: "查看完整榜单",

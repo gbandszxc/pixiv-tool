@@ -251,6 +251,7 @@ export default {
       followNew: "New from Following",
       recommend: "Recommended for You",
       dailyRanking: "Daily Ranking",
+      tagRecommendSuffix: " — recommended illustrations",
       newPost: "Latest Posts",
       trendingTags: "Trending Tags",
       viewFullRanking: "View full ranking",

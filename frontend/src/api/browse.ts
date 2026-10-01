@@ -100,12 +100,20 @@ export interface BrowseList {
   is_last_page?: boolean;
 }
 
-/** browse_channel 返回体：频道页一次性快照（四个板块 + 热门标签）。 */
+/** 频道页「按标签推荐」板块（#tag 的推荐作品；实测仅插画频道返回，其余为空数组）。 */
+export interface BrowseChannelSection {
+  tag: string;
+  items: BrowseWorkItem[];
+}
+
+/** browse_channel 返回体：频道页一次性快照（四个板块 + 按标签推荐 + 热门标签）。 */
 export interface BrowseChannel {
   follow: BrowseList;
   recommend: BrowseList;
   ranking: BrowseList;
   new_post: BrowseList;
+  /** 插画频道特有：官方每板块给 24 个 id、页面渲染 12 条 */
+  tag_sections: BrowseChannelSection[];
   trending_tags: { name: string; translated_name?: string; count?: number }[];
   ranking_date?: string | null;
 }
@@ -678,11 +686,23 @@ async function mockChannel(kind: ChannelKind): Promise<BrowseChannel> {
     translated_name: tag.translated_name,
     count: 100 + Math.floor(rand() * 9900),
   }));
+  // #标签推荐板块：实测仅插画频道返回（官方每板块 24 个 id、渲染 12 条；mock 给 14 条供切片验收）
+  const tagSections =
+    kind === "illustration"
+      ? pick(rand, MOCK_TRENDING_TAGS, 3).map((tag, i) => ({
+          tag: tag.name,
+          items: mockItems(`channel:${kind}:tag:${i}`, 1, {
+            kinds: [workKind],
+            count: 14,
+          }),
+        }))
+      : [];
   return {
     follow: section("follow"),
     recommend: section("recommend"),
     ranking: section("ranking", true),
     new_post: section("new"),
+    tag_sections: tagSections,
     trending_tags: trendingTags,
     ranking_date: todayYmd(),
   };

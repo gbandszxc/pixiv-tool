@@ -1,8 +1,8 @@
 <script setup lang="ts">
 /**
  * 浏览·频道页（插画/漫画/小说三路由共用，props.kind 区分）：
- * browse_channel 一次性快照 → 纵向分区「已关注的新作 / 为你推荐 / 每日排行 / 最新投稿」
- * + 底部热门标签。各板块 WorkGrid 只展示前 12 条；排行榜板块附 ranking_date，
+ * browse_channel 一次性快照 → 纵向分区「已关注的新作 / 为你推荐 / 每日排行 / #标签推荐（仅插画）/
+ * 最新投稿」+ 底部热门标签。各板块 WorkGrid 只展示前 12 条；排行榜板块附 ranking_date，
  * 「查看完整榜单」跳 /browse/ranking 并预选对应类型；标签点击 → 搜索页预填关键词。
  */
 import { computed, onMounted, ref, shallowRef, watch } from "vue";
@@ -74,15 +74,32 @@ const rankingItems = computed<BrowseWorkItem[]>(() =>
 const newPostItems = computed<BrowseWorkItem[]>(() =>
   filterByR18(data.value?.new_post.items ?? [], filter.value).slice(0, SECTION_LIMIT)
 );
+/** #标签推荐板块（插画频道特有）：先按档位过滤再各取 12 条；过滤后为空的板块整体隐藏。 */
+const tagSections = computed(() =>
+  (data.value?.tag_sections ?? [])
+    .map((section) => ({
+      tag: section.tag,
+      items: filterByR18(section.items, filter.value).slice(0, SECTION_LIMIT),
+    }))
+    .filter((section) => section.items.length > 0)
+);
 const trendingTags = computed(() => data.value?.trending_tags ?? []);
 
-/** 当前档位下四板块合计隐藏的 R-18 条数（按快照全量计，不受 12 条展示上限影响）。 */
+/** 当前档位下各板块合计隐藏的 R-18 条数（按快照全量计，不受 12 条展示上限影响）。 */
 const hiddenCount = computed(() => {
   const snapshot = data.value;
   if (!snapshot) return 0;
-  return [snapshot.follow, snapshot.recommend, snapshot.ranking, snapshot.new_post].reduce(
+  const lists = [snapshot.follow, snapshot.recommend, snapshot.ranking, snapshot.new_post];
+  const fromLists = lists.reduce(
     (sum, list) => sum + list.items.length - filterByR18(list.items, filter.value).length,
     0
+  );
+  return (
+    fromLists +
+    (snapshot.tag_sections ?? []).reduce(
+      (sum, section) => sum + section.items.length - filterByR18(section.items, filter.value).length,
+      0
+    )
   );
 });
 /** 榜单板块日期（YYYYMMDD → YYYY-MM-DD，缺失为空）。 */
@@ -153,6 +170,17 @@ function openTag(name: string): void {
         <WorkGrid :items="rankingItems" :loading="loading" hooks hide-r18-hint @select="openWork" />
       </section>
 
+      <!-- #标签推荐板块（官方 /illustration 同位置：排行之后、最新投稿之前；仅插画频道有数据） -->
+      <section v-for="section in tagSections" :key="section.tag" class="channel-section">
+        <div class="section-head">
+          <h2 class="section-title">
+            <span class="section-tag">#{{ section.tag }}</span>
+            <span>{{ t("browse.channel.tagRecommendSuffix") }}</span>
+          </h2>
+        </div>
+        <WorkGrid :items="section.items" :loading="loading" hooks hide-r18-hint @select="openWork" />
+      </section>
+
       <section class="channel-section">
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.newPost") }}</h2>
@@ -202,6 +230,13 @@ function openTag(name: string): void {
   font-weight: 600;
   line-height: 1.4;
   color: var(--ink-muted);
+}
+
+/* #标签板块标题：标签名升为 on-surface 强调，后缀沿用区标题辅助色（DESIGN.md 分区规则） */
+.section-tag {
+  color: var(--ink);
+  margin-right: var(--space-xxs);
+  overflow-wrap: anywhere;
 }
 
 .section-head-side {
