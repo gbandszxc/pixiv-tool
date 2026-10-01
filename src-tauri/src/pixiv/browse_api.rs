@@ -1,6 +1,6 @@
-//! 浏览模式 ajax 接口层（browse-ui-v1，IPC 契约 v2）。
+//! 浏览模式 ajax 接口层（browse-ui-v1，IPC 契约 v2，13 个命令）。
 //!
-//! 为契约 v2 的 11 个 browse 命令提供 `PixivApi` 方法（跨文件固有实现块），
+//! 为契约 v2 的 13 个 browse 命令提供 `PixivApi` 方法（跨文件固有实现块），
 //! 全部返回 `serde_json::Value`（结构已按契约组装，命令层原样透传前端）。
 //!
 //! 端点与响应形状真相源：`docs/research/pixiv-browse-api.md`（2026-10-01 实测）。
@@ -224,6 +224,42 @@ pub struct BrowseSeriesContent {
     pub x_restrict: Option<i64>,
 }
 
+/// 单条评论（roots 根评论 / replies 回复通用）。
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct BrowseComment {
+    /// pixiv 评论 id（字符串原样；前端作列表 key 与回复查询参数）。
+    pub id: String,
+    pub user_id: i64,
+    pub user_name: String,
+    /// 头像 URL（pixiv 返回无协议前缀，后端补全 https://；缺失/空省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_img: Option<String>,
+    /// 纯文本正文；表情（stamp）评论为空（前端纯文本渲染）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// 表情贴图 URL（stampId 生成；无表情省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stamp_url: Option<String>,
+    /// commentDate 原样（"2026-10-01 08:15"）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub date: Option<String>,
+    /// 是否有回复（bool/"true" 字符串两形态容错）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_replies: Option<bool>,
+    /// 被回复者用户名（仅 replies 条目，replyToUserName）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_user_name: Option<String>,
+}
+
+/// 评论列表（roots / replies 通用；next 游标，省略=到底）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseComments {
+    pub comments: Vec<BrowseComment>,
+    /// roots: hasNext ? offset+len : null；replies: hasNext ? page+1 : null。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<i64>,
+}
+
 /// 小说系列详情 + 一批内容（游标分页）。
 #[derive(Debug, Clone, Serialize)]
 pub struct BrowseSeriesDetail {
@@ -373,7 +409,12 @@ fn parse_work_thumb(v: &Value, fallback_kind: &str) -> Option<BrowseWorkItem> {
                 .iter()
                 .find_map(|k| urls.get(k).and_then(Value::as_str))
                 .map(String::from)
-                .or_else(|| urls.as_object()?.values().find_map(Value::as_str).map(String::from))
+                .or_else(|| {
+                    urls.as_object()?
+                        .values()
+                        .find_map(Value::as_str)
+                        .map(String::from)
+                })
         });
     let text_length = if is_novel {
         v.get("textCount")
@@ -981,6 +1022,89 @@ fn parse_novel_series_detail(
 }
 
 // ----------------------------------------------------------------------
+// 评论（roots / replies）parse（纯函数）
+// ----------------------------------------------------------------------
+
+/// 宽松 bool：pixiv 布尔字段在 bool 与 "true"/"false" 字符串间漂移
+/// （实测 hasReplies 两形态都有）。其余值视为缺失。
+fn as_bool_loose(v: &Value) -> Option<bool> {
+    match v {
+        Value::Bool(b) => Some(*b),
+        Value::String(s) => match s.trim() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// 单条评论对象（roots / replies 条目同构）→ BrowseComment。
+/// id 缺失 → 空串，由 parse_comment_list 整条跳过；其余字段容错兜底：
+/// img 无协议前缀补 https://（空值跳过）；stampId 非空且可解析时拼贴图 URL。
+fn parse_comment(v: &Value) -> BrowseComment {
+    let id = match v.get("id") {
+        Some(Value::String(s)) if !s.is_empty() => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => String::new(),
+    };
+    let profile_img = str_field(v, "img").map(|img| {
+        if img.starts_with("http://") || img.starts_with("https://") {
+            img
+        } else {
+            format!("https://{img}")
+        }
+    });
+    let stamp_url = v
+        .get("stampId")
+        .and_then(as_i64_loose)
+        .map(|sid| format!("https://s.pximg.net/common/images/stamp/generated-stamps/{sid}_s.jpg"));
+    BrowseComment {
+        id,
+        user_id: v.get("userId").and_then(as_i64_loose).unwrap_or(0),
+        user_name: str_field(v, "userName").unwrap_or_default(),
+        profile_img,
+        content: str_field(v, "comment"),
+        stamp_url,
+        date: str_field(v, "commentDate"),
+        has_replies: v.get("hasReplies").and_then(as_bool_loose),
+        reply_to_user_name: str_field(v, "replyToUserName"),
+    }
+}
+
+/// body.comments 数组逐条 parse（缺 id 的条目跳过；缺失/形状异常 → 空列表）。
+fn parse_comment_list(body: &Value) -> Vec<BrowseComment> {
+    body.get("comments")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .map(parse_comment)
+                .filter(|c| !c.id.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 翻页信标 hasNext（缺失或不可识别 → false，视为到底）。
+fn has_next_page(body: &Value) -> bool {
+    body.get("hasNext").and_then(as_bool_loose) == Some(true)
+}
+
+/// roots 响应 → BrowseComments。next = hasNext ? offset+len : null（无 total）。
+fn parse_comments_roots(body: &Value, offset: i64) -> BrowseComments {
+    let comments = parse_comment_list(body);
+    let next = has_next_page(body).then(|| offset + comments.len() as i64);
+    BrowseComments { comments, next }
+}
+
+/// replies 响应 → BrowseComments。next = hasNext ? page+1 : null。
+fn parse_comments_replies(body: &Value, page: i64) -> BrowseComments {
+    let comments = parse_comment_list(body);
+    let next = has_next_page(body).then(|| page + 1);
+    BrowseComments { comments, next }
+}
+
+// ----------------------------------------------------------------------
 // 参数校验与 URL 组装（纯函数，离线可测）
 // ----------------------------------------------------------------------
 
@@ -1381,6 +1505,53 @@ impl PixivApi {
             id, &meta, &content, LIMIT,
         )))
     }
+
+    /// 作品评论根列表：/ajax/illusts|novels/comments/roots（manga 走 illusts 端点）。
+    /// offset 游标分页（limit=10，同官方 web）；next = hasNext ? offset+len : null
+    /// （无 total，前端以 next 为 0 时请求首页）。
+    pub async fn get_work_comments(
+        &self,
+        kind: &str,
+        id: i64,
+        offset: i64,
+    ) -> Result<Value, PixivError> {
+        let (seg, id_key) = match kind {
+            "illust" | "manga" => ("illusts", "illust_id"),
+            "novel" => ("novels", "novel_id"),
+            other => return Err(PixivError::Client(format!("不支持的作品类型: {other}"))),
+        };
+        let offset = offset.max(0);
+        let body = self
+            .client()
+            .get_json(&format!(
+                "/ajax/{seg}/comments/roots?{id_key}={id}&offset={offset}&limit=10&lang=zh"
+            ))
+            .await?;
+        Ok(to_value(&parse_comments_roots(&body, offset)))
+    }
+
+    /// 评论回复列表：/ajax/illusts|novels/comments/replies（无 limit，同官方 web）。
+    /// page 从 1 起；next = hasNext ? page+1 : null。
+    pub async fn get_comment_replies(
+        &self,
+        kind: &str,
+        comment_id: &str,
+        page: i64,
+    ) -> Result<Value, PixivError> {
+        let seg = match kind {
+            "illust" | "manga" => "illusts",
+            "novel" => "novels",
+            other => return Err(PixivError::Client(format!("不支持的作品类型: {other}"))),
+        };
+        let page = page.max(1);
+        let body = self
+            .client()
+            .get_json(&format!(
+                "/ajax/{seg}/comments/replies?comment_id={comment_id}&page={page}&lang=zh"
+            ))
+            .await?;
+        Ok(to_value(&parse_comments_replies(&body, page)))
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -1492,7 +1663,10 @@ mod tests {
             "illust",
         )
         .unwrap();
-        assert_eq!(item.cover.as_deref(), Some("https://i.pximg.net/c/540x540/img-master/mid.jpg"));
+        assert_eq!(
+            item.cover.as_deref(),
+            Some("https://i.pximg.net/c/540x540/img-master/mid.jpg")
+        );
         // 只有 1200 档时也能取到
         let item2 = parse_work_thumb(
             &json!({"id": 1, "pages": [{"urls": {"1200x1200_standard": "https://i.pximg.net/big.jpg"}}]}),
@@ -2036,6 +2210,111 @@ mod tests {
         assert_eq!(contents.len(), 2);
         assert_eq!(contents[0].series_order, 1, "缺 contentOrder 用遍历序兜底");
         assert_eq!(contents[1].series_order, 9);
+    }
+
+    // ---- comments ----
+
+    #[test]
+    fn parse_comment_maps_fields_and_completes_img_protocol() {
+        // 实测形状：img 无协议前缀；id 字符串；commentDate 原样
+        let v = json!({
+            "id": "194911294",
+            "userId": "28640",
+            "userName": "画师",
+            "img": "i.pximg.net/userprofile/x.jpg",
+            "comment": "こんにちは",
+            "commentDate": "2026-10-01 08:15",
+            "hasReplies": true
+        });
+        let c = parse_comment(&v);
+        assert_eq!(c.id, "194911294");
+        assert_eq!(c.user_id, 28640);
+        assert_eq!(c.user_name, "画师");
+        assert_eq!(
+            c.profile_img.as_deref(),
+            Some("https://i.pximg.net/userprofile/x.jpg"),
+            "无协议前缀补 https://"
+        );
+        assert_eq!(c.content.as_deref(), Some("こんにちは"));
+        assert_eq!(c.date.as_deref(), Some("2026-10-01 08:15"));
+        assert_eq!(c.has_replies, Some(true));
+        assert!(c.stamp_url.is_none(), "无 stampId 不拼贴图 URL");
+        assert!(c.reply_to_user_name.is_none(), "roots 条目无被回复者");
+    }
+
+    #[test]
+    fn parse_comment_stamp_and_has_replies_forms() {
+        // 表情评论：comment 空字符串 + stampId；hasReplies 字符串形态
+        let c = parse_comment(&json!({
+            "id": "195000001",
+            "userId": "1",
+            "userName": "甲",
+            "img": "https://i.pximg.net/a.jpg",
+            "comment": "",
+            "stampId": "636",
+            "hasReplies": "true",
+            "replyToUserName": "乙"
+        }));
+        assert_eq!(c.content, None, "空正文省略（表情评论）");
+        assert_eq!(
+            c.stamp_url.as_deref(),
+            Some("https://s.pximg.net/common/images/stamp/generated-stamps/636_s.jpg")
+        );
+        assert_eq!(c.has_replies, Some(true), "字符串 \"true\" 容错");
+        assert_eq!(c.reply_to_user_name.as_deref(), Some("乙"));
+        // hasReplies 两形态 + 缺失
+        assert_eq!(
+            parse_comment(&json!({"id": "1", "hasReplies": false})).has_replies,
+            Some(false)
+        );
+        assert_eq!(
+            parse_comment(&json!({"id": "1", "hasReplies": "false"})).has_replies,
+            Some(false)
+        );
+        assert_eq!(parse_comment(&json!({"id": "1"})).has_replies, None);
+        // stampId 空/非数字 → 不拼 URL；已带协议的 img 不重复补前缀
+        let c = parse_comment(&json!({"id": "2", "stampId": "", "img": "i.pximg.net/b.jpg"}));
+        assert!(c.stamp_url.is_none());
+        assert_eq!(c.profile_img.as_deref(), Some("https://i.pximg.net/b.jpg"));
+    }
+
+    #[test]
+    fn parse_comment_tolerates_missing_fields() {
+        let c = parse_comment(&json!({"id": "9", "userId": "abc", "img": ""}));
+        assert_eq!(c.user_id, 0, "非法 userId 兜底 0");
+        assert_eq!(c.profile_img, None, "空 img 跳过");
+        assert!(c.content.is_none());
+        assert!(c.date.is_none());
+        // 缺 id → 空串，parse_comment_list 整条跳过；数字 id 字符串化容错
+        let body = json!({"comments": [{"userName": "无 id"}, {"id": 7}, {"id": "1"}]});
+        let list = parse_comment_list(&body);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].id, "7");
+        assert_eq!(list[1].id, "1");
+        // comments 缺失/形状异常 → 空列表
+        assert!(parse_comment_list(&json!({})).is_empty());
+        assert!(parse_comment_list(&json!({"comments": "junk"})).is_empty());
+    }
+
+    #[test]
+    fn parse_comments_next_cursor_semantics() {
+        let body =
+            |has_next: Value| json!({"comments": [{"id": "1"}, {"id": "2"}], "hasNext": has_next});
+        // roots：hasNext=true → offset+len
+        let r = parse_comments_roots(&body(json!(true)), 10);
+        assert_eq!(r.comments.len(), 2);
+        assert_eq!(r.next, Some(12));
+        // roots：hasNext=false → 到底
+        let r = parse_comments_roots(&body(json!(false)), 0);
+        assert_eq!(r.next, None);
+        // replies：page 游标
+        let r = parse_comments_replies(&body(json!("true")), 3);
+        assert_eq!(r.next, Some(4));
+        let r = parse_comments_replies(&body(json!(false)), 3);
+        assert_eq!(r.next, None);
+        // hasNext 缺失 → 视为到底
+        let r = parse_comments_roots(&json!({"comments": [{"id": "1"}]}), 5);
+        assert_eq!(r.next, None);
     }
 
     // ---- 参数校验与 URL 组装 ----

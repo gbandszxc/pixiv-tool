@@ -142,6 +142,8 @@ pub fn run() {
             commands::browse_api_cmds::browse_user_profile,
             commands::browse_api_cmds::browse_user_works,
             commands::browse_api_cmds::browse_novel_series,
+            commands::browse_api_cmds::browse_work_comments,
+            commands::browse_api_cmds::browse_comment_replies,
             // tasks
             commands::task_cmds::tasks_list,
             commands::task_cmds::task_create,

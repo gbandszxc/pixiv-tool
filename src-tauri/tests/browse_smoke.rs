@@ -2,7 +2,7 @@
 //!
 //! 不经 GUI / Tauri 运行时，直接调用 `*_impl`（temp_state 模式复制自
 //! tests/smoke_commands.rs，避免跨测试文件共享辅助函数）：
-//! 1. 未登录（隔离空 cookie store）时全部 11 个命令以合法参数调用，
+//! 1. 未登录（隔离空 cookie store）时全部 13 个命令以合法参数调用，
 //!    统一被登录守卫拦截，文案逐字等于 `NOT_LOGGED_IN`（含「登录」关键字，
 //!    前端据此弹登录窗）——同时即「合法参数 → 登录守卫」验证；
 //! 2. 非法参数在登录守卫**之前**被粗校验拒绝，返回参数专属中文错误
@@ -16,10 +16,10 @@
 //! 绝不读写真实 `default` 凭据条目（Windows 无授权弹窗）。
 
 use pixiv_tool_lib::commands::browse_api_cmds::{
-    NOT_LOGGED_IN, browse_channel_impl, browse_discover_impl, browse_follow_latest_impl,
-    browse_home_feed_impl, browse_novel_series_impl, browse_ranking_impl, browse_related_impl,
-    browse_search_impl, browse_user_profile_impl, browse_user_works_impl, browse_work_detail_impl,
-    build_browse_api,
+    NOT_LOGGED_IN, browse_channel_impl, browse_comment_replies_impl, browse_discover_impl,
+    browse_follow_latest_impl, browse_home_feed_impl, browse_novel_series_impl,
+    browse_ranking_impl, browse_related_impl, browse_search_impl, browse_user_profile_impl,
+    browse_user_works_impl, browse_work_comments_impl, browse_work_detail_impl, build_browse_api,
 };
 use pixiv_tool_lib::cookies::CookieStore;
 use pixiv_tool_lib::db::Db;
@@ -50,7 +50,7 @@ fn cleanup(dir: &std::path::Path) {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// ①+③：未登录下全部 11 个命令（合法参数）统一被登录守卫拦截，文案逐字一致。
+/// ①+③：未登录下全部 13 个命令（合法参数）统一被登录守卫拦截，文案逐字一致。
 #[tokio::test]
 async fn not_logged_in_blocks_all_commands_with_login_error() {
     let (state, dir) = temp_state("nologin");
@@ -108,6 +108,18 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
     );
     assert_eq!(
         browse_novel_series_impl(&state, 1093870, Some(30))
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    assert_eq!(
+        browse_work_comments_impl(&state, "manga", 131592804, 10)
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    assert_eq!(
+        browse_comment_replies_impl(&state, "novel", "194911294", 1)
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
@@ -299,6 +311,54 @@ async fn invalid_params_rejected_before_login_guard() {
             .await
             .unwrap_err(),
         "last_order 不能为负数"
+    );
+
+    // 评论：kind 白名单（manga 复用 illusts 端点，ugoira 不支持）
+    assert_eq!(
+        browse_work_comments_impl(&state, "ugoira", 1, 0)
+            .await
+            .unwrap_err(),
+        "不支持的作品类型: ugoira"
+    );
+    assert_eq!(
+        browse_comment_replies_impl(&state, "video", "1", 1)
+            .await
+            .unwrap_err(),
+        "不支持的作品类型: video"
+    );
+
+    // 评论：offset 负数 / 作品 id 越界 / 回复 page<1
+    assert_eq!(
+        browse_work_comments_impl(&state, "illust", 1, -1)
+            .await
+            .unwrap_err(),
+        "offset 不能为负数"
+    );
+    assert_eq!(
+        browse_work_comments_impl(&state, "illust", 0, 0)
+            .await
+            .unwrap_err(),
+        "作品 ID 必须为正整数"
+    );
+    assert_eq!(
+        browse_comment_replies_impl(&state, "illust", "1", 0)
+            .await
+            .unwrap_err(),
+        "页码必须从 1 开始"
+    );
+
+    // 评论：comment_id 非空（含全空白）
+    assert_eq!(
+        browse_comment_replies_impl(&state, "illust", "", 1)
+            .await
+            .unwrap_err(),
+        "评论 ID 不能为空"
+    );
+    assert_eq!(
+        browse_comment_replies_impl(&state, "novel", "   ", 1)
+            .await
+            .unwrap_err(),
+        "评论 ID 不能为空"
     );
 
     cleanup(&dir);

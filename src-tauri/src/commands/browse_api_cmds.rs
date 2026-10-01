@@ -1,10 +1,11 @@
-//! 浏览命令层（browse-ui-v1，IPC 契约 v2，11 个命令）。
+//! 浏览命令层（browse-ui-v1，IPC 契约 v2，13 个命令）。
 //!
 //! 形状约定与 history_cmds 一致：`#[tauri::command]` 薄壳 +
 //! `*_impl(&AppState, ...)` 可离线调用，业务失败统一 `Err(中文文案)`。
 //!
 //! `*_impl` 的调用顺序（冒烟测试 tests/browse_smoke.rs 对齐此顺序）：
-//! 1. 参数粗校验（空 word / page<1 / id 数字域 / kind-mode-date 白名单）
+//! 1. 参数粗校验（空 word / page<1 / id 数字域 / offset<0 / 空 comment_id /
+//!    kind-mode-date 白名单）
 //!    → 可读中文 Err。放在登录守卫之前，未登录也能先暴露参数错误；
 //! 2. [`build_browse_api`]：读登录态 → PHPSESSID 为空即
 //!    [`NOT_LOGGED_IN`]（前端 browse IPC 层以「登录」关键字识别并弹登录窗，
@@ -136,6 +137,14 @@ fn validate_work_kind(kind: &str) -> Result<(), String> {
 
 /// 作者作品 kind 白名单（B1 仅支持 illust|manga|novel）。
 fn validate_user_works_kind(kind: &str) -> Result<(), String> {
+    if !matches!(kind, "illust" | "manga" | "novel") {
+        return Err(format!("不支持的作品类型: {kind}"));
+    }
+    Ok(())
+}
+
+/// 评论 kind 白名单（manga 走 illusts 评论端点）。
+fn validate_comment_kind(kind: &str) -> Result<(), String> {
     if !matches!(kind, "illust" | "manga" | "novel") {
         return Err(format!("不支持的作品类型: {kind}"));
     }
@@ -405,6 +414,62 @@ pub async fn browse_novel_series_impl(
     }
     build_browse_api(state)?
         .get_novel_series(id, last_order)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// 作品评论根列表（offset 游标分页，每页 10，无 total）。
+#[tauri::command]
+pub async fn browse_work_comments(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    offset: i64,
+) -> Result<Value, String> {
+    browse_work_comments_impl(&state, &kind, id, offset).await
+}
+
+pub async fn browse_work_comments_impl(
+    state: &AppState,
+    kind: &str,
+    id: i64,
+    offset: i64,
+) -> Result<Value, String> {
+    validate_comment_kind(kind)?;
+    validate_id(id, "作品")?;
+    if offset < 0 {
+        return Err("offset 不能为负数".to_string());
+    }
+    build_browse_api(state)?
+        .get_work_comments(kind, id, offset)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// 评论回复列表（page 从 1 起，无 limit，同官方 web）。
+#[tauri::command]
+pub async fn browse_comment_replies(
+    state: State<'_, AppState>,
+    kind: String,
+    comment_id: String,
+    page: i64,
+) -> Result<Value, String> {
+    browse_comment_replies_impl(&state, &kind, &comment_id, page).await
+}
+
+pub async fn browse_comment_replies_impl(
+    state: &AppState,
+    kind: &str,
+    comment_id: &str,
+    page: i64,
+) -> Result<Value, String> {
+    validate_comment_kind(kind)?;
+    if comment_id.trim().is_empty() {
+        return Err("评论 ID 不能为空".to_string());
+    }
+    validate_page(page)?;
+    build_browse_api(state)?
+        .get_comment_replies(kind, comment_id, page)
         .await
         .map_err(|err| err.to_string())
 }
