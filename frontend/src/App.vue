@@ -23,7 +23,8 @@
   </div>
   <dialog ref="exitDialog" class="m3-dialog" @close="showExitConfirm = false"><h2>{{ t('app.exitConfirmTitle') }}</h2><div class="m3-row"><md-text-button @click="showExitConfirm = false">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="invoke('app_exit').catch(() => {})">{{ t('app.exit') }}</md-filled-button></div></dialog>
   <LoginDialog v-model:show="showLoginDialog" />
-  <AccountDrawer v-model:show="showDrawer" @add-account="showLoginDialog = true" />
+  <AccountDrawer v-model:show="showDrawer" @add-account="showLoginDialog = true" @open-settings="openSettings" />
+  <SettingsDialog v-model:show="showSettings" />
   <div v-if="notification" class="m3-snackbar" role="status">{{ notification }}</div>
 </template>
 
@@ -34,6 +35,7 @@ import { useI18n } from "vue-i18n";
 import { listen } from "@tauri-apps/api/event";
 import LoginDialog from "./components/auth/LoginDialog.vue";
 import AccountDrawer from "./components/auth/AccountDrawer.vue";
+import SettingsDialog from "./components/settings/SettingsDialog.vue";
 import SidebarIcon, { type SidebarIconName } from "./components/navigation/SidebarIcon.vue";
 import { useAuthStore } from "./stores/auth";
 import { useSettingsStore } from "./stores/settings";
@@ -42,7 +44,7 @@ import { OPEN_LOGIN_EVENT } from "./api/browse";
 
 const router = useRouter(); const route = useRoute(); const { t } = useI18n();
 const authStore = useAuthStore(); const settingsStore = useSettingsStore();
-const showLoginDialog = ref(false); const showDrawer = ref(false); const showExitConfirm = ref(false); const exitDialog = ref<HTMLDialogElement>();
+const showLoginDialog = ref(false); const showDrawer = ref(false); const showSettings = ref(false); const showExitConfirm = ref(false); const exitDialog = ref<HTMLDialogElement>();
 const siderCollapsed = ref(false); const notification = ref(""); let toastTimer: number | undefined; let unlistenExit: (() => void) | undefined;
 interface MenuItem { path: string; label: string; icon: SidebarIconName }
 /** 扁平侧栏：浏览区在上（精确匹配高亮），其后分隔线 + 单一「工具」项（/tools* 前缀高亮）。 */
@@ -57,7 +59,7 @@ const menuItems = computed<MenuItem[]>(() => [
   { path: "/browse/ranking", label: t("nav.browseRanking"), icon: "ranking" },
   { path: "/browse/bookmark", label: t("nav.browseBookmark"), icon: "bookmark" },
 ]);
-// 头像 chip（账号/设置抽屉触发器）：文案与首字母回退逻辑迁自原 AccountMenu
+// 头像 chip（账号抽屉触发器）：文案与首字母回退逻辑迁自原 AccountMenu
 const avatarFailed = ref(false); const avatarSrc = computed(() => avatarFailed.value ? "" : authStore.avatarUrl);
 const accountLabel = computed(() => authStore.isLoggedIn ? authStore.pixivId || authStore.name : t("auth.accounts"));
 const accountInitial = computed(() => accountLabel.value.charAt(0).toUpperCase());
@@ -70,6 +72,8 @@ watch(() => settingsStore.settings.theme_color, (palette) => { document.document
 function onNotification(event: Event) { notification.value = (event as CustomEvent<string>).detail; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => notification.value = "", 3200); }
 /** 浏览接口报未登录（api/browse.ts 派发）→ 复用现有登录弹窗。 */
 function onOpenLogin() { showLoginDialog.value = true; }
+/** 账号抽屉的「设置」入口：关抽屉、开模态设置弹窗（同一时刻只留一层浮层）。 */
+function openSettings() { showDrawer.value = false; showSettings.value = true; }
 onMounted(() => { media.addEventListener("change", onMediaChange); settingsStore.fetchSettings().catch(() => {}); authStore.checkStatus(); authStore.fetchAccounts(); listen("app://confirm-exit", () => showExitConfirm.value = true).then(fn => unlistenExit = fn); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); });
 onBeforeUnmount(() => { media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); });
 </script>

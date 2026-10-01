@@ -25,10 +25,11 @@
             </div>
           </section>
           <hr class="drawer-divider" />
-          <section class="drawer-section" :aria-label="t('settings.title')">
-            <h3>{{ t('settings.title') }}</h3>
-            <SettingsPanel ref="settingsPanel" />
-          </section>
+          <button class="drawer-menu-item" @click="emit('open-settings')">
+            <SidebarIcon name="settings" />
+            <span>{{ t('settings.title') }}</span>
+            <svg class="menu-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 6 6 6-6 6" /></svg>
+          </button>
         </div>
       </aside>
     </div>
@@ -37,24 +38,24 @@
 
 <script setup lang="ts">
 /**
- * 账号/设置抽屉：侧栏底部头像 chip 的展开物（M3 modal drawer 形态）。
+ * 账号抽屉：侧栏底部头像 chip 的展开物（M3 modal drawer 形态）。
  * 账号区迁移自原 AccountMenu（列表切换 / 添加账号 emit 给 LoginDialog / 退出登录）；
- * 设置区承载 SettingsPanel（原 SettingsView 表单），关闭前经其 beforeClose()
- * 恢复未保存的主题预览。Esc / 点 scrim / 标题栏 ✕ 均可关闭。
+ * 「设置」只留入口，点击 emit open-settings（由 App 关抽屉并打开模态设置弹窗
+ * SettingsDialog）。Esc / 点 scrim / 标题栏 ✕ 均可关闭。
  */
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import SettingsPanel from "../settings/SettingsPanel.vue";
+import SidebarIcon from "../navigation/SidebarIcon.vue";
 import { useAuthStore } from "../../stores/auth";
 import { errorMessage, type AccountEntry } from "../../api/tauri";
 import { notify } from "../../ui/notify";
 
 const props = defineProps<{ show: boolean }>();
-const emit = defineEmits<{ (e: "update:show", value: boolean): void; (e: "add-account"): void }>();
+const emit = defineEmits<{ (e: "update:show", value: boolean): void; (e: "add-account"): void; (e: "open-settings"): void }>();
 const { t } = useI18n(); const authStore = useAuthStore();
-const panel = ref<HTMLElement | null>(null); const settingsPanel = ref<InstanceType<typeof SettingsPanel> | null>(null);
+const panel = ref<HTMLElement | null>(null);
 
-function close() { settingsPanel.value?.beforeClose(); emit("update:show", false); }
+function close() { emit("update:show", false); }
 /** Esc 关闭抽屉（window 级监听）；设置确认等原生 dialog 打开时让位（Esc 优先关闭最上层 dialog）。 */
 function onWindowKeydown(event: KeyboardEvent) { if (event.key === "Escape" && !document.querySelector("dialog[open]")) close(); }
 watch(() => props.show, (show) => { if (show) { window.addEventListener("keydown", onWindowKeydown); nextTick(() => panel.value?.focus()); } else window.removeEventListener("keydown", onWindowKeydown); });
@@ -84,6 +85,9 @@ async function handleLogout() { try { await authStore.logout(); } catch (error) 
 .account-check { flex: none; color: var(--md-sys-color-primary); }
 .account-empty { margin: 0 0 var(--space-md); color: var(--ink-muted); font-size: 12px; }
 .account-actions { margin-bottom: var(--space-sm); }
+.drawer-menu-item { display: flex; align-items: center; gap: var(--space-sm); width: 100%; min-height: 44px; padding: var(--space-xxs) var(--space-sm); color: var(--ink); font: inherit; text-align: left; background: transparent; border: 0; border-radius: var(--radius-control); cursor: pointer; }
+.drawer-menu-item:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
+.menu-caret { flex: none; width: 16px; height: 16px; margin-left: auto; color: var(--ink-muted); }
 .avatar { display: grid; place-items: center; flex: none; width: 32px; height: 32px; border-radius: 50%; color: var(--md-sys-color-on-primary-container); font-weight: 600; background: var(--md-sys-color-primary-container); }
 .avatar-image { object-fit: cover; }
 /* 滑入过渡：时长复用既有 0.15s ease（WorkCard / BookmarkButton 同源）；reduced-motion 由全局兜底压到 0.01ms */

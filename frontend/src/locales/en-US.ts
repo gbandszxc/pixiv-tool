@@ -47,8 +47,8 @@ export default {
     browseBookmark: "Bookmarks",
   },
   auth: {
-    drawerTitle: "Account & Settings",
-    openAccountDrawer: "Open account & settings",
+    drawerTitle: "Account",
+    openAccountDrawer: "Open account drawer",
     notLoggedInHint: "Not logged in yet — add an account to use crawl and browse features",
     accounts: "Account",
     addAccount: "Add account",

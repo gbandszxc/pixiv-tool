@@ -131,7 +131,7 @@ pixiv-tool/
 │  ├─ src/
 │  │  ├─ views/                 # ToolsView（工具页签壳）/ CrawlView / IllustrationView / TasksView / HistoryView
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark + Work/Series/Author/Novel
-│  │  ├─ components/            # auth/（LoginDialog / AccountDrawer）navigation/ settings/（SettingsPanel）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
+│  │  ├─ components/            # auth/（LoginDialog / AccountDrawer）navigation/ settings/（SettingsPanel / SettingsDialog）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
@@ -420,7 +420,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 - `backend_port`：旧 Python 后端端口配置；Tauri 版无后端进程，仅保留字段
   兼容旧配置文件（仍在 `settings_save` 白名单内），无实际作用。
 - `max_wait_seconds`：任务最大运行时长（秒），默认 180，合法区间 30~86400，
-  设置抽屉可配；任务运行超过该时长自动标记为 failed（**不含暂停时间**）。
+  设置弹窗可配；任务运行超过该时长自动标记为 failed（**不含暂停时间**）。
 - `theme` / `theme_color`：主题模式（`light`/`dark`/`auto`）与色板（`pixiv` 默认 /
   `indigo` / `jade` / `violet` / `amber`），实现见 §6.3。两个键都在
   `settings_save` 白名单内。
@@ -492,16 +492,19 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 即子路由导航、与路由双向同步；`/tools` 重定向到 `/tools/novel`。旧路径 `/`、
 `/illustration`、`/tasks`、`/history` 保留为函数式 redirect，透传 query 与 hash
 （浏览页「返填表单」跳旧路径并带 `sourceType`/`sourceId` 预填，依赖此处）。
-`/settings` 路由已移除，设置整体迁入账号/设置抽屉（见下）。
+`/settings` 路由已移除：账号抽屉只留「设置」入口，设置表单承载于模态设置弹窗（见下）。
 
 **侧边栏**：扁平菜单、无分组标题——浏览区（首页/插画/漫画/小说/发现/动态/搜索/
 排行榜/收藏）在上，其后一条分隔线，最后是「工具」单项（`/tools*` 前缀高亮，
 浏览项按路径精确匹配）。头部行 = logo + 标题 + 收起侧栏按钮（折叠态仅留展开按钮）；
 折叠态 72px 只显示图标，窗口高度不足时导航区自身滚动。侧栏底部为**头像 chip**
-（头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击打开**账号/设置抽屉**：
+（头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击打开**账号抽屉**：
 modal drawer 左侧滑出、带 scrim、宽 `min(420px, 92vw)`、Esc / 点 scrim / 标题栏
 ✕ 关闭；内容 = 账号区（列表切换 / 添加账号复用 LoginDialog / 退出登录）+ 分隔线 +
-设置区（SettingsPanel，含主题实时预览；关闭时若预览未保存则恢复已保存主题并提示）。
+**「设置」入口**。入口点击后关抽屉并打开**设置弹窗**（`SettingsDialog`：原生
+dialog、宽 `min(600px, 92vw)`、表单区自身滚动、Esc / 点 backdrop / 标题栏 ✕ 关闭），
+表单为 SettingsPanel，含主题实时预览；关闭弹窗时若预览未保存则恢复已保存主题并提示，
+设置项增多时在弹窗内分组扩展。
 应用外壳恒为视口高，右侧内容区是唯一滚动容器，长内容不再拉长侧栏。
 
 浏览模式详见 §6.4 与 ADR 0012。
@@ -511,12 +514,12 @@ modal drawer 左侧滑出、带 scrim、宽 `min(420px, 92vw)`、Esc / 点 scrim
 - 框架：**vue-i18n**
 - 语言：**简体中文（默认）+ 英文**
 - 文件：`src/locales/zh-CN.ts` / `en-US.ts`
-- 设置抽屉可切；启动期以 `localStorage["pixiv-tool-lang"]` 为准，settings.json 的
+- 设置弹窗可切；启动期以 `localStorage["pixiv-tool-lang"]` 为准，settings.json 的
   `language` 加载后回填并向 localStorage 同步（两处同写，避免首屏语言闪变）
 
 ### 6.3 主题
 
-- 选项：浅色 / 深色 / 跟随系统（设置抽屉下拉，持久化到 `settings.json` 的 `theme`）
+- 选项：浅色 / 深色 / 跟随系统（设置弹窗下拉，持久化到 `settings.json` 的 `theme`）
 - 实现：`frontend/src/styles/main.css` 定义 M3 颜色角色（`--md-sys-color-*`）与
   `--surface` / `--ink` / `--space-*` / `--radius-*` 别名；`dark`，或 `auto` 且
   系统 `prefers-color-scheme: dark` 时，`App.vue` 给 `<html>` 加 `.dark` 类并调
@@ -678,10 +681,13 @@ bash ./dev.sh dev start  # 默认动作也是 start；后台 Vite + Rust 热重�
   不终止无关进程，不自动换端口。`dev stop` 只连带停止由它启动的前端，
   复用的已有前端保留；`frontend stop/restart` 不连带停止桌面开发进程。
   停止操作强制终止对应进程树，不能代替应用内正常退出。
-  启动返回后 Rust 编译与窗口启动进度通过 `logs dev -f` 查看。
+  `dev start/restart` 等待后台工具链初始化完成后才报告成功；初始化失败返回错误，
+  原因写入 `dev.log`。窗口需等待 Rust 编译完成，进度通过 `logs dev -f` 查看。
   服务状态存 `.dev/pids/`，操作输出写入 `.dev/logs/<子命令>.log`
   （UTF-8，启动服务或执行前台操作时覆盖），均不入库；应用日志仍在 §9 的位置。
-  Windows 自动初始化 VS 2022 / MSVC / LLVM；Git Bash 委托 PowerShell 入口；
+  Windows 在独立后台进程初始化 VS 2022 / MSVC / LLVM，不修改启动服务的终端环境；
+  继承的工具搜索路径去重，已有匹配的 x64 VS 环境直接复用，避免重复初始化撑爆
+  cmd.exe 的命令行长度。Git Bash 委托 PowerShell 入口；
   macOS / Linux 使用当前工具链，服务管理另需 `lsof`。参数错误退出 2，
   前置条件错误退出 1；前台子进程失败保留其退出码。完整用法见
   `docs/PACKAGING.md` §1。
@@ -723,7 +729,7 @@ macOS universal/aarch64 DMG、Linux x64 AppImage，最后**幂等覆盖**式发�
 - **格式**：`%Y-%m-%d %H:%M:%S%.3f [级别] [target] 消息`（chrono 本地时间戳）
 - **编码**：UTF-8
 - **滚动**：单文件 8MB（`MAX_LOG_FILE_SIZE`），超出轮转为 `app_old.log`
-- **清除**：设置抽屉"清除日志"按钮（`clear_logs` 将 app.log 清空写回）
+- **清除**：设置弹窗"清除日志"按钮（`clear_logs` 将 app.log 清空写回）
 
 ---
 

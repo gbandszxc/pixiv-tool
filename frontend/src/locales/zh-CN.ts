@@ -47,8 +47,8 @@ export default {
     browseBookmark: "收藏",
   },
   auth: {
-    drawerTitle: "账号与设置",
-    openAccountDrawer: "打开账号与设置",
+    drawerTitle: "账号",
+    openAccountDrawer: "打开账号抽屉",
     notLoggedInHint: "尚未登录，添加账号后即可使用抓取与浏览功能",
     accounts: "账号",
     addAccount: "添加账号",

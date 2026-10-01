@@ -47,7 +47,7 @@ const router = createRouter({
         { path: "history", name: "tools-history", component: () => import("../views/HistoryView.vue") },
       ],
     },
-    // 旧抓取页路径保留为重定向；/settings 已移除（设置迁入侧栏头像的账号/设置抽屉）。
+    // 旧抓取页路径保留为重定向；/settings 已移除（设置在账号抽屉的「设置」入口 → 模态设置弹窗）。
     { path: "/", redirect: legacyToolRedirect("/tools/novel") },
     { path: "/illustration", redirect: legacyToolRedirect("/tools/illustration") },
     { path: "/tasks", redirect: legacyToolRedirect("/tools/tasks") },

@@ -59,9 +59,9 @@
 
 <script setup lang="ts">
 /**
- * 设置面板（可复用）：原 SettingsView 的完整表单迁入，承载于账号/设置抽屉
- * （AccountDrawer）。原「路由离开时恢复未保存预览」的守卫改为暴露 beforeClose()，
- * 由抽屉关闭流程调用。
+ * 设置面板（可复用）：原 SettingsView 的完整表单迁入，承载于模态设置弹窗
+ * （SettingsDialog，由账号抽屉的「设置」入口打开）。原「路由离开时恢复未保存
+ * 预览」的守卫改为暴露 beforeClose()，由弹窗关闭流程调用。
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
