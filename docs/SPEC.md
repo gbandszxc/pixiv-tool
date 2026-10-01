@@ -136,6 +136,8 @@ pixiv-tool/
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
 │  │  ├─ api/browse.ts          # 浏览契约类型 + 非 Tauri 环境的确定性 mock 层
+│  │  ├─ utils/thumb.ts         # 缩略图 URL 档位改写（§6.4）
+│  │  ├─ composables/useThumbTier.ts # 设置档位 → 合法 ThumbTier 的响应式读取
 │  │  ├─ locales/               # zh-CN.ts / en-US.ts
 │  │  ├─ styles/                # 全局 CSS Variables（--md-sys-color-* 等）
 │  │  └─ router/                # hash 模式
@@ -522,7 +524,13 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   mock 层在 `frontend/src/api/browse.ts`（非 Tauri 环境返回确定性样例数据，供浏览器
   视觉验收；生产不受影响）。
 - **图片**：`<img>` 一律经自定义协议 `pixiv-img`（§3.1、ADR 0012 §2），磁盘缓存
-  `<data>/cache/img/`（1GB 上限按 mtime 淘汰），前端 `pxSrc()` 封装。
+  `<data>/cache/img/`（1GB 上限按 mtime 淘汰），前端 `pxSrc()` 封装。封面 URL 经
+  `frontend/src/utils/thumb.ts` 按设置档位（`thumb_quality_grid` /
+  `thumb_quality_detail` / `thumb_quality_fullscreen`，见 §5.2）改写：**只替换路径里已有的
+  `/c/<尺寸段>/` 段**（列表卡片多为 `c/540x540_70`），**或给 `/img-master/img/`
+  前缀插入 `/c/<尺寸段>/`**；`/img-original/`、`/img-zip-ugoira/`、`/user-profile/`
+  等其它路径与 `original` 档一律原样返回（头像保留接口给的 `_50`/`_170` 后缀）。
+  **绝不构造 `{datePath}` 与文件名**（拼错即 404）。
 - **分页**：统一收敛为 `next_page` / `is_last_page` / `next_last_order`（游标）语义；
   发现页与首页推荐无服务端翻页，前端重复调用按 id 去重。
 - **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图

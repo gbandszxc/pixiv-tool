@@ -270,6 +270,8 @@ export default {
       likes: "点赞",
       seriesEp: "{title} · 第 {order} 话",
       relatedTitle: "相关推荐",
+      fullscreen: "全屏查看",
+      exitFullscreen: "退出全屏",
     },
     author: {
       followingCount: "关注 {n}",

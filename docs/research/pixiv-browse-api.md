@@ -400,6 +400,34 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 - 因此**后端代理图片必须设置请求头** `Referer: https://www.pixiv.net/`；不需要 Cookie。wreq/后端代理时记得同时带上常规浏览器 UA。
 - 响应带长缓存（`cache-control: max-age=31536000`），代理层可放心做磁盘缓存。
 
+### 本项目采用的缩略图三档与改写规则（2026-10-01）
+
+接口给的封面 URL 已经带尺寸段：列表卡片多为 `/c/540x540_70/img-master/...`，
+详情页 `pages` 的 `regular` 则是 `/img-master/img/..._master1200.jpg`（不带 `/c/`）。
+本项目不改写图片内容，只按设置档位在 URL 上替换 / 插入尺寸段
+（前端 `frontend/src/utils/thumb.ts`）：
+
+| 档位 | 尺寸段 | 改写方式 |
+|---|---|---|
+| small | `250x250_80_a2` | 路径以 `/c/<段>/` 开头 → 替换该尺寸段；以 `/img-master/img/` 开头 → 在其前插入 `/c/<段>/` |
+| medium | `540x540_70` | 同上 |
+| large | `600x1200_90` | 同上 |
+| original | 不改写 | 原样返回 |
+
+- 非 `/c/` 且非 `/img-master/img/` 的路径一律原样：`/img-original/`、
+  `/img-zip-ugoira/`、`/user-profile/`、`/custom-thumb/` 等；头像保留接口给的
+  `_50` / `_170` 尺寸后缀。
+- 只在原 URL 上动 `/c/` 尺寸段，查询串与锚点不动；`{datePath}` 与文件名
+  **绝不构造**（自行拼路径即 404，见 §10）。
+- 详情页档位 `medium` 的语义是「接口 `regular` 原样」（不插 `/c/`），
+  `540x540_70` 只作「先低清后高清」的占位层。
+- 本项目默认档位：列表/网格 `medium`、详情页 `medium`、全屏 `large`；R-18 全局
+  开关 `show_r18` 默认 `true`。
+- 代理层成功响应统一 `Cache-Control: public, max-age=31536000, immutable`
+  （CDN 长缓存的下游延伸；同 URL 内容不变，缓存命中与回源共用同一响应头）。
+- **待实测**：`novel-cover` 路径使用 `540x540_70` / `600x1200_90`，以及
+  `img-master` 使用 `600x1200_90`，均属本项目新增用法（官方页面未见过这两组
+  组合），需实机确认返回 200 且尺寸/裁切符合预期。
 ## 10. 风险与备注
 
 ### 登录要求

@@ -267,6 +267,17 @@ export function pxSrc(url?: string): string {
   return convertFileSrc(url, "pixiv-img");
 }
 
+/**
+ * 按档位改写尺寸段后的图片地址（组件层唯一出口）。
+ * 档位一律经 composables/useThumbTier 读取；thumbUrl 不直接对组件开放，
+ * 以免组件自行拼尺寸段。mock 的 data URI 与头像等非 pximg URL 由 thumbUrl 原样透传。
+ */
+export function thumbSrc(url: string | undefined | null, tier: ThumbTier): string {
+  return pxSrc(thumbUrl(url, tier));
+}
+
+export type { ThumbTier };
+
 // ===== 未登录错误联动 =====
 
 /** 打开登录弹窗的自定义事件名（App.vue 监听并复用现有 LoginDialog）。 */

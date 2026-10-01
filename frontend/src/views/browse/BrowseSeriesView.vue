@@ -12,8 +12,10 @@ import {
   browseNovelSeries,
   errorMessage,
   pxSrc,
+  thumbSrc,
   type BrowseSeriesDetail,
 } from "../../api/browse";
+import { useThumbTier } from "../../composables/useThumbTier";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivSeriesUrl } from "../../utils/pixivUrl";
@@ -34,6 +36,8 @@ const loading = ref(false);
 const error = ref("");
 const loadingMore = ref(false);
 const moreError = ref("");
+/** 改写后的头图地址 404 时为 true → 回落接口原始 URL（load() 里随系列切换重置）。 */
+const coverFailed = ref(false);
 
 async function load(): Promise<void> {
   loading.value = true;
@@ -42,6 +46,7 @@ async function load(): Promise<void> {
   seriesInfo.value = null;
   contents.value = [];
   nextLastOrder.value = null;
+  coverFailed.value = false;
   // 进入/切换系列回到页首（SPA 内路由切换会保留上一页滚动位置）
   window.scrollTo(0, 0);
   try {
@@ -76,7 +81,19 @@ watch(() => props.id, load, { immediate: true });
 
 // ===== 头部展示 =====
 
-const cover = computed(() => pxSrc(seriesInfo.value?.cover));
+/** 头部封面档位（thumb_quality_grid，120px 方形展示）。 */
+const gridTier = useThumbTier("thumb_quality_grid");
+
+/** 头图优先走 grid 档改写，失败时由 coverFailed 回落到接口原始 URL。 */
+const cover = computed(() =>
+  coverFailed.value
+    ? pxSrc(seriesInfo.value?.cover)
+    : thumbSrc(seriesInfo.value?.cover, gridTier.value)
+);
+
+function onCoverError(): void {
+  coverFailed.value = true;
+}
 
 /** caption 剥 HTML 标签为纯文本（简介里的排版标记不渲染）。 */
 const caption = computed(() => (seriesInfo.value?.caption ?? "").replace(/<[^>]*>/g, "").trim());
@@ -155,7 +172,7 @@ function openInPixiv(): void {
     <template v-else-if="seriesInfo">
       <!-- 系列头 -->
       <header class="series-head">
-        <img v-if="cover" class="cover" :src="cover" alt="" />
+        <img v-if="cover" class="cover" :src="cover" alt="" @error="onCoverError" />
         <div class="head-info">
           <h1 class="page-title" :title="seriesInfo.title">{{ seriesInfo.title }}</h1>
           <router-link class="author-link" :to="`/browse/user/${seriesInfo.user_id}`">

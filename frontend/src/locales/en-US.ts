@@ -269,6 +269,8 @@ export default {
       likes: "Likes",
       seriesEp: "{title} · Episode {order}",
       relatedTitle: "Related",
+      fullscreen: "View fullscreen",
+      exitFullscreen: "Exit fullscreen",
     },
     author: {
       followingCount: "Following {n}",

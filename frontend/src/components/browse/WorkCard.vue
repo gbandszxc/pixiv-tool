@@ -3,9 +3,10 @@
  * 作品卡片：封面 + 标题（两行省略）+ 作者行 + 左上角徽标（页数 / R-18）。
  * 整卡可点击（emit click），键盘可聚焦；无阴影，hover 用 8% primary 状态层（DESIGN.md）。
  */
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { pxSrc, type BrowseWorkItem } from "../../api/browse";
+import { pxSrc, thumbSrc, type BrowseWorkItem } from "../../api/browse";
+import { useThumbTier } from "../../composables/useThumbTier";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser, workDownloadTarget } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
@@ -43,6 +44,29 @@ const badgeText = computed(() => {
 
 const restricted = computed(() => props.item.x_restrict === 1 || props.item.x_restrict === 2);
 
+/** 网格封面档位（thumb_quality_grid）。 */
+const gridTier = useThumbTier("thumb_quality_grid");
+
+/**
+ * 改写后地址（含 novel-cover 等路径）一旦 404，回落到接口给的原始 URL 重试一次；
+ * item.cover 变化视为新封面，重置回退标记。
+ */
+const coverFailed = ref(false);
+const coverSrc = computed(() =>
+  coverFailed.value ? pxSrc(props.item.cover) : thumbSrc(props.item.cover, gridTier.value)
+);
+
+function onCoverError(): void {
+  coverFailed.value = true;
+}
+
+watch(
+  () => props.item.cover,
+  () => {
+    coverFailed.value = false;
+  }
+);
+
 function handleClick(): void {
   if (props.disabled) return;
   emit("click", props.item);
@@ -72,7 +96,7 @@ function handleFillForm(): void {
       @keydown.space.prevent="handleClick"
     >
       <div class="cover" :class="{ portrait }">
-        <img v-if="item.cover" :src="pxSrc(item.cover)" alt="" loading="lazy" />
+        <img v-if="item.cover" :src="coverSrc" alt="" loading="lazy" decoding="async" @error="onCoverError" />
         <span v-if="badgeText" class="badge" :class="{ restricted }">{{ badgeText }}</span>
         <span v-if="item.kind === 'novel'" class="kind-mark" :title="t('nav.browseNovel')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -223,6 +247,8 @@ function handleFillForm(): void {
   aspect-ratio: 1 / 1;
   border-radius: var(--radius-control);
   overflow: hidden;
+  /* 封面重渲染不影响卡片外布局（长列表滚动性能） */
+  contain: content;
   /* 主色底占位：封面未加载时可见（DESIGN.md token 派生） */
   background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container));
 }
