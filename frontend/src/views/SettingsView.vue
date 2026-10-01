@@ -76,7 +76,8 @@ onBeforeRouteLeave(() => { if (savedSnapshot.value && savedSnapshot.value !== sn
 </script>
 
 <style scoped>
-.settings-path-row { display: flex; gap: var(--space-sm); }
+/* 密度层下字段与按钮同为 40px：居中对齐，按钮不再随文本框拉伸（窄屏 column 时由下方媒体查询改回 stretch 铺满行宽） */
+.settings-path-row { display: flex; align-items: center; gap: var(--space-sm); }
 .settings-path-input { flex: 1; min-width: 0; }
 .settings-fieldset { min-width: 0; padding: 0; border: 0; }
 .settings-fieldset legend { padding: 0; color: var(--ink-muted); font-size: 14px; font-weight: 500; }

@@ -122,6 +122,8 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 - 左侧导航：图标加文字，hover 使用 8% primary 的状态层，active 使用 primary-container。账号区位于侧栏底部，原生 `details` 菜单向上弹出。
 - alert、状态 pill、表格和表单卡是小型本地样式，复用 M3 颜色角色和上述 shape/spacing，不另建组件库。
 
+**控件密度.** Material Web 的 `md-outlined-text-field` 与 `md-outlined-select` 统一为 40px 高、14px 输入文字（组件默认 56px / 16px），与全局 14px 正文和 40px 的 choice 行对齐。实现只做尺寸 token 覆盖（`frontend/src/styles/main.css` 的「控件密度层」）：上下内距 8px（文本框 `--md-outlined-text-field-top/bottom-space`；选择器无容器高度 token，经内嵌 field 继承 `--md-outlined-field-top/bottom-space`）、输入字号 14px（选择器走 `--md-outlined-select-text-field-input-text-size`）、输入行高钉 24px（8 + 24 + 8 = 40px）。按钮维持 Material 默认的 40px 高 / 14px 标签字，不做覆盖。密度层不改颜色、圆角、描边、浮标等组件外观（Native-First Rule）。
+
 ### 浏览模式组件（ADR 0012）
 
 浏览（browse）页面在既有 M3 体系上新增以下本地组件，全部复用现有颜色角色与间距刻度，不引入新 token：

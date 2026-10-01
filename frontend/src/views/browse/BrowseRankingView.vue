@@ -259,6 +259,7 @@ function openWork(item: BrowseWorkItem): void {
 
 .mode-select {
   width: 168px;
+  min-width: 0; /* md-outlined-select 宿主默认 min-width:210px，会压过 width，需显式放开 */
 }
 
 .date-nav {

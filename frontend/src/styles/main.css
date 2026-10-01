@@ -49,6 +49,37 @@ html.dark[data-palette="jade"] { --md-sys-color-primary:#55dba9; --md-sys-color-
 html.dark[data-palette="violet"] { --md-sys-color-primary:#e9b8ec; --md-sys-color-on-primary:#45254d; --md-sys-color-primary-container:#5d3c65; --md-sys-color-on-primary-container:#fbd7ff; --md-sys-color-secondary:#d5c0d3; --md-sys-color-on-secondary:#3a2a3b; --md-sys-color-secondary-container:#524052; --md-sys-color-on-secondary-container:#f2ddf0; }
 html.dark[data-palette="amber"] { --md-sys-color-primary:#ffb870; --md-sys-color-on-primary:#4a2800; --md-sys-color-primary-container:#6b3c00; --md-sys-color-on-primary-container:#ffdcc0; --md-sys-color-secondary:#e2c1a8; --md-sys-color-on-secondary:#422c1a; --md-sys-color-secondary-container:#5a4230; --md-sys-color-on-secondary-container:#ffdcc7; }
 
+/* ── 控件密度层 ─────────────────────────────────────────────
+ * @material/web 2.5 的文本框/选择器默认 56px 高、16px 输入字，
+ * 与全应用 14px 正文、40px 选择行（.m3-choice）不协调，统一压到
+ * 40px 高、14px 输入字（56→40：上下内距 16px→8px，行高 24px 不变；
+ * 16→14：输入字号 1rem→14px）。
+ * 边界：只调尺寸 token，不改组件外观（Native-First Rule）——
+ * 颜色/圆角/描边/浮标等一概沿用 Material 默认。token 放 :root，
+ * 按继承规则进入 shadow DOM。按钮默认即 40px 高 / 14px 标签，不覆盖。
+ *
+ * 源码依据（node_modules/@material/web@2.5.0）：
+ * - 文本框高度 = --md-outlined-text-field-top-space + 输入行高
+ *   + --md-outlined-text-field-bottom-space（tokens/_md-comp-outlined-text-field.scss
+ *   默认 16+24+16；布局见 field/internal/_content.scss 的 padding-top/bottom）。
+ *   该组件不支持 container-height token。
+ * - 选择器无 container-height token（tokens/_md-comp-outlined-select.scss
+ *   supported-tokens 无此条），且其内部转发不含上/下内距，故内嵌
+ *   field 走继承的 --md-outlined-field-top/bottom-space 生效。
+ * ---------------------------------------------------------- */
+:root {
+  --md-outlined-text-field-top-space: 8px;
+  --md-outlined-text-field-bottom-space: 8px;
+  --md-outlined-text-field-input-text-size: 14px;
+  /* 行高钉 24px（与默认 body-large 一致），使总高恰为 8+24+8=40px */
+  --md-outlined-text-field-input-text-line-height: 24px;
+  /* 选择器内嵌 field 的高度路径（见上方源码依据） */
+  --md-outlined-field-top-space: 8px;
+  --md-outlined-field-bottom-space: 8px;
+  --md-outlined-select-text-field-input-text-size: 14px;
+  --md-outlined-select-text-field-input-text-line-height: 24px;
+}
+
 * {
   box-sizing: border-box;
 }
