@@ -33,11 +33,6 @@ const router = createRouter({
   history: createWebHashHistory(),
   routes: [
     {
-      path: "/pixiv",
-      name: "pixiv",
-      component: () => import("../views/PixivView.vue"),
-    },
-    {
       path: "/",
       name: "crawl",
       component: () => import("../views/CrawlView.vue"),

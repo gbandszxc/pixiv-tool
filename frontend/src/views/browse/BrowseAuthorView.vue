@@ -4,7 +4,7 @@
  *
  * - 头部：头像（pxSrc 代理，失败回退占位）、昵称、@pixiv_id、统计行、
  *   简介(comment_html 剥 HTML 标签为纯文本，3 行截断 + 展开/收起)、
- *   「在 Pixiv 浏览器中打开」→ 切到 /pixiv 后 browse_navigate 到用户页。
+ *   「在浏览器中打开」→ 系统默认浏览器打开用户主页。
  * - 作品区：插画 / 漫画 / 小说三个 tab 各自持有独立的 useInfiniteList
  *   （切 tab 不丢已加载内容，回到该 tab 经 IntersectionObserver 续传），
  *   空态按类型给文案；追加页失败在网格下方就地重试。
@@ -20,13 +20,14 @@ import {
   browseUserProfile,
   browseUserWorks,
   errorMessage,
-  invoke,
-  isTauri,
   pxSrc,
   type BrowseUserProfile,
   type BrowseWorkItem,
   type ListWorkKind,
 } from "../../api/browse";
+import { notify } from "../../ui/notify";
+import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
+import { pixivUserUrl } from "../../utils/pixivUrl";
 import { useInfiniteList } from "../../composables/useInfiniteList";
 
 const props = defineProps<{ id: number }>();
@@ -179,35 +180,20 @@ function openWork(item: BrowseWorkItem): void {
   router.push(`/browse/work/${item.kind}/${item.id}`);
 }
 
-// ===== 在 Pixiv 浏览器中打开 =====
+// ===== 打开原页 / 返填 =====
 
-const openingBrowse = ref(false);
+/** 用系统默认浏览器打开该作者的 pixiv 主页。 */
+function openInPixiv(): void {
+  void openInBrowser(pixivUserUrl(props.id)).catch(() => notify(t("browse.hooks.openFailed")));
+}
 
-async function openInPixivBrowser(): Promise<void> {
-  const url = `https://www.pixiv.net/users/${props.id}`;
-  if (!isTauri()) {
-    window.open(url, "_blank", "noopener");
-    return;
-  }
-  if (openingBrowse.value) return;
-  openingBrowse.value = true;
-  try {
-    // 先切到 Pixiv 浏览器路由：browse_open 在其 onMounted 异步创建子 webview；
-    // webview 就绪前 browse_navigate 是静默 no-op，故短轮询重试直到导航被接受
-    //（同一 URL 重复导航无害，就绪后的首次调用即生效）。
-    void router.push("/pixiv");
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      try {
-        await invoke("browse_navigate", { url });
-        return;
-      } catch {
-        // 导航失败（如 webview 恰在创建中）→ 下一轮重试
-      }
-    }
-  } finally {
-    openingBrowse.value = false;
-  }
+/** 返填跟随当前 tab：插画/漫画 → 插画抓取页（用户全集）；小说 → 小说抓取页（用户全集）。 */
+function fillActiveTab(): void {
+  fillDownloadForm({
+    form: activeTab.value === "novel" ? "novel" : "illustration",
+    sourceType: "user",
+    sourceId: props.id,
+  });
 }
 
 onMounted(() => {
@@ -267,10 +253,9 @@ onBeforeUnmount(() => {
           </div>
           <md-outlined-icon-button
             class="open-browse"
-            :disabled="openingBrowse"
-            :aria-label="t('browse.author.openInBrowser')"
-            :title="t('browse.author.openInBrowser')"
-            @click="openInPixivBrowser"
+            :aria-label="t('browse.hooks.openInBrowser')"
+            :title="t('browse.hooks.openInBrowser')"
+            @click="openInPixiv"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M14 4h6v6" />
@@ -290,8 +275,13 @@ onBeforeUnmount(() => {
       </template>
     </section>
 
-    <!-- ===== 作品区：三类 tab ===== -->
-    <SectionTabs class="works-tabs" :tabs="tabs" :value="activeTab" @change="activeTab = $event as ListWorkKind" />
+    <!-- ===== 作品区：三类 tab + 返填（目标随当前 tab）===== -->
+    <div class="works-bar">
+      <SectionTabs class="works-tabs" :tabs="tabs" :value="activeTab" @change="activeTab = $event as ListWorkKind" />
+      <md-outlined-button @click="fillActiveTab()">
+        {{ activeTab === "novel" ? t("browse.hooks.fillNovelForm") : t("browse.hooks.fillIllustForm") }}
+      </md-outlined-button>
+    </div>
 
     <div v-for="pane in panes" v-show="activeTab === pane.kind" :key="pane.kind" class="works-pane">
       <WorkGrid
@@ -493,8 +483,16 @@ onBeforeUnmount(() => {
 }
 
 /* ===== 作品区 ===== */
-.works-tabs {
+.works-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
   margin-top: var(--space-sm);
+}
+
+.works-tabs {
+  flex: 1;
+  min-width: 0;
 }
 
 .works-pane {

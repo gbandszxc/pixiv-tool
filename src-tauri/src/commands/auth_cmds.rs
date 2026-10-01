@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tauri::{Manager, State};
+use tauri::State;
 
 use crate::accounts::AccountInfo;
 use crate::auth::browser_login::{find_login_browser, open_browser_login};
@@ -207,35 +207,6 @@ fn should_persist_credentials(explicit_login: bool, known_account: bool) -> bool
     explicit_login || !known_account
 }
 
-/// 账号变化（登录 / 切换）后，把内嵌 webview 同步到当前 default 镜像：
-/// 已创建则注入新账号 cookie 并回首页；未创建则首次加载的 auto_inject
-/// 读镜像即新账号，无需处理。webview 里残留的是旧账号会话，不同步的话
-/// 用户会看到「app 已是新账号、内嵌页还是旧账号」，且「同步登录」按钮
-/// 会把旧账号拉回 app（它的语义是 webview 侧登录后回传）。
-async fn sync_browse_webview(app: &tauri::AppHandle, state: &AppState) {
-    if let Some(wv) = app.get_webview(crate::browse::BROWSE_LABEL) {
-        match crate::commands::browse_cmds::inject_saved_and_reload(&wv, &state.cookies).await {
-            Ok(true) => log::info!("已同步内嵌 webview 登录态"),
-            Ok(false) => {
-                if let Err(err) = crate::commands::browse_cmds::clear_session_and_reload(&wv).await
-                {
-                    log::warn!("清除内嵌 webview 登录态失败: {err}");
-                }
-            }
-            Err(err) => log::warn!("同步内嵌 webview 登录态失败: {err}"),
-        }
-    } else if state
-        .cookies
-        .load()
-        .ok()
-        .flatten()
-        .and_then(|cookies| cookies.get("PHPSESSID").cloned())
-        .is_none_or(|sid| sid.is_empty())
-    {
-        crate::browse::clear_session_on_next_load();
-    }
-}
-
 fn fallback_account_id<'a>(accounts: &'a [AccountInfo], removed: Option<&str>) -> Option<&'a str> {
     accounts
         .iter()
@@ -340,8 +311,6 @@ pub async fn auth_login(
             .unwrap_or_else(|| json!({}));
         // 多账号：新登录账号登记并激活（头像缓存由随后前端的 auth_status 补）
         enroll_account(&state, &user, cookies, "", true);
-        // 内嵌 webview 里还是旧账号会话，立即推入新账号（语义同切换）
-        sync_browse_webview(&app, &state).await;
         return Ok(json!({
             "status": "success",
             "message": "登录成功",
@@ -361,7 +330,6 @@ pub async fn auth_login(
 /// 无效/过期 → Err("PHPSESSID 无效或已过期")；缺 token → Err(token 相关中文文案)。
 #[tauri::command]
 pub async fn auth_login_manual(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     phpsessid: String,
 ) -> Result<Value, String> {
@@ -383,8 +351,6 @@ pub async fn auth_login_manual(
         .unwrap_or_else(|| json!({}));
     // 多账号：登记并激活（同 auth_login）
     enroll_account(&state, &user, &cookies, "", true);
-    // 内嵌 webview 里还是旧账号会话，立即推入新账号（语义同切换）
-    sync_browse_webview(&app, &state).await;
     Ok(json!({
         "status": "success",
         "message": "Cookie 已保存",
@@ -394,12 +360,9 @@ pub async fn auth_login_manual(
 
 /// 清空当前账号登录态（等价旧 POST /api/auth/logout）。
 /// 多账号语义：退出 = 清 default 镜像 + 从账号列表移除该账号（含其独立
-/// 凭据条目）；有剩余账号时自动激活首个，否则同步退出内嵌 Pixiv。
+/// 凭据条目）；有剩余账号时自动激活首个。
 #[tauri::command]
-pub async fn auth_logout(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<Value, String> {
+pub async fn auth_logout(state: State<'_, AppState>) -> Result<Value, String> {
     let active = state.accounts.active();
     let fallback =
         fallback_account_id(&state.accounts.list(), active.as_deref()).map(str::to_owned);
@@ -422,7 +385,6 @@ pub async fn auth_logout(
             state.accounts.set_active(&next)?;
         }
     }
-    sync_browse_webview(&app, &state).await;
     Ok(json!({ "status": "success" }))
 }
 
@@ -438,11 +400,8 @@ pub async fn auth_accounts_list(state: State<'_, AppState>) -> Result<Value, Str
 /// 切换当前账号：
 /// 1) 目标账号条目凭据写入 default（缺 PHPSESSID → Err）
 /// 2) 索引 active 指向目标
-/// 3) 内嵌 webview 已创建则注入新账号登录态并回首页；未创建时首次
-///    加载的 auto_inject 读 default 即新账号，无需处理
 #[tauri::command]
 pub async fn auth_account_switch(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     user_id: String,
 ) -> Result<Value, String> {
@@ -456,7 +415,6 @@ pub async fn auth_account_switch(
     state.accounts.set_active(&user_id)?;
     log::info!("已切换当前账号");
 
-    sync_browse_webview(&app, &state).await;
     Ok(json!({ "status": "success" }))
 }
 

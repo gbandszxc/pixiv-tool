@@ -126,7 +126,8 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 
 浏览（browse）页面在既有 M3 体系上新增以下本地组件，全部复用现有颜色角色与间距刻度，不引入新 token：
 
-- **作品卡 WorkCard**：封面圆角 `--radius-control`（12px）、无阴影；标题 14px/600 最多两行省略，作者 12px on-surface-variant；左上角完整胶囊徽标（999px、12px/600）：页数（surface-container/ink，>1 时显示「12P」）与 R-18/R-18G（ink 底/surface 字，同时出现时 R 系优先）；小说封面右下角 12px 小书角标。hover 为 8% primary 状态层，focus-visible 环保留。
+- **作品卡 WorkCard**：封面圆角 `--radius-control`（12px）、无阴影；标题 14px/600 最多两行省略，作者 12px on-surface-variant；左上角完整胶囊徽标（999px、12px/600）：页数（surface-container/ink，>1 时显示「12P」）与 R-18/R-18G（ink 底/surface 字，同时出现时 R 系优先）；小说封面右下角 12px 小书角标。hover 为 8% primary 状态层，focus-visible 环保留。整卡可点击；封面右上角快捷动作（见下条）只在浏览频道页卡片出现，其它网格不渲染。
+- **卡片快捷动作**：28×28、圆角 999px、`surface-container` 底 / `ink` 图标、16px 线性图标（stroke 1.8）；hover 8% / active 12% primary 混合（与卡片状态层同源），`focus-visible` primary 2px 外环；默认 `opacity: 0`，hover 或 `focus-within` 显现，过渡 0.15s，`prefers-reduced-motion` 下取消；按钮必须有 `aria-label` 与 `title`；动作按钮与整卡可点击元素为兄弟节点，不得嵌套在 `role="button"` 内。
 - **作品网格 WorkGrid**：`repeat(auto-fill, minmax(160px,1fr))`，gap 12/16px（紧凑相关推荐变体 120px）；骨架为纯 surface-container 色块（**不做闪烁动画**）；空态带插画占位与引导文案；错误态给可读文案 + 重试；「没有更多」收尾。
 - **分区与 Tab**：频道页分区标题 16px/600 on-surface-variant；类型/周期切换用 md-tabs（secondary），排行前三名徽标用 primary-container 突出。
 - **查看器舞台**：整页路由，图片区以中性近黑 `rgb(0 0 0 / 0.78)` 为底（深浅色一致），图片 object-contain 居中；R-18 遮罩为 `blur(24px)` + 中央文案 + filled「显示」按钮，确认后本会话记忆。近黑底是查看器的既定例外，不得扩散到普通内容容器。

@@ -14,6 +14,9 @@ import {
   pxSrc,
   type BrowseSeriesDetail,
 } from "../../api/browse";
+import { notify } from "../../ui/notify";
+import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
+import { pixivSeriesUrl } from "../../utils/pixivUrl";
 
 type SeriesEpisode = BrowseSeriesDetail["contents"][number];
 
@@ -114,6 +117,11 @@ function episodeRestrict(ep: SeriesEpisode): string {
   if (ep.x_restrict === 2) return t("common.browseR18G");
   return "";
 }
+
+/** 用系统默认浏览器打开 pixiv 系列页。 */
+function openInPixiv(): void {
+  void openInBrowser(pixivSeriesUrl(props.id)).catch(() => notify(t("browse.hooks.openFailed")));
+}
 </script>
 
 <template>
@@ -155,6 +163,14 @@ function episodeRestrict(ep: SeriesEpisode): string {
           </router-link>
           <p v-if="caption" class="caption">{{ caption }}</p>
           <p class="stats" :title="t('browse.series.totalWordsHint')">{{ statsText }}</p>
+          <div class="head-actions">
+            <md-outlined-button @click="fillDownloadForm({ form: 'novel', sourceType: 'series', sourceId: props.id })">
+              {{ t("browse.hooks.fillNovelForm") }}
+            </md-outlined-button>
+            <md-outlined-button @click="openInPixiv">
+              {{ t("browse.hooks.openInBrowser") }}
+            </md-outlined-button>
+          </div>
         </div>
       </header>
 
@@ -289,6 +305,13 @@ function episodeRestrict(ep: SeriesEpisode): string {
   font-size: 12px;
   font-weight: 600;
   line-height: 1.4;
+}
+
+.head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
 }
 
 @media (max-width: 640px) {

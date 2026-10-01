@@ -2,7 +2,7 @@
 /**
  * 小说阅读器整页（/browse/work/novel/:id，browse-ui-v1 / F4）。
  *
- * 结构：吸顶顶栏（返回 / 标题 / 作者 / 在 Pixiv 浏览器中打开）+ 居中 720px 正文列
+ * 结构：吸顶顶栏（返回 / 标题 / 作者 / 在浏览器中打开）+ 居中 720px 正文列
  * （信息头 → NovelContent 分页正文 → 下一话 → 相关推荐）+ 底部吸底翻页器。
  * 数据来自 browseWorkDetail("novel", id)，相关推荐 browseRelated("novel", id, 12) 一次性。
  */
@@ -16,12 +16,13 @@ import {
   browseRelated,
   browseWorkDetail,
   errorMessage,
-  invoke,
-  isTauri,
   pxSrc,
   type BrowseNovelDetail,
   type BrowseWorkItem,
 } from "../../api/browse";
+import { notify } from "../../ui/notify";
+import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
+import { pixivWorkUrl } from "../../utils/pixivUrl";
 
 const props = defineProps<{ kind: "illust" | "manga" | "novel"; id: number }>();
 
@@ -160,16 +161,17 @@ function searchTag(tag: string): void {
   router.push({ path: "/browse/search", query: { word: tag } });
 }
 
-/** 在内嵌浏览器中打开 pixiv 原页（复用 browse_navigate；未创建子 webview 时后端静默忽略）。 */
+/** 用系统默认浏览器打开 pixiv 原页。 */
 function openInPixiv(): void {
-  if (!isTauri()) return;
-  void invoke("browse_navigate", { url: `https://www.pixiv.net/novel/show.php?id=${props.id}` }).catch(() => {});
+  void openInBrowser(pixivWorkUrl("novel", props.id)).catch(() =>
+    notify(t("browse.hooks.openFailed"))
+  );
 }
 </script>
 
 <template>
   <div class="novel-view">
-    <!-- 顶栏：返回 / 标题 / 作者 / 在 Pixiv 浏览器中打开 -->
+    <!-- 顶栏：返回 / 标题 / 作者 / 返填表单 / 在浏览器中打开 -->
     <header class="topbar">
       <md-icon-button :aria-label="t('browse.novel.back')" :title="t('browse.novel.back')" @click="router.back()">
         <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
@@ -183,8 +185,15 @@ function openInPixiv(): void {
         <span class="author-name">{{ item.author_name }}</span>
       </router-link>
       <md-icon-button
-        :aria-label="t('browse.novel.openInPixiv')"
-        :title="t('browse.novel.openInPixiv')"
+        :aria-label="t('browse.hooks.fillNovelForm')"
+        :title="t('browse.hooks.fillNovelForm')"
+        @click="fillDownloadForm({ form: 'novel', sourceType: 'single', sourceId: props.id })"
+      >
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" /></svg>
+      </md-icon-button>
+      <md-icon-button
+        :aria-label="t('browse.hooks.openInBrowser')"
+        :title="t('browse.hooks.openInBrowser')"
         @click="openInPixiv"
       >
         <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>

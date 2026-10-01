@@ -21,6 +21,8 @@ tauri-build = { version = "2.6", features = [] }
 
 [dependencies]
 tauri = { version = "2.11", features = ["unstable"] }
+# 打开外链（浏览页「在浏览器中打开」）：系统默认浏览器，不经内嵌 webview。
+tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2.7"
 tauri-plugin-log = "2.9"
 serde = { version = "1.0", features = ["derive"] }
@@ -51,9 +53,6 @@ log = "0.4"
 rand = "0.9"
 
 [target.'cfg(windows)'.dependencies]
-# Tauri with_webview 暴露的原生 WebView2 类型；版本须与 Tauri 2.11 锁定的一致。
-webview2-com = "=0.38.2"
-windows-core = "=0.61.2"
 # 菜单栏子类化（默认隐藏 / Alt 唤出，见 src/menu_bar.rs）：SetWindowSubclass、
 # SetMenu/DrawMenuBar、PostMessageW。与 Tauri 内部同为 windows 0.61 系列。
 windows = { version = "0.61", features = [

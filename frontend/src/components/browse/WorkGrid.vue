@@ -21,8 +21,10 @@ const props = withDefaults(
     hasMore?: boolean;
     /** 首屏骨架块数量 */
     skeletonCount?: number;
+    /** 卡片快捷动作（打开原页 / 返填表单）：仅浏览频道页显式开启 */
+    hooks?: boolean;
   }>(),
-  { loading: false, error: "", loadingMore: false, hasMore: true, skeletonCount: 12 }
+  { loading: false, error: "", loadingMore: false, hasMore: true, skeletonCount: 12, hooks: false }
 );
 
 const emit = defineEmits<{
@@ -107,6 +109,7 @@ onBeforeUnmount(() => {
           v-for="item in items"
           :key="`${item.kind}:${item.id}`"
           :item="item"
+          :hooks="hooks"
           @click="emit('select', item)"
         />
         <!-- 追加页骨架：与首屏同款色块 -->

@@ -87,11 +87,6 @@
 进度经 `task://progress` / `task://done` 事件推送（TasksView 同时保留 2s
 轮询兜底）。
 
-Pixiv 浏览页使用独立子 WebView：离开 `/pixiv` 路由时记录最后 URL 并关闭实例，
-释放站点页面与 renderer、停止 URL 轮询；返回时按最后 URL 重建。临时弹窗只隐藏、
-不关闭。Cookie 仍由平台 WebView 的共享存储保留，关闭期间发生账号切换或退出时，
-下一次创建会同步当前登录态。
-
 ### 3.2 通信协议
 
 - **命令类**：`invoke('<命令名>', args)`，命令与参数清单见 §7（返回体沿用旧
@@ -116,13 +111,12 @@ pixiv-tool/
 ├─ src-tauri/                   # Tauri 2 + Rust 后端
 │  ├─ Cargo.toml                # wreq 6（指纹伪装，锁版本）/ rusqlite / keyring / tokio
 │  ├─ tauri.conf.json           # devUrl 9961、frontendDist ../frontend/dist
-│  ├─ capabilities/default.json # IPC 权限（core + dialog）
+│  ├─ capabilities/default.json # IPC 权限（core + dialog + opener）
 │  ├─ tests/                    # smoke_commands.rs（IPC 冒烟）/ browse_smoke.rs（浏览命令离线冒烟）
 │  └─ src/
 │     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、pixiv-img 协议、关闭确认）
 │     ├─ state.rs               # AppState：paths/settings/db/cookies/tasks/accounts
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
-│     ├─ browse/                # 内嵌 Pixiv 子 WebView 生命周期（域白名单 / URL 轮询 / 登录注入）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
 │     ├─ commands/              # 50 个 #[tauri::command]（auth 6 / browse 10 / browse_api 11 / tasks 9 / settings 3 / history 1 / misc 8 / app 2）
@@ -135,7 +129,7 @@ pixiv-tool/
 │     └─ paths.rs / platform.rs / logging.rs
 ├─ frontend/                    # Vue3 + TS + Vite + Material Web（M3）
 │  ├─ src/
-│  │  ├─ views/                 # CrawlView / IllustrationView / TasksView / HistoryView / SettingsView / PixivView
+│  │  ├─ views/                 # CrawlView / IllustrationView / TasksView / HistoryView / SettingsView
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking + Work/Series/Author/Novel
 │  │  ├─ components/            # auth/ navigation/ browse/（WorkCard / WorkGrid / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
@@ -444,11 +438,10 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   独立条目 `u-<user_id>`（分片规则同上）；账号索引
   `config/accounts.json` **只存用户元信息**（user_id / pixiv_id / name /
   profile_img 原始头像 URL / avatar_file 本地缓存文件名 / saved_at 登记时间），
-  **任何 cookie 都不落 config**。显式登录与
-  browse_sync_login 成功时双写镜像/账号条目，auth_status 只刷新
+  **任何 cookie 都不落 config**。显式登录时双写镜像/账号条目，auth_status 只刷新
   索引元信息（旧单账号首次校验仍补建账号条目），避免启动时重复访问 Keychain；
   退出登录移除当前账号（镜像 + 条目 + 索引项），有剩余账号时自动激活列表
-  中首个账号，否则同步清除内嵌 Pixiv 会话；auth_status 探测确定
+  中首个账号；auth_status 探测确定
   失效（401/403）时同样移除，避免死账号
 
 ---
@@ -464,7 +457,6 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 | 任务 | `/tasks`（支持小说/插画分类筛选） | ✅ |
 | 历史 | `/history`（支持小说/插画分类切换） | ✅ |
 | 设置 | `/settings` | ✅ |
-| Pixiv 浏览器 | `/pixiv`（内嵌子 WebView 直连 pixiv 主站，与自有浏览模式互补，ADR 0012） | ✅ |
 | 浏览-首页 | `/browse/home`（推荐流，换一批去重追加） | ✅ |
 | 浏览-频道 | `/browse/illustration` `/browse/manga` `/browse/novel`（关注新作/推荐/排行/热门标签板块） | ✅ |
 | 浏览-发现 | `/browse/discover`（按历史推荐，前端去重无限滚动） | ✅ |
@@ -476,7 +468,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 | 系列目录 | `/browse/series/:id`（游标加载） | ✅ |
 | 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说 tab） | ✅ |
 
-侧边栏分组为「工具」（既有 5 项 + Pixiv 浏览器）与「浏览」8 项；分组标题 12px/600。
+侧边栏分组为「工具」（抓取-小说 / 抓取-插画 / 任务 / 历史 / 设置）与「浏览」8 项；分组标题 12px/600。
 浏览模式详见 §6.4 与 ADR 0012。
 
 ### 6.2 i18n
@@ -518,6 +510,9 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   发现页与首页推荐无服务端翻页，前端重复调用按 id 去重。
 - **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图
   （`[pixivimage:]`）显示占位块；评论不展示。
+- **打开原页 / 返填**：浏览页的「在浏览器中打开」走系统默认浏览器
+  （官方 `tauri-plugin-opener`，capability `opener:default`）；
+  频道页卡片与作品级页面另有「返填表单」→ 跳对应抓取页并预填 `sourceType` / `sourceId`。
 
 ---
 
@@ -532,9 +527,9 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `auth_status` | 登录态探测（2s 超时；401/403 清 cookie，其余失败保留） |
 | `auth_login` | 真实 Chromium CDP 登录（长阻塞，最长 300s）；无浏览器时回退内嵌 webview 登录窗（ADR 0009），`PIXIV_TOOL_FORCE_WEBVIEW_LOGIN=1` 强制走 webview |
 | `auth_login_manual(phpsessid)` | 手动 PHPSESSID（normalize → 会话探测 → 存储） |
-| `auth_logout` | 退出当前账号：清 default 镜像 + 移除其账号条目与索引项；有剩余账号则自动激活首个并同步内嵌 Pixiv，否则内嵌 Pixiv 同步退出 |
+| `auth_logout` | 退出当前账号：清 default 镜像 + 移除其账号条目与索引项；有剩余账号则自动激活首个 |
 | `auth_accounts_list` | 已保存账号列表：`{active, accounts:[{user_id,pixiv_id,name,profile_img,avatar_file,avatar_url?,saved_at}]}` |
-| `auth_account_switch(userId)` | 切换当前账号：目标条目写入 default → 索引 active → 内嵌 webview 清旧 PHPSESSID、注入新账号并回首页；目标凭据缺失/失效 → Err |
+| `auth_account_switch(userId)` | 切换当前账号：目标条目写入 default → 索引 active；目标凭据缺失/失效 → Err |
 | `tasks_list(category?)` | 任务列表（按小说/插画过滤） |
 | `task_create(sourceType, sourceId, formats, category)` | 创建抓取任务，后台 tokio 运行 |
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
@@ -564,20 +559,6 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 菜单在 macOS 渲染于系统顶栏、恒显，不受影响。菜单栏只承载「退出」（等价
 Alt+F4 / 标题栏关闭）与 Edit 项（撤销/剪切/复制/粘贴/全选，WebView2 原生
 支持），默认隐藏不影响文本编辑快捷键。
-
-**内嵌 Pixiv 子 WebView 控制命令**（`commands/browse_cmds.rs`，10 个，服务于 `/pixiv` 路由）：
-
-| 命令 | 说明 |
-|---|---|
-| `browse_open` | 创建并显示子 WebView（已存在则复用；按离开时记录的最后 URL 恢复） |
-| `browse_show` / `browse_hide` | 临时弹窗只隐藏不销毁 |
-| `browse_set_bounds(rect)` | 随布局与窗口尺寸同步 WebView 矩形 |
-| `browse_navigate(url)` | 地址栏跳转（域白名单内） |
-| `browse_go_back` | 后退 |
-| `browse_deactivate` | 离开 `/pixiv`：记录最后 URL 并销毁实例、停止 URL 轮询 |
-| `browse_set_theme(dark)` | 同步站点页面深浅色 |
-| `browse_sync_login` | 登录态变更（切换/退出账号）后同步子 WebView |
-| `browse_inject_login` | 注入当前账号 Cookie 并回首页 |
 
 以上数据命令实现于 `commands/browse_api_cmds.rs`，公共登录守卫 `build_browse_api`：
 无 PHPSESSID 一律 `Err("未登录或登录态已失效，请先登录")`（前端据此弹登录窗）。
@@ -712,6 +693,7 @@ GitCode 托管无流水线，`.github/workflows/release.yml` 已移除。**打�
 | 0010 | 多账号登录态存储与切换 | [adr/0010-multi-account-login.md](adr/0010-multi-account-login.md) |
 | 0011 | 登录窗必然以未登录态打开 | [adr/0011-fresh-login-window.md](adr/0011-fresh-login-window.md) |
 | 0012 | 浏览模式：自有 UI 代理 pixiv 只读接口（内嵌浏览器保留） | [adr/0012-browse-mode-own-ui.md](adr/0012-browse-mode-own-ui.md) |
+| 0013 | 移除内嵌 Pixiv 浏览器（/pixiv），自有浏览 UI 为唯一入口 | [adr/0013-remove-embedded-browser.md](adr/0013-remove-embedded-browser.md) |
 
 ADR 按需追加，不强制一次性写完。
 

@@ -5,7 +5,7 @@
 ## 探索前必读
 
 - **`docs/SPEC.md`** —— 本项目的单一真相源（13 章 + 风险登记 + ADR 索引）
-- **`docs/adr/`** —— 读涉及你即将修改区域的 ADR。当前 0001 ~ 0012：
+- **`docs/adr/`** —— 读涉及你即将修改区域的 ADR。当前 0001 ~ 0013：
   - `0001`：初版技术栈选型（桌面壳 + Python 后端；已被 0008 取代，Vue3 前端沿用）
   - `0002`：登录策略（浏览器登录主导 + 手动 Cookie 兜底）
   - `0003`：任务模型（Source + Crawler + Task 状态机）
@@ -17,7 +17,8 @@
   - `0009`：恢复 Webview 登录回退窗（Tauri 原生实现）
   - `0010`：多账号登录态存储与切换
   - `0011`：登录窗必然以未登录态打开
-  - `0012`：浏览模式：左侧栏自有 UI 代理 pixiv 只读接口（内嵌浏览器保留）
+  - `0012`：浏览模式：左侧栏自有 UI 代理 pixiv 只读接口（内嵌浏览器保留；其保留决策已由 0013 推翻）
+  - `0013`：移除内嵌 Pixiv 浏览器（/pixiv），自有浏览 UI 为唯一入口
 
 > 注：标准 mattpocock 流程用 `CONTEXT.md` 作为术语表。本项目目前用 `docs/SPEC.md` 统一承载规格 + 术语，未单独建 `CONTEXT.md`。如果术语开始膨胀（>20 个专有名词），再用 `/domain-modeling` 拆出 `CONTEXT.md`。
 
@@ -50,7 +51,6 @@
         ├── state.rs / db.rs / settings.rs / cookies.rs / accounts.rs / paths.rs / platform.rs / logging.rs / image_proxy.rs
         ├── pixiv/                 ← API 客户端（client / api / csrf / browse_api）
         ├── core/                  ← 任务模型（sources / crawler / illust_crawler / exporter / task_manager）
-        ├── browse/                ← 浏览模式编排（内嵌子 WebView 控制）
         ├── auth/                  ← 登录（browser_login / cdp / webview_login）
         └── commands/              ← #[tauri::command] IPC 命令层
 ```

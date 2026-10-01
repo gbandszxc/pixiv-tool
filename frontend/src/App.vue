@@ -10,12 +10,12 @@
         </template>
       </nav>
       <div class="sider-footer">
-        <AccountMenu v-if="authStore.isLoggedIn || authStore.accounts.length" :collapsed="siderCollapsed" @visible="syncBrowseVisibility" @add-account="showLoginDialog = true" />
+        <AccountMenu v-if="authStore.isLoggedIn || authStore.accounts.length" :collapsed="siderCollapsed" @add-account="showLoginDialog = true" />
         <md-outlined-button v-else @click="showLoginDialog = true">{{ t('auth.login') }}</md-outlined-button>
         <md-icon-button class="collapse" :aria-label="siderCollapsed ? 'Expand navigation' : 'Collapse navigation'" @click="siderCollapsed = !siderCollapsed">{{ siderCollapsed ? '›' : '‹' }}</md-icon-button>
       </div>
     </aside>
-    <main class="app-content" :class="{ 'is-pixiv-route': route.path === '/pixiv' }"><router-view /></main>
+    <main class="app-content"><router-view /></main>
   </div>
   <dialog ref="exitDialog" class="m3-dialog" @close="showExitConfirm = false"><h2>{{ t('app.exitConfirmTitle') }}</h2><div class="m3-row"><md-text-button @click="showExitConfirm = false">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="invoke('app_exit').catch(() => {})">{{ t('app.exit') }}</md-filled-button></div></dialog>
   <LoginDialog v-model:show="showLoginDialog" />
@@ -45,7 +45,6 @@ const menuGroups = computed<MenuGroup[]>(() => [
   {
     label: t("nav.groupTools"),
     items: [
-      { path: "/pixiv", label: t("nav.pixiv"), icon: "pixiv" },
       { path: "/", label: t("nav.crawlNovel"), icon: "crawl" },
       { path: "/illustration", label: t("nav.crawlIllustration"), icon: "crawl" },
       { path: "/tasks", label: t("nav.tasks"), icon: "tasks" },
@@ -67,8 +66,6 @@ const menuGroups = computed<MenuGroup[]>(() => [
     ],
   },
 ]);
-function syncBrowseVisibility(hidden: boolean) { if (hidden) invoke("browse_hide").catch(() => {}); else if (route.path === "/pixiv") invoke("browse_show").catch(() => {}); }
-watch([showLoginDialog, showExitConfirm], ([login, exit]) => syncBrowseVisibility(login || exit));
 watch(showExitConfirm, (show) => { if (!exitDialog.value) return; if (show) exitDialog.value.showModal(); else exitDialog.value.close(); });
 const systemDark = ref(window.matchMedia("(prefers-color-scheme: dark)").matches); const media = window.matchMedia("(prefers-color-scheme: dark)"); const onMediaChange = (e: MediaQueryListEvent) => systemDark.value = e.matches;
 const isDark = computed(() => settingsStore.settings.theme === "dark" || (settingsStore.settings.theme === "auto" && systemDark.value));
@@ -84,5 +81,4 @@ onBeforeUnmount(() => { media.removeEventListener("change", onMediaChange); unli
 </script>
 
 <style scoped>
-.app-shell { display:grid; grid-template-columns:256px 1fr; height:100vh; background:var(--surface); }.app-shell.collapsed { grid-template-columns:72px 1fr; }.sidebar { display:flex; flex-direction:column; min-width:0; background:var(--md-sys-color-surface-container); border-right:1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }.sider-title { display:flex; align-items:center; gap:12px; height:72px; padding:0 20px; font-size:18px; font-weight:700; }.sider-title img { width:32px; height:32px; }.nav-item { display:flex; align-items:center; gap:16px; width:calc(100% - 24px); min-height:48px; margin:2px 12px; padding:0 16px; color:var(--ink); font:inherit; text-align:left; background:transparent; border:0; border-radius:24px; cursor:pointer; }.nav-item:hover { background:color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }.nav-item.active { color:var(--md-sys-color-on-primary-container); font-weight:600; background:var(--md-sys-color-primary-container); }.nav-group-title { margin:var(--space-sm) 12px 0; padding:0 16px; color:var(--md-sys-color-on-surface-variant); font-size:12px; font-weight:600; line-height:20px; }.nav-group-divider { height:0; margin:var(--space-sm) 12px; border-top:1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }.sider-footer { margin-top:auto; padding:12px; display:grid; gap:8px; }.collapse { justify-self:center; }.m3-dialog { min-width:min(420px, 90vw); border:0; border-radius:28px; padding:24px; color:var(--ink); background:var(--md-sys-color-surface-container); }.m3-dialog::backdrop { background:rgb(0 0 0 / 35%); }.m3-dialog .m3-row { justify-content:flex-end; }.app-content.is-pixiv-route { padding:0; height:100%; overflow:hidden; }
-</style>
+.app-shell { display:grid; grid-template-columns:256px 1fr; height:100vh; background:var(--surface); }.app-shell.collapsed { grid-template-columns:72px 1fr; }.sidebar { display:flex; flex-direction:column; min-width:0; background:var(--md-sys-color-surface-container); border-right:1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }.sider-title { display:flex; align-items:center; gap:12px; height:72px; padding:0 20px; font-size:18px; font-weight:700; }.sider-title img { width:32px; height:32px; }.nav-item { display:flex; align-items:center; gap:16px; width:calc(100% - 24px); min-height:48px; margin:2px 12px; padding:0 16px; color:var(--ink); font:inherit; text-align:left; background:transparent; border:0; border-radius:24px; cursor:pointer; }.nav-item:hover { background:color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }.nav-item.active { color:var(--md-sys-color-on-primary-container); font-weight:600; background:var(--md-sys-color-primary-container); }.nav-group-title { margin:var(--space-sm) 12px 0; padding:0 16px; color:var(--md-sys-color-on-surface-variant); font-size:12px; font-weight:600; line-height:20px; }.nav-group-divider { height:0; margin:var(--space-sm) 12px; border-top:1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }.sider-footer { margin-top:auto; padding:12px; display:grid; gap:8px; }.collapse { justify-self:center; }.m3-dialog { min-width:min(420px, 90vw); border:0; border-radius:28px; padding:24px; color:var(--ink); background:var(--md-sys-color-surface-container); }.m3-dialog::backdrop { background:rgb(0 0 0 / 35%); }.m3-dialog .m3-row { justify-content:flex-end; } </style>

@@ -12,14 +12,13 @@ const revealedWorkIds = new Set<number>();
  * 桌面 ≥960px 双列：左图片舞台（近黑底）+ 右信息列（固定 320px 可滚动）；
  * 窄窗纵向堆叠（图片在上）。相关推荐经 router.replace 原地跳转（watch 参数重拉）。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import {
   browseRelated,
   browseWorkDetail,
   errorMessage,
-  invoke,
   pxSrc,
   type BrowseIllustDetail,
   type BrowseWorkItem,
@@ -28,6 +27,9 @@ import {
 import ImageViewer from "../../components/browse/ImageViewer.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
 import RelatedGrid from "../../components/browse/RelatedGrid.vue";
+import { notify } from "../../ui/notify";
+import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
+import { pixivWorkUrl } from "../../utils/pixivUrl";
 
 const props = defineProps<{
   kind: "illust" | "manga";
@@ -179,22 +181,11 @@ function goBack(): void {
   else void router.push("/browse/home");
 }
 
-/**
- * 「在 Pixiv 浏览器中打开」：先 router.push('/pixiv')（PixivView 挂载 →
- * browse_open 创建子 webview，为异步且 browse_navigate 在 webview 不存在时静默成功），
- * 待挂载完成后延迟调用 browse_navigate 导航到作品页。
- */
+/** 用系统默认浏览器打开 pixiv 原页。 */
 function openInPixiv(): void {
-  const url = `https://www.pixiv.net/artworks/${props.id}`;
-  void router
-    .push("/pixiv")
-    .then(async () => {
-      await nextTick();
-      window.setTimeout(() => {
-        void invoke("browse_navigate", { url }).catch(() => {});
-      }, 400);
-    })
-    .catch(() => {});
+  void openInBrowser(pixivWorkUrl(props.kind, props.id)).catch(() =>
+    notify(t("browse.hooks.openFailed"))
+  );
 }
 
 // ===== 翻页 / 遮罩 / 键盘 =====
@@ -237,7 +228,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 <template>
   <div class="work-view">
-    <!-- 顶部条：返回 + 标题/作者 + 在 Pixiv 浏览器中打开 -->
+    <!-- 顶部条：返回 + 标题/作者 + 返填表单 / 在浏览器中打开 -->
     <header class="work-topbar">
       <md-icon-button :aria-label="t('browse.work.back')" :title="t('browse.work.back')" @click="goBack">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
@@ -256,10 +247,21 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
           </button>
         </template>
       </div>
+      <!-- 返填到插画抓取页：来源=单篇，ID=当前作品 -->
+      <md-outlined-button
+        class="fill-download"
+        :aria-label="t('browse.hooks.fillIllustForm')"
+        :title="t('browse.hooks.fillIllustForm')"
+        @click="fillDownloadForm({ form: 'illustration', sourceType: 'single', sourceId: props.id })"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" />
+        </svg>
+      </md-outlined-button>
       <md-outlined-button
         class="open-pixiv"
-        :aria-label="t('browse.work.openInPixiv')"
-        :title="t('browse.work.openInPixiv')"
+        :aria-label="t('browse.hooks.openInBrowser')"
+        :title="t('browse.hooks.openInBrowser')"
         @click="openInPixiv"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -454,11 +456,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   text-overflow: ellipsis;
 }
 
-.open-pixiv {
+.open-pixiv,
+.fill-download {
   flex-shrink: 0;
 }
 
-.open-pixiv svg {
+.open-pixiv svg,
+.fill-download svg {
   width: 18px;
   height: 18px;
   stroke-width: 1.8;

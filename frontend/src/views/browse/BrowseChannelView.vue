@@ -106,14 +106,14 @@ function openTag(name: string): void {
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.followNew") }}</h2>
         </div>
-        <WorkGrid :items="followItems" :loading="loading" @select="openWork" />
+        <WorkGrid :items="followItems" :loading="loading" hooks @select="openWork" />
       </section>
 
       <section class="channel-section">
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.recommend") }}</h2>
         </div>
-        <WorkGrid :items="recommendItems" :loading="loading" @select="openWork" />
+        <WorkGrid :items="recommendItems" :loading="loading" hooks @select="openWork" />
       </section>
 
       <section class="channel-section">
@@ -124,14 +124,14 @@ function openTag(name: string): void {
             <md-text-button @click="openRanking">{{ t("browse.channel.viewFullRanking") }}</md-text-button>
           </div>
         </div>
-        <WorkGrid :items="rankingItems" :loading="loading" @select="openWork" />
+        <WorkGrid :items="rankingItems" :loading="loading" hooks @select="openWork" />
       </section>
 
       <section class="channel-section">
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.newPost") }}</h2>
         </div>
-        <WorkGrid :items="newPostItems" :loading="loading" @select="openWork" />
+        <WorkGrid :items="newPostItems" :loading="loading" hooks @select="openWork" />
       </section>
 
       <section v-if="trendingTags.length" class="channel-section">

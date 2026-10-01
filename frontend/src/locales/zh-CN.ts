@@ -27,7 +27,6 @@ export default {
     exit: "退出",
   },
   nav: {
-    pixiv: "Pixiv",
     crawl: "抓取",
     crawlNovel: "小说",
     crawlIllustration: "插画",
@@ -214,34 +213,15 @@ export default {
     maxWaitHint: "任务运行超过该时长自动标记失败，暂停时间不计入。默认 180s。",
     maxWaitInvalid: "最大等待时间必须 ≥ 30 秒",
   },
-  pixiv: {
-    title: "Pixiv",
-    back: "后退",
-    home: "主页",
-    reload: "刷新",
-    loading: "正在加载 Pixiv...",
-    syncLogin: "同步登录态",
-    syncLoginSuccess: "已从浏览器同步登录态",
-    syncLoginInjected: "已将客户端登录态注入到浏览器",
-    syncLoginNoSession: "未检测到登录态，请先在网页中登录",
-    syncLoginInvalid: "登录态无效或已过期，请在网页中重新登录",
-    syncLoginError: "同步登录态失败",
-    crawlNow: "立即抓取",
-    crawlUserNovels: "抓取全部小说",
-    crawlUserIllustrations: "抓取全部插画",
-    fillForm: "返填抓取表单",
-    fillIllustForm: "返填插画表单",
-    taskCreated: "任务已创建：{id}",
-    createFailed: "创建任务失败",
-    detected: {
-      novelSingle: "已识别小说 #{id}",
-      novelSeries: "已识别系列 #{id}",
-      user: "已识别用户 #{id}",
-      illustration: "已识别插画 #{id}",
-    },
-  },
   browse: {
     // 各单元只追加自己的子分组（F1：home / channel / ranking；F2：discover / feed / search），勿动他人分组
+    // 跨页面共用（频道页卡片与作品级页面）：打开原页 / 返填抓取表单
+    hooks: {
+      openInBrowser: "在浏览器中打开",
+      fillNovelForm: "返填抓取表单",
+      fillIllustForm: "返填插画表单",
+      openFailed: "无法打开系统浏览器",
+    },
     home: {
       refresh: "换一批",
       refreshing: "刷新中…",
@@ -276,7 +256,6 @@ export default {
     },
     work: {
       back: "返回",
-      openInPixiv: "在 Pixiv 浏览器中打开",
       restrictedTitle: "该作品含限制级内容",
       show: "显示",
       prevPage: "上一页",
@@ -294,7 +273,6 @@ export default {
     author: {
       followingCount: "关注 {n}",
       myPixivCount: "好P友 {n}",
-      openInBrowser: "在 Pixiv 浏览器中打开",
       expandBio: "展开",
       collapseBio: "收起",
       emptyIllust: "该作者还没有插画作品",
@@ -340,7 +318,6 @@ export default {
     },
     novel: {
       back: "返回",
-      openInPixiv: "在 Pixiv 浏览器中打开",
       seriesLabel: "系列：{title} · 第 {order} 话",
       words: "{count} 字",
       readingTime: "约 {count} 分钟",

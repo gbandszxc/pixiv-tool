@@ -41,7 +41,7 @@ const WINDOW_HEIGHT: f64 = 720.0;
 ///
 /// 刻意不用 `cookies_for_url`：其对 domain 的匹配在部分平台是精确匹配，
 /// 会漏掉 ".pixiv.net" 的域级 cookie；全量读取后本地过滤更可靠。
-pub fn extract_pixiv_cookies_from_store(cookies: &[Cookie<'static>]) -> HashMap<String, String> {
+fn extract_pixiv_cookies_from_store(cookies: &[Cookie<'static>]) -> HashMap<String, String> {
     cookies
         .iter()
         .filter_map(|cookie| {

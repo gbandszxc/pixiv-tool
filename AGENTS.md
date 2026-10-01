@@ -60,7 +60,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 | `PRODUCT.md` | 产品定位、目标用户、范围边界 | 产品定位或用户可见范围变化 |
 | `.scratch/` · `.archive/pywebview-era/` | **非项目文档**：本机 issue tracker / 旧栈归档，被 `.gitignore` 忽略 | 不维护、不索引，换台机器 clone 不到 |
 
-**ADR 速查**：`0008` 是现行架构基座（Tauri 2 全量重构），`0009` / `0010` / `0011` / `0012` 是最新决策（webview 登录回退 / 多账号 / 登录窗未登录态 / 浏览模式）。`0001` / `0004` / `0005` 描述的是已废弃的 pywebview 旧栈，读其结论、不读其实现。
+**ADR 速查**：`0008` 是现行架构基座（Tauri 2 全量重构），`0009` / `0010` / `0011` / `0012` / `0013` 是最新决策（webview 登录回退 / 多账号 / 登录窗未登录态 / 浏览模式 / 移除内嵌浏览器）。`0001` / `0004` / `0005` 描述的是已废弃的 pywebview 旧栈，读其结论、不读其实现。
 
 **开工顺序**：任何改动先读 `docs/SPEC.md`；改前端加读 `DESIGN.md`；改打包加读 `docs/PACKAGING.md`；改浏览模式加读 `docs/research/pixiv-browse-api.md` + ADR 0012；本次 ticket 在 `.scratch/pixiv-tool-v1/issues/<NN>-<slug>.md`。
 
@@ -115,7 +115,7 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 
 ### Issue tracker 与 triage
 
-- ticket 存 `.scratch/pixiv-tool-v1/issues/<NN>-<slug>.md`，新 ticket 递增编号（当前至 `30`）；`.scratch/` 不入库
+- ticket 存 `.scratch/pixiv-tool-v1/issues/<NN>-<slug>.md`，新 ticket 递增编号（当前至 `33`）；`.scratch/` 不入库
 - triage 五个 role 写在 issue 顶部 `Status:` 行：`needs-triage` / `needs-info` / `ready-for-agent` / `ready-for-human` / `wontfix`
 - 详见 `docs/agents/issue-tracker.md`、`docs/agents/triage-labels.md`
 

@@ -136,7 +136,7 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   /**
-   * 切换当前账号。后端会归档当前登录态、激活目标账号并同步内嵌 webview；
+   * 切换当前账号。后端会归档当前登录态、激活目标账号；
    * 成功后本地刷新登录态与账号列表。失败抛 reject string（中文文案）。
    */
   async function switchAccount(targetUserId: string) {

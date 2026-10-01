@@ -27,7 +27,6 @@ export default {
     exit: "Quit",
   },
   nav: {
-    pixiv: "Pixiv",
     crawl: "Crawl",
     crawlNovel: "Novel",
     crawlIllustration: "Illustration",
@@ -213,34 +212,15 @@ export default {
     maxWaitHint: "Tasks auto-fail after running longer than this (pause time excluded). Default 180s.",
     maxWaitInvalid: "Max wait time must be at least 30 seconds",
   },
-  pixiv: {
-    title: "Pixiv",
-    back: "Back",
-    home: "Home",
-    reload: "Reload",
-    loading: "Loading Pixiv...",
-    syncLogin: "Sync Login",
-    syncLoginSuccess: "Login state synced from browser",
-    syncLoginInjected: "Client login state injected into browser",
-    syncLoginNoSession: "No login session detected. Please log in first.",
-    syncLoginInvalid: "Session invalid or expired. Please log in again in the browser.",
-    syncLoginError: "Failed to sync login state",
-    crawlNow: "Crawl Now",
-    crawlUserNovels: "Crawl All Novels",
-    crawlUserIllustrations: "Crawl All Illustrations",
-    fillForm: "Fill Novel Form",
-    fillIllustForm: "Fill Illustration Form",
-    taskCreated: "Task created: {id}",
-    createFailed: "Failed to create task",
-    detected: {
-      novelSingle: "Detected Novel #{id}",
-      novelSeries: "Detected Series #{id}",
-      user: "Detected User #{id}",
-      illustration: "Detected Artwork #{id}",
-    },
-  },
   browse: {
     // Each unit appends only its own sub-groups (F1: home / channel / ranking; F2: discover / feed / search)
+    // Shared across pages (channel cards and work-level pages): open original page / fill crawl form
+    hooks: {
+      openInBrowser: "Open in Browser",
+      fillNovelForm: "Fill Novel Form",
+      fillIllustForm: "Fill Illustration Form",
+      openFailed: "Failed to open the system browser",
+    },
     home: {
       refresh: "Shuffle",
       refreshing: "Refreshing…",
@@ -275,7 +255,6 @@ export default {
     },
     work: {
       back: "Back",
-      openInPixiv: "Open in Pixiv browser",
       restrictedTitle: "This work contains restricted content",
       show: "Show",
       prevPage: "Previous page",
@@ -293,7 +272,6 @@ export default {
     author: {
       followingCount: "Following {n}",
       myPixivCount: "My pixiv {n}",
-      openInBrowser: "Open in Pixiv browser",
       expandBio: "Show more",
       collapseBio: "Show less",
       emptyIllust: "This artist has no illustrations yet",
@@ -339,7 +317,6 @@ export default {
     },
     novel: {
       back: "Back",
-      openInPixiv: "Open in Pixiv browser",
       seriesLabel: "Series: {title} · Episode {order}",
       words: "{count} words",
       readingTime: "~{count} min read",

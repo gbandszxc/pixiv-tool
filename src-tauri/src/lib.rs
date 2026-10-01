@@ -1,14 +1,14 @@
 //! pixiv-tool Tauri 2 桌面应用（lib 形态，main.rs 只做薄壳）。
 //!
 //! 本文件是**装配层**，一次写全，后续 phase 只填充桩模块内容、不改本文件：
-//! - 插件：tauri-plugin-log（文件 + dev stdout）、tauri-plugin-dialog（退出确认/目录选择）
+//! - 插件：tauri-plugin-log（文件 + dev stdout）、tauri-plugin-dialog（退出确认/目录选择）、
+//!   tauri-plugin-opener（浏览页「在浏览器中打开」走系统默认浏览器）
 //! - setup：AppPaths（dev/release 分平台）→ Settings 加载 → Db 打开 → AppState
 //! - 全部命令注册（见 invoke_handler，与 commands/ 一一对应）
 //! - 主窗口关闭确认（读 settings.language 决定中英文文案）
 
 pub mod accounts;
 pub mod auth;
-pub mod browse;
 pub mod commands;
 pub mod cookies;
 pub mod core;
@@ -40,6 +40,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(log_plugin)
+        // 浏览页「在浏览器中打开」：opener 插件以系统默认程序打开 http(s) 外链。
+        .plugin(tauri_plugin_opener::init())
         // 头像回显协议：从 data/cache 读取后端代下的头像文件。
         // i.pximg.net 防盗链导致 webview 直连 403，故走本地自定义协议。
         .register_uri_scheme_protocol("pixiv-avatar", |ctx, request| {
@@ -93,10 +95,10 @@ pub fn run() {
         .setup(move |app| {
             let settings = Settings::load_or_init(&paths.config_dir);
             let db = Db::open(&paths.data_dir.join("app.db"))?;
-            // 显式主题须在任何子 webview 创建前同步设置：窗口默认外观跟随
-            // 系统，与持久化主题不一致时，pixiv 首次加载会按浅色完成 JS
-            // 初始化，之后窗口转深色也只有 CSS 媒体查询部分跟随，出现
-            // 白块。auto 不设置，保持跟随系统（首载天然正确）。
+            // 显式主题须在 webview 首次渲染前同步设置：窗口默认外观跟随
+            // 系统，与持久化主题不一致时，首载会按系统外观完成 JS 初始化，
+            // 之后切换主题也只有 CSS 媒体查询部分跟随，出现白块。
+            // auto 不设置，保持跟随系统（首载天然正确）。
             let explicit_theme = match settings.theme.as_str() {
                 "dark" => Some(tauri::Theme::Dark),
                 "light" => Some(tauri::Theme::Light),
@@ -121,17 +123,6 @@ pub fn run() {
             commands::auth_cmds::auth_logout,
             commands::auth_cmds::auth_accounts_list,
             commands::auth_cmds::auth_account_switch,
-            // browse
-            commands::browse_cmds::browse_open,
-            commands::browse_cmds::browse_set_bounds,
-            commands::browse_cmds::browse_hide,
-            commands::browse_cmds::browse_deactivate,
-            commands::browse_cmds::browse_set_theme,
-            commands::browse_cmds::browse_show,
-            commands::browse_cmds::browse_navigate,
-            commands::browse_cmds::browse_go_back,
-            commands::browse_cmds::browse_sync_login,
-            commands::browse_cmds::browse_inject_login,
             // 浏览数据
             commands::browse_api_cmds::browse_home_feed,
             commands::browse_api_cmds::browse_channel,

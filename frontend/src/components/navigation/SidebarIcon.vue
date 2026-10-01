@@ -1,6 +1,5 @@
 <script setup lang="ts">
 export type SidebarIconName =
-  | "pixiv"
   | "crawl"
   | "tasks"
   | "history"
@@ -29,12 +28,7 @@ defineProps<{
     stroke-linejoin="round"
     aria-hidden="true"
   >
-    <template v-if="name === 'pixiv'">
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="M3.5 12h17" />
-      <path d="M12 3.5c2.5 2.5 4 5.5 4 8.5s-1.5 6-4 8.5c-2.5-2.5-4-5.5-4-8.5s1.5-6 4-8.5z" />
-    </template>
-    <template v-else-if="name === 'crawl'">
+    <template v-if="name === 'crawl'">
       <path d="M4 5.5c2.4-.9 4.9-.5 7 1.1v12c-2.1-1.6-4.6-2-7-1.1z" />
       <path d="M20 5.5c-2.4-.9-4.9-.5-7 1.1v12c2.1-1.6 4.6-2 7-1.1z" />
       <path d="M11 6.6h2" />

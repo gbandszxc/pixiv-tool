@@ -44,8 +44,8 @@ dev 模式数据目录沿用仓库 `data/`、`config/`（与旧 Python 版 dev �
 ## 跨平台说明
 
 - **Windows / macOS**：全功能支持（登录、抓取、导出）。登录优先使用独立
-  Chrome / Edge / Chromium 窗口（CDP 提取 Cookie）；未安装时改用手动 Cookie
-  登录。Cookie 存系统凭据存储（Credential Manager / Keychain）。
+  Chrome / Edge / Chromium 窗口（CDP 提取 Cookie）；未安装时回退内置登录窗
+  （或手动粘贴 Session 兜底）。Cookie 存系统凭据存储（Credential Manager / Keychain）。
 - **Linux**：需预装 `webkit2gtk`：
 
   ```bash

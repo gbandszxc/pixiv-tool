@@ -1,8 +1,27 @@
+import type { WorkKind } from "../api/browse";
+
 export type PixivPageKind = "novel-single" | "novel-series" | "illustration" | "user";
 
 export interface ParsedPixivUrl {
   kind: PixivPageKind;
   id: string;
+}
+
+/** 作品页 URL：illust/manga/ugoira → /artworks/{id}；novel → /novel/show.php?id={id}。 */
+export function pixivWorkUrl(kind: WorkKind, id: number | string): string {
+  return kind === "novel"
+    ? `https://www.pixiv.net/novel/show.php?id=${id}`
+    : `https://www.pixiv.net/artworks/${id}`;
+}
+
+/** 作者主页 URL。 */
+export function pixivUserUrl(id: number | string): string {
+  return `https://www.pixiv.net/users/${id}`;
+}
+
+/** 小说系列页 URL。 */
+export function pixivSeriesUrl(id: number | string): string {
+  return `https://www.pixiv.net/novel/series/${id}`;
 }
 
 /**
