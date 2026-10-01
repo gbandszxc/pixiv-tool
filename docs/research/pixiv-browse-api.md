@@ -758,3 +758,120 @@ query 参数语义（均实测）：
 - 后端按 `maxPage` 聚合（上限 20 页防异常大订阅；空页提前收尾），一次输出 `BrowseWatchlist{kind, total, max_page, items[]}`，前端无需翻页。
 - 条目归一：`BrowseWatchlistItem{id, kind, title, user_id, user_name, user_avatar, cover, x_restrict, total, update_date, latest_work_id}`；`latest_work_id` 取 `latestIllustId`/`latestNovelId`，供「读最新话」直达。
 - `isNotifying`（官方铃铛开关）与追更/取消追更写操作 V1 不做；卡片跳转：novel → 应用内系列目录（`/browse/series/:id`），manga → 官方系列页 `https://www.pixiv.net/user/{userId}/series/{id}`。
+
+---
+
+## 13. 系列分集列表（illust / manga series，2026-10-01 实测）
+
+> 调研方式：已登录会话打开官方漫画系列页 `/user/11***16/series/344074`（14 话样本），
+> DevTools 网络面板抓真实加载请求，再用页内 `fetch()` 复现并实测参数边界（全部 GET 只读）。
+> 顺带复核小说系列接口（§7.2）。样本：漫画系列 `344074`（total=14，R-18）、`341166`（total=3）；
+> 小说系列 `10559822`（total=4，来自追更列表）。任何 Cookie / token 值不落盘。
+>
+> **勘误 §7.2**：`/ajax/novel/series_content/{id}` 的 `order_by` 原记「实测仅 asc 生效」不准确——
+> 实测 `asc` / `desc` 均合法，**省略时默认 desc**（官方页显式传 `order_by=asc`），其他值 → 400。
+> 待回填 `docs/PIXIV-API.md` 时以本节为准。
+
+### 13.0 概览
+
+| 功能 | 接口 | 方法 | 关键说明 |
+|---|---|---|---|
+| 插画/漫画系列分集列表 | `/ajax/series/{sid}?p={p}&lang=zh` | GET | **页码制**：每页恒 12 条、恒按话数降序；分集表在 `page.series[]`，条目本体经 `thumbnails.illust` 同序映射；系列元数据在 `illustSeries[0]` |
+| （复核）小说系列元数据 | `/ajax/novel/series/{id}` | GET | 与 §7.2 记载一致（见 13.4） |
+| （复核）小说系列内容列表 | `/ajax/novel/series_content/{id}` | GET | `last_order` 游标制复核通过；desc 合法为勘误项（见 13.4） |
+
+- 官方页 URL：插画与漫画系列共用 `https://www.pixiv.net/user/{userId}/series/{seriesId}`；页内数字翻页器链接形如 `?p=2#seriesContents`。
+- 官方页加载序列：`/ajax/series/{sid}?p=1&lang=zh` 一次拿全本页分集（**无滚动懒加载 ajax**），辅以 `rpc/notify_count.php` 等角标接口与 `/ajax/illust/{firstIllustId}`（头部「从最初开始阅读」锚点）。
+- `x-user-id` 请求头可选：页内 `fetch()` 不带该头全部正常返回（与 §11.10 一致）。
+
+### 13.1 query 参数（实测）
+
+| 参数 | 合法值 | 说明 |
+|---|---|---|
+| `{sid}` | 路径段 | 系列数字 id；不存在 → HTTP 404（`error:true`，message 空串） |
+| `p` | `1` .. `ceil(total/12)` | **必传**：缺省 → 400「不正确的请求。」；`p=0` → 500「例外エラーです」；`p=-1`、`p=1.5` → 400 |
+| `lang` | `zh` 等 | 翻译语言（`tagTranslation` 受其影响） |
+| `limit` / `last_order` / `order` / `order_by` | - | **全部被忽略**（实测与不传响应完全一致）——本端点无游标、无排序参数，恒为话数降序 |
+
+### 13.2 响应 body 形状
+
+顶层键：`tagTranslation, thumbnails, illustSeries, requests, users, page, extraData, zoneConfig`（id 列表 + 索引表模型，同 §2/§12）。
+
+**`page`**（本页翻页状态）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `series` | Array | **本页分集表**，每项 `{workId, order}`：`workId` 字符串作品 id、`order` 数字话数（1..total）。恒按 order **降序**（最新话在前），与 `thumbnails.illust` 同序一一对应 |
+| `total` | number | 系列总话数（样本 14）；翻页终止判断依据 |
+| `seriesId` | string | 系列 id 回显 |
+| `isSetCover` | bool | 是否设置了系列自定义封面（两样本均 false） |
+| `otherSeriesId` | string/null | 同作者其他系列 id（对应 `illustSeries[1..]`） |
+| `recentUpdatedWorkIds` | Array | 实测空数组（语义未明，忽略） |
+| `isWatched` / `isNotifying` | bool | 当前登录用户的追更 / 更新通知状态 |
+
+**`illustSeries[0]`**（系列元数据）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` / `userId` / `title` | string | 系列 id / 作者 uid / 标题 |
+| `description` / `caption` | string | 系列简介（样本为空串） |
+| `total` | number | 总话数（与 `page.total` 同值） |
+| `firstIllustId` / `latestIllustId` | string | 第一话 / 最新话作品 id（头部「从最初开始阅读」→ firstIllustId） |
+| `createDate` / `updateDate` | string | ISO 时间（含时区）；`updateDate` = 最近更新 |
+| `content_order` / `url` / `coverImageSl` / `watchCount` | null | 实测恒 null（自定义封面未设置时无值；`isSetCover=true` 时的形状未采样） |
+| `isWatched` / `isNotifying` | bool | 同 `page` |
+
+- **无 `isConcluded` 字段**（两样本实测）——pixiv 未提供漫画/插画系列完结标记，小说系列才有（§7.2）。
+- `illustSeries[1..]`：同作者其他系列（样本 [1] = `341166`「奴隶志愿」total=3），侧栏「作品・系列」数据源；`page.otherSeriesId` 给出其 id。
+
+**`thumbnails.illust[]`**（本页分集条目；字段同 §2 索引表 + 系列平铺字段）：
+
+| 字段 | 说明 |
+|---|---|
+| `id` / `title` | 作品 id（字符串）/ 标题 |
+| `illustType` | `0`=插画 `1`=漫画（样本系列全部为 1；0/2 混排未采样，索引表结构与 §2/§11 一致） |
+| `pageCount` | 页数（UI 角标；样本 2~83） |
+| `xRestrict` | `1`=R-18（UI 徽标依据）；样本系列全部 R-18，接口正常返回 |
+| `seriesId` / `seriesTitle` | 所属系列**平铺字段**（不是 seriesNavData） |
+| `url` | 代表封面（`250x250_80_a2`；样本多为 `custom-thumb` 自定义裁切路径，亦有 `img-master` 方图，混见） |
+| `urls` | `{250x250, 360x360, 540x540, 1200x1200}` 四档（官方卡片用 `360x360`） |
+| `tags` / `alt` / `description` | 标签数组 / a11y 描述 / HTML 说明（样本 description 空） |
+| `width` / `height` / `aiType` / `restrict` / `sl` | 同 §2 |
+| `createDate` / `updateDate` | ISO 时间 |
+| `isBookmarkable` / `bookmarkData` | 收藏锚点（未收藏 null） |
+| `isUnlisted` / `isMasked` / `visibilityScope` / `titleCaptionTranslation` / `profileImageUrl` | 同 §2 |
+
+**`users[]`**：作者条目数组（`userId/name/image/imageBig/premium/isFollowed/...`，数组形状同 §12），侧栏头像/昵称/关注态来源。
+
+### 13.3 分页语义
+
+- **页码制**：`p` 从 1 起；**每页恒 12 条**（14 话样本：p=1 → order 14..3 共 12 条，p=2 → order 2,1 共 2 条，切片精确）。
+- 总页数 = `ceil(total/12)`；响应**无** isLastPage / hasNext 类字段。
+- 终止条件：`page.series` 为空数组，或已取满 `ceil(total/12)` 页。
+- 超页行为：越界页（如 p=3）→ HTTP 200，`page.series: []`、`thumbnails.illust: []`，`page.total` 照常返回——**静默空页不报错**，翻页器可直接禁用前进。
+- 排序：恒 order 降序（最新在前），服务端无排序参数；升序由客户端自行反转。
+
+### 13.4 小说系列接口复核（对 §7.2）
+
+样本 `/ajax/novel/series/10559822`（total=4）实测：
+
+- 元数据与 §7.2 一致：`id`（字符串）、`total == publishedContentCount == displaySeriesContentCount`、`isConcluded`、`firstNovelId/latestNovelId`、`cover.urls{240mw,480mw,1200x1200,128x128,original}`、`createDate`（ISO）+ `updatedTimestamp`（unix 秒）；`maxXRestrict` 实测为 null。
+- `/ajax/novel/series_content/{id}` 补充实测：
+  - `series.contentOrder` **从 1 起**（1..total）；`last_order` 语义 = 「取 contentOrder **大于**该值的下 limit 条」（排他下界）：`last_order=0` → 1..N；`limit=2&last_order=2` → 3,4（步进精确）。
+  - `limit` 切片生效；省略 `limit`（按官方默认 30）与省略 `last_order`（按 0）均可正常返回。
+  - 超页：`last_order` 超过最大 contentOrder（如 999）→ HTTP 200 + `seriesContents: []`，不报错。
+  - 不存在的系列 id → HTTP 404「…不存在」。
+  - **order_by 勘误**：`asc` / `desc` 均合法；省略时默认 **desc**；其他值（`bogus`）→ 400「不正确的请求。」。
+- **页码映射结论**：`last_order = (page-1)*30` **成立**（asc 语义下每批恒 30 条、游标为排他 contentOrder 下界；个别话删除造成的 contentOrder 跳号不影响「按条数取批」，仅意味着不能反向用 `(page-1)*30+1` 推断页首话的 contentOrder）。总页数 `ceil(total/30)`；终止：返回条数 < limit 或已取满总页数；next 游标 = 本批最后一条的 `series.contentOrder`。
+- 条目字段与 §7.2 记载逐项一致（`id` 字符串、`series.id` 数字、`viewableType`、`contentOrder` 等）。
+
+### 13.5 与应用的映射建议（illust 系列分集页契约草案）
+
+1. 后端单命令 `browse_illust_series(id, page)`：串调 `/ajax/series/{id}?p={page}&lang=zh`；归一输出系列头 + 本页分集（`page.series[i].workId` → `thumbnails.illust` 同 id 条目按位映射）。
+2. 字段清单（snake_case）：
+   - 系列头：`id`、`title`、`user_id`、`user_name`/`user_avatar`（users[] 按 userId 映射，imageBig 优先）、`caption`、`cover`（illustSeries[0].url，null 时前端回退最新话封面）、`total`（page.total）、`is_concluded`（**无来源恒 false**）、`is_watched`、`update_date`（illustSeries[0].updateDate）。
+   - 分集条目 `contents[]`：`id`、`kind`（恒 `"illust"`，illustType 0/1/2 均入此 kind、详情页再分）、`title`、`cover`（`urls.360x360` 优先，回退 `url`）、`page_count`、`x_restrict`、`update_date`、`series_order`（page.series[].order）、`ai_type`。
+   - 翻页：`page` 回显、`total_pages = ceil(total/12)`、`next_page`（page < total_pages ? page+1 : null）；**不是游标**——illust 系列端点天生页码制，与小说系列的 `last_order` 不同源，前端翻页器直接 +1。
+3. R-18 过滤沿用条目级 `x_restrict`（系列头无 xRestrict；与 §12 watchlist 口径一致）。
+4. 入口跳转映射：watchlist `kind="manga"` 卡 → 本页 `kind="illust"`；作品详情 `seriesNavData`（seriesType "manga"）→ 本页。官方分集直达链接 = `/artworks/{workId}`，应用内映射 `browse_work_detail(workId)`。
+5. 未验证项（如实记录）：匿名访问（本会话全程登录）；`isSetCover=true` 时封面字段形状；纯插画（illustType=0）系列样本（三组关键词搜索均未命中系列导航条目；结构上与 §2/§11 的 thumbnails.illust 索引表同构，无独立端点）。
