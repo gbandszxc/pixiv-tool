@@ -119,13 +119,13 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 50 个 #[tauri::command]（auth 6 / browse 10 / browse_api 11 / tasks 9 / settings 3 / history 1 / misc 8 / app 2）
+│     ├─ commands/              # 49 个 #[tauri::command]（auth 6 / browse 10 / browse_api 11 / tasks 9 / settings 3 / history 1 / misc 8 / app 1）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
 │     ├─ accounts.rs            # 多账号索引（accounts.json）+ 每账号凭据条目
 │     ├─ image_proxy.rs         # pixiv-img 协议核心（磁盘缓存 + CDN 并发闸门）
-│     ├─ menu_bar.rs            # Windows 菜单栏默认隐藏 / Alt 唤出（子类化 WM_EXITMENULOOP 自动收回）
+│     ├─ menu_bar.rs            # Windows 菜单栏默认隐藏 / Alt 唤出（AcceleratorKeyPressed + WM_EXITMENULOOP 收回）
 │     └─ paths.rs / platform.rs / logging.rs
 ├─ frontend/                    # Vue3 + TS + Vite + Material Web（M3）
 │  ├─ src/
@@ -553,9 +553,12 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_user_works(id, kind, page)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量 |
 | `browse_novel_series(id, last_order)` | 系列元数据 + 目录（last_order 游标） |
 | `app_exit` | 退出应用（前端确认框确认后调用，与 Cmd+Q 路径一致） |
-| `app_menu_show` | 显示菜单栏并进入菜单循环（前端 Alt 松开触发）。Windows 菜单栏默认隐藏，选中 / Esc / 窗口失活退出菜单循环后自动收回（`menu_bar.rs`）；其它平台 no-op |
 
-**应用菜单栏**：Windows 上默认隐藏（`SetMenu(hwnd, NULL)`），按 Alt 唤起；
+**应用菜单栏**：Windows 上默认隐藏（`SetMenu(hwnd, NULL)`），按 Alt 唤起并
+进入菜单循环、退出循环（选中 / Esc / 窗口失活）后自动收回。实现见
+`menu_bar.rs`：用 `ICoreWebView2Controller::AcceleratorKeyPressed` 捕获 Alt
+（Chromium 不把单独按下的 Alt 派发为 DOM 事件，线程级键盘钩子也收不到——
+键盘消息落在 WebView2 自己的线程），配顶层窗口子类化处理 `WM_EXITMENULOOP`。
 菜单在 macOS 渲染于系统顶栏、恒显，不受影响。菜单栏只承载「退出」（等价
 Alt+F4 / 标题栏关闭）与 Edit 项（撤销/剪切/复制/粘贴/全选，WebView2 原生
 支持），默认隐藏不影响文本编辑快捷键。

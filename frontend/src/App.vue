@@ -74,10 +74,8 @@ watch(() => settingsStore.settings.theme_color, (palette) => { document.document
 function onNotification(event: Event) { notification.value = (event as CustomEvent<string>).detail; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => notification.value = "", 3200); }
 /** 浏览接口报未登录（api/browse.ts 派发）→ 复用现有登录弹窗。 */
 function onOpenLogin() { showLoginDialog.value = true; }
-/** Alt 松开唤起菜单栏（Windows 默认隐藏，见 src-tauri/src/menu_bar.rs；其它平台 no-op）。用 keyup 以免 Alt+Tab 等组合键误触发。 */
-function onMenuKeyUp(event: KeyboardEvent) { if (event.key === "Alt") invoke("app_menu_show").catch(() => {}); }
-onMounted(() => { media.addEventListener("change", onMediaChange); settingsStore.fetchSettings().catch(() => {}); authStore.checkStatus(); authStore.fetchAccounts(); listen("app://confirm-exit", () => showExitConfirm.value = true).then(fn => unlistenExit = fn); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.addEventListener("keyup", onMenuKeyUp); });
-onBeforeUnmount(() => { media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.removeEventListener("keyup", onMenuKeyUp); });
+onMounted(() => { media.addEventListener("change", onMediaChange); settingsStore.fetchSettings().catch(() => {}); authStore.checkStatus(); authStore.fetchAccounts(); listen("app://confirm-exit", () => showExitConfirm.value = true).then(fn => unlistenExit = fn); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); });
+onBeforeUnmount(() => { media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); });
 </script>
 
 <style scoped>

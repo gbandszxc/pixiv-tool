@@ -53,6 +53,9 @@ log = "0.4"
 rand = "0.9"
 
 [target.'cfg(windows)'.dependencies]
+# Alt 唤出菜单栏走 WebView2 的 AcceleratorKeyPressed 事件；
+# `PlatformWebview::controller()` 的返回类型来自此 crate。
+webview2-com = "=0.38.2"
 # 菜单栏子类化（默认隐藏 / Alt 唤出，见 src/menu_bar.rs）：SetWindowSubclass、
 # SetMenu/DrawMenuBar、PostMessageW。与 Tauri 内部同为 windows 0.61 系列。
 windows = { version = "0.61", features = [

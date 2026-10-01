@@ -164,7 +164,6 @@ pub fn run() {
             commands::misc_cmds::open_illustration_folder,
             // app
             commands::app_cmds::app_exit,
-            commands::app_cmds::app_menu_show,
         ])
         .build(tauri::generate_context!())
         .expect("Pixiv Tool 构建失败")
