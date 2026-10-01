@@ -788,6 +788,10 @@ macOS universal/aarch64 DMG、Linux x64 AppImage，最后**幂等覆盖**式发�
 产物未签名。本地 `cargo tauri build`（§8.3）保留，与 CI 独立；详见
 `docs/PACKAGING.md` §6。
 
+CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需手动同步仓库内的版本号**
+（`tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `frontend/package.json` 四处），
+否则本地 dev 构建与账号菜单的版本回显仍停在旧版本。
+
 ---
 
 ## 9. 日志（`src-tauri/src/logging.rs`，tauri-plugin-log）

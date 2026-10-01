@@ -158,7 +158,9 @@ GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`�
 1. 仓库 **Actions → Release → Run workflow** 手动触发，输入版本号（semver，
    格式非法会在构建前置校验阶段直接失败）
 2. 版本号写入 `src-tauri/tauri.conf.json` 与 `src-tauri/Cargo.toml`
-   （仅本次构建环境内，不回写仓库）
+   （仅本次构建环境内，不回写仓库）；**发版后需手动把仓库内四处版本号同步为
+   刚发布的版本**：`tauri.conf.json` / `Cargo.toml` / `Cargo.lock` /
+   `frontend/package.json`，否则本地 dev 构建与账号菜单版本回显仍是旧值
 3. 四路并行构建：Windows x64 **MSI** / macOS **universal DMG** /
    macOS **aarch64 DMG** / Linux x64 **AppImage**
 4. **幂等覆盖**：发布阶段先删除同名 `v<版本>` Release 与 Tag 再重建，
