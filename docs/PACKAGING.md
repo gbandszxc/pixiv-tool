@@ -19,7 +19,8 @@ macOS / Linux / Git Bash 使用 `bash ./dev.sh`。无参数、`-h` 或 `--help`
 | `build debug` | 前端构建 + Rust debug + 平台安装包，**不**附加 `--no-bundle` |
 | `check` | 前端类型检查及生产构建，再执行 `cargo check --locked` |
 | `test` | `cargo test --locked`（单元与集成测试） |
-| `logs [app\|dev\|frontend\|build\|install\|check\|test] [-f\|--follow]` | 默认读取开发态 `data/logs/app.log` 最后 100 行；指定子命令读取其控制台日志；跟随模式等待追加内容，Ctrl+C 退出 |
+| `test-live` | `cargo test --locked --test pixiv_api -- --ignored --test-threads=1`（在线 pixiv 接口实测，需本机登录态） |
+| `logs [app\|dev\|frontend\|build\|install\|check\|test\|test-live] [-f\|--follow]` | 默认读取开发态 `data/logs/app.log` 最后 100 行；指定子命令读取其控制台日志；跟随模式等待追加内容，Ctrl+C 退出 |
 
 每次启动服务或执行前台操作覆盖 `.dev/logs/<子命令>.log`，操作内部的多个阶段追加到同一份
 UTF-8 日志，合并保存子进程 stdout / stderr（含警告与空行）；该目录已忽略，

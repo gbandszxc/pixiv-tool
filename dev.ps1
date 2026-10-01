@@ -15,9 +15,10 @@ Usage: ./dev.ps1 <command>
   build [release|debug]   Package installers; default: release
   install                 Install frontend dependencies (frozen lockfile)
   check                   Frontend type check/build + cargo check
-  test                    Rust unit and integration tests
+  test                    Rust unit and integration tests (offline)
+  test-live               Live pixiv API tests (needs a local login; serial)
   logs [app|COMMAND] [-f]  Last 100 lines; -f/--follow watches new lines
-                          COMMAND: dev, frontend, build, install, check, test
+                          COMMAND: dev, frontend, build, install, check, test, test-live
 
 No arguments show help. Extra/unknown arguments are errors (exit 2).
 Commands run from the repository, regardless of your current directory.
@@ -279,7 +280,7 @@ if ($cliArgs.Count -eq 0 -or ($cliArgs.Count -eq 1 -and $cliArgs[0] -cin @('-h',
     exit 0
 }
 $command = $cliArgs[0]
-$valid = @('dev', 'frontend', 'build', 'install', 'check', 'test', 'logs')
+$valid = @('dev', 'frontend', 'build', 'install', 'check', 'test', 'test-live', 'logs')
 $invalid = $command -cnotin $valid
 $mode = 'release'
 $source = 'app'
@@ -301,7 +302,7 @@ if ($command -cin @('dev', 'frontend')) {
     }
     if ($rest.Count -gt 1) { $invalid = $true }
     if ($rest.Count -eq 1) { $source = $rest[0] }
-    if ($source -cnotin @('app', 'dev', 'frontend', 'build', 'install', 'check', 'test')) { $invalid = $true }
+    if ($source -cnotin @('app', 'dev', 'frontend', 'build', 'install', 'check', 'test', 'test-live')) { $invalid = $true }
 } elseif ($cliArgs.Count -ne 1) {
     $invalid = $true
 }
@@ -332,7 +333,7 @@ try {
     $frontend = Join-Path $root 'frontend'
     $backend = Join-Path $root 'src-tauri'
     if ($command -cin @('dev', 'frontend', 'build', 'install', 'check')) { Require-Command pnpm }
-    if ($command -cin @('dev', 'build', 'check', 'test')) { Initialize-Rust }
+    if ($command -cin @('dev', 'build', 'check', 'test', 'test-live')) { Initialize-Rust }
     $tauri = Join-Path $frontend 'node_modules/.bin/tauri'
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $tauri += '.cmd' }
     if ($command -cin @('dev', 'build') -and -not (Test-Path -LiteralPath $tauri)) { throw 'Local Tauri CLI missing. Run ./dev.ps1 install first.' }
@@ -356,6 +357,9 @@ try {
             Invoke-Logged 'cargo' @('check', '--locked') $backend
         }
         'test' { Invoke-Logged 'cargo' @('test', '--locked') $backend }
+        # Live pixiv API tests: slow + network + real login state, so opt-in.
+        # Serial (test-threads=1) keeps the shared session under pixiv rate limits.
+        'test-live' { Invoke-Logged 'cargo' @('test', '--locked', '--test', 'pixiv_api', '--', '--ignored', '--test-threads=1') $backend }
     }
     exit 0
 } catch {

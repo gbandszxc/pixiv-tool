@@ -1,5 +1,19 @@
 # pixiv 网页版浏览类 API 调研（Web Ajax/RPC 接口）
 
+> **定位说明**：本文是 2026-10-01 的调研证据档案（含字段细节与当日实测）；
+> **现行 pixiv 接口契约事实源是 `docs/PIXIV-API.md`**，两者冲突以后者为准，
+> 勘误请回填 `docs/PIXIV-API.md`，不要只改本文。
+
+> **勘误速查（2026-10-01 晚，`tests/pixiv_api/` 在线套件实机复核；细节与依据见 `docs/PIXIV-API.md` §6 与各端点小节）**
+>
+> | 本文原记 | 实测 | 影响 |
+> |---|---|---|
+> | §2 `page.trendingTags[].{tag,translatedName,illustCount}` | 条目键实为 `{tag,ids,trendingRate}`；且仅 illust 频道有该板块 | 译名改取同响应 `tagTranslation[tag].zh`；`count` 无源字段 |
+> | §2 频道三接口同构 | `page.ranking.date` 形态不一（illust/manga `20260930`、novel `2026-09-30`）；`page.ranking.items[]` 是 `{id,rank}` 对象 | 日期经 `normalize_ymd` 归一；对象条目需专门解析（原按标量解析会整块丢弃） |
+> | §5 `{word}` 放路径 | 必须 percent-encode，直拼非 ASCII → HTTP 400 | `search_path` 先 `percent_encode` |
+> | §6 `/ajax/ranking/novel` 的 `date` 为 yyyymmdd | 实为日文展示串（`2026年9月30日`），`prev_date`/`next_date` 恒 null | 后端归一为 yyyymmdd |
+> | §8 `/ajax/user/{id}?full=1` 含 `account` | 响应无 `account` 键（四种组合实测） | `pixiv_id` 恒空串，前端隐藏 @handle 行 |
+
 > 调研方式：2026-10-01 对已登录 pixiv 的真实 Chrome 会话（中文界面，pixiv-web-next 前端）做只读抓包，逐页面用浏览器内 `fetch()` 复调确认响应结构。
 > 基础域名：`https://www.pixiv.net`（接口同源）；图片 `https://i.pximg.net`；静态资源 `https://s.pximg.net`；嵌入图 `https://embed.pixiv.net`。
 > 本文只记录浏览（读）类接口；点赞/收藏/关注等写操作接口未调研。

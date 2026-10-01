@@ -4,7 +4,7 @@
 //! 形状约定与 history_cmds 一致：`#[tauri::command]` 薄壳 +
 //! `*_impl(&AppState, ...)` 可离线调用，业务失败统一 `Err(中文文案)`。
 //!
-//! `*_impl` 的调用顺序（冒烟测试 tests/browse_smoke.rs 对齐此顺序）：
+//! `*_impl` 的调用顺序（离线冒烟 tests/pixiv_api/offline_guard.rs 对齐此顺序）：
 //! 1. 参数粗校验（空 word / page<1 / id 数字域 / offset<0 / 空 comment_id /
 //!    kind-mode-date 白名单）
 //!    → 可读中文 Err。放在登录守卫之前，未登录也能先暴露参数错误；

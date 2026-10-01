@@ -1,5 +1,9 @@
 //! browse 命令层（commands/browse_api_cmds.rs）离线冒烟测试。
 //!
+//! 本文件由 `tests/browse_smoke.rs` 迁移而来，现为 `tests/pixiv_api/` 测试
+//! 目标的离线模块（`./dev.ps1 test` 会跑到；在线用例全部 `#[ignore]`，只由
+//! `./dev.ps1 test-live` 触发）。断言自迁移起逐字未改。
+//!
 //! 不经 GUI / Tauri 运行时，直接调用 `*_impl`（temp_state 模式复制自
 //! tests/smoke_commands.rs，避免跨测试文件共享辅助函数）：
 //! 1. 未登录（隔离空 cookie store）时全部 13 个命令以合法参数调用，

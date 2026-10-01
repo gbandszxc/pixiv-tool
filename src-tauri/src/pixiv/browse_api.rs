@@ -645,6 +645,20 @@ fn users_index_array(body: &Value) -> HashMap<i64, &Value> {
         .unwrap_or_default()
 }
 
+/// 列表项 id 提取：兼容标量 id 与 `{id, rank}` 对象两种形态。
+/// 频道页 `page.ranking.items` 实测是 **100 个 `{"id":"...","rank":"1"}` 对象**
+/// （2026-10-01，三频道一致），而 `page.follow` / `recommend.ids` / `newPost` /
+/// `recommendByTag[].ids` 是标量数组；两种都要能解析，否则榜单板块会整块为空。
+fn value_id_and_rank(v: &Value) -> Option<(i64, Option<i64>)> {
+    match v {
+        Value::Object(map) => {
+            let id = map.get("id").and_then(as_i64_loose)?;
+            Some((id, map.get("rank").and_then(as_i64_loose)))
+        }
+        scalar => Some((as_i64_loose(scalar)?, None)),
+    }
+}
+
 /// 按 id 列表顺序映射索引表 → items（pixiv 偶发索引缺项：跳过不报错）。
 /// 作者名/头像缺失时回退 users 索引表（imageBig 优先）。
 fn items_from_ids(
@@ -655,8 +669,9 @@ fn items_from_ids(
 ) -> Vec<BrowseWorkItem> {
     ids.iter()
         .filter_map(|idv| {
-            let id = as_i64_loose(idv)?;
+            let (id, rank) = value_id_and_rank(idv)?;
             let mut item = parse_work_thumb(index.get(&id)?, fallback_kind)?;
+            item.rank = rank.or(item.rank);
             if let Some(user) = users.get(&item.author_id) {
                 if item.author_name.is_empty() {
                     item.author_name = str_field(user, "name").unwrap_or_default();
@@ -684,6 +699,30 @@ fn list_from_items(items: Vec<BrowseWorkItem>) -> BrowseList {
 // ----------------------------------------------------------------------
 // 各端点 parse（纯函数）
 // ----------------------------------------------------------------------
+
+/// 榜单日期归一为 `yyyymmdd`。pixiv 同一语义字段实测三种形态（2026-10-01）：
+/// `20260930`（ranking.php、illust/manga 频道）、`2026-09-30`（novel 频道）、
+/// `2026年9月30日`（/ajax/ranking/novel，月/日无前导零）。识别不了的原样返回
+/// （不丢数据；前端对非 yyyymmdd 一律原样展示）。
+fn normalize_ymd(raw: &str) -> String {
+    if raw.len() == 8 && raw.bytes().all(|b| b.is_ascii_digit()) {
+        return raw.to_string();
+    }
+    let parts: Vec<&str> = raw
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let [y, m, d] = parts.as_slice() else {
+        return raw.to_string();
+    };
+    let (Ok(y), Ok(m), Ok(d)) = (y.parse::<u32>(), m.parse::<u32>(), d.parse::<u32>()) else {
+        return raw.to_string();
+    };
+    if !(1000..=9999).contains(&y) || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return raw.to_string();
+    }
+    format!("{y:04}{m:02}{d:02}")
+}
 
 /// POST /ajax/street/v2/main body → BrowseList。
 /// contents[].kind 分派解析：illust/manga 卡组取 thumbnails 全部项逐个输出；
@@ -750,6 +789,11 @@ fn parse_channel(body: &Value, kind: &str) -> BrowseChannel {
                 .collect()
         })
         .unwrap_or_default();
+    // 热门标签：实测条目键为 `{tag, ids, trendingRate}`（2026-10-01，仅 illust
+    // 频道有该板块）——**没有** `translatedName` / `illustCount`。中文译名从
+    // 同响应的 `tagTranslation[tag].zh`（回退 zh_tw）取；`count` 无对应源字段，
+    // 恒为 None（前端当前不消费该字段，保留仅为契约稳定）。
+    let tag_translation = body.get("tagTranslation");
     let trending_tags = body
         .pointer("/page/trendingTags")
         .and_then(Value::as_array)
@@ -757,19 +801,25 @@ fn parse_channel(body: &Value, kind: &str) -> BrowseChannel {
             arr.iter()
                 .filter_map(|t| {
                     let name = str_field(t, "tag")?;
+                    let translated_name = tag_translation
+                        .and_then(|m| m.get(&name))
+                        .and_then(|entry| {
+                            str_field(entry, "zh").or_else(|| str_field(entry, "zh_tw"))
+                        });
                     Some(TrendingTag {
                         name,
-                        translated_name: str_field(t, "translatedName"),
+                        translated_name,
                         count: t.get("illustCount").and_then(as_i64_loose),
                     })
                 })
                 .collect()
         })
         .unwrap_or_default();
+    // 榜单日期实测三频道两种形态（illust/manga `20260930`、novel `2026-09-30`）→ 归一
     let ranking_date = body
         .pointer("/page/ranking/date")
         .and_then(Value::as_str)
-        .map(String::from);
+        .map(normalize_ymd);
     BrowseChannel {
         follow: list_from_items(follow),
         recommend: list_from_items(recommend),
@@ -1026,9 +1076,9 @@ fn parse_ranking_illust(body: &Value, page: i64) -> BrowseRanking {
     };
     BrowseRanking {
         items,
-        date: str_field(body, "date"),
-        prev_date: str_field(body, "prev_date"),
-        next_date: str_field(body, "next_date"),
+        date: str_field(body, "date").map(|d| normalize_ymd(&d)),
+        prev_date: str_field(body, "prev_date").map(|d| normalize_ymd(&d)),
+        next_date: str_field(body, "next_date").map(|d| normalize_ymd(&d)),
         next_page,
     }
 }
@@ -1071,7 +1121,8 @@ fn parse_ranking_novel(body: &Value, page: i64) -> BrowseRanking {
     BrowseRanking {
         next_page: (items.len() >= 50).then(|| page + 1),
         items,
-        date: str_field(body, "date"),
+        // 实测为日文展示串（如 `2026年9月30日`）→ 归一成 yyyymmdd，与插画榜同口径
+        date: str_field(body, "date").map(|d| normalize_ymd(&d)),
         prev_date: None,
         next_date: None,
     }
@@ -1234,6 +1285,9 @@ fn parse_related(body: &Value, fallback_kind: &str) -> Vec<BrowseWorkItem> {
 }
 
 /// /ajax/user/{id}?full=1 body → BrowseUserProfile。
+/// `pixiv_id`：实测（2026-10-01，full=1/full=0/自己/他人四种组合）响应**没有**
+/// `account` 键，恒为空串；页面因此隐藏 @handle 行（见 BrowseAuthorView）。
+/// 登录用户自己的 pixivId 由 `/ajax/user/self` 提供（csrf.rs，账号索引已存）。
 fn parse_user_profile(id: i64, body: &Value) -> BrowseUserProfile {
     BrowseUserProfile {
         id: body.get("userId").and_then(as_i64_loose).unwrap_or(id),
@@ -1534,8 +1588,9 @@ const RANKING_MODES_ILLUST: [&str; 6] = [
 const RANKING_MODES_NOVEL: [&str; 6] =
     ["daily", "weekly", "monthly", "male", "female", "daily_r18"];
 
-/// 搜索词清理：去掉会破坏 URL 结构的 `?`/`#` 与控制字符（其余字符交给
-/// wreq 的 IntoUri/url 规范化做百分号编码，不手写 encode）。
+/// 搜索词清理：去掉会破坏 URL 结构的 `?`/`#` 与控制字符、去首尾空白。
+/// 其余字符（含非 ASCII）由 [`percent_encode`] 编码后进路径段——**不能**直接拼接：
+/// wreq 不会对路径里的非 ASCII 做编码，实测直拼日文标签 → HTTP 400（2026-10-01）。
 fn sanitize_search_word(word: &str) -> Result<String, PixivError> {
     let cleaned: String = word
         .chars()
@@ -1596,7 +1651,12 @@ fn search_path(
     }
     params.push(format!("p={}", page.max(1)));
     params.push("lang=zh".to_string());
-    Ok(format!("/ajax/search/{seg}/{word}?{}", params.join("&")))
+    // word 在路径段，必须 percent-encode（非 ASCII 直拼实测 400，见 sanitize 注释）
+    Ok(format!(
+        "/ajax/search/{seg}/{}?{}",
+        percent_encode(&word),
+        params.join("&")
+    ))
 }
 
 /// 排行榜 kind/mode 合法性校验。
@@ -1622,8 +1682,9 @@ fn validate_ranking_date(date: Option<&str>) -> Result<(), PixivError> {
 }
 
 /// percent-encode：RFC 3986 unreserved（字母数字 `-_.~`）之外的 UTF-8 字节
-/// 编码为大写 `%XX`。用于收藏接口的 query tag 值与 form 体字段值
-/// （标签名可含非 ASCII 与 `&` 等保留字符，直接拼接会破坏 URL/form 结构）。
+/// 编码为大写 `%XX`。用于搜索词的路径段、收藏接口的 query tag 值与 form 体
+/// 字段值（这些位置可含非 ASCII 与 `&`/`/` 等保留字符，直接拼接会破坏
+/// URL/form 结构，或让 pixiv 返回 400）。
 fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for byte in s.as_bytes() {
@@ -2415,7 +2476,8 @@ mod tests {
             "page": {
                 "follow": [1],
                 "recommend": {"ids": [2]},
-                "ranking": {"items": [1, 3], "date": "20260929"},
+                // 实测（2026-10-01）：ranking.items 是 {id, rank} 对象数组
+                "ranking": {"items": [{"id": "1", "rank": "1"}, {"id": "3", "rank": "2"}], "date": "20260929"},
                 "newPost": [4],
                 "recommendByTag": [
                     // 实测形状：字符串 id + details（推荐跟踪信息，解析忽略）
@@ -2423,10 +2485,16 @@ mod tests {
                     {"tag": "", "ids": ["1"]},
                     {"tag": "孤儿板块", "ids": ["999999"]}
                 ],
+                // 实测形状：{tag, ids, trendingRate}，无 translatedName/illustCount
                 "trendingTags": [
-                    {"tag": "オリジナル", "translatedName": "原创", "illustCount": 9999},
+                    {"tag": "オリジナル", "ids": [1, 2], "trendingRate": -4},
+                    {"tag": "未收录译名", "ids": [3], "trendingRate": 1},
                     {"tag": ""}
                 ]
+            },
+            // 中文译名源：tagTranslation[tag].zh（回退 zh_tw）
+            "tagTranslation": {
+                "オリジナル": {"en": "original", "romaji": "orijinaru", "zh": "原创", "zh_tw": "原創"}
             },
             "thumbnails": {"illust": [
                 {"id": "1", "illustType": 0, "title": "A", "userId": "9"},
@@ -2445,9 +2513,19 @@ mod tests {
             ch.recommend.items.iter().map(|i| i.id).collect::<Vec<_>>(),
             vec![2]
         );
+        // ranking：对象条目按 id 映射，rank 一并带回
         assert_eq!(
             ch.ranking.items.iter().map(|i| i.id).collect::<Vec<_>>(),
             vec![1, 3]
+        );
+        assert_eq!(
+            ch.ranking
+                .items
+                .iter()
+                .map(|i| i.rank)
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2)],
+            "ranking 条目的 rank 应保留"
         );
         assert_eq!(
             ch.new_post.items.iter().map(|i| i.id).collect::<Vec<_>>(),
@@ -2465,10 +2543,28 @@ mod tests {
             vec![2, 1]
         );
         assert_eq!(ch.ranking_date.as_deref(), Some("20260929"));
-        assert_eq!(ch.trending_tags.len(), 1, "空 tag 跳过");
+        assert_eq!(ch.trending_tags.len(), 2, "空 tag 跳过");
         assert_eq!(ch.trending_tags[0].name, "オリジナル");
-        assert_eq!(ch.trending_tags[0].translated_name.as_deref(), Some("原创"));
-        assert_eq!(ch.trending_tags[0].count, Some(9999));
+        assert_eq!(
+            ch.trending_tags[0].translated_name.as_deref(),
+            Some("原创"),
+            "译名取自 tagTranslation.zh"
+        );
+        assert_eq!(
+            ch.trending_tags[1].translated_name, None,
+            "tagTranslation 未收录 → 无译名"
+        );
+        assert_eq!(ch.trending_tags[0].count, None, "响应无 illustCount 源字段");
+    }
+
+    /// 频道页日期形态：novel 频道实测 `2026-09-30`，归一到 yyyymmdd。
+    #[test]
+    fn parse_channel_normalizes_novel_ranking_date() {
+        let ch = parse_channel(
+            &json!({"page": {"ranking": {"items": [], "date": "2026-09-30"}}}),
+            "novel",
+        );
+        assert_eq!(ch.ranking_date.as_deref(), Some("20260930"));
     }
 
     #[test]
@@ -2850,6 +2946,22 @@ mod tests {
         assert!(r.items.is_empty());
     }
 
+    /// 榜单日期归一：小说榜实测日文展示串、插画榜已是 yyyymmdd（prev/next 同规则）。
+    #[test]
+    fn parse_ranking_dates_normalized_to_yyyymmdd() {
+        let r = parse_ranking_novel(
+            &json!({"display_a": {"rank_a": []}, "date": "2026年9月30日"}),
+            1,
+        );
+        assert_eq!(r.date.as_deref(), Some("20260930"));
+        let r = parse_ranking_illust(
+            &json!({"contents": [], "date": "20260930", "prev_date": "2026-09-29"}),
+            1,
+        );
+        assert_eq!(r.date.as_deref(), Some("20260930"));
+        assert_eq!(r.prev_date.as_deref(), Some("20260929"));
+    }
+
     // ---- 详情 ----
 
     #[test]
@@ -3218,7 +3330,7 @@ mod tests {
 
     #[test]
     fn search_path_builds_artworks_and_novels() {
-        // word 原样进路径（编码交给 wreq IntoUri/url 规范化），query 为白名单 ASCII
+        // word 经 percent-encode 进路径段（非 ASCII 直拼实测 400），query 为白名单 ASCII
         let path = search_path(
             "illust",
             "東方",
@@ -3231,11 +3343,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             path,
-            "/ajax/search/artworks/東方?order=date&mode=r18&s_mode=s_tag&type=illust&ai_type=0&p=2&lang=zh"
+            "/ajax/search/artworks/%E6%9D%B1%E6%96%B9?order=date&mode=r18&s_mode=s_tag&type=illust&ai_type=0&p=2&lang=zh"
         );
         let path = search_path("novel", "オリジナル", None, None, None, Some("manga"), 1).unwrap();
         assert_eq!(
-            path, "/ajax/search/novels/オリジナル?order=date_d&mode=all&p=1&lang=zh",
+            path,
+            "/ajax/search/novels/%E3%82%AA%E3%83%AA%E3%82%B8%E3%83%8A%E3%83%AB?order=date_d&mode=all&p=1&lang=zh",
             "novel 不带 type/ai_type，type_ 被忽略"
         );
         let path = search_path("manga", "w", None, None, None, Some("ugoira"), 0).unwrap();
@@ -3248,6 +3361,33 @@ mod tests {
         assert!(search_path("illust", "w", None, None, None, Some("z"), 1).is_err());
         assert!(search_path("video", "w", None, None, None, None, 1).is_err());
         assert!(search_path("illust", "", None, None, None, None, 1).is_err());
+    }
+
+    /// 搜索词编码：ASCII 保留、非 ASCII 与保留字符编码、`?`/`#` 已在
+    /// sanitize 阶段剥除；编码后不得再出现裸的非 ASCII 字节。
+    #[test]
+    fn search_path_percent_encodes_non_ascii_word() {
+        let path = search_path("illust", "風景 100%", None, None, None, None, 1).unwrap();
+        assert!(
+            path.starts_with("/ajax/search/artworks/%E9%A2%A8%E6%99%AF%20100%25?"),
+            "空格与 % 均应编码，实际: {path}"
+        );
+        assert!(path.is_ascii(), "路径必须全 ASCII（wreq 不会自动编码）");
+    }
+
+    #[test]
+    fn normalize_ymd_forms() {
+        assert_eq!(normalize_ymd("20260930"), "20260930");
+        assert_eq!(normalize_ymd("2026-09-30"), "20260930", "novel 频道形态");
+        assert_eq!(
+            normalize_ymd("2026年9月30日"),
+            "20260930",
+            "小说榜形态（月/日无前导零）"
+        );
+        assert_eq!(normalize_ymd("2026-9-3"), "20260903");
+        assert_eq!(normalize_ymd(""), "", "空串原样");
+        assert_eq!(normalize_ymd("本周"), "本周", "识别不了的原样返回");
+        assert_eq!(normalize_ymd("2026-13-01"), "2026-13-01", "非法月原样返回");
     }
 
     #[test]

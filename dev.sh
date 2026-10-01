@@ -15,9 +15,10 @@ Usage: bash dev.sh <command>
   build [release|debug]   Package installers; default: release
   install                 Install frontend dependencies (frozen lockfile)
   check                   Frontend type check/build + cargo check
-  test                    Rust unit and integration tests
+  test                    Rust unit and integration tests (offline)
+  test-live               Live pixiv API tests (needs a local login; serial)
   logs [app|COMMAND] [-f]  Last 100 lines; -f/--follow watches new lines
-                          COMMAND: dev, frontend, build, install, check, test
+                          COMMAND: dev, frontend, build, install, check, test, test-live
 
 No arguments show help. Extra/unknown arguments are errors (exit 2).
 Commands run from the repository, regardless of your current directory.
@@ -68,7 +69,7 @@ case "$command_name" in
         [[ $# -le 1 ]] || invalid
         source_name=${1:-app}
         [[ $# -eq 0 || -n $1 ]] || invalid
-        case "$source_name" in app|dev|frontend|build|install|check|test) ;; *) invalid ;; esac
+        case "$source_name" in app|dev|frontend|build|install|check|test|test-live) ;; *) invalid ;; esac
         ;;
     dev|frontend)
         [[ $# -le 1 ]] || invalid
@@ -76,7 +77,7 @@ case "$command_name" in
         [[ $# -eq 0 || -n $1 ]] || invalid
         case "$action" in start|stop|restart) ;; *) invalid ;; esac
         ;;
-    install|check|test) [[ $# -eq 0 ]] || invalid ;;
+    install|check|test|test-live) [[ $# -eq 0 ]] || invalid ;;
     *) invalid ;;
 esac
 # Validate before crossing the Windows native argument boundary: PS 5.1 can
@@ -239,7 +240,7 @@ log_path="$root/.dev/logs/$command_name.log"
 : > "$log_path"
 printf 'Log: %s\n' "$log_path"
 case "$command_name" in dev|frontend|build|install|check) require pnpm ;; esac
-case "$command_name" in dev|build|check|test) require cargo; require cmake ;; esac
+case "$command_name" in dev|build|check|test|test-live) require cargo; require cmake ;; esac
 tauri="$root/frontend/node_modules/.bin/tauri"
 case "$command_name" in
     dev|build) [[ -x $tauri ]] || fail 'Local Tauri CLI missing. Run bash dev.sh install first.' ;;
@@ -265,4 +266,7 @@ case "$command_name" in
         run "$root/src-tauri" cargo check --locked
         ;;
     test) run "$root/src-tauri" cargo test --locked ;;
+    # Live pixiv API tests: slow + network + real login state, so opt-in.
+    # Serial (test-threads=1) keeps the shared session under pixiv rate limits.
+    test-live) run "$root/src-tauri" cargo test --locked --test pixiv_api -- --ignored --test-threads=1 ;;
 esac

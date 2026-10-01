@@ -34,8 +34,9 @@
 ├── docs/
 │   ├── SPEC.md                    ← 真相源（项目规格 + 风险登记）
 │   ├── PACKAGING.md               ← Tauri 打包与分发指引
-│   ├── adr/                       ← 架构决策记录（0001 ~ 0012）
-│   ├── research/                  ← 外部接口调研（pixiv 只读浏览 API 等）
+│   ├── PIXIV-API.md               ← pixiv 接口契约事实源（端点/参数/分页/实现与测试映射/维护矩阵）
+│   ├── adr/                       ← 架构决策记录（0001 ~ 0013）
+│   ├── research/                  ← 外部接口调研证据档案（pixiv 只读浏览 API 等）
 │   ├── agents/                    ← skills 配置（本目录）
 │   └── icon/                      ← 应用图标源图（raw_icon.png）
 ├── frontend/                      ← Vue3 + TS + Vite（views/、components/、stores/、api/、styles/、locales/；UI 库 @material/web，api 层走 invoke/listen）
@@ -45,7 +46,7 @@
     ├── Cargo.toml / tauri.conf.json / build.rs
     ├── capabilities/              ← Tauri 权限声明
     ├── icons/                     ← 全平台图标（tauri.conf.json 引用，必须入库）
-    ├── tests/                     ← IPC 冒烟测试（smoke_commands.rs / browse_smoke.rs）
+    ├── tests/                     ← pixiv 接口测试（pixiv_api/：live_read / live_write 在线实测 + offline_guard 离线命令层）+ IPC 冒烟（smoke_commands.rs）
     └── src/
         ├── main.rs / lib.rs       ← 入口薄壳 / 业务库（lib 名 pixiv_tool_lib）
         ├── state.rs / db.rs / settings.rs / cookies.rs / accounts.rs / paths.rs / platform.rs / logging.rs / image_proxy.rs

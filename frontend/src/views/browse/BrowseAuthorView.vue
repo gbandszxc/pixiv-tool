@@ -264,7 +264,8 @@ onBeforeUnmount(() => {
           </div>
           <div class="card-id">
             <h1 class="author-name">{{ profile.name }}</h1>
-            <p class="author-pixiv-id">@{{ profile.pixiv_id }}</p>
+            <!-- /ajax/user/{id} 实测不返回 account（2026-10-01），pixiv_id 恒为空 → 隐藏整行 -->
+            <p v-if="profile.pixiv_id" class="author-pixiv-id">@{{ profile.pixiv_id }}</p>
             <p class="author-stats">
               {{ t("browse.author.followingCount", { n: profile.following_count ?? 0 }) }}
               <span class="stats-divider" aria-hidden="true">·</span>

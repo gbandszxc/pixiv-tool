@@ -112,7 +112,7 @@ pixiv-tool/
 │  ├─ Cargo.toml                # wreq 6（指纹伪装，锁版本）/ rusqlite / keyring / tokio
 │  ├─ tauri.conf.json           # devUrl 9961、frontendDist ../frontend/dist
 │  ├─ capabilities/default.json # IPC 权限（core + dialog + opener）
-│  ├─ tests/                    # smoke_commands.rs（IPC 冒烟）/ browse_smoke.rs（浏览命令离线冒烟）
+│  ├─ tests/                    # pixiv_api/（pixiv 接口测试唯一入口：live_read.rs / live_write.rs 在线实测 + offline_guard.rs 离线命令层冒烟）/ smoke_commands.rs（IPC 冒烟）
 │  └─ src/
 │     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、pixiv-img 协议、关闭确认）
 │     ├─ state.rs               # AppState：paths/settings/db/cookies/tasks/accounts
@@ -143,7 +143,7 @@ pixiv-tool/
 │  │  ├─ styles/                # 全局 CSS Variables（--md-sys-color-* 等）
 │  │  └─ router/                # hash 模式
 │  └─ vite.config.ts            # port 9961 + strictPort（无 proxy）
-├─ docs/                        # 本文档与 ADR、调研、agents 约定
+├─ docs/                        # 本文档与 ADR、PIXIV-API 接口契约、调研、agents 约定
 ├─ scripts/                     # make_icon.sh（macOS 图标生成）
 └─ README.md
 ```
@@ -537,8 +537,9 @@ Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主�
 路由见 §6.1。数据层要点：
 
 - **接口**：全部走 `www.pixiv.net/ajax/*` 同源 GET + 既有 `PixivClient` 限速；
-  端点与响应结构真相源为 `docs/research/pixiv-browse-api.md`（2026-10-01 实测，
-  含失效端点勘误）。唯一例外是首页 street 流（POST，需 csrf token，见 ADR 0012 §3）。
+  端点与响应结构的契约事实源为 `docs/PIXIV-API.md`（`docs/research/pixiv-browse-api.md`
+  为 2026-10-01 调研证据档案，保留当日字段细节与失效端点勘误）。
+  唯一例外是首页 street 流（POST，需 csrf token，见 ADR 0012 §3）。
 - **IPC 契约**：11 个命令（§7），返回体统一 `BrowseWorkItem` 卡片结构
   （id/kind/title/author/cover/page_count/x_restrict/tags/series…），前端契约类型与
   mock 层在 `frontend/src/api/browse.ts`（非 Tauri 环境返回确定性样例数据，供浏览器
@@ -610,6 +611,13 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_user_profile(id)` | 作者资料（/ajax/user/{id}?full=1） |
 | `browse_user_works(id, kind, page)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量 |
 | `browse_novel_series(id, last_order)` | 系列元数据 + 目录（last_order 游标） |
+| `browse_watchlist(kind)` | 追更列表：manga/novel 两个子 tab（/ajax/watch_list/*，按 maxPage 聚合 ≤20 页） |
+| `browse_work_comments(kind, id, offset)` | 作品评论根列表（illusts/novels comments/roots，limit=10，offset 游标） |
+| `browse_comment_replies(kind, commentId, page)` | 评论回复列表（comments/replies，page 从 1） |
+| `browse_bookmark_list(kind, rest, tag, offset, limit)` | 收藏列表（自己：illusts 48/页、novels 30/页；offset + total 翻页） |
+| `browse_bookmark_tags(kind)` | 收藏标签（一次返回 public/private 两组，含「未分類」聚合标签） |
+| `browse_bookmark_add(kind, id, restrict, tags)` | 添加收藏（全局 JSON 端点 + x-csrf-token；restrict 0 公开 / 1 非公开） |
+| `browse_bookmark_remove(kind, id, bookmarkId)` | 取消收藏：插画走 ajax form，小说走旧式 `/novel/bookmark_setting.php` 表单 |
 | `app_exit` | 退出应用（前端确认框确认后调用，与 Cmd+Q 路径一致） |
 
 **应用菜单栏**：Windows 上默认隐藏（`SetMenu(hwnd, NULL)`），按 Alt 唤起并
@@ -623,6 +631,7 @@ Alt+F4 / 标题栏关闭）与 Edit 项（撤销/剪切/复制/粘贴/全选，W
 
 以上数据命令实现于 `commands/browse_api_cmds.rs`，公共登录守卫 `build_browse_api`：
 无 PHPSESSID 一律 `Err("未登录或登录态已失效，请先登录")`（前端据此弹登录窗）。
+端点 / 参数 / 响应解析契约见 `docs/PIXIV-API.md`（含端点 → 实现 → 测试的维护矩阵）。
 图片经 `pixiv-img` 自定义协议（`image_proxy.rs`，白名单 `*.pximg.net`，磁盘缓存
 1GB，CDN 并发 10、同 URL 在途合并，单个逻辑下载含全部重试与退避受 15s 总预算
 约束（`DOWNLOAD_TIMEOUT_SECS`），失败 200/500ms 短退避后重试至多 3 次，命中与
@@ -666,7 +675,10 @@ bash ./dev.sh dev start  # 默认动作也是 start；后台 Vite + Rust 热重�
   `tauri dev` 复用该前端，不再重复执行 `beforeDevCommand`。
   debug 构建的数据目录为 `<repo>/data`、`<repo>/config`，与旧 dev 数据无缝衔接。
 - Rust 改动自动重编译重启；前端走 Vite HMR
-- 测试：`cd src-tauri && cargo test`（单测 + IPC 冒烟集成测试）；
+- 测试：`cd src-tauri && cargo test`（单测 + IPC 冒烟集成测试，全离线）；
+  pixiv 在线接口实测走仓库根 `./dev.ps1 test-live`（Git Bash：`bash ./dev.sh test-live`）
+  = `cargo test --locked --test pixiv_api -- --ignored --test-threads=1`：
+  前置条件是本机已有登录态（系统凭据存储），**串行执行、会真实访问 pixiv**；
   前端类型检查：`cd frontend && pnpm build`
 - **Windows 工具链**：本机（Windows 11）默认 gnu 工具链的 cdylib 链接超
   mingw ld 导出上限（"export ordinal too large"），**统一改用 MSVC 工具链**，
@@ -675,7 +687,7 @@ bash ./dev.sh dev start  # 默认动作也是 start；后台 Vite + Rust 热重�
   详见 AGENTS.md 开发命令一节
 - 根目录 `dev.ps1` / `dev.sh` 封装 `install`、
   `dev [start|stop|restart]`、`frontend [start|stop|restart]`、
-  `build [release|debug]`、`check`、`test`、`logs [app|子命令] [-f|--follow]`。
+  `build [release|debug]`、`check`、`test`、`test-live`、`logs [app|子命令] [-f|--follow]`。
   无参数或 `-h` / `--help` 显示帮助；脚本以自身位置定位仓库。
   `dev` / `frontend` 默认 `start`，后台运行，重复启动幂等；通过 PID、启动时间
   和命令确认进程身份，过期记录自动清理。可验证并接管本仓库已有 Vite；

@@ -24,7 +24,8 @@ V1.1 起应用提供 `/pixiv` 内嵌浏览器（子 WebView，ADR 0008/0009 体�
 间隔 + 429 闸门，见 SPEC §4.3）请求 `www.pixiv.net/ajax/*` 同源 GET 接口，复用
 Keychain 登录态。**V1 不做写操作**（点赞/收藏/关注/评论），接口清单以实测调研为准：
 `docs/research/pixiv-browse-api.md`（2026-10-01 抓包；含失效端点勘误，如
-`/ajax/ranking/illust` 不存在、`stacc.php` 已下线）。
+`/ajax/ranking/illust` 不存在、`stacc.php` 已下线；现行契约事实源为
+`docs/PIXIV-API.md`）。
 
 ### 2. 图片代理协议 `pixiv-img`
 
@@ -79,4 +80,6 @@ street 无翻页参数（前端重复调用 + 按 id 去重）；相关推荐为
 - V1 限制：ugoira 只显示封面帧；小说内嵌图（`[pixivimage:]`）显示占位块；
   写操作、评论浏览、收藏夹浏览留待 V2。
 - 测试：全部接口解析为离线单测（内嵌样例 JSON），命令层离线冒烟
-  （`tests/browse_smoke.rs`），真实链路由人工/实机冒烟覆盖。
+  （`tests/pixiv_api/offline_guard.rs`），真实链路由人工/实机冒烟覆盖。
+  （2026-10-01 追加：真实链路已有 `test-live` 在线用例覆盖——`./dev.ps1 test-live`
+  / `bash ./dev.sh test-live`，需本机登录态、串行执行、真实访问 pixiv。）
