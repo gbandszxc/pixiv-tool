@@ -22,7 +22,9 @@ tauri-build = { version = "2.6", features = [] }
 [dependencies]
 tauri = { version = "2.11", features = ["unstable"] }
 # 打开外链（浏览页「在浏览器中打开」）：系统默认浏览器，不经内嵌 webview。
-tauri-plugin-opener = "2"
+# 锁 2.5：2.6+ 声明 rust-version 1.90，与包内 rust-version 1.85 冲突；且 npm 侧
+# @tauri-apps/plugin-opener 必须与之同 major.minor，两侧一起升才动这里。
+tauri-plugin-opener = "2.5"
 tauri-plugin-dialog = "2.7"
 tauri-plugin-log = "2.9"
 serde = { version = "1.0", features = ["derive"] }
