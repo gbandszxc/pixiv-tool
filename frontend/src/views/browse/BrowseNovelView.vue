@@ -152,7 +152,7 @@ function goAuthor(): void {
 }
 
 function goSeries(): void {
-  if (series.value) router.push(`/browse/series/${series.value.id}`);
+  if (series.value) router.push(`/browse/series/novel/${series.value.id}`);
 }
 
 function goEpisode(id: number): void {
@@ -243,7 +243,7 @@ function openInPixiv(): void {
           <router-link
             v-if="series"
             class="series-link"
-            :to="`/browse/series/${series.id}`"
+            :to="`/browse/series/novel/${series.id}`"
             :title="t('browse.novel.seriesLabel', { title: series.title, order: series.order })"
           >
             {{ t("browse.novel.seriesLabel", { title: series.title, order: series.order }) }}

@@ -211,6 +211,53 @@ export interface BrowseSeriesDetail {
   next_last_order?: number | null;
 }
 
+/**
+ * browse_illust_series 返回体：插画/漫画系列目录。
+ * pixiv 端点 GET /ajax/series/{id}?p={page}&lang=zh —— 页码制：每页恒 12 条、
+ * 恒按 series_order 降序；无游标/排序参数（limit、last_order、order* 均被服务端忽略）。
+ * 证据：docs/research/pixiv-browse-api.md §13。
+ */
+export interface BrowseIllustSeriesDetail {
+  id: number;
+  title: string;
+  user_id: number;
+  user_name: string;
+  /** users[] 按 userId 映射，imageBig 优先回退 image */
+  user_avatar?: string;
+  caption?: string;
+  /** illustSeries[0].url；空串 = 未设自定义封面（isSetCover=false 恒 null），前端回退 contents[0].cover */
+  cover?: string;
+  /** page.total（系列总话数） */
+  total: number;
+  /** pixiv 无漫画/插画系列完结标记（illustSeries[0] 无 isConcluded 字段），恒 false */
+  is_concluded: false;
+  is_watched?: boolean;
+  /** illustSeries[0].updateDate（ISO 含时区） */
+  update_date?: string;
+  /** 本页分集，series_order 降序（pixiv page.series[] 与 thumbnails.illust 同序按位映射） */
+  contents: {
+    id: number;
+    /** 恒 "illust"：illustType 0/1/2 均入此 kind，进详情页后再分 */
+    kind: "illust";
+    title: string;
+    /** pixiv urls.360x360 优先，回退顶层 url（官方卡片档） */
+    cover: string;
+    page_count?: number;
+    /** 1=R-18；全局过滤 filterByR18 用条目级口径（系列头无 xRestrict） */
+    x_restrict?: number;
+    update_date?: string;
+    /** 话数 1..total（pixiv page.series[].order；UI #N 徽标同源） */
+    series_order: number;
+    ai_type?: number;
+  }[];
+  /** 当前页码回显（从 1 起） */
+  page: number;
+  /** ceil(total/12) */
+  total_pages: number;
+  /** page < total_pages ? page+1 : null（pixiv 超页返回空数组不报错，等价到底） */
+  next_page: number | null;
+}
+
 // ===== 评论契约（v2.1，2026-10-01 实机实测）=====
 
 /** 浏览评论条目（roots 与 replies 同构）。 */
@@ -443,10 +490,20 @@ export async function browseUserWorks(
   return invokeBrowse<BrowseList>("browse_user_works", { id, kind, page });
 }
 
-/** browse_novel_series：小说系列目录（游标 last_order 分页，每批 30；mock 12/批）。 */
+/**
+ * browse_novel_series：小说系列目录（游标 last_order 分页，每批 30；mock 同参）。
+ * 页码分集页的映射：last_order = (page-1)*30（contentOrder 从 1 起的排他下界），
+ * total_pages = ceil(total/30)。证据：docs/research/pixiv-browse-api.md §13.4。
+ */
 export async function browseNovelSeries(id: number, lastOrder = 0): Promise<BrowseSeriesDetail> {
   if (!isTauri()) return mockSeriesDetail(id, lastOrder);
   return invokeBrowse<BrowseSeriesDetail>("browse_novel_series", { id, lastOrder });
+}
+
+/** browse_illust_series：插画/漫画系列目录（官方页码制，每页 12 条、话数降序；mock 同参）。 */
+export async function browseIllustSeries(id: number, page = 1): Promise<BrowseIllustSeriesDetail> {
+  if (!isTauri()) return mockIllustSeries(id, page);
+  return invokeBrowse<BrowseIllustSeriesDetail>("browse_illust_series", { id, page });
 }
 
 /** browse_work_comments：评论 roots（offset 游标，limit=10；接口无 total，next=null 到底）。 */
@@ -868,15 +925,18 @@ async function mockUserProfile(id: number): Promise<BrowseUserProfile> {
   };
 }
 
-/** 系列目录：游标 last_order 分页，每批 12 条，第 3 批后 next_last_order=null。 */
+/**
+ * 小说系列目录：每批 30 条（与真实后端一致），页码映射 last_order=(page-1)*30 精确切片；
+ * total=91 → 4 页（末页 1 条，覆盖页边界）。is_concluded 按 id 确定性（同系列各页恒定）。
+ */
 async function mockSeriesDetail(id: number, lastOrder = 0): Promise<BrowseSeriesDetail> {
   await mockDelay();
   const rand = mulberry32(seedFrom(`series#${id}`));
   const authorIndex = Math.floor(rand() * MOCK_AUTHORS.length);
-  const total = 36; // 3 批 × 12
-  const start = Math.floor(lastOrder / 12) * 12;
-  const count = Math.max(0, Math.min(12, total - start));
-  const next = start + 12 < total ? start + 12 : null;
+  const total = 91;
+  const start = Math.floor(lastOrder / 30) * 30;
+  const count = Math.max(0, Math.min(30, total - start));
+  const next = start + 30 < total ? start + 30 : null;
   return {
     id,
     title: `示例小说系列 #${id}`,
@@ -885,12 +945,15 @@ async function mockSeriesDetail(id: number, lastOrder = 0): Promise<BrowseSeries
     caption: "这是 mock 系列简介，用于视觉验收。",
     cover: mockCover((id * 31) % 360, "portrait"),
     total,
-    is_concluded: next === null,
+    is_concluded: id % 2 === 0,
     contents: Array.from({ length: count }, (_, i) => {
       const order = start + i + 1;
       return {
         id: 9500000 + order,
-        title: `第 ${order} 话 示例章节`,
+        title:
+          order % 5 === 1
+            ? `第 ${order} 话 示例章节标题——刻意拉长到超出两行，用于验收标题截断与省略号表现`
+            : `第 ${order} 话 示例章节`,
         series_order: order,
         text_length: 1500 + Math.floor(rand() * 6000),
         update_date: `2026-09-${pad2(1 + (order % 28))}`,
@@ -898,6 +961,58 @@ async function mockSeriesDetail(id: number, lastOrder = 0): Promise<BrowseSeries
       };
     }),
     next_last_order: next,
+  };
+}
+
+/**
+ * 插画/漫画系列目录：官方页码制复刻——每页恒 12 条、话数降序、超页空数组不报错；
+ * total=31 → 3 页（p1: 31..20，p2: 19..8，p3: 7..1）。条目含长标题（两行截断）、
+ * 部分多页作品与 R-18；封面 portrait/square 混合。系列头 cover 按 id 奇偶给「有值 /
+ * 空串」两形态（空串 → 前端回退 contents[0].cover，验回退分支）。
+ */
+async function mockIllustSeries(id: number, page = 1): Promise<BrowseIllustSeriesDetail> {
+  await mockDelay();
+  const total = 31;
+  const totalPages = Math.ceil(total / 12);
+  const headRand = mulberry32(seedFrom(`illust-series#${id}`));
+  const authorIndex = Math.floor(headRand() * MOCK_AUTHORS.length);
+  const rand = mulberry32(seedFrom(`illust-series#${id}#${page}`));
+  const startOrder = total - (page - 1) * 12; // 本页最大话数（降序切片页首）
+  const count = Math.max(0, Math.min(12, startOrder)); // 末页剩余条数；超页 → 0（空数组）
+  const contents = Array.from({ length: count }, (_, i) => {
+    const order = startOrder - i;
+    const restrictRoll = rand();
+    return {
+      id: 9600000 + order,
+      kind: "illust" as const,
+      title:
+        order % 4 === 1
+          ? `第 ${order} 话 · 用于验收两行截断的超长示例标题——这一话的标题被刻意拉长到两行以上，检查省略号与布局稳定`
+          : `第 ${order} 话 示例分镜`,
+      cover: mockCover((order * 53 + id * 17) % 360, order % 3 === 0 ? "portrait" : "square"),
+      page_count: rand() < 0.35 ? 2 + Math.floor(rand() * 18) : 1,
+      x_restrict: restrictRoll < 0.2 ? 1 : 0,
+      update_date: `2026-09-${pad2(1 + (order % 28))}`,
+      series_order: order,
+      ai_type: 0,
+    };
+  });
+  return {
+    id,
+    title: `示例插画系列 #${id}`,
+    user_id: 100001 + authorIndex,
+    user_name: MOCK_AUTHORS[authorIndex],
+    user_avatar: mockCover((id * 41 + 7) % 360, "square"),
+    caption: "这是 mock 插画/漫画系列简介，用于视觉验收。",
+    cover: id % 2 === 0 ? mockCover((id * 31) % 360, "portrait") : "",
+    total,
+    is_concluded: false,
+    is_watched: headRand() < 0.5,
+    update_date: `2026-09-${pad2(1 + Math.floor(headRand() * 28))}T12:00:00+09:00`,
+    contents,
+    page,
+    total_pages: totalPages,
+    next_page: page < totalPages ? page + 1 : null,
   };
 }
 

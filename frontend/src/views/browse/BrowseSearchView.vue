@@ -207,7 +207,10 @@ function pushTarget(target: ParsedBrowseInput): void {
       void router.push(`/browse/user/${target.id}`);
       break;
     case "novel-series":
-      void router.push(`/browse/series/${target.id}`);
+      void router.push(`/browse/series/novel/${target.id}`);
+      break;
+    case "illust-series":
+      void router.push(`/browse/series/illust/${target.id}`);
       break;
   }
 }

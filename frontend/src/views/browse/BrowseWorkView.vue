@@ -178,7 +178,8 @@ function openTag(tag: string): void {
 
 function openSeries(): void {
   const series = detail.value?.series;
-  if (series) void router.push(`/browse/series/${series.id}`);
+  // 作品详情（illust/manga）系列导航 → 应用内系列分集页 illust 段
+  if (series) void router.push(`/browse/series/illust/${series.id}`);
 }
 
 /** 无应用内历史（直达深链）时兜底回浏览首页。 */

@@ -1,6 +1,6 @@
 import type { WorkKind } from "../api/browse";
 
-export type PixivPageKind = "novel-single" | "novel-series" | "illustration" | "user";
+export type PixivPageKind = "novel-single" | "novel-series" | "illust-series" | "illustration" | "user";
 
 export interface ParsedPixivUrl {
   kind: PixivPageKind;
@@ -30,7 +30,7 @@ export function pixivIllustSeriesUrl(userId: number | string, seriesId: number |
 }
 
 /**
- * 解析 Pixiv 页面 URL，识别小说单篇、小说系列、插画作品或用户主页
+ * 解析 Pixiv 页面 URL，识别小说单篇、小说系列、插画/漫画系列、插画作品或用户主页
  */
 export function parsePixivUrl(url: string): ParsedPixivUrl | null {
   if (!url) return null;
@@ -39,6 +39,13 @@ export function parsePixivUrl(url: string): ParsedPixivUrl | null {
   const seriesMatch = url.match(/(?:[a-z]{2}\/)?novel\/series\/(\d+)/i);
   if (seriesMatch) {
     return { kind: "novel-series", id: seriesMatch[1] };
+  }
+
+  // 1.5 插画/漫画系列：/(?:[a-z]{2}/)?user/{uid}/series/{sid}（官方两类系列共用；
+  // sid 生效、uid 仅消歧。先于用户主页匹配，避免 user/{uid} 前缀被 4 吞掉）
+  const illustSeriesMatch = url.match(/(?:[a-z]{2}\/)?users?\/(\d+)\/series\/(\d+)/i);
+  if (illustSeriesMatch) {
+    return { kind: "illust-series", id: illustSeriesMatch[2] };
   }
 
   // 2. 小说单篇：/(?:[a-z]{2}/)?novel/show\.php\?.*id=(\d+) 或 /(?:[a-z]{2}/)?novel/(\d+)

@@ -10,7 +10,8 @@
  * | ② URL 含 /artworks/{id}                | 插画/漫画   | /browse/work/illust/{id}      |
  * | ③ URL 含 /users/{id}                   | 用户主页    | /browse/user/{id}             |
  * | ④ novel/show.php?id= 或 /novel/{id}    | 小说       | /browse/work/novel/{id}       |
- * | ⑤ /novel/series/{id}                   | 小说系列    | /browse/series/{id}           |
+ * | ⑤ /novel/series/{id}                   | 小说系列    | /browse/series/novel/{id}     |
+ * | ⑥ /user/{uid}/series/{sid}             | 插画/漫画系列 | /browse/series/illust/{sid}   |
  *
  * 边界处理：
  * - 尾随斜杠：`/artworks/123/` 仍命中（正则不锚定结尾）；
@@ -25,13 +26,20 @@ export type ParsedBrowseInput =
   | { type: "illust-work"; id: number }
   | { type: "novel-work"; id: number }
   | { type: "user"; id: number }
-  | { type: "novel-series"; id: number };
+  | { type: "novel-series"; id: number }
+  | { type: "illust-series"; id: number };
 
 /** 可选的 pixiv 语言前缀：`en/`、`ja/`、`zh-cn/` 等（1-2 段小写字母 + 斜杠）。 */
 const LOCALE_PREFIX = "(?:[a-z]{2}(?:-[a-z]{2})?/)?";
 
 /** ⑤ 小说系列：/novel/series/{id}（先于小说单篇匹配，规则互斥但保持顺序清晰）。 */
 const RE_NOVEL_SERIES = new RegExp(`${LOCALE_PREFIX}novel/series/(\\d+)`, "i");
+/**
+ * ⑥ 插画/漫画系列：/user/{uid}/series/{sid}（官方插画与漫画系列共用此形态；
+ * sid 生效、uid 仅消歧；兼容单复数 users?。必须先于用户主页规则匹配，
+ * 否则 user/{uid} 前缀会被 ③ 吞掉）。
+ */
+const RE_ILLUST_SERIES = new RegExp(`${LOCALE_PREFIX}users?/(\\d+)/series/(\\d+)`, "i");
 /** ④ 小说单篇（旧链接）：novel/show.php?id={id}（id 取自查询串，忽略其余参数）。 */
 const RE_NOVEL_SHOW = new RegExp(`${LOCALE_PREFIX}novel/show\\.php\\?(?:[^#]*&)?id=(\\d+)`, "i");
 /** ② 插画/漫画作品：/artworks/{id}。 */
@@ -57,6 +65,7 @@ function toId(raw: string): number | null {
  * parseBrowseInput("www.pixiv.net/novel/show.php?id=22&w=1#c") // { type: "novel-work", id: 22 }
  * parseBrowseInput("/zh-cn/novel/33/")     // { type: "novel-work", id: 33 }
  * parseBrowseInput("novel/series/44")      // { type: "novel-series", id: 44 }
+ * parseBrowseInput("user/11/series/22")    // { type: "illust-series", id: 22 }
  * parseBrowseInput("風景 插画")             // null（关键词）
  */
 export function parseBrowseInput(input: string): ParsedBrowseInput | null {
@@ -74,6 +83,12 @@ export function parseBrowseInput(input: string): ParsedBrowseInput | null {
   if (series) {
     const id = toId(series[1]);
     if (id) return { type: "novel-series", id };
+  }
+
+  const illustSeries = text.match(RE_ILLUST_SERIES);
+  if (illustSeries) {
+    const id = toId(illustSeries[2]);
+    if (id) return { type: "illust-series", id };
   }
 
   const show = text.match(RE_NOVEL_SHOW);

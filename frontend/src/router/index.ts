@@ -91,10 +91,24 @@ const router = createRouter({
     },
     ...browseWorkRoutes,
     {
-      path: "/browse/series/:id",
+      // 系列分集页：kind = novel（小说系列）| illust（插画/漫画系列，官方接口族不区分；
+      // watchlist 的 manga 语义在入口处映射为 illust）。
+      path: "/browse/series/:kind(novel|illust)/:id",
       name: "browse-series",
       component: () => import("../views/browse/BrowseSeriesView.vue"),
-      props: (route: RouteLocation) => ({ id: Number(route.params.id) }),
+      props: (route: RouteLocation) => ({
+        kind: route.params.kind as "novel" | "illust",
+        id: Number(route.params.id),
+      }),
+    },
+    {
+      // 旧深链（无 kind 段）→ novel 系列：函数式 redirect 保留 query 与 hash。
+      path: "/browse/series/:id",
+      redirect: (to: RouteLocation) => ({
+        path: `/browse/series/novel/${String(to.params.id)}`,
+        query: to.query,
+        hash: to.hash,
+      }),
     },
     {
       path: "/browse/user/:id",

@@ -1,192 +1,275 @@
 <script setup lang="ts">
 /**
- * 小说系列目录页（/browse/series/:id，browse-ui-v1 / F4）。
+ * 系列分集页（/browse/series/:kind/:id，series-episode-ui / F1）。
  *
- * 系列头（封面 / 标题 / 作者 / 简介 / 统计）+ 行式目录列表（序号 / 标题 / 右对齐元信息），
- * browseNovelSeries(id, lastOrder) 游标分页，「加载更多」按钮触达下一批（目录场景比
- * IntersectionObserver 更稳）。行 hover 用 8% primary 状态层，整行 router-link 键盘可达。
+ * kind = novel（小说系列）| illust（插画/漫画系列，官方接口族不区分两类，
+ * watchlist 的 manga 语义在入口处映射为 illust）。系列头（封面 / 标题 / 作者 /
+ * 简介 / 话数状态 / 动作）+ 宫格·列表双模式分集列表 + 页码翻页器：
+ * - novel：browseNovelSeries(id, (page-1)*30)——游标按页码映射，30 条/页；
+ * - illust：browseIllustSeries(id, page)——官方页码制，12 条/页、话数降序。
+ * 切页保留旧内容做局部过渡（禁止闪烁）；R-18 全局过滤只作用于分集条目，
+ * 头部统计保持服务端口径。模式切换会话内记忆（seriesView.ts，默认 illust→宫格、novel→列表）。
  */
 import { computed, ref, shallowRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
+  browseIllustSeries,
   browseNovelSeries,
   errorMessage,
   pxSrc,
   thumbSrc,
+  type BrowseIllustSeriesDetail,
   type BrowseSeriesDetail,
 } from "../../api/browse";
+import SeriesEpisodeGrid from "../../components/browse/SeriesEpisodeGrid.vue";
+import SeriesEpisodeList from "../../components/browse/SeriesEpisodeList.vue";
+import SeriesPager from "../../components/browse/SeriesPager.vue";
+import ViewModeToggle from "../../components/browse/ViewModeToggle.vue";
 import { filterByR18, useGlobalR18Filter } from "../../components/browse/r18Filter";
+import { useSeriesViewMode, type SeriesEpisodeView, type SeriesKind } from "../../components/browse/seriesView";
 import { useThumbTier } from "../../composables/useThumbTier";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
-import { pixivSeriesUrl } from "../../utils/pixivUrl";
+import { pixivIllustSeriesUrl, pixivSeriesUrl } from "../../utils/pixivUrl";
 
-type SeriesEpisode = BrowseSeriesDetail["contents"][number];
+/** 小说系列每页条数（browse_novel_series 每批 30，页码映射 last_order=(page-1)*30）。 */
+const NOVEL_PAGE_SIZE = 30;
 
-const props = defineProps<{ id: number }>();
+const props = defineProps<{ kind: SeriesKind; id: number }>();
 
 const { t } = useI18n();
 
-// ===== 数据（游标分页） =====
+// ===== 数据（页码分页；切页保留旧内容） =====
 
-const seriesInfo = shallowRef<BrowseSeriesDetail | null>(null);
-const contents = shallowRef<SeriesEpisode[]>([]);
-/** 下一批游标；null = 已到底。 */
-const nextLastOrder = ref<number | null>(null);
+const novelData = shallowRef<BrowseSeriesDetail | null>(null);
+const illustData = shallowRef<BrowseIllustSeriesDetail | null>(null);
+const page = ref(1);
+/** 首屏加载（无数据可保留，显示整页骨架）。 */
 const loading = ref(false);
+/** 切页加载（保留旧内容 + 局部过渡）。 */
+const switching = ref(false);
 const error = ref("");
-const loadingMore = ref(false);
-const moreError = ref("");
-/** 改写后的头图地址 404 时为 true → 回落接口原始 URL（load() 里随系列切换重置）。 */
+/** 切页失败文案（内容保留，错误就地显示）。 */
+const pageError = ref("");
+/** 头图档位改写 404 时为 true → 回落接口原始 URL（随封面源变化重置）。 */
 const coverFailed = ref(false);
 
-async function load(): Promise<void> {
-  loading.value = true;
-  error.value = "";
-  moreError.value = "";
-  seriesInfo.value = null;
-  contents.value = [];
-  nextLastOrder.value = null;
-  coverFailed.value = false;
-  // 进入/切换系列回到页首（SPA 内路由切换会保留上一页滚动位置）
-  window.scrollTo(0, 0);
+const hasData = computed(() =>
+  props.kind === "illust" ? illustData.value != null : novelData.value != null
+);
+
+async function load(target: number, initial: boolean): Promise<void> {
+  if (initial) {
+    loading.value = true;
+    error.value = "";
+    novelData.value = null;
+    illustData.value = null;
+    // 进入/切换系列回到页首（SPA 内路由切换会保留上一页滚动位置）
+    window.scrollTo(0, 0);
+  } else {
+    switching.value = true;
+  }
+  pageError.value = "";
   try {
-    const data = await browseNovelSeries(props.id, 0);
-    seriesInfo.value = data;
-    contents.value = data.contents;
-    nextLastOrder.value = data.next_last_order ?? null;
+    if (props.kind === "illust") {
+      illustData.value = await browseIllustSeries(props.id, target);
+    } else {
+      novelData.value = await browseNovelSeries(props.id, (target - 1) * NOVEL_PAGE_SIZE);
+    }
+    page.value = target;
   } catch (err) {
-    error.value = errorMessage(err) || t("common.browseLoadFailed");
+    const message = errorMessage(err) || t("common.browseLoadFailed");
+    if (initial) error.value = message;
+    else pageError.value = message;
   } finally {
     loading.value = false;
+    switching.value = false;
   }
 }
 
-async function loadMore(): Promise<void> {
-  if (nextLastOrder.value == null || loadingMore.value) return;
-  loadingMore.value = true;
-  moreError.value = "";
-  try {
-    const data = await browseNovelSeries(props.id, nextLastOrder.value);
-    seriesInfo.value = data;
-    contents.value = contents.value.concat(data.contents);
-    nextLastOrder.value = data.next_last_order ?? null;
-  } catch (err) {
-    moreError.value = errorMessage(err) || t("common.browseLoadFailed");
-  } finally {
-    loadingMore.value = false;
-  }
+watch(
+  () => [props.kind, props.id] as const,
+  () => {
+    page.value = 1;
+    void load(1, true);
+  },
+  { immediate: true }
+);
+
+function changePage(target: number): void {
+  if (target === page.value || loading.value || switching.value) return;
+  // 切页回到页首；数据到达前旧内容以局部过渡呈现（不闪烁）
+  window.scrollTo(0, 0);
+  void load(target, false);
 }
 
-watch(() => props.id, load, { immediate: true });
+// ===== 展示模式（会话内记忆） =====
 
-// ===== 头部展示 =====
+const { mode, setMode } = useSeriesViewMode(() => props.kind);
+
+// ===== 系列头（两类型统一信息架构） =====
+
+interface SeriesHead {
+  title: string;
+  userId: number;
+  userName: string;
+  caption: string;
+  /** 接口原始封面（illust 空串时已回退第一话封面） */
+  rawCover: string;
+  total: number;
+  concluded: boolean;
+}
+
+const head = computed<SeriesHead | null>(() => {
+  if (props.kind === "illust") {
+    const d = illustData.value;
+    if (!d) return null;
+    return {
+      title: d.title,
+      userId: d.user_id,
+      userName: d.user_name,
+      caption: d.caption ?? "",
+      // 契约：cover 空串 = 未设自定义封面 → 回退第一话封面
+      rawCover: d.cover || d.contents[0]?.cover || "",
+      total: d.total,
+      concluded: d.is_concluded,
+    };
+  }
+  const d = novelData.value;
+  if (!d) return null;
+  return {
+    title: d.title,
+    userId: d.user_id,
+    userName: d.user_name,
+    caption: d.caption ?? "",
+    rawCover: d.cover ?? "",
+    total: d.total,
+    concluded: d.is_concluded ?? false,
+  };
+});
 
 /** 头部封面档位（thumb_quality_grid，120px 方形展示）。 */
 const gridTier = useThumbTier("thumb_quality_grid");
 
-/** 头图优先走 grid 档改写，失败时由 coverFailed 回落到接口原始 URL。 */
-const cover = computed(() =>
-  coverFailed.value
-    ? pxSrc(seriesInfo.value?.cover)
-    : thumbSrc(seriesInfo.value?.cover, gridTier.value)
+const cover = computed(() => {
+  const raw = head.value?.rawCover;
+  if (!raw) return "";
+  return coverFailed.value ? pxSrc(raw) : thumbSrc(raw, gridTier.value);
+});
+
+watch(
+  () => head.value?.rawCover,
+  () => {
+    coverFailed.value = false;
+  }
 );
 
 function onCoverError(): void {
   coverFailed.value = true;
 }
 
-/** 全局 R-18 过滤：只作用于目录行（统计行 / 头部保持服务端口径）。 */
-const r18Filter = useGlobalR18Filter();
-const visibleContents = computed(() => filterByR18(contents.value, r18Filter.value));
-
-/** caption 剥 HTML 标签为纯文本（简介里的排版标记不渲染）。 */
-const caption = computed(() => (seriesInfo.value?.caption ?? "").replace(/<[^>]*>/g, "").trim());
+const caption = computed(() => head.value?.caption.replace(/<[^>]*>/g, "").trim() ?? "");
 
 const statusLabel = computed(() =>
-  seriesInfo.value?.is_concluded ? t("browse.series.concluded") : t("browse.series.ongoing")
-);
-
-/** 总字数：契约无全系列字段，按已加载章节的 text_length 求和（title 提示口径）。 */
-const totalWords = computed(() =>
-  contents.value.reduce((sum, ep) => sum + (ep.text_length ?? 0), 0)
+  head.value?.concluded ? t("browse.series.concluded") : t("browse.series.ongoing")
 );
 
 const statsText = computed(() => {
-  const info = seriesInfo.value;
-  if (!info) return "";
-  const parts = [t("browse.series.episodes", { count: info.total.toLocaleString() }), statusLabel.value];
-  if (totalWords.value > 0) {
-    parts.push(t("browse.series.totalWords", { count: totalWords.value.toLocaleString() }));
-  }
-  return parts.join(" · ");
+  if (!head.value) return "";
+  return `${t("browse.series.episodes", { count: head.value.total.toLocaleString() })} · ${statusLabel.value}`;
 });
 
-function pad2(value: number): string {
-  return String(value).padStart(2, "0");
+// ===== 分集条目（归一 + R-18 过滤） =====
+
+const r18Filter = useGlobalR18Filter();
+
+const contents = computed<SeriesEpisodeView[]>(() => {
+  if (props.kind === "illust") {
+    return (illustData.value?.contents ?? []).map((ep) => ({
+      id: ep.id,
+      series_order: ep.series_order,
+      title: ep.title,
+      cover: ep.cover,
+      page_count: ep.page_count,
+      x_restrict: ep.x_restrict,
+      update_date: datePart(ep.update_date),
+    }));
+  }
+  return (novelData.value?.contents ?? []).map((ep) => ({
+    id: ep.id,
+    series_order: ep.series_order,
+    title: ep.title,
+    x_restrict: ep.x_restrict,
+    text_length: ep.text_length ?? null,
+    update_date: datePart(ep.update_date),
+  }));
+});
+
+/** ISO 时间戳 → YYYY-MM-DD（缺失/非法为空串）。 */
+function datePart(iso?: string): string {
+  return iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? iso.slice(0, 10) : "";
 }
 
-function episodeWords(ep: SeriesEpisode): string {
-  return ep.text_length != null ? t("browse.series.words", { count: ep.text_length.toLocaleString() }) : "";
-}
+/** R-18 全局过滤只作用分集条目（宫格/列表同口径）；头部不受影响。 */
+const visibleContents = computed(() => filterByR18(contents.value, r18Filter.value));
 
-function episodeDate(ep: SeriesEpisode): string {
-  return ep.update_date ? ep.update_date.slice(0, 10) : "";
-}
+// ===== 总页数与翻页 =====
 
-function episodeRestrict(ep: SeriesEpisode): string {
-  if (ep.x_restrict === 1) return t("common.browseR18");
-  if (ep.x_restrict === 2) return t("common.browseR18G");
-  return "";
-}
+const totalPages = computed(() => {
+  if (props.kind === "illust") return illustData.value?.total_pages ?? 1;
+  return Math.max(1, Math.ceil((novelData.value?.total ?? 0) / NOVEL_PAGE_SIZE));
+});
 
-/** 用系统默认浏览器打开 pixiv 系列页。 */
+// ===== 动作 =====
+
+/** 用系统默认浏览器打开 pixiv 系列页（illust 需作者 uid）。 */
 function openInPixiv(): void {
-  void openInBrowser(pixivSeriesUrl(props.id)).catch(() => notify(t("browse.hooks.openFailed")));
+  const url =
+    props.kind === "illust" && illustData.value
+      ? pixivIllustSeriesUrl(illustData.value.user_id, props.id)
+      : pixivSeriesUrl(props.id);
+  void openInBrowser(url).catch(() => notify(t("browse.hooks.openFailed")));
 }
 </script>
 
 <template>
   <div class="page-view">
-    <!-- 首屏骨架：头部色块 + 列表行色块，无动画 -->
+    <!-- 首屏骨架：头部色块 + 当前模式骨架，无动画 -->
     <div v-if="loading" aria-hidden="true">
       <div class="series-head">
         <div class="sk sk-cover"></div>
         <div class="head-info">
           <div class="sk sk-title"></div>
           <div class="sk sk-line w40"></div>
-          <div class="sk sk-line w90"></div>
           <div class="sk sk-line w60"></div>
         </div>
       </div>
-      <div class="series-list">
-        <div v-for="n in 8" :key="n" class="series-row sk-row">
-          <div class="sk sk-order"></div>
-          <div class="sk sk-line"></div>
-          <div class="sk sk-line w30"></div>
-        </div>
-      </div>
+      <SeriesEpisodeGrid v-if="mode === 'grid'" :kind="kind" :items="[]" loading />
+      <SeriesEpisodeList v-else :kind="kind" :items="[]" loading />
     </div>
 
-    <!-- 错误态：文案 + 重试 -->
+    <!-- 首屏错误态：文案 + 重试 -->
     <div v-else-if="error" class="series-state" role="alert">
       <p class="state-text strong">{{ error }}</p>
-      <md-outlined-button @click="load">{{ t("common.retry") }}</md-outlined-button>
+      <md-outlined-button @click="load(1, true)">{{ t("common.retry") }}</md-outlined-button>
     </div>
 
-    <template v-else-if="seriesInfo">
+    <template v-else-if="head">
       <!-- 系列头 -->
       <header class="series-head">
         <img v-if="cover" class="cover" :src="cover" alt="" @error="onCoverError" />
         <div class="head-info">
-          <h1 class="page-title" :title="seriesInfo.title">{{ seriesInfo.title }}</h1>
-          <router-link class="author-link" :to="`/browse/user/${seriesInfo.user_id}`">
-            {{ seriesInfo.user_name }}
+          <h1 class="page-title" :title="head.title">{{ head.title }}</h1>
+          <router-link class="author-link" :to="`/browse/user/${head.userId}`">
+            {{ head.userName }}
           </router-link>
           <p v-if="caption" class="caption">{{ caption }}</p>
-          <p class="stats" :title="t('browse.series.totalWordsHint')">{{ statsText }}</p>
+          <p class="stats">{{ statsText }}</p>
           <div class="head-actions">
-            <md-outlined-button @click="fillDownloadForm({ form: 'novel', sourceType: 'series', sourceId: props.id })">
+            <md-outlined-button
+              v-if="kind === 'novel'"
+              @click="fillDownloadForm({ form: 'novel', sourceType: 'series', sourceId: id })"
+            >
               {{ t("browse.hooks.fillNovelForm") }}
             </md-outlined-button>
             <md-outlined-button @click="openInPixiv">
@@ -196,40 +279,27 @@ function openInPixiv(): void {
         </div>
       </header>
 
-      <!-- 目录列表（行式，整行 router-link）；R-18 行按全局开关隐藏，加载更多仍按服务端游标 -->
-      <nav v-if="visibleContents.length" class="series-list" :aria-label="t('browse.series.listLabel')">
-        <router-link
-          v-for="ep in visibleContents"
-          :key="ep.id"
-          class="series-row"
-          :to="`/browse/work/novel/${ep.id}`"
-        >
-          <span class="row-order" aria-hidden="true">{{ pad2(ep.series_order) }}</span>
-          <span class="row-title" :title="ep.title">{{ ep.title }}</span>
-          <span class="row-meta">
-            <span v-if="episodeWords(ep)">{{ episodeWords(ep) }}</span>
-            <span v-if="episodeDate(ep)">{{ episodeDate(ep) }}</span>
-            <span v-if="episodeRestrict(ep)" class="r18-pill">{{ episodeRestrict(ep) }}</span>
-          </span>
-        </router-link>
-      </nav>
-      <div v-else class="series-state">
+      <!-- 工具行：目录标签 + 宫格/列表模式切换（会话内记忆） -->
+      <div class="series-toolbar">
+        <p class="toolbar-label">{{ t("browse.series.listLabel") }}</p>
+        <ViewModeToggle :value="mode" @change="setMode" />
+      </div>
+
+      <!-- 切页失败：内容保留，错误就地显示 -->
+      <p v-if="pageError" class="page-error" role="alert">{{ pageError }}</p>
+
+      <!-- 分集列表：切页保留旧内容，局部过渡降透明（不闪烁） -->
+      <div class="series-body" :class="{ switching }">
+        <SeriesEpisodeGrid v-if="mode === 'grid'" :kind="kind" :items="visibleContents" />
+        <SeriesEpisodeList v-else :kind="kind" :items="visibleContents" />
+      </div>
+
+      <div v-if="!visibleContents.length" class="series-state">
         <p class="state-text strong">{{ t("browse.series.emptyList") }}</p>
       </div>
 
-      <!-- 游标加载：按钮触发（next_last_order=null 时显示已全部加载） -->
-      <div v-if="contents.length" class="series-more">
-        <p v-if="moreError" class="state-text" role="alert">{{ moreError }}</p>
-        <md-outlined-button
-          v-if="nextLastOrder != null"
-          :disabled="loadingMore"
-          :aria-busy="loadingMore"
-          @click="loadMore"
-        >
-          {{ t("browse.series.loadMore") }}
-        </md-outlined-button>
-        <p v-else class="no-more">{{ t("common.browseNoMore") }}</p>
-      </div>
+      <!-- 页码翻页器（sticky 底部，复用小说阅读器 recipe） -->
+      <SeriesPager :page="page" :total-pages="totalPages" @change="changePage" />
     </template>
   </div>
 </template>
@@ -262,18 +332,6 @@ function openInPixiv(): void {
 .sk-line.w90 { width: 90%; }
 .sk-line.w60 { width: 60%; }
 .sk-line.w40 { width: 40%; }
-.sk-line.w30 { width: 30%; }
-
-.sk-row .sk-line {
-  flex: 1;
-  margin-top: 0;
-}
-
-.sk-order {
-  width: 28px;
-  height: 14px;
-  flex-shrink: 0;
-}
 
 /* ===== 系列头 ===== */
 
@@ -352,113 +410,45 @@ function openInPixiv(): void {
   }
 }
 
-/* ===== 目录列表 ===== */
+/* ===== 工具行 / 切页状态 ===== */
 
-.series-list {
-  border-radius: 16px;
-  background: var(--md-sys-color-surface-container);
-  overflow: hidden;
-}
-
-.series-row {
+.series-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-md);
-  min-height: 48px;
-  padding: var(--space-xs) var(--space-lg);
-  color: var(--ink);
-  text-decoration: none;
-  outline: none;
-  transition: background-color 0.15s ease;
+  margin-bottom: var(--space-md);
 }
 
-.series-row + .series-row {
-  border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
-}
-
-.series-row:hover {
-  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
-}
-
-.series-row:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
-  outline-offset: -2px;
-}
-
-.row-order {
-  min-width: 28px;
-  color: var(--ink-subtle);
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  flex-shrink: 0;
-}
-
-.row-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 14px;
-}
-
-.row-meta {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-md);
-  color: var(--ink-subtle);
-  font-size: 12px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.r18-pill {
-  padding: 0 var(--space-sm);
-  border-radius: 999px;
-  background: var(--ink);
-  color: var(--md-sys-color-surface);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.6;
-}
-
-@media (max-width: 640px) {
-  .series-row {
-    flex-wrap: wrap;
-    row-gap: var(--space-xxs);
-    padding: var(--space-sm) var(--space-md);
-  }
-
-  .row-title {
-    /* 序号之后换行：标题独占一行，元信息落到下一行 */
-    flex-basis: calc(100% - 40px);
-    white-space: normal;
-  }
-
-  .row-meta {
-    flex-basis: 100%;
-    justify-content: flex-start;
-  }
-}
-
-/* ===== 加载更多 / 状态 ===== */
-
-.series-more {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-sm);
-  margin-top: var(--space-lg);
-}
-
-.no-more {
+.toolbar-label {
   margin: 0;
-  color: var(--ink-subtle);
+  color: var(--ink-muted);
   font-size: 12px;
   font-weight: 600;
 }
+
+.page-error {
+  margin: 0 0 var(--space-md);
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.series-body {
+  transition: opacity 0.15s ease;
+}
+
+.series-body.switching {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .series-body {
+    transition: none;
+  }
+}
+
+/* ===== 状态区 ===== */
 
 .series-state {
   display: flex;

@@ -4,8 +4,9 @@
  * browse_watchlist 一次返回该类型全部订阅系列（后端已按 max_page 聚合，无需翻页），
  * 漫画/小说两个 SectionTabs 切换。条目为「系列行卡」：2:3 封面 + 「系列作品」overline
  * + 标题 + 作者 + 「N 话 · 更新日期」；主行动「读最新话」直达最新话作品（整卡同动作）。
- * 小说附「系列目录」（应用内 /browse/series/:id）；漫画无应用内系列页，
- * 经「在 pixiv 打开」走官方系列页。追更为用户主动订阅，页面不做 R-18 渲染期过滤。
+ * 两类卡均附「系列目录」进应用内系列分集页（novel → /browse/series/novel/:id，
+ * manga 为 watchlist 语义、映射到 /browse/series/illust/:id）。追更为用户主动订阅，
+ * 页面不做 R-18 渲染期过滤。
  */
 import { computed, onMounted, ref, shallowRef } from "vue";
 import { useI18n } from "vue-i18n";
@@ -19,9 +20,6 @@ import {
   type WatchKind,
 } from "../../api/browse";
 import SectionTabs from "../../components/browse/SectionTabs.vue";
-import { notify } from "../../ui/notify";
-import { openInBrowser } from "../../utils/pixivHooks";
-import { pixivIllustSeriesUrl } from "../../utils/pixivUrl";
 
 const { t } = useI18n();
 const router = useRouter();
@@ -70,15 +68,10 @@ function openLatest(item: BrowseWatchlistItem): void {
   void router.push(`/browse/work/${item.kind}/${item.latest_work_id}`);
 }
 
-/** 系列入口：novel → 应用内系列目录；manga → 官方系列页（应用内无漫画系列页）。 */
+/** 系列入口：统一进应用内系列分集页（manga 是 watchlist 语义，映射 series kind "illust"）。 */
 function openSeries(item: BrowseWatchlistItem): void {
-  if (item.kind === "novel") {
-    void router.push(`/browse/series/${item.id}`);
-  } else {
-    openInBrowser(pixivIllustSeriesUrl(item.user_id, item.id)).catch(() =>
-      notify(t("browse.hooks.openFailed"))
-    );
-  }
+  const seriesKind = item.kind === "novel" ? "novel" : "illust";
+  void router.push(`/browse/series/${seriesKind}/${item.id}`);
 }
 </script>
 
@@ -162,11 +155,7 @@ function openSeries(item: BrowseWatchlistItem): void {
             {{ t("browse.watchlist.readLatest") }}
           </md-filled-button>
           <md-text-button @click="openSeries(item)">
-            {{
-              item.kind === "novel"
-                ? t("browse.watchlist.openSeriesNovel")
-                : t("browse.watchlist.openSeriesPixiv")
-            }}
+            {{ t("browse.watchlist.openSeries") }}
           </md-text-button>
         </div>
       </li>
