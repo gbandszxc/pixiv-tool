@@ -150,11 +150,18 @@ jobs:
             [ -n "$VSPATH" ] || VSPATH=$("$VSWHERE" -latest -products '*' -property installationPath | tr -d '\r' | head -1)
             echo "VS 安装路径: $VSPATH"
             [ -n "$VSPATH" ] || { echo "::error::vswhere 未找到 MSVC 工具链"; exit 1; }
-            eval "$(
-              cmd //c "call \"${VSPATH}\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul 2>&1 && set" \
-                | awk -F= '/^[A-Za-z_][A-Za-z0-9_]*=/ { printf "export %s=\"%s\"\n", $1, substr($0, length($1)+2) }'
-            )"
+            VCVARS_WIN="${VSPATH}\\VC\\Auxiliary\\Build\\vcvars64.bat"
+            # vcvars 后的全量环境落到文件再转 bash export；失败时输出 stderr 便于诊断
+            cmd //c "call \"$VCVARS_WIN\" && set" > msvc_env.raw 2> msvc_env.err || {
+              echo "::error::vcvars64.bat 调用失败"; tail -20 msvc_env.err; exit 1;
+            }
+            eval "$(grep -aE '^[A-Za-z_][A-Za-z0-9_]*=' msvc_env.raw \
+              | awk -F= '{ printf "export %s=\"%s\"\n", $1, substr($0, length($1)+2) }')"
+            # INCLUDE/LIB 保持 Windows 格式供 cl.exe 使用；PATH 单独转成 MSYS 冒号格式
+            WINPATH=$(grep -a '^PATH=' msvc_env.raw | head -1 | cut -d= -f2-)
+            export PATH="$(printf '%s' "$WINPATH" | tr ';' '\n' | sed '/^$/d' | cygpath -u -f - | paste -sd: -):$PATH"
             command -v cl.exe >/dev/null 2>&1 || { echo "::error::MSVC 环境导入失败（cl.exe 不在 PATH）"; exit 1; }
+            cl.exe 2>&1 | head -1 || true
           fi
           args=(--bundles "${{ matrix.bundles }}" --config '{"build":{"beforeBuildCommand":""}}')
           [ -n "${{ matrix.tauri_target }}" ] && args+=(--target "${{ matrix.tauri_target }}")
