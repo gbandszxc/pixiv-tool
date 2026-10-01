@@ -37,8 +37,13 @@ Vite（Windows 核对命令、源映射内容及仓库 package 路径；Unix 核
 `dev` 先确保前端可用，运行时通过 `.dev/tauri-dev.json`（Windows）或等价
 CLI 配置禁用重复的 `beforeDevCommand`。如果前端由这次 `dev start` 创建，
 `dev stop` 同时停止该前端；复用的已有前端则保留。`frontend stop/restart`
-仅作用于前端，已运行的桌面开发进程不会被连带停止。启动返回表示已创建后台
-开发进程，Rust 编译及桌面窗口启动进度通过 `logs dev -f` 查看。
+仅作用于前端，已运行的桌面开发进程不会被连带停止。`dev start/restart`
+等待后台工具链初始化完成后才报告成功；初始化失败在调用终端报错并写入
+`dev.log`，不再把「已创建进程」当作「初始化成功」。Rust 编译仍在后台进行，
+Tauri 窗口在编译成功后出现，进度通过 `logs dev -f` 查看。
+Windows 的 VS 环境只在独立后台进程中初始化，不修改调用终端的 PATH / VS
+环境；继承的工具目录先去重，已有匹配的 x64 VS 环境直接复用，避免重复调用
+vcvars64.bat 导致 cmd.exe 报 `The input line is too long`。
 进程树停止是强制终止，不等同于应用内的正常退出；操作前确保无需要保留的运行中任务。
 
 ```powershell

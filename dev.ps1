@@ -59,6 +59,24 @@ function Initialize-Rust {
         throw 'Set LIBCLANG_PATH to the LLVM bin directory containing libclang.dll.'
     }
     $env:CMAKE_GENERATOR = 'Visual Studio 17 2022'
+    # vcvars expands PATH inside cmd.exe (8191-character command-line limit).
+    # Keep inherited tool directories once, including an already initialized VS shell.
+    foreach ($name in @('PATH', 'INCLUDE', 'LIB', 'LIBPATH', '__VSCMD_PREINIT_PATH')) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($value) {
+            $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            $entries = @($value.Split(';') | Where-Object { $seen.Add($_.TrimEnd([char[]]@('\', '/'))) })
+            [Environment]::SetEnvironmentVariable($name, ($entries -join ';'), 'Process')
+        }
+    }
+    Require-Command cmake
+    if ($env:VSCMD_ARG_TGT_ARCH -eq 'x64' -and $env:VCToolsInstallDir -and $env:WindowsSdkDir -and $env:LIB -and $env:VSINSTALLDIR -and
+        $env:VCToolsInstallDir.StartsWith($env:VSINSTALLDIR.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        $tools = Join-Path $env:VCToolsInstallDir 'bin/Hostx64/x64'
+        if ((Test-Path -LiteralPath (Join-Path $tools 'cl.exe')) -and (Test-Path -LiteralPath (Join-Path $tools 'link.exe'))) {
+            return
+        }
+    }
     # Import the complete VS environment, not just link.exe's directory.
     if ($env:VSINSTALLDIR) {
         $vs = $env:VSINSTALLDIR
@@ -174,6 +192,7 @@ function Stop-ServiceTree([string]$name) {
     if ($LASTEXITCODE -ne 0) { throw "Cannot stop $name (PID $($record.pid))." }
     Remove-Item -LiteralPath (Join-Path $root ".dev/pids/$name.json")
     if ($name -eq 'dev' -and $record.ownsFrontend) { Stop-ServiceTree 'frontend' }
+    Remove-Item -LiteralPath (Join-Path $root ".dev/pids/$name.ready") -ErrorAction SilentlyContinue
     if ($name -eq 'frontend') {
         $deadline = (Get-Date).AddSeconds(10)
         while (Get-NetTCPConnection -LocalPort 9961 -State Listen -ErrorAction SilentlyContinue) {
@@ -186,6 +205,8 @@ function Stop-ServiceTree([string]$name) {
 
 function Start-ServiceWorker([string]$name, [bool]$ownsFrontend = $false) {
     $executable = (Get-Process -Id $PID).Path
+    $readyPath = Join-Path $root ".dev/pids/$name.ready"
+    Remove-Item -LiteralPath $readyPath -ErrorAction SilentlyContinue
     $worker = Start-Process -FilePath $executable -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$root/dev.ps1`"", '__run', $name) -WorkingDirectory $root -WindowStyle Hidden -RedirectStandardOutput (Join-Path $root ".dev/logs/$name.stdout.log") -RedirectStandardError (Join-Path $root ".dev/logs/$name.stderr.log") -PassThru
     $process = Get-CimInstance Win32_Process -Filter "ProcessId=$($worker.Id)"
     if (-not $process) { throw "$name worker exited during startup; see .dev/logs/$name.stderr.log." }
@@ -195,13 +216,16 @@ function Start-ServiceWorker([string]$name, [bool]$ownsFrontend = $false) {
         Start-Sleep -Milliseconds 300
         if ($worker.HasExited) {
             Remove-Item -LiteralPath (Join-Path $root ".dev/pids/$name.json") -ErrorAction SilentlyContinue
-            throw "$name exited during startup; see .dev/logs/$name.log and $name.stderr.log."
+            $detail = [string](Get-Content -LiteralPath (Join-Path $root ".dev/logs/$name.stderr.log") -Raw)
+            throw "$name exited during startup: $($detail.Trim()). See .dev/logs/$name.log."
         }
-        if ($name -eq 'dev') { break }
-        if ((Get-NetTCPConnection -LocalPort 9961 -State Listen -ErrorAction SilentlyContinue) -and (Get-FrontendProcess)) { break }
-        if ((Get-Date) -ge $deadline) { Stop-ServiceTree $name; throw 'Frontend startup timed out.' }
+        if ($name -eq 'dev') {
+            if ((Test-Path -LiteralPath $readyPath) -and (Get-Content -LiteralPath $readyPath -Raw) -eq "$($worker.Id)") { break }
+        } elseif ((Get-NetTCPConnection -LocalPort 9961 -State Listen -ErrorAction SilentlyContinue) -and (Get-FrontendProcess)) { break }
+        if ((Get-Date) -ge $deadline) { Stop-ServiceTree $name; throw "$name initialization timed out; see .dev/logs/$name.log." }
     } while ($true)
     Write-Host "Started $name (PID $($worker.Id)). Log: .dev/logs/$name.log"
+    if ($name -eq 'dev') { Write-Host 'Toolchain initialized; the Tauri window opens after Rust builds. Watch: ./dev.ps1 logs dev -f' }
 }
 
 function Start-ManagedService([string]$name) {
@@ -215,7 +239,10 @@ function Start-ManagedService([string]$name) {
     }
     Require-Command pnpm
     if ($name -eq 'dev') {
-        Initialize-Rust
+        # Initialize VS only inside the isolated worker, never in the caller's shell.
+        Require-Command cargo
+        Require-Command rustup
+        Require-Command cmake
         if (-not (Test-Path -LiteralPath (Join-Path $root 'frontend/node_modules/.bin/tauri.cmd'))) { throw 'Local Tauri CLI missing. Run ./dev.ps1 install first.' }
         $frontendRecord = Get-ServiceRecord 'frontend'
         $ownsFrontend = -not $vite -and -not $frontendRecord
@@ -314,6 +341,7 @@ try {
             # A file avoids cmd.exe stripping quotes from inline JSON on PS 5.1.
             $devConfig = Join-Path $root '.dev/tauri-dev.json'
             [IO.File]::WriteAllText($devConfig, '{"build":{"beforeDevCommand":""}}', [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText((Join-Path $root '.dev/pids/dev.ready'), "$PID")
             Invoke-Logged $tauri @('dev', '--config', $devConfig) $root
         }
         'frontend' { Invoke-Logged 'pnpm' @('dev') $frontend }
@@ -331,6 +359,9 @@ try {
     }
     exit 0
 } catch {
+    if ($workerMode -and (Get-Variable logPath -Scope Script -ErrorAction SilentlyContinue)) {
+        [IO.File]::AppendAllText($script:logPath, ($_.Exception.Message + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    }
     [Console]::Error.WriteLine($_.Exception.Message)
     exit 1
 }

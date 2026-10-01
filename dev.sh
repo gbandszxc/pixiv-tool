@@ -29,7 +29,11 @@ Services run in the background; use stop to end them, logs COMMAND -f to watch.
 Examples: bash dev.sh dev start; bash dev.sh frontend restart; bash dev.sh dev stop
 HELP
 }
-fail() { printf '%s\n' "$*" >&2; exit 1; }
+fail() {
+    if [[ ${worker_mode:-false} == true && -n ${log_path:-} ]]; then printf '%s\n' "$*" >> "$log_path"; fi
+    printf '%s\n' "$*" >&2
+    exit 1
+}
 invalid() { printf '%s\n' 'Invalid command or arguments. Run bash dev.sh -h.' >&2; exit 2; }
 require() { command -v "$1" >/dev/null 2>&1 || fail "Missing command: $1. Install it and add it to PATH."; }
 worker_mode=false
@@ -161,6 +165,7 @@ stop_service() {
     read_record "$name" || return 0
     kill_tree "$target"
     rm -f -- "$(record_path "$name")"
+    rm -f -- "$root/.dev/pids/$name.ready"
     if [[ $name == dev && $owned == true ]]; then stop_service frontend; fi
     if [[ $name == frontend ]]; then
         local attempt
@@ -174,6 +179,7 @@ stop_service() {
 }
 start_worker() {
     local name=$1 owned=${2:-false} target attempt
+    rm -f -- "$root/.dev/pids/$name.ready"
     nohup bash "$root/dev.sh" __run "$name" > "$root/.dev/logs/$name.stdout.log" 2> "$root/.dev/logs/$name.stderr.log" < /dev/null &
     target=$!
     save_record "$name" "$target" false "$owned"
@@ -184,12 +190,19 @@ start_worker() {
             if [[ $name == dev && $owned == true ]]; then stop_service frontend; fi
             fail "$name exited during startup; see .dev/logs/$name.log and $name.stderr.log."
         fi
-        [[ $name == dev ]] && break
-        frontend_process
-        [[ -n $frontend_pid ]] && break
+        if [[ $name == dev ]]; then
+            if [[ -f $root/.dev/pids/dev.ready && $(< "$root/.dev/pids/dev.ready") == "$target" ]]; then break; fi
+        else
+            frontend_process
+            [[ -n $frontend_pid ]] && break
+        fi
     done
-    if [[ $name == frontend && -z $frontend_pid ]]; then stop_service "$name"; fail 'Frontend startup timed out.'; fi
+    if [[ ( $name == frontend && -z $frontend_pid ) || ( $name == dev && ! -f $root/.dev/pids/dev.ready ) ]]; then
+        stop_service "$name"
+        fail "$name initialization timed out; see .dev/logs/$name.log."
+    fi
     printf 'Started %s (PID %s). Log: .dev/logs/%s.log\n' "$name" "$target" "$name"
+    if [[ $name == dev ]]; then printf '%s\n' 'Toolchain initialized; the Tauri window opens after Rust builds. Watch: bash dev.sh logs dev -f'; fi
 }
 start_service() {
     local name=$1 owned=false
@@ -238,6 +251,7 @@ run() {
     # pipefail preserves a compiler/package-manager failure despite tee succeeding.
     (cd -- "$directory" && "$@") 2>&1 | tee -a "$log_path"
 }
+if [[ $worker_mode == true && $command_name == dev ]]; then printf '%s' "$$" > "$root/.dev/pids/dev.ready"; fi
 case "$command_name" in
     dev) run "$root" "$tauri" dev --config '{"build":{"beforeDevCommand":""}}' ;;
     frontend) run "$root/frontend" pnpm dev ;;
