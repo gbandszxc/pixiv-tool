@@ -179,6 +179,20 @@ textarea {
 .m3-table th { color: var(--ink-muted); font-size: 12px; font-weight: 600; }
 .m3-snackbar { position: fixed; z-index: 1000; top: 24px; right: 24px; max-width: min(420px, calc(100vw - 48px)); padding: 14px 18px; border-radius: 8px; background: #2f3035; color: #f3f0f4; box-shadow: 0 4px 12px rgb(0 0 0 / 18%); }
 
+/* ── 原生 dialog 通用层 ─────────────────────────────────────
+ * M3 basic dialog 配方全局唯一一份：surface-container 容器、28px 圆角、
+ * 24px 内边距、35% scrim；标题（18px/700）+ 紧随其后的说明文字（muted）
+ * + .dialog-actions 右对齐操作行。操作行必须用 .dialog-actions 修饰，
+ * 不能用 .m3-row 裸匹配——设置表单内部的 .m3-row 是内容行，不许被拉右。
+ * 此前散落 App.vue 局部与 History/Tasks 的 .local-dialog 复制品均已收敛到此。 */
+.m3-dialog { min-width: min(420px, 90vw); border: 0; border-radius: 28px; padding: var(--space-xl); color: var(--ink); background: var(--md-sys-color-surface-container); }
+.m3-dialog::backdrop { background: rgb(0 0 0 / 35%); }
+.m3-dialog h2 { margin: 0; color: var(--ink); font-size: 18px; font-weight: 700; line-height: 1.4; }
+.m3-dialog > p { margin: var(--space-xs) 0 0; }
+/* 说明文字只在标题之后出现时降为辅助层级；无标题的确认弹窗（历史/任务删除）正文仍是主文案 */
+.m3-dialog h2 + p { color: var(--ink-muted); line-height: 1.6; }
+.m3-dialog .dialog-actions { justify-content: flex-end; margin-top: var(--space-xl); }
+
 @media (max-width: 640px) {
   .app-content {
     padding: var(--space-lg);
