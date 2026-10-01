@@ -100,6 +100,16 @@
 **渲染逻辑**：`page.*` 里的 id → 到 `thumbnails.illust|novel` 与 `users` 索引表查详情。第三方客户端按同样方式组装即可，一个接口拿全频道页。
 **分页**：无。频道页是一次性快照。
 
+### recommendByTag（#标签推荐板块，2026-10-01 实测）
+
+- **仅 `/ajax/top/illust` 返回**（实测 manga/novel 响应无此字段；官方 /manga、/novel 页面也没有对应板块）。
+- 形状：`page.recommendByTag` 为板块数组（实测 10 个），每项：
+  - `tag`：标签名（官方板块标题即「#tag的推荐插画作品」）；
+  - `ids`：24 个**字符串**作品 id（展示顺序）；
+  - `details`：`{[id]: {methods: ["by_tag"], score: 0, seedIllustIds: []}}`，推荐跟踪信息，客户端可忽略。
+- 作品本体在 `thumbnails.illust` 索引表，按 ids 顺序映射即可。
+- **官方页面渲染**（/illustration 实测）：板块位于「推荐用户」之后、「本站的最新作品」之前；每板块 6 列 × 2 行 = **12 件**（接口给 24 个 id 但只渲染 12），卡片滚动进入视口才挂载；板块标题无「查看更多」链接。
+
 ## 3. 发现页（/discovery）
 
 ### 接口清单
