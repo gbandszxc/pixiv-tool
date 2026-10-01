@@ -49,6 +49,7 @@ const menuItems = computed<MenuItem[]>(() => [
   { path: "/browse/novel", label: t("nav.browseNovel"), icon: "novel" },
   { path: "/browse/discover", label: t("nav.browseDiscover"), icon: "discover" },
   { path: "/browse/feed", label: t("nav.browseFeed"), icon: "feed" },
+  { path: "/browse/watchlist", label: t("nav.browseWatchlist"), icon: "watchlist" },
   { path: "/browse/search", label: t("nav.browseSearch"), icon: "search" },
   { path: "/browse/ranking", label: t("nav.browseRanking"), icon: "ranking" },
   { path: "/browse/bookmark", label: t("nav.browseBookmark"), icon: "bookmark" },

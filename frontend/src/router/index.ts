@@ -70,6 +70,11 @@ const router = createRouter({
       component: () => import("../views/browse/BrowseFeedView.vue"),
     },
     {
+      path: "/browse/watchlist",
+      name: "browse-watchlist",
+      component: () => import("../views/browse/BrowseWatchlistView.vue"),
+    },
+    {
       path: "/browse/search",
       name: "browse-search",
       component: () => import("../views/browse/BrowseSearchView.vue"),

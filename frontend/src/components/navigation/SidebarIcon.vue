@@ -10,6 +10,7 @@ export type SidebarIconName =
   | "novel"
   | "discover"
   | "feed"
+  | "watchlist"
   | "search"
   | "ranking"
   | "bookmark";
@@ -79,6 +80,11 @@ defineProps<{
       <path d="M5 11.5a7.5 7.5 0 0 1 7.5 7.5" />
       <path d="M5 5.5A13.5 13.5 0 0 1 18.5 19" />
       <circle cx="6.2" cy="17.8" r="1.3" />
+    </template>
+    <template v-else-if="name === 'watchlist'">
+      <path d="M6 9.5a6 6 0 0 1 12 0c0 4.6 1.8 5.8 1.8 5.8H4.2S6 14.1 6 9.5" />
+      <path d="M10.4 19.5a1.8 1.8 0 0 0 3.2 0" />
+      <path d="M12 3.5V2" />
     </template>
     <template v-else-if="name === 'search'">
       <circle cx="11" cy="11" r="6.5" />

@@ -4,8 +4,8 @@
  *
  * 组成：
  * - 契约类型（snake_case，与 Rust browse 命令返回体一致）
- * - 13 个命令的 invoke 封装（v2 的 11 个 + v2.1 评论补充的 2 个；
- *   未登录错误 → 派发 `pixiv-tool:open-login` 事件，App.vue 负责弹登录窗）
+ * - 18 个命令的 invoke 封装（v2 的 11 个 + v2.1 评论补充的 2 个 + v3.1 收藏 4 个
+ *   + 追更列表 1 个；未登录错误 → 派发 `pixiv-tool:open-login` 事件，App.vue 负责弹登录窗）
  * - pxSrc()：pximg 封面 URL → `pixiv-img://` 代理协议（Tauri 环境）
  * - thumbSrc()：按档位改写尺寸段后再走 pxSrc（组件层唯一的缩略图出口）
  * - mock 层：`!isTauri()`（普通浏览器直接打开 dev 页）时返回样例数据，
@@ -37,6 +37,8 @@ export type ListWorkKind = "illust" | "manga" | "novel";
 export type BookmarkKind = "illust" | "novel";
 /** browse_bookmark_list 的 rest：show = 公开收藏、hide = 私密收藏（自己；他人只能 show）。 */
 export type BookmarkRest = "show" | "hide";
+/** browse_watchlist 的 kind（官方追更列表只有漫画 / 小说两个子 tab）。 */
+export type WatchKind = "manga" | "novel";
 /** 收藏可见范围（pixiv restrict 语义）：0 = 公开、1 = 非公开。 */
 export type BookmarkRestrict = 0 | 1;
 /** browse_ranking 的 kind（ranking 端点含 ugoira 榜）。 */
@@ -261,6 +263,37 @@ export interface BrowseBookmarkTags {
   private: BrowseBookmarkTag[];
 }
 
+// ===== 追更列表契约（watchlist-ui-v1）=====
+
+/** browse_watchlist 条目：用户订阅的系列（追更）。 */
+export interface BrowseWatchlistItem {
+  /** 系列 id（novel 可直达 /browse/series/:id） */
+  id: number;
+  kind: WatchKind;
+  title: string;
+  user_id: number;
+  user_name: string;
+  user_avatar?: string;
+  /** 竖版封面（240x480 档；漫画为最新话封面，小说为系列封面） */
+  cover?: string;
+  /** 最新话的 R-18 标记（0 无 | 1 R-18 | 2 R-18G） */
+  x_restrict?: number;
+  /** 已发布话数 */
+  total: number;
+  /** ISO 时间戳；前端只展示日期部分 */
+  update_date?: string;
+  /** 最新话作品 id（「读最新话」直达） */
+  latest_work_id?: number;
+}
+
+/** browse_watchlist 返回体：后端已按 max_page 聚合（≤20 页），前端无需翻页。 */
+export interface BrowseWatchlist {
+  kind: WatchKind;
+  total: number;
+  max_page: number;
+  items: BrowseWatchlistItem[];
+}
+
 // ===== 图片代理 helper =====
 
 /**
@@ -483,6 +516,14 @@ export async function browseBookmarkRemove(
 ): Promise<void> {
   if (!isTauri()) return mockBookmarkRemove(kind, id, bookmarkId);
   await invokeBrowse<void>("browse_bookmark_remove", { kind, id, bookmarkId });
+}
+
+// ===== 追更列表封装（watchlist-ui-v1；!isTauri() → mock）=====
+
+/** browse_watchlist：追更列表（订阅的漫画/小说系列，一次全部返回）。 */
+export async function browseWatchlist(kind: WatchKind): Promise<BrowseWatchlist> {
+  if (!isTauri()) return mockWatchlist(kind);
+  return invokeBrowse<BrowseWatchlist>("browse_watchlist", { kind });
 }
 
 function channelKindToWork(kind: ChannelKind): WorkKind {
@@ -858,6 +899,33 @@ async function mockSeriesDetail(id: number, lastOrder = 0): Promise<BrowseSeries
     }),
     next_last_order: next,
   };
+}
+
+// ===== 追更列表 mock =====
+
+/** 追更列表：5-8 个系列条目（竖版封面 + 作者头像），确定性。 */
+async function mockWatchlist(kind: WatchKind): Promise<BrowseWatchlist> {
+  await mockDelay();
+  const rand = mulberry32(seedFrom(`watchlist:${kind}`));
+  const count = 5 + Math.floor(rand() * 4);
+  const items: BrowseWatchlistItem[] = Array.from({ length: count }, (_, i) => {
+    const authorIndex = Math.floor(rand() * MOCK_AUTHORS.length);
+    const restrictRoll = rand();
+    return {
+      id: (kind === "novel" ? 850000 : 800000) + i,
+      kind,
+      title: `示例追更系列 ${kind === "novel" ? "· 小说 " : ""}#${i + 1}`,
+      user_id: 100001 + authorIndex,
+      user_name: MOCK_AUTHORS[authorIndex],
+      user_avatar: mockCover((i * 67 + 13) % 360, "square"),
+      cover: mockCover((i * 97 + 29) % 360, "portrait"),
+      x_restrict: restrictRoll < 0.15 ? 1 : 0,
+      total: 6 + Math.floor(rand() * 30),
+      update_date: `2026-09-${pad2(1 + Math.floor(rand() * 28))}`,
+      latest_work_id: 9200000 + i,
+    };
+  });
+  return { kind, total: items.length, max_page: 1, items };
 }
 
 // ===== 评论 mock =====

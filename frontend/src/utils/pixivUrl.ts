@@ -24,6 +24,11 @@ export function pixivSeriesUrl(id: number | string): string {
   return `https://www.pixiv.net/novel/series/${id}`;
 }
 
+/** 插画/漫画系列页 URL（需作者 userId，追更列表「在 pixiv 打开」用）。 */
+export function pixivIllustSeriesUrl(userId: number | string, seriesId: number | string): string {
+  return `https://www.pixiv.net/user/${userId}/series/${seriesId}`;
+}
+
 /**
  * 解析 Pixiv 页面 URL，识别小说单篇、小说系列、插画作品或用户主页
  */
