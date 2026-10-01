@@ -40,10 +40,10 @@
         </button>
       </div>
     </Transition>
-    <dialog ref="logoutDialog" class="m3-dialog" @close="logoutConfirmOpen = false">
+    <dialog ref="logoutDialog" class="m3-dialog logout-dialog" @close="logoutConfirmOpen = false">
       <h2>{{ t('auth.logoutConfirmTitle') }}</h2>
-      <p class="logout-confirm-text">{{ t('auth.logoutConfirmText') }}</p>
-      <div class="m3-row logout-confirm-actions">
+      <p>{{ t('auth.logoutConfirmText') }}</p>
+      <div class="m3-row dialog-actions">
         <md-text-button @click="cancelLogout">{{ t('common.cancel') }}</md-text-button>
         <md-filled-button @click="confirmLogout">{{ t('auth.logout') }}</md-filled-button>
       </div>
@@ -118,9 +118,9 @@ async function confirmLogout() { logoutDialog.value?.close(); try { await authSt
 .menu-hint { margin: 0; padding: 0 var(--space-sm); color: var(--ink-muted); font-size: 12px; line-height: 40px; }
 /* danger 沿用 SettingsPanel .danger-button 的既有规范值 #ba1a1a */
 .menu-item.danger .menu-label { color: #ba1a1a; }
-/* 退出登录确认弹窗（容器样式来自 main.css 的全局 .m3-dialog） */
-.logout-confirm-text { margin: var(--space-sm) 0 0; color: var(--ink-muted); line-height: 1.6; }
-.logout-confirm-actions { justify-content: flex-end; margin-top: var(--space-lg); }
+/* 退出登录确认弹窗：基础 confirm 用更紧凑的 360px 宽（覆盖全局 .m3-dialog 的 min-width）；
+ * 标题/正文/按钮行（.dialog-actions 右对齐）均走 main.css 的 .m3-dialog 全局规则 */
+dialog.logout-dialog { width: min(360px, 92vw); min-width: 0; }
 /* 上浮过渡：时长复用既有 0.15s ease（WorkCard / BookmarkButton 同源）；reduced-motion 由全局兜底压到 0.01ms */
 .menu-enter-active, .menu-leave-active { transition: opacity 0.15s ease, transform 0.15s ease; }
 .menu-enter-from, .menu-leave-to { opacity: 0; transform: translateY(4px) scale(0.98); }
