@@ -2374,7 +2374,7 @@ mod tests {
     #[test]
     fn parse_ranking_novel_shape_and_last_page() {
         let entry = json!({
-            "rank": 1, "id": "27466576", "title": "小说", "create_date": "2026-09-01",
+            "rank": 1, "id": "9000012", "title": "小说", "create_date": "2026-09-01",
             "user_id": "5", "user_name": "作者", "profile_img": "https://i.pximg.net/p.jpg",
             "x_restrict": 1, "tag_a": ["ファンタジー"], "url": "https://i.pximg.net/c.jpg",
             "series_id": 0, "character_count": 3200, "bookmark_count": 88
@@ -2416,7 +2416,7 @@ mod tests {
     #[test]
     fn parse_illust_detail_fields() {
         let body = json!({
-            "illustId": "131592804",
+            "illustId": "9000021",
             "illustTitle": "標題",
             "illustComment": "说明 <strong>html</strong>",
             "illustType": 2,
@@ -2432,7 +2432,7 @@ mod tests {
             "seriesNavData": {"seriesId": 55, "title": "系列", "orderNumber": 3}
         });
         let (item, series) = parse_illust_detail(&body);
-        assert_eq!(item.id, 131592804);
+        assert_eq!(item.id, 9000021);
         assert_eq!(item.kind, "ugoira");
         assert_eq!(
             item.cover.as_deref(),
@@ -2499,7 +2499,7 @@ mod tests {
     #[test]
     fn parse_novel_detail_fields() {
         let body = json!({
-            "id": "27466576",
+            "id": "9000012",
             "title": "相対性理論",
             "content": "第一章[newpage]第二章",
             "description": "<p>简介</p>",
@@ -2508,7 +2508,7 @@ mod tests {
             "pageCount": 2,
             "tags": [{"tag": "SF"}],
             "seriesNavData": {"seriesType": "novel", "seriesId": 1093870, "title": "系列", "orderNumber": 2,
-                "next": {"id": "28625793", "title": "下一话"}},
+                "next": {"id": "9000013", "title": "下一话"}},
             "characterCount": 12345,
             "readingTime": 25,
             "bookmarkCount": 66,
@@ -2516,7 +2516,7 @@ mod tests {
             "createDate": "2026-07-21T00:00:00+09:00"
         });
         let (item, series) = parse_novel_detail(&body);
-        assert_eq!(item.id, 27466576);
+        assert_eq!(item.id, 9000012);
         assert_eq!(item.kind, "novel");
         assert_eq!(
             item.cover.as_deref(),
@@ -2528,7 +2528,7 @@ mod tests {
         let series = series.unwrap();
         assert_eq!(series.id, 1093870);
         assert_eq!(series.order, 2);
-        assert_eq!(series.next_id, Some(28625793), "seriesNavData.next.id");
+        assert_eq!(series.next_id, Some(9000013), "seriesNavData.next.id");
         // 无系列
         let (_, series) = parse_novel_detail(&json!({"id": "1", "content": "c"}));
         assert!(series.is_none());
@@ -2893,17 +2893,17 @@ mod tests {
         assert!(parse_bookmark_data(Some(&json!({"id": ""}))).is_none());
         // 已收藏（公开）：{id, private:false}（§11.7 实测形状）
         let s =
-            parse_bookmark_data(Some(&json!({"id": "38982536074", "private": false}))).unwrap();
-        assert_eq!(s.bookmark_id, "38982536074");
+            parse_bookmark_data(Some(&json!({"id": "31000000001", "private": false}))).unwrap();
+        assert_eq!(s.bookmark_id, "31000000001");
         assert_eq!(s.restrict, 0);
         // 已收藏（非公开）
         let s =
-            parse_bookmark_data(Some(&json!({"id": "38359200349", "private": true}))).unwrap();
+            parse_bookmark_data(Some(&json!({"id": "31000000002", "private": true}))).unwrap();
         assert_eq!(s.restrict, 1);
         // 小说实测数字 id → 统一 String 化
         let s =
-            parse_bookmark_data(Some(&json!({"id": 3688006889_i64, "private": true}))).unwrap();
-        assert_eq!(s.bookmark_id, "3688006889");
+            parse_bookmark_data(Some(&json!({"id": 3100000001_i64, "private": true}))).unwrap();
+        assert_eq!(s.bookmark_id, "3100000001");
         // private 字符串形态容错
         let s = parse_bookmark_data(Some(&json!({"id": "1", "private": "true"}))).unwrap();
         assert_eq!(s.restrict, 1);
@@ -3000,15 +3000,15 @@ mod tests {
         // 插画（§11.4）：body 是对象，取 last_bookmark_id
         assert_eq!(
             parse_bookmark_add_id(
-                &json!({"last_bookmark_id": "39079976043", "stacc_status_id": null})
+                &json!({"last_bookmark_id": "31000000001", "stacc_status_id": null})
             )
             .unwrap(),
-            "39079976043"
+            "31000000001"
         );
         // 小说：body 直接是 bookmarkId 字符串
         assert_eq!(
-            parse_bookmark_add_id(&json!("3688006889")).unwrap(),
-            "3688006889"
+            parse_bookmark_add_id(&json!("3100000001")).unwrap(),
+            "3100000001"
         );
         // 容错：last_bookmark_id 数字形态
         assert_eq!(
@@ -3025,8 +3025,8 @@ mod tests {
     fn bookmark_request_encoding_and_forms() {
         // 列表路径：官方参数全集（order=desc / mode=all 写死），tag 缺省空串
         assert_eq!(
-            bookmark_list_path(19509348, "novel", "show", None, 0, 30),
-            "/ajax/user/19509348/novels/bookmarks?tag=&offset=0&limit=30&rest=show&order=desc&mode=all&lang=zh"
+            bookmark_list_path(9000099, "novel", "show", None, 0, 30),
+            "/ajax/user/9000099/novels/bookmarks?tag=&offset=0&limit=30&rest=show&order=desc&mode=all&lang=zh"
         );
         // tag 值 percent-encode（日文 + 空格），illust → illusts
         assert_eq!(
@@ -3034,11 +3034,11 @@ mod tests {
             "/ajax/user/1/illusts/bookmarks?tag=%E6%9D%B1%E6%96%B9%20Project&offset=48&limit=48&rest=hide&order=desc&mode=all&lang=zh"
         );
         // 插画删除 form：bookmark_id=（与 add 不对称）
-        assert_eq!(illust_delete_form("39079976043"), "bookmark_id=39079976043");
+        assert_eq!(illust_delete_form("31000000001"), "bookmark_id=31000000001");
         // 小说删除 form：旧式表单（tt 字段 + book_id%5B%5D + del=1）
         assert_eq!(
-            novel_delete_form("abc123def", "3688006889"),
-            "tt=abc123def&p=1&untagged=0&rest=show&book_id%5B%5D=3688006889&del=1"
+            novel_delete_form("abc123def", "3100000001"),
+            "tt=abc123def&p=1&untagged=0&rest=show&book_id%5B%5D=3100000001&del=1"
         );
         // percent_encode 边界
         assert_eq!(percent_encode("a b&c=1"), "a%20b%26c%3D1");
@@ -3083,13 +3083,13 @@ mod tests {
         // （注：parse_novel_detail 的 item 历史上不填 bookmarked——novel 详情
         // 契约无该字段；收藏态统一走顶层 bookmarkState）
         let body = json!({
-            "id": "27466576", "title": "t", "content": "c",
-            "bookmarkData": {"id": 3688006889_i64, "private": true}
+            "id": "9000012", "title": "t", "content": "c",
+            "bookmarkData": {"id": 3100000001_i64, "private": true}
         });
         let (item, _) = parse_novel_detail(&body);
         assert_eq!(item.bookmarked, None, "novel 详情 item 不含 bookmarked（现状）");
         let state = parse_bookmark_data(body.get("bookmarkData")).unwrap();
-        assert_eq!(state.bookmark_id, "3688006889");
+        assert_eq!(state.bookmark_id, "3100000001");
         assert_eq!(state.restrict, 1);
     }
 
@@ -3099,8 +3099,8 @@ mod tests {
         invalidate_self_uid();
         assert!(cached_self_uid().is_none());
         let cache = SELF_UID_CACHE.get_or_init(|| Mutex::new(None));
-        *cache.lock().unwrap() = Some((19509348, Instant::now()));
-        assert_eq!(cached_self_uid().map(|(uid, _)| uid), Some(19509348));
+        *cache.lock().unwrap() = Some((9000099, Instant::now()));
+        assert_eq!(cached_self_uid().map(|(uid, _)| uid), Some(9000099));
         invalidate_self_uid();
         assert!(cached_self_uid().is_none());
     }
