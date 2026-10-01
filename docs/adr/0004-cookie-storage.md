@@ -1,6 +1,6 @@
 # ADR 0004 · Cookie 存储：Windows DPAPI + 跨平台接口
 
-**状态**：部分被 ADR 0006 补充 · **日期**：2026-07-19 · **关联 SPEC**：§5.3
+**状态**：已被 ADR 0008 取代（Windows DPAPI 文件改为 keyring） · **日期**：2026-07-19 · **关联 SPEC**：§5.3
 
 > 状态补充（2026-08-20）：Windows DPAPI 文件方案已被 [ADR 0008](0008-tauri-rewrite.md) 取代为 keyring（系统 Credential Manager / Keychain / Secret Service 统一接口）；「跨平台接口预留」的意图由 keyring 落地。
 

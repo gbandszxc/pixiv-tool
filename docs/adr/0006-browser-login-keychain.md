@@ -1,6 +1,6 @@
 # ADR 0006 · 真实 Chromium 登录 + macOS Keychain
 
-**状态**：已接受 · **日期**：2026-07-23 · **关联 SPEC**：§4.1、§5.3
+**状态**：已接受（决策 5 由 ADR 0008 修正、决策 6 由 ADR 0009 修正） · **日期**：2026-07-23 · **关联 SPEC**：§4.1、§5.3
 
 > 状态补充（2026-10-01）：决策 5 的「Windows 继续使用 DPAPI」已由 [ADR 0008](0008-tauri-rewrite.md) 改为系统 Credential Manager（keyring）；
 > 决策 6 的「回退 pywebview 登录窗」已由 [ADR 0009](0009-webview-login-fallback.md) 改为 Tauri 原生 webview 登录窗。其余决策（CDP 主路径、手动 Cookie 兜底、独立 profile、不碰日常 profile）仍有效。

@@ -1,6 +1,6 @@
 # ADR 0005 · Spike 结果：pywebview Cookie 探测可行性
 
-**状态**：已接受 · **日期**：2026-07-19 · **关联**：SPEC §4.1、ADR 0002、风险登记 R1
+**状态**：已归档（仅「R1 已解决」结论仍有效） · **日期**：2026-07-19 · **关联**：SPEC §4.1、ADR 0002、风险登记 R1
 
 > 状态补充（2026-10-01）：本文是 pywebview 旧栈的 spike 存档，**只有「R1 已解决」这一结论仍然有效**（现行 R1 见 SPEC §11）。
 > 正文引用的 `spike/cookie_probe/probe.py`、`result.json`、`backend/auth/`、`backend/storage/` 以及末尾「spike → 主代码复用清单」

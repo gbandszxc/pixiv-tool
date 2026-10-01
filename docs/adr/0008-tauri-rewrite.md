@@ -1,6 +1,6 @@
 # ADR 0008 · 全量重构为 Tauri 2 + Rust，移除 Python 后端
 
-> 状态：已采纳 · 2026-08-20
+> 状态：已接受 · 2026-08-20
 > 取代：ADR 0001 中"选 pywebview + FastAPI 而非 Electron/Tauri"的桌面壳与后端选型
 
 ## 背景

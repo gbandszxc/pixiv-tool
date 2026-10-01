@@ -1,6 +1,6 @@
 # ADR 0001 · 技术栈选型：pywebview + FastAPI + Vue3
 
-**状态**：已接受 · **日期**：2026-07-19 · **关联 SPEC**：§2.1
+**状态**：已被 ADR 0008 取代（仅 Vue3 前端选型沿用） · **日期**：2026-07-19 · **关联 SPEC**：§2.1
 
 > 状态补充（2026-08-20）：本文桌面壳与后端选型已被 [ADR 0008](0008-tauri-rewrite.md) 全量取代（Tauri 2 + Rust）；前端框架选型（Vue3）仍有效。
 > 状态补充（2026-10-01）：前端 UI 层已由 Naive UI 换为 `@material/web`（Material 3），视觉规范见根目录 `DESIGN.md`。本文正文的 pywebview / FastAPI 描述均为历史。
