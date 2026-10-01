@@ -27,9 +27,11 @@ import {
 import ImageViewer from "../../components/browse/ImageViewer.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
 import RelatedGrid from "../../components/browse/RelatedGrid.vue";
+import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
+import type { WorkBookmarkState } from "../../api/browse";
 
 const props = defineProps<{
   kind: "illust" | "manga";
@@ -45,6 +47,8 @@ const detail = ref<BrowseIllustDetail | null>(null);
 const loading = ref(true);
 /** 详情加载失败文案（404 / 无权限等，非空即错误态） */
 const error = ref("");
+/** 查看者收藏态（来自详情响应 bookmarkState；收藏按钮经 change 回写） */
+const bookmarkState = ref<WorkBookmarkState | null>(null);
 /** 当前页下标（0 起） */
 const current = ref(0);
 /** 本作品是否已确认 R-18 遮罩 */
@@ -99,6 +103,7 @@ async function loadDetail(): Promise<void> {
   loading.value = true;
   error.value = "";
   detail.value = null;
+  bookmarkState.value = null;
   current.value = 0;
   revealed.value = revealedWorkIds.has(props.id);
   void loadRelated();
@@ -111,6 +116,7 @@ async function loadDetail(): Promise<void> {
       return;
     }
     detail.value = data;
+    bookmarkState.value = data.bookmarkState ?? null;
   } catch (err) {
     if (seq !== reqSeq) return;
     error.value = errorMessage(err) || t("common.browseLoadFailed");
@@ -247,6 +253,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
           </button>
         </template>
       </div>
+      <!-- 收藏：未收藏=空心「收藏」；已收藏=实心「已收藏」（私密加角标）；详情就绪后显示 -->
+      <BookmarkButton
+        v-if="item"
+        :kind="props.kind"
+        :id="props.id"
+        :state="bookmarkState"
+        @change="bookmarkState = $event"
+      />
       <!-- 返填到插画抓取页：来源=单篇，ID=当前作品 -->
       <md-outlined-button
         class="fill-download"

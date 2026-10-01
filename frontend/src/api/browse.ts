@@ -28,6 +28,15 @@ export type FeedKind = "illust" | "novel";
 export type FeedMode = "all" | "r18";
 /** browse_search / browse_related / browse_user_works 的 kind 取值。 */
 export type ListWorkKind = "illust" | "manga" | "novel";
+/**
+ * 收藏命令（browse_bookmark_*）的 kind：pixiv 端点只有 illusts / novels 两族，
+ * 插画、漫画、动图共用 illust 族。
+ */
+export type BookmarkKind = "illust" | "novel";
+/** browse_bookmark_list 的 rest：show = 公开收藏、hide = 私密收藏（自己；他人只能 show）。 */
+export type BookmarkRest = "show" | "hide";
+/** 收藏可见范围（pixiv restrict 语义）：0 = 公开、1 = 非公开。 */
+export type BookmarkRestrict = 0 | 1;
 /** browse_ranking 的 kind（ranking 端点含 ugoira 榜）。 */
 export type RankingKind = "illust" | "manga" | "ugoira" | "novel";
 /**
@@ -66,6 +75,13 @@ export interface BrowseWorkItem {
   series_title?: string | null;
   /** ranking 专用：名次 */
   rank?: number;
+  /**
+   * 收藏列表专用：当前查看者对该作品的收藏记录 id（取消收藏直接用它，无需再查详情）。
+   * 他人公开收藏列表中该字段是「查看者本人」的收藏态，UI 不使用。
+   */
+  bookmarkId?: string;
+  /** 收藏列表专用：0 = 公开收藏、1 = 私密收藏 */
+  bookmarkRestrict?: BookmarkRestrict;
 }
 
 /**
@@ -131,6 +147,8 @@ export interface BrowseIllustDetail {
   ugoira?: { src: string; frames: { file: string; delay: number }[] } | null;
   /** 所属系列（页面顶部入口） */
   series?: { id: number; title: string; order: number } | null;
+  /** 查看者的收藏态（未收藏 null；B1 契约扩展字段，后端未上线时缺省 = 未知 → 视为未收藏） */
+  bookmarkState?: WorkBookmarkState | null;
 }
 
 /** browse_work_detail（novel）返回体；content 为全文（保留 [newpage]/[chapter:]/[rb:]/[pixivimage:] 原始标记，前端切分）。 */
@@ -144,9 +162,20 @@ export interface BrowseNovelDetail {
   content: string;
   /** seriesNavData：系列导航（order 为本书在系列中的序号） */
   series?: { id: number; title: string; order: number; next_id?: number | null } | null;
+  /** 查看者的收藏态（未收藏 null；B1 契约扩展字段，后端未上线时缺省 = 未知 → 视为未收藏） */
+  bookmarkState?: WorkBookmarkState | null;
 }
 
 export type BrowseWorkDetail = BrowseIllustDetail | BrowseNovelDetail;
+
+/**
+ * 详情响应中的收藏态（pixiv 详情体 bookmarkData 三态归一；id 统一 String 化）：
+ * 未收藏为 null；匿名访问恒为 null（个人态字段，登录后才反映真实收藏态）。
+ */
+export interface WorkBookmarkState {
+  bookmarkId: string;
+  restrict: BookmarkRestrict;
+}
 
 /** browse_novel_series 返回体：系列目录，游标 last_order 分页。 */
 export interface BrowseSeriesDetail {
@@ -197,6 +226,29 @@ export interface BrowseComment {
 export interface BrowseComments {
   comments: BrowseComment[];
   next?: number | null;
+}
+
+// ===== 收藏契约（bookmark-ui-v1 v3.1）=====
+
+/** browse_bookmark_list 返回体（offset 游标分页；next = null 到底）。 */
+export interface BrowseBookmarkList {
+  /** 插画/漫画/动图混排或小说；条目带 bookmarkId / bookmarkRestrict */
+  items: BrowseWorkItem[];
+  total: number | null;
+  /** 下一批 offset；null = 到底 */
+  next: number | null;
+}
+
+/** 收藏标签条目（name 为空串 = 未分类，前端 i18n 显示）。 */
+export interface BrowseBookmarkTag {
+  name: string;
+  count: number;
+}
+
+/** browse_bookmark_tags 返回体（端点无 rest 参数，一次返回公开/私密两组）。 */
+export interface BrowseBookmarkTags {
+  public: BrowseBookmarkTag[];
+  private: BrowseBookmarkTag[];
 }
 
 // ===== 图片代理 helper =====
@@ -363,6 +415,53 @@ export async function browseCommentReplies(params: {
   const { kind, commentId, page = 1 } = params;
   if (!isTauri()) return mockReplies(kind, commentId, page);
   return invokeBrowse<BrowseComments>("browse_comment_replies", { kind, commentId, page });
+}
+
+// ===== 收藏命令封装（bookmark-ui-v1；!isTauri() → mock）=====
+
+/** 每页条数与官方一致：插画·漫画 48 / 页、小说 30 / 页。 */
+export const BOOKMARK_PAGE_SIZE: Record<BookmarkKind, number> = { illust: 48, novel: 30 };
+
+/**
+ * browse_bookmark_list：收藏列表（自己）。tag 语义：null = 全部、"" = 未分类、其余为标签名。
+ * 他人公开收藏（作者页收藏 tab）必须显式 rest="show"。
+ */
+export async function browseBookmarkList(
+  kind: BookmarkKind,
+  rest: BookmarkRest,
+  tag: string | null,
+  offset = 0,
+  limit = BOOKMARK_PAGE_SIZE[kind]
+): Promise<BrowseBookmarkList> {
+  if (!isTauri()) return mockBookmarkList(kind, rest, tag, offset, limit);
+  return invokeBrowse<BrowseBookmarkList>("browse_bookmark_list", { kind, rest, tag, offset, limit });
+}
+
+/** browse_bookmark_tags：收藏标签（一次返回 public/private 两组，供公开/私密筛选分别取组）。 */
+export async function browseBookmarkTags(kind: BookmarkKind): Promise<BrowseBookmarkTags> {
+  if (!isTauri()) return mockBookmarkTags(kind);
+  return invokeBrowse<BrowseBookmarkTags>("browse_bookmark_tags", { kind });
+}
+
+/** browse_bookmark_add：添加收藏（restrict 0=公开 1=私密；tags 缺省为空 = 未分类）。 */
+export async function browseBookmarkAdd(
+  kind: BookmarkKind,
+  id: number,
+  restrict: BookmarkRestrict,
+  tags?: string[]
+): Promise<{ bookmarkId: string }> {
+  if (!isTauri()) return mockBookmarkAdd(kind, id, restrict);
+  return invokeBrowse<{ bookmarkId: string }>("browse_bookmark_add", { kind, id, restrict, tags });
+}
+
+/** browse_bookmark_remove：取消收藏（bookmarkId 来自列表项 bookmarkId 或详情 bookmarkState）。 */
+export async function browseBookmarkRemove(
+  kind: BookmarkKind,
+  id: number,
+  bookmarkId: string
+): Promise<void> {
+  if (!isTauri()) return mockBookmarkRemove(kind, id, bookmarkId);
+  await invokeBrowse<void>("browse_bookmark_remove", { kind, id, bookmarkId });
 }
 
 function channelKindToWork(kind: ChannelKind): WorkKind {
@@ -647,6 +746,8 @@ async function mockIllustDetail(kind: "illust" | "manga", id: number): Promise<B
       item.series_id != null && item.series_title
         ? { id: item.series_id, title: item.series_title, order: 1 + (id % 5) }
         : null,
+    // mock 收藏态：优先取本会话 add/remove 后的存储，否则按 id 确定性预置（覆盖三态视觉验收）
+    bookmarkState: mockBookmarkStore.get(`illust:${id}`) ?? mockDefaultBookmarkState("illust", id),
   };
 }
 
@@ -672,6 +773,8 @@ async function mockNovelDetail(id: number): Promise<BrowseNovelDetail> {
       item.series_id != null && item.series_title
         ? { id: item.series_id, title: item.series_title, order: 1 + (id % 8), next_id: id + 1 }
         : null,
+    // mock 收藏态：优先取本会话 add/remove 后的存储，否则按 id 确定性预置（覆盖三态视觉验收）
+    bookmarkState: mockBookmarkStore.get(`novel:${id}`) ?? mockDefaultBookmarkState("novel", id),
   };
 }
 
@@ -826,4 +929,106 @@ async function mockReplies(kind: ListWorkKind, commentId: string, page = 1): Pro
   });
   // page 从 1 起；每组 ≤3 条单页装下，第 1 页即到底
   return { comments: page <= 1 ? replies : [], next: null };
+}
+
+// ===== 收藏 mock =====
+
+/** 收藏标签池（mock；空串 = 未分类）。 */
+const MOCK_BOOKMARK_TAGS: Record<BookmarkKind, string[]> = {
+  illust: ["風景", "女の子", "オリジナル", "漫画", "水彩"],
+  novel: ["ファンタジー", "恋愛", "短編", "連載"],
+};
+
+/** 各 kind × rest 的收藏池规模（确定性）。 */
+const MOCK_BOOKMARK_TOTALS: Record<BookmarkKind, Record<BookmarkRest, number>> = {
+  illust: { show: 132, hide: 26 },
+  novel: { show: 64, hide: 11 },
+};
+
+/** mock 收藏池缓存：同一 kind + rest 恒为同一组条目（列表与标签计数共用，保证自洽）。 */
+const bookmarkPoolCache = new Map<string, BrowseWorkItem[]>();
+
+function mockBookmarkPool(kind: BookmarkKind, rest: BookmarkRest): BrowseWorkItem[] {
+  const key = `${kind}:${rest}`;
+  const cached = bookmarkPoolCache.get(key);
+  if (cached) return cached;
+  const kinds: WorkKind[] = kind === "novel" ? ["novel"] : ["illust", "manga", "ugoira"];
+  const items = mockItems(`bookmark:${key}`, 1, {
+    kinds,
+    count: MOCK_BOOKMARK_TOTALS[kind][rest],
+    idBase: rest === "show" ? 300000 : 400000,
+  }).map((item) => ({
+    ...item,
+    bookmarkId: String(77000000000 + (rest === "hide" ? 100000 : 0) + item.id),
+    bookmarkRestrict: (rest === "hide" ? 1 : 0) as BookmarkRestrict,
+  }));
+  bookmarkPoolCache.set(key, items);
+  return items;
+}
+
+/** 第 i 项的收藏标签：约 1/4 未分类（空串），其余按组内标签轮转（与池条目确定性对应）。 */
+function mockBookmarkTagOf(kind: BookmarkKind, index: number): string {
+  const tags = MOCK_BOOKMARK_TAGS[kind];
+  return index % 4 === 3 ? "" : tags[index % tags.length];
+}
+
+/** 收藏列表：池按 tag（null 全部 / "" 未分类 / 标签名）过滤后 offset 切片，next 为续拉游标。 */
+async function mockBookmarkList(
+  kind: BookmarkKind,
+  rest: BookmarkRest,
+  tag: string | null,
+  offset: number,
+  limit: number
+): Promise<BrowseBookmarkList> {
+  await mockDelay();
+  const pool = mockBookmarkPool(kind, rest);
+  const filtered =
+    tag === null ? pool : pool.filter((_, i) => mockBookmarkTagOf(kind, i) === tag);
+  const slice = filtered.slice(offset, offset + limit);
+  const next = offset + slice.length < filtered.length ? offset + slice.length : null;
+  return { items: slice, total: filtered.length, next };
+}
+
+/** 收藏标签：由池实时统计（含未分类），计数与列表 total 自洽。 */
+async function mockBookmarkTags(kind: BookmarkKind): Promise<BrowseBookmarkTags> {
+  await mockDelay();
+  const group = (rest: BookmarkRest): BrowseBookmarkTag[] => {
+    const counts = new Map<string, number>();
+    mockBookmarkPool(kind, rest).forEach((_, i) => {
+      const name = mockBookmarkTagOf(kind, i);
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    });
+    return [...counts.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({ name, count }));
+  };
+  return { public: group("show"), private: group("hide") };
+}
+
+/** mock 收藏态存储：详情页 bookmarkState 与 add/remove 共享（仅浏览器 dev mock 生效）。 */
+const mockBookmarkStore = new Map<string, WorkBookmarkState>();
+
+/** mock 详情的默认收藏态：按 id 确定性预置（≈2/5 已收藏，覆盖公开/私密/未收藏三态视觉验收）。 */
+function mockDefaultBookmarkState(kind: BookmarkKind, id: number): WorkBookmarkState | null {
+  const roll = id % 5;
+  if (roll === 0) return { bookmarkId: `7800000${id}`, restrict: 0 };
+  if (roll === 1) return { bookmarkId: `7800001${id}`, restrict: 1 };
+  return null;
+}
+
+async function mockBookmarkAdd(
+  kind: BookmarkKind,
+  id: number,
+  restrict: BookmarkRestrict
+): Promise<{ bookmarkId: string }> {
+  await mockDelay();
+  const state = { bookmarkId: `790000${restrict}${id}`, restrict };
+  mockBookmarkStore.set(`${kind}:${id}`, state);
+  return { bookmarkId: state.bookmarkId };
+}
+
+async function mockBookmarkRemove(kind: BookmarkKind, id: number, bookmarkId: string): Promise<void> {
+  await mockDelay();
+  mockBookmarkStore.delete(`${kind}:${id}`);
+  void bookmarkId;
 }

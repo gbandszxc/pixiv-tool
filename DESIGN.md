@@ -128,7 +128,7 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 
 浏览（browse）页面在既有 M3 体系上新增以下本地组件，全部复用现有颜色角色与间距刻度，不引入新 token：
 
-- **作品卡 WorkCard**：封面圆角 `--radius-control`（12px）、无阴影；标题 14px/600 最多两行省略，作者 12px on-surface-variant；左上角完整胶囊徽标（999px、12px/600）：页数（surface-container/ink，>1 时显示「12P」）与 R-18/R-18G（ink 底/surface 字，同时出现时 R 系优先）；小说封面右下角 12px 小书角标。hover 为 8% primary 状态层，focus-visible 环保留。整卡可点击；封面右上角快捷动作（见下条）只在浏览频道页卡片出现，其它网格不渲染。
+- **作品卡 WorkCard**：封面圆角 `--radius-control`（12px）、无阴影；标题 14px/600 最多两行省略，作者 12px on-surface-variant；左上角完整胶囊徽标（999px、12px/600）：页数（surface-container/ink，>1 时显示「12P」）与 R-18/R-18G（ink 底/surface 字，同时出现时 R 系优先）；小说封面右下角 12px 小书角标。hover 为 8% primary 状态层，focus-visible 环保留。整卡可点击；封面右上角快捷动作（见下条）只在浏览频道页卡片出现，收藏页卡片可渲染同规格的「取消收藏」心形动作（仅条目带 bookmarkId 时），其它网格不渲染。
 - **卡片快捷动作**：28×28、圆角 999px、`surface-container` 底 / `ink` 图标、16px 线性图标（stroke 1.8）；hover 8% / active 12% primary 混合（与卡片状态层同源），`focus-visible` primary 2px 外环；默认 `opacity: 0`，hover 或 `focus-within` 显现，过渡 0.15s，`prefers-reduced-motion` 下取消；按钮必须有 `aria-label` 与 `title`；动作按钮与整卡可点击元素为兄弟节点，不得嵌套在 `role="button"` 内。
 - **作品网格 WorkGrid**：`repeat(auto-fill, minmax(160px,1fr))`，gap 12/16px（紧凑相关推荐变体 120px）；骨架为纯 surface-container 色块（**不做闪烁动画**）；空态带插画占位与引导文案；错误态给可读文案 + 重试；「没有更多」收尾。
 - **分区与 Tab**：频道页分区标题 16px/600 on-surface-variant；类型/周期切换用 md-tabs（secondary），排行前三名徽标用 primary-container 突出。
@@ -136,6 +136,8 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 - **小说阅读器**：正文列 max 720px、14px/1.8 on-surface；`[chapter:]` 渲染为 16px/700 章节标题；翻页器 sticky 底部（surface 底 + 上缘 divider），页码可下拉直选；系列目录为 48px+ 行式列表（序号/标题/元信息右对齐），非卡片网格。
 - **首页头部**：页面标题与「换一批」同行两端对齐、垂直居中；辅助刷新操作固定为 text 按钮级（`md-text-button` + 18px 线性刷新图标），不升到 outlined / filled，保持标题行的主次层级。
 - **登录守卫联动**：浏览命令未登录返回固定文案并自动打开既有登录弹窗；浏览页面本身不重复实现登录 UI。
+- **收藏页布局**：顶行为类型 md-tabs（插画·漫画 / 小说）+ 公开/私密胶囊分段切换（surface-container 底，选中 primary-container/on-primary-container）；左侧 sticky 标签栏（180px，「全部」行 = 名称+合计计数，标签行 = 名称+计数徽标 12px/600，空名显示「未分类」，选中态 primary-container；640px 下转为横向换行 chips）；右侧为总数行（12px/600 on-surface-variant）+ WorkGrid。收藏页卡片 hover 显示「取消收藏」心形快捷动作；作者页收藏 tab（他人公开收藏）固定 rest=show，不渲染取消收藏动作。
+- **详情页收藏按钮**：顶栏触发器对齐 md-outlined-button 规格（40px 胶囊、outline 45%、primary 文字、18px 心形）：未收藏 = 空心 + 「收藏」；已收藏 = 实心 + 「已收藏」，私密收藏追加「私密」角标（surface-container 底 / ink-muted 12px/600 胶囊）；点击弹原生 `details` 弹出菜单（surface-container、`--radius-control` 圆角、唯一合法轻阴影）：未收藏 → 公开收藏 / 私密收藏，已收藏 → 取消收藏；请求进行中禁用（`aria-busy` + 降透明度）。点击菜单外或 Escape 关闭。
 
 **The Native-First Rule.** 已由 Material Web 覆盖的按钮、输入、选择、复选、单选、标签页和进度条不重写外观；原生 `dialog`、`details` 和表格只补充当前实现所需的容器样式。
 

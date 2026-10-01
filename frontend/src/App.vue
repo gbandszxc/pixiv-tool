@@ -63,6 +63,7 @@ const menuGroups = computed<MenuGroup[]>(() => [
       { path: "/browse/feed", label: t("nav.browseFeed"), icon: "feed" },
       { path: "/browse/search", label: t("nav.browseSearch"), icon: "search" },
       { path: "/browse/ranking", label: t("nav.browseRanking"), icon: "ranking" },
+      { path: "/browse/bookmark", label: t("nav.browseBookmark"), icon: "bookmark" },
     ],
   },
 ]);

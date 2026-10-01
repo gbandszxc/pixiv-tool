@@ -1,13 +1,16 @@
 <script setup lang="ts">
 /**
- * 作者主页（F5）：头部信息卡（无阴影 surface-container 区块）+ 三类作品 tab。
+ * 作者主页（F5，bookmark-ui-v1 追加收藏 tab）：
+ * 头部信息卡（无阴影 surface-container 区块）+ 三类作品 tab + 收藏 tab。
  *
  * - 头部：头像（pxSrc 代理，失败回退占位）、昵称、@pixiv_id、统计行、
  *   简介(comment_html 剥 HTML 标签为纯文本，3 行截断 + 展开/收起)、
  *   「在浏览器中打开」→ 系统默认浏览器打开用户主页。
- * - 作品区：插画 / 漫画 / 小说三个 tab 各自持有独立的 useInfiniteList
+ * - 作品区：插画 / 漫画 / 小说 / 收藏四个 tab 各自持有独立的 useInfiniteList
  *   （切 tab 不丢已加载内容，回到该 tab 经 IntersectionObserver 续传），
  *   空态按类型给文案；追加页失败在网格下方就地重试。
+ *   收藏 tab = 该作者的他人公开收藏（契约：必须显式 rest=show；后端 offset 游标
+ *   经适配转 page 语义；不显示取消收藏动作 —— 列表项 bookmarkId 是查看者态，UI 不使用）。
  * - 未登录 / 无权限等错误直接展示 api 层归一文案（invokeBrowse 已联动登录弹窗）。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
@@ -17,6 +20,7 @@ import "@material/web/iconbutton/outlined-icon-button.js";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import SectionTabs from "../../components/browse/SectionTabs.vue";
 import {
+  browseBookmarkList,
   browseUserProfile,
   browseUserWorks,
   errorMessage,
@@ -108,29 +112,42 @@ watch(profile, async () => {
   measureBio();
 });
 
-// ===== 作品区：三类 tab，各自独立分页 =====
+// ===== 作品区：三类作品 + 收藏 tab，各自独立分页 =====
 
-const KINDS: ListWorkKind[] = ["illust", "manga", "novel"];
+/** tab 取值域：三类作品 + 收藏（他人公开收藏）。 */
+type AuthorTab = ListWorkKind | "bookmark";
+
+const KINDS: AuthorTab[] = ["illust", "manga", "novel", "bookmark"];
 
 const tabs = computed(() => [
   { value: "illust", label: t("nav.browseIllustration") },
   { value: "manga", label: t("nav.browseManga") },
   { value: "novel", label: t("nav.browseNovel") },
+  { value: "bookmark", label: t("browse.bookmark.authorTab") },
 ]);
 
-const activeTab = ref<ListWorkKind>("illust");
+const activeTab = ref<AuthorTab>("illust");
 
 type WorkList = ReturnType<typeof useInfiniteList<BrowseWorkItem>>;
 
-/** 每个 kind 一个独立列表状态机：切 tab 不丢已加载内容，回到该 tab 续传。 */
+/** 收藏 tab（他人公开收藏）分页游标：后端为 offset，转为 useInfiniteList 的 page 语义。 */
+let bookmarkOffset = 0;
+
+/** 每个 tab 一个独立列表状态机：切 tab 不丢已加载内容，回到该 tab 续传。 */
 const lists = {
   illust: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "illust", page)),
   manga: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "manga", page)),
   novel: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "novel", page)),
-} satisfies Record<ListWorkKind, WorkList>;
+  bookmark: useInfiniteList<BrowseWorkItem>(async (page) => {
+    const offset = page === 1 ? 0 : bookmarkOffset;
+    const data = await browseBookmarkList("illust", "show", null, offset, 24); // 官方作者收藏页 24/页
+    bookmarkOffset = data.next ?? offset;
+    return { items: data.items, total: data.total, next_page: data.next == null ? null : page + 1 };
+  }),
+} satisfies Record<AuthorTab, WorkList>;
 
 /** 尚未加载过首屏的 tab 在激活时拉起第 1 页。 */
-function ensureStarted(kind: ListWorkKind): void {
+function ensureStarted(kind: AuthorTab): void {
   const list = lists[kind];
   if (list.items.value.length || list.loading.value || list.loadingMore.value || list.error.value || !list.hasMore.value) return;
   void list.loadMore();
@@ -138,7 +155,7 @@ function ensureStarted(kind: ListWorkKind): void {
 
 watch(activeTab, ensureStarted);
 
-/** 首次进入 / 换作者：清空三类列表并重拉第 1 页 + 头部信息。 */
+/** 首次进入 / 换作者：清空四类列表并重拉第 1 页 + 头部信息。 */
 function resetAll(): void {
   profile.value = null;
   profileError.value = "";
@@ -152,7 +169,7 @@ watch(
   () => resetAll()
 );
 
-/** panes：把三类列表的响应式值快照成模板友好的普通对象（ref 嵌在对象里不自动解包）。 */
+/** panes：把四类列表的响应式值快照成模板友好的普通对象（ref 嵌在对象里不自动解包）。 */
 const panes = computed(() =>
   KINDS.map((kind) => {
     const list = lists[kind];
@@ -170,14 +187,17 @@ const panes = computed(() =>
 );
 
 /** 空态文案按类型区分（「该作者还没有漫画作品」等）。 */
-const EMPTY_KEY: Record<ListWorkKind, string> = {
+const EMPTY_KEY: Record<AuthorTab, string> = {
   illust: "browse.author.emptyIllust",
   manga: "browse.author.emptyManga",
   novel: "browse.author.emptyNovel",
+  bookmark: "browse.bookmark.authorEmpty",
 };
 
 function openWork(item: BrowseWorkItem): void {
-  router.push(`/browse/work/${item.kind}/${item.id}`);
+  // ugoira 经 illust 端点取详情，路由归 illust（与相关推荐一致）
+  const routeKind = item.kind === "ugoira" ? "illust" : item.kind;
+  void router.push(`/browse/work/${routeKind}/${item.id}`);
 }
 
 // ===== 打开原页 / 返填 =====
@@ -187,7 +207,7 @@ function openInPixiv(): void {
   void openInBrowser(pixivUserUrl(props.id)).catch(() => notify(t("browse.hooks.openFailed")));
 }
 
-/** 返填跟随当前 tab：插画/漫画 → 插画抓取页（用户全集）；小说 → 小说抓取页（用户全集）。 */
+/** 返填跟随当前 tab：插画/漫画/收藏 → 插画抓取页（用户全集）；小说 → 小说抓取页（用户全集）。 */
 function fillActiveTab(): void {
   fillDownloadForm({
     form: activeTab.value === "novel" ? "novel" : "illustration",
@@ -275,9 +295,9 @@ onBeforeUnmount(() => {
       </template>
     </section>
 
-    <!-- ===== 作品区：三类 tab + 返填（目标随当前 tab）===== -->
+    <!-- ===== 作品区：四类 tab + 返填（目标随当前 tab）===== -->
     <div class="works-bar">
-      <SectionTabs class="works-tabs" :tabs="tabs" :value="activeTab" @change="activeTab = $event as ListWorkKind" />
+      <SectionTabs class="works-tabs" :tabs="tabs" :value="activeTab" @change="activeTab = $event as AuthorTab" />
       <md-outlined-button @click="fillActiveTab()">
         {{ activeTab === "novel" ? t("browse.hooks.fillNovelForm") : t("browse.hooks.fillIllustForm") }}
       </md-outlined-button>

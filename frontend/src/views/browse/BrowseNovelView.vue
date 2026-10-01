@@ -12,6 +12,7 @@ import { useRouter } from "vue-router";
 import NovelContent from "../../components/browse/NovelContent.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
+import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import {
   browseRelated,
   browseWorkDetail,
@@ -19,6 +20,7 @@ import {
   pxSrc,
   type BrowseNovelDetail,
   type BrowseWorkItem,
+  type WorkBookmarkState,
 } from "../../api/browse";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
@@ -34,6 +36,8 @@ const router = useRouter();
 const detail = shallowRef<BrowseNovelDetail | null>(null);
 const loading = ref(false);
 const error = ref("");
+/** 查看者收藏态（来自详情响应 bookmarkState；收藏按钮经 change 回写） */
+const bookmarkState = ref<WorkBookmarkState | null>(null);
 
 const item = computed(() => detail.value?.item ?? null);
 const content = computed(() => detail.value?.content ?? "");
@@ -62,6 +66,7 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = "";
   detail.value = null;
+  bookmarkState.value = null;
   relatedItems.value = [];
   relatedError.value = "";
   // 进入/切换作品回到页首（SPA 内路由切换会保留上一页滚动位置）
@@ -70,6 +75,7 @@ async function load(): Promise<void> {
     const data = await browseWorkDetail("novel", props.id);
     if (data.detail_kind !== "novel") throw new Error("unexpected detail kind");
     detail.value = data;
+    bookmarkState.value = data.bookmarkState ?? null;
   } catch (err) {
     error.value = errorMessage(err) || t("common.browseLoadFailed");
   } finally {
@@ -184,6 +190,14 @@ function openInPixiv(): void {
         <span v-else class="avatar avatar-fallback" aria-hidden="true">{{ item.author_name.slice(0, 1) }}</span>
         <span class="author-name">{{ item.author_name }}</span>
       </router-link>
+      <!-- 收藏：未收藏=空心「收藏」；已收藏=实心「已收藏」（私密加角标）；详情就绪后显示 -->
+      <BookmarkButton
+        v-if="item"
+        kind="novel"
+        :id="props.id"
+        :state="bookmarkState"
+        @change="bookmarkState = $event"
+      />
       <md-icon-button
         :aria-label="t('browse.hooks.fillNovelForm')"
         :title="t('browse.hooks.fillNovelForm')"

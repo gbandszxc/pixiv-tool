@@ -84,6 +84,11 @@ const router = createRouter({
       name: "browse-ranking",
       component: () => import("../views/browse/BrowseRankingView.vue"),
     },
+    {
+      path: "/browse/bookmark",
+      name: "browse-bookmark",
+      component: () => import("../views/browse/BrowseBookmarkView.vue"),
+    },
     ...browseWorkRoutes,
     {
       path: "/browse/series/:id",

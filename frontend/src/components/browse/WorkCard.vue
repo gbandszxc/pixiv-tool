@@ -15,9 +15,14 @@ const props = defineProps<{
   disabled?: boolean;
   /** 封面快捷动作（打开原页 / 返填表单）：仅浏览频道页显式开启 */
   hooks?: boolean;
+  /** 显示「取消收藏」快捷动作（收藏页卡片；无 bookmarkId 的条目由父级控制不传） */
+  removable?: boolean;
 }>();
 
-const emit = defineEmits<{ (e: "click", item: BrowseWorkItem): void }>();
+const emit = defineEmits<{
+  (e: "click", item: BrowseWorkItem): void;
+  (e: "remove-bookmark"): void;
+}>();
 
 const { t } = useI18n();
 
@@ -80,29 +85,44 @@ function handleFillForm(): void {
       <p class="author" :title="item.author_name">{{ item.author_name }}</p>
     </div>
     <!-- 快捷动作与 role="button" 卡片为兄弟节点：嵌套会被 ARIA children-presentational 从无障碍树抹掉 -->
-    <div v-if="hooks && !disabled" class="cover-actions">
+    <div v-if="(hooks && !disabled) || removable" class="cover-actions">
+      <template v-if="hooks && !disabled">
+        <button
+          class="cover-action"
+          type="button"
+          :aria-label="t('browse.hooks.openInBrowser')"
+          :title="t('browse.hooks.openInBrowser')"
+          @click="handleOpenInBrowser"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <polyline points="15 3 21 3 21 9" />
+            <line x1="10" y1="14" x2="21" y2="3" />
+          </svg>
+        </button>
+        <button
+          class="cover-action"
+          type="button"
+          :aria-label="fillLabel"
+          :title="fillLabel"
+          @click="handleFillForm"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" />
+          </svg>
+        </button>
+      </template>
+      <!-- 取消收藏（收藏页）：同规格 28px 胶囊动作，心形图标 -->
       <button
+        v-if="removable"
         class="cover-action"
         type="button"
-        :aria-label="t('browse.hooks.openInBrowser')"
-        :title="t('browse.hooks.openInBrowser')"
-        @click="handleOpenInBrowser"
+        :aria-label="t('browse.bookmark.removeBookmark')"
+        :title="t('browse.bookmark.removeBookmark')"
+        @click="emit('remove-bookmark')"
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-          <polyline points="15 3 21 3 21 9" />
-          <line x1="10" y1="14" x2="21" y2="3" />
-        </svg>
-      </button>
-      <button
-        class="cover-action"
-        type="button"
-        :aria-label="fillLabel"
-        :title="fillLabel"
-        @click="handleFillForm"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" />
+          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
         </svg>
       </button>
     </div>

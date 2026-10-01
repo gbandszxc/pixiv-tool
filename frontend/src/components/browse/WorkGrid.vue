@@ -23,14 +23,17 @@ const props = withDefaults(
     skeletonCount?: number;
     /** 卡片快捷动作（打开原页 / 返填表单）：仅浏览频道页显式开启 */
     hooks?: boolean;
+    /** 卡片显示「取消收藏」动作（收藏页）；无 bookmarkId 的条目自动隐藏 */
+    removable?: boolean;
   }>(),
-  { loading: false, error: "", loadingMore: false, hasMore: true, skeletonCount: 12, hooks: false }
+  { loading: false, error: "", loadingMore: false, hasMore: true, skeletonCount: 12, hooks: false, removable: false }
 );
 
 const emit = defineEmits<{
   (e: "load-more"): void;
   (e: "retry"): void;
   (e: "select", item: BrowseWorkItem): void;
+  (e: "remove-bookmark", item: BrowseWorkItem): void;
 }>();
 
 const { t } = useI18n();
@@ -110,7 +113,9 @@ onBeforeUnmount(() => {
           :key="`${item.kind}:${item.id}`"
           :item="item"
           :hooks="hooks"
+          :removable="removable && !!item.bookmarkId"
           @click="emit('select', item)"
+          @remove-bookmark="emit('remove-bookmark', item)"
         />
         <!-- 追加页骨架：与首屏同款色块 -->
         <template v-if="loadingMore">
