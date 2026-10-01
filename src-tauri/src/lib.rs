@@ -15,6 +15,8 @@ pub mod core;
 pub mod db;
 pub mod image_proxy;
 pub mod logging;
+#[cfg(windows)]
+mod menu_bar;
 pub mod paths;
 pub mod pixiv;
 pub mod platform;
@@ -171,6 +173,7 @@ pub fn run() {
             commands::misc_cmds::open_illustration_folder,
             // app
             commands::app_cmds::app_exit,
+            commands::app_cmds::app_menu_show,
         ])
         .build(tauri::generate_context!())
         .expect("Pixiv Tool 构建失败")
@@ -253,4 +256,12 @@ fn setup_app_menu(app: &tauri::App) {
             let _ = app_handle.emit("app://confirm-exit", ());
         }
     });
+    // Windows：菜单栏默认隐藏，Alt 唤起（前端 `app_menu_show` + 退出菜单循环
+    // 后自动收回，见 menu_bar）。macOS 菜单在系统顶栏恒显，不受影响。
+    #[cfg(windows)]
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(e) = menu_bar::install(&window) {
+            log::warn!("菜单栏隐藏失败（将保持常驻）: {e}");
+        }
+    }
 }

@@ -54,3 +54,10 @@ rand = "0.9"
 # Tauri with_webview 暴露的原生 WebView2 类型；版本须与 Tauri 2.11 锁定的一致。
 webview2-com = "=0.38.2"
 windows-core = "=0.61.2"
+# 菜单栏子类化（默认隐藏 / Alt 唤出，见 src/menu_bar.rs）：SetWindowSubclass、
+# SetMenu/DrawMenuBar、PostMessageW。与 Tauri 内部同为 windows 0.61 系列。
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
