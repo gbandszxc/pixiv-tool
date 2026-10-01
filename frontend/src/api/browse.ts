@@ -179,7 +179,10 @@ export interface BrowseSeriesDetail {
 export function pxSrc(url?: string): string {
   if (!url) return "";
   if (!isTauri()) return url;
-  return convertFileSrc(encodeURIComponent(url), "pixiv-img");
+  // 传原始 URL：convertFileSrc 在 Windows 侧会做一次 encodeURIComponent，
+  // 后端 image_proxy 恰好按「单次编码」解码；这里再预编码会导致双重编码、
+  // 后端白名单解析失败（pixiv-img 403）。非 Windows 平台不编码，由后端兼容。
+  return convertFileSrc(url, "pixiv-img");
 }
 
 // ===== 未登录错误联动 =====
