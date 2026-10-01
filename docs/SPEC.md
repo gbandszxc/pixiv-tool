@@ -486,8 +486,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 | 浏览-搜索 | `/browse/search`（类型 tab + 排序/对象/匹配 + ID/链接直达） | ✅ |
 | 浏览-排行榜 | `/browse/ranking`（插画/漫画/动图/小说 × 周期 + 日期导航） | ✅ |
 | 浏览-收藏 | `/browse/bookmark`（插画·漫画/小说 × 公开/私密 + 标签筛选） | ✅ |
-| 作品查看器 | `/browse/work/illust|:kind=illust|manga>/:id`（多页纵向渐进加载、点击放大进入全屏翻页 + 胶卷缩略图、R-18 遮罩（仅关闭 show_r18 时）、相关推荐） | ✅ |
-| 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航） | ✅ |
+| 作品查看器 | `/browse/work/illust|:kind=illust|manga>/:id`（多页纵向渐进加载、点击放大进入全屏翻页 + 胶卷缩略图、R-18 遮罩（仅关闭 show_r18 时）、相关推荐 / 评论面板（顶栏评论按钮切换）） | ✅ |
+| 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航、相关推荐 / 评论面板） | ✅ |
 | 系列目录 | `/browse/series/:id`（游标加载） | ✅ |
 | 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab） | ✅ |
 
@@ -565,6 +565,17 @@ Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主�
   舞台右上角全屏按钮是键盘入口（进入时定位到视口内当前页），右下角「第 N / M 页」徽标
   跟随滚动，舞台可聚焦（Esc 退出浮层后焦点回到舞台）、↑/↓ 原生滚动。ugoira 仍只显示
   封面帧 + 说明行。
+- **详情页顶栏与面板（查看器 / 阅读器共用）**：顶栏带文案的动作保持 40px 胶囊（收藏），
+  图标动作统一 `md-icon-button`（40×40、无描边、20px 线性自绘 SVG，stroke 1.8），
+  顺序为「收藏 / 评论 / 返填表单 / 在浏览器中打开」；**不再用只有图标的
+  `md-outlined-button`**（左右各 24px 内距会把单个图标撑成约 66px 宽的胶囊），
+  也不再用 `‹ › ✕` 文本字形充当图标——浏览页的分页器与排行榜日期切换同规
+  （`md-icon-button` + 20px chevron）。顶栏评论按钮（toggle + selected，标签在
+  「查看评论」/「返回相关推荐」间切换）切换查看器右列下段与阅读器正文列下段的
+  面板：默认「相关推荐」，切到「评论」时 `CommentsSection` 才挂载并拉第一页
+  （roots 沿用「加载更多评论」offset 分页、回复展开后按页续拉），切换时把面板
+  滚入视野（阅读器 `block: start` + 72px 吸顶余量、查看器 `block: nearest`）；
+  作品切换（kind / id 变化）时面板回到「相关推荐」。
 - **R-18 显示**：全局开关 `show_r18`（§5.2）关闭后，各列表在**渲染期**过滤
   `x_restrict >= 1` 的作品——只隐藏已取得的条目，**不重新请求**；`x_restrict`
   缺失（无法判定）的条目按 fail-closed 处理：仅在「全部」档可见，一般向与
@@ -583,7 +594,7 @@ Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主�
 - **分页**：统一收敛为 `next_page` / `is_last_page` / `next_last_order`（游标）语义；
   发现页与首页推荐无服务端翻页，前端重复调用按 id 去重。
 - **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图
-  （`[pixivimage:]`）显示占位块；评论不展示。
+  （`[pixivimage:]`）显示占位块；评论只在详情页面板内按需加载（只读，无评论/回复发布）。
 - **打开原页 / 返填**：浏览页的「在浏览器中打开」走系统默认浏览器
   （官方 `tauri-plugin-opener`，capability `opener:default`）；
   频道页卡片与作品级页面另有「返填表单」→ 跳对应抓取页并预填 `sourceType` / `sourceId`。

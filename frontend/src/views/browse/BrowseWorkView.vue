@@ -265,7 +265,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       />
       <!-- 评论：切换右列面板（相关推荐 ⇄ 评论）；选中态走 md-icon-button 的 toggle/selected -->
       <md-icon-button
-        class="panel-toggle"
         toggle
         :selected="panel === 'comments'"
         :aria-label="t('browse.comments.show')"
@@ -490,9 +489,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   text-overflow: ellipsis;
 }
 
-.open-pixiv,
-.fill-download,
-.panel-toggle {
+/* 顶栏动作不参与收缩（空间由标题列 flex:1 吸收） */
+.work-topbar md-icon-button {
   flex-shrink: 0;
 }
 

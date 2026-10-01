@@ -400,6 +400,11 @@ function openInPixiv(): void {
   color: var(--ink);
 }
 
+/* 顶栏动作不参与收缩（空间由标题列 flex:1 吸收） */
+.topbar md-icon-button {
+  flex-shrink: 0;
+}
+
 .topbar-author {
   display: inline-flex;
   align-items: center;
