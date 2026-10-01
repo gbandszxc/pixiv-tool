@@ -585,6 +585,11 @@ cargo tauri dev        # 仓库根执行；等价 cd frontend && pnpm tauri dev
 - Rust 改动自动重编译重启；前端走 Vite HMR
 - 测试：`cd src-tauri && cargo test`（单测 + IPC 冒烟集成测试）；
   前端类型检查：`cd frontend && pnpm build`
+- **Windows 工具链**：本机（Windows 11）默认 gnu 工具链的 cdylib 链接超
+  mingw ld 导出上限（"export ordinal too large"），**统一改用 MSVC 工具链**，
+  cargo 命令前设置 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc`、
+  `LIBCLANG_PATH`（LLVM 安装路径）、`CMAKE_GENERATOR="Visual Studio 17 2022"`；
+  详见 AGENTS.md 开发命令一节
 
 ### 8.2 依赖管理
 

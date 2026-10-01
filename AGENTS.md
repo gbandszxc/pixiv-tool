@@ -65,6 +65,13 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
 
 - 无后端进程/端口：IPC 直连，Vite 仅 dev 期占用 9961（strictPort）
 - 系统依赖：构建需 cmake + LLVM/libclang（wreq 编译 BoringSSL 的 btls-sys 用 bindgen 生成绑定，全平台都需要；Windows 装 LLVM.LLVM，macOS 随 Xcode CLT 自带），见 docs/PACKAGING.md
+- **Windows 工具链标准（本机实测，2026-10-01）**：默认 `stable-x86_64-pc-windows-gnu` 的 cdylib 链接会超 mingw ld 65535 导出上限（"export ordinal too large"），**一律改用 MSVC 工具链**。所有 cargo 命令前设置：
+  ```bash
+  export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc
+  export LIBCLANG_PATH="C:\Users\gbandszxc\scoop\apps\llvm\current\bin"
+  export CMAKE_GENERATOR="Visual Studio 17 2022"
+  ```
+  MSVC 链接器缺失时包一层 `cmd /c "call <vs路径>VC\Auxiliary\Build\vcvars64.bat && cargo ..."`。`tauri` CLI 在 frontend devDependencies（`./frontend/node_modules/.bin/tauri`），仓库根跑 `tauri dev` 需 `--config '{"build":{"beforeDevCommand":""}}'` 并自起 Vite。
 
 ### Git 约定
 

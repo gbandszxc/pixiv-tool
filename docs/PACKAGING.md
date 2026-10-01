@@ -31,6 +31,22 @@ Windows、deb/appimage on Linux）。
 Rust ≥ 1.85（edition 2024）。首次构建约 5–15 分钟（BoringSSL 现场编译 +
 bindgen），增量秒级。
 
+### Windows 工具链标准（本机实测，2026-10-01）
+
+默认 `stable-x86_64-pc-windows-gnu` 的 cdylib 链接超 mingw ld 65535 导出上限
+（"export ordinal too large"，debug/release 均复现），**统一改用 MSVC 工具链**。
+所有 cargo 命令（dev/test/build）前设置：
+
+```bash
+export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc
+export LIBCLANG_PATH="<LLVM 安装路径>\bin"        # 本机：C:\Users\gbandszxc\scoop\apps\llvm\current\bin
+export CMAKE_GENERATOR="Visual Studio 17 2022"    # 避免 MSYS Makefiles 误选
+```
+
+MSVC 链接器（link.exe）不在 PATH 时包一层
+`cmd /c "call <vs路径>\VC\Auxiliary\Build\vcvars64.bat && cargo ..."`。
+Git Bash 里 tauri CLI 用 frontend 的本地依赖：`./frontend/node_modules/.bin/tauri`。
+
 ## 3. 关键依赖约束
 
 - **wreq = 6.0.0-rc.31 / wreq-util = 3.0.0-rc.14**：指纹伪装库，锁定版本。

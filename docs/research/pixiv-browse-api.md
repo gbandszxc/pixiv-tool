@@ -427,6 +427,17 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 - 图片扩展名（jpg/png/gif）不确定时一律用接口给的 `original` URL；自行拼 `.jpg` 会 404。
 - 本调研基于 2026-10 的 pixiv-web-next；旧资料中以下端点**已失效**：`stacc.php`（404）、`/ajax/illust/{id}/ugoira`（404，改 `/ugoira_meta`）、`/ajax/illust/{id}/comments`（404，改 `/ajax/illusts/comments/roots`）、`/ajax/ranking/illust`（404，改 `ranking.php?format=json`）、`/ajax/user/{id}/profile/illusts|novels`（400，改 `/ajax/user/{id}/illusts|novels?ids[]=`）。写代码时以本文端点为准。
 
+### 请求头与状态形态勘误（2026-10-01 晚间实机补充）
+
+- **csrf token 的实际形态**：登录态下 `__NEXT_DATA__` 的
+  `props.pageProps.serverSerializedPreloadedState` 是 **JSON 字符串**（需再
+  `JSON.parse` 一次），token 在解析后的 `api.token`；匿名/部分场景可能直接是
+  对象。解析须兼容两种形态（`pixiv/csrf.rs::parse_next_data_token` 已实现）。
+- **street 缩略对象的封面**：插画/漫画卡片缩略**没有**顶层 `url`/`urls`，
+  封面在 `pages[0].urls`，键名是尺寸字符串（`"1200x1200_standard"` /
+  `"540x540"` / `"360x360"`，取 540 优先）；小说卡片缩略有顶层 `url`
+  （novel-cover-master）。解析见 `browse_api.rs::parse_work_thumb` 兜底链。
+
 ### 对 pixiv-tool 的落地建议（与 SPEC 对齐）
 
 1. 浏览类数据全部走同源 `www.pixiv.net/ajax/*` GET 接口 + Cookie（来自系统凭据存储），响应解析只需 `error/message/body` 包裹判断。
