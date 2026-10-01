@@ -399,7 +399,11 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "theme": "auto",
   "theme_color": "pixiv",
   "backend_port": null,
-  "max_wait_seconds": 180
+  "max_wait_seconds": 180,
+  "show_r18": true,
+  "thumb_quality_grid": "medium",
+  "thumb_quality_detail": "medium",
+  "thumb_quality_fullscreen": "large"
 }
 ```
 
@@ -413,10 +417,23 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 - `backend_port`：旧 Python 后端端口配置；Tauri 版无后端进程，仅保留字段
   兼容旧配置文件（仍在 `settings_save` 白名单内），无实际作用。
 - `max_wait_seconds`：任务最大运行时长（秒），默认 180，合法区间 30~86400，
-  设置页可配；任务运行超过该时长自动标记为 failed（**不含暂停时间**）。
+  设置抽屉可配；任务运行超过该时长自动标记为 failed（**不含暂停时间**）。
 - `theme` / `theme_color`：主题模式（`light`/`dark`/`auto`）与色板（`pixiv` 默认 /
   `indigo` / `jade` / `violet` / `amber`），实现见 §6.3。两个键都在
   `settings_save` 白名单内。
+- `thumb_quality_grid` / `thumb_quality_detail` / `thumb_quality_fullscreen`：
+  缩略图三档设置，尺寸段与改写规则见 §6.4。三档尺寸段：`small` = `250x250_80_a2`、
+  `medium` = `540x540_70`、`large` = `600x1200_90`、`original` = 不改写。取值域
+  分别为 grid `small|medium|large`（默认 `medium`）、detail `medium|large|original`
+  （默认 `medium`）、fullscreen `large|original`（默认 `large`）。**`thumb_quality_detail`
+  的 `medium` 不映射 540 段**，而是「接口 `regular` 原样」——`/img-master/img/..._master1200.jpg`
+  不插 `/c/`，与改造前逐字一致；`540x540_70` 只作详情页/全屏「先低清后高清」的占位层，
+  不是任何档位的目标。`thumb_quality_fullscreen` 的消费者为全屏浮层（§6.4）。
+  手改 settings.json 写入非法档位时，加载期回落到该键默认值（不强制回写文件）。
+- `show_r18`：全局 R-18 展示开关（默认 `true`）。关闭后所有作品列表（首页/发现/动态/
+  搜索/排行榜/收藏/作者页/频道页各板块/相关推荐/小说相关/系列目录行）在渲染期隐藏
+  `x_restrict >= 1` 的作品；详情页仍可访问并保留模糊遮罩。
+- 以上四键与既有键一样都在 `settings_save` 白名单内（见 §7）。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
 
@@ -535,7 +552,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 7 键 + 校验，含 `theme_color`） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 11 键 + 校验，含 `theme_color` 与 §5.2 四个新键） |
 | `clear_logs` | 清空 app.log |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |

@@ -103,6 +103,14 @@ export interface Settings {
   theme_color: string;
   backend_port: number | null;
   max_wait_seconds: number;
+  /** 全局 R-18 展示开关；关闭后列表隐藏 x_restrict >= 1 的作品（详情页仍可访问） */
+  show_r18: boolean;
+  /** 列表 / 网格封面档位：small | medium | large（经 useThumbTier 读取，脏值兜底 medium） */
+  thumb_quality_grid: string;
+  /** 详情页主图档位：medium（= 接口 regular 原样，不插 /c/）| large | original */
+  thumb_quality_detail: string;
+  /** 大图 / 全屏浮层档位：large | original */
+  thumb_quality_fullscreen: string;
 }
 
 export interface HistoryItem {

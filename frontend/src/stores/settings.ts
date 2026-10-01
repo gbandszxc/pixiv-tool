@@ -15,6 +15,11 @@ export const useSettingsStore = defineStore("settings", () => {
     theme_color: "pixiv",
     backend_port: null,
     max_wait_seconds: 180,
+    // 以下四项的取值约束见 useThumbTier；默认值与后端 Settings::default 一致
+    show_r18: true,
+    thumb_quality_grid: "medium",
+    thumb_quality_detail: "medium",
+    thumb_quality_fullscreen: "large",
   });
 
   async function fetchSettings() {

@@ -28,6 +28,14 @@ pub struct Settings {
     pub backend_port: Option<i64>,
     /// 任务最大等待时间（秒）：运行超过该时长自动标记失败，不含暂停时间。
     pub max_wait_seconds: i64,
+    /// 全局 R-18 展示开关：关闭后列表隐藏 x_restrict >= 1 的作品，详情页仍可访问。
+    pub show_r18: bool,
+    /// 列表/网格封面档位（见 [`THUMB_GRID_TIERS`]）。
+    pub thumb_quality_grid: String,
+    /// 详情页主图档位（见 [`THUMB_DETAIL_TIERS`]；medium = 接口 regular 原样）。
+    pub thumb_quality_detail: String,
+    /// 全屏浮层档位（见 [`THUMB_FULLSCREEN_TIERS`]）。
+    pub thumb_quality_fullscreen: String,
 }
 
 impl Default for Settings {
@@ -40,7 +48,26 @@ impl Default for Settings {
             theme_color: "pixiv".into(),
             backend_port: None,
             max_wait_seconds: 180,
+            show_r18: true,
+            thumb_quality_grid: "medium".into(),
+            thumb_quality_detail: "medium".into(),
+            thumb_quality_fullscreen: "large".into(),
         }
+    }
+}
+
+/// 列表/网格封面可选档位。
+pub const THUMB_GRID_TIERS: [&str; 3] = ["small", "medium", "large"];
+/// 详情页主图可选档位（medium = 接口 regular 原样，不映射到 540px 档）。
+pub const THUMB_DETAIL_TIERS: [&str; 3] = ["medium", "large", "original"];
+/// 全屏浮层可选档位。
+pub const THUMB_FULLSCREEN_TIERS: [&str; 2] = ["large", "original"];
+
+/// 缩略图档位校验：非字符串或不在 `allowed` 集合内 → Err(message)。
+pub fn validate_thumb_tier(value: &Value, allowed: &[&str], message: &str) -> Result<(), String> {
+    match value.as_str() {
+        Some(tier) if allowed.contains(&tier) => Ok(()),
+        _ => Err(message.to_string()),
     }
 }
 
@@ -53,6 +80,7 @@ impl Settings {
     /// - 文件不存在 → 写入默认值并返回
     /// - JSON 损坏 / 读失败 → 备份为 `settings.json.corrupt-{mtime_ns}` 后重建默认
     /// - 旧值迁移：`output_dir == "downloads"`（早期默认相对路径）→ 系统下载目录/pixiv-tool
+    /// - 加载期归一：非法缩略图档位重置为默认（不强制回写文件）
     /// - 缺键填默认（serde default）；未知键忽略（serde 默认行为）
     pub fn load_or_init(config_dir: &Path) -> Settings {
         let path = settings_path(config_dir);
@@ -71,6 +99,16 @@ impl Settings {
                 // 用户显式改过的路径不动。
                 if settings.output_dir == "downloads" {
                     settings.output_dir = default_output_dir().to_string_lossy().into_owned();
+                }
+                // 手改 settings.json 写入的非法档位回落到默认（不强制回写文件）。
+                if !THUMB_GRID_TIERS.contains(&settings.thumb_quality_grid.as_str()) {
+                    settings.thumb_quality_grid = "medium".into();
+                }
+                if !THUMB_DETAIL_TIERS.contains(&settings.thumb_quality_detail.as_str()) {
+                    settings.thumb_quality_detail = "medium".into();
+                }
+                if !THUMB_FULLSCREEN_TIERS.contains(&settings.thumb_quality_fullscreen.as_str()) {
+                    settings.thumb_quality_fullscreen = "large".into();
                 }
                 settings
             }
@@ -210,6 +248,10 @@ mod tests {
         assert_eq!(s.theme_color, "pixiv");
         assert_eq!(s.backend_port, None);
         assert_eq!(s.max_wait_seconds, 180);
+        assert!(s.show_r18);
+        assert_eq!(s.thumb_quality_grid, "medium");
+        assert_eq!(s.thumb_quality_detail, "medium");
+        assert_eq!(s.thumb_quality_fullscreen, "large");
         assert!(
             s.output_dir
                 .replace('\\', "/")
@@ -242,7 +284,57 @@ mod tests {
         assert_eq!(s.output_dir, "/tmp/x");
         assert_eq!(s.language, "zh-CN"); // 缺键 → 默认
         assert_eq!(s.output_formats.len(), 2); // 缺键 → 默认
+        // 新增键缺省 → 默认
+        assert!(s.show_r18);
+        assert_eq!(s.thumb_quality_grid, "medium");
+        assert_eq!(s.thumb_quality_detail, "medium");
+        assert_eq!(s.thumb_quality_fullscreen, "large");
         cleanup(&dir);
+    }
+
+    #[test]
+    fn invalid_thumb_tier_falls_back_to_default_on_load() {
+        let dir = temp_config_dir("thumb-tier");
+        std::fs::write(
+            settings_path(&dir),
+            r#"{"thumb_quality_grid":"huge","thumb_quality_detail":"small","thumb_quality_fullscreen":"medium"}"#,
+        )
+        .unwrap();
+        let s = Settings::load_or_init(&dir);
+        assert_eq!(s.thumb_quality_grid, "medium");
+        assert_eq!(s.thumb_quality_detail, "medium");
+        assert_eq!(s.thumb_quality_fullscreen, "large");
+        // 合法档位原样保留
+        std::fs::write(
+            settings_path(&dir),
+            r#"{"thumb_quality_grid":"small","thumb_quality_detail":"original","thumb_quality_fullscreen":"original"}"#,
+        )
+        .unwrap();
+        let s = Settings::load_or_init(&dir);
+        assert_eq!(s.thumb_quality_grid, "small");
+        assert_eq!(s.thumb_quality_detail, "original");
+        assert_eq!(s.thumb_quality_fullscreen, "original");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn validate_thumb_tier_rules() {
+        let ok = validate_thumb_tier(
+            &serde_json::json!("large"),
+            &THUMB_GRID_TIERS,
+            "列表缩略图档位无效",
+        );
+        assert!(ok.is_ok());
+        for bad in [
+            serde_json::json!("huge"),
+            serde_json::json!(1),
+            serde_json::json!(null),
+        ] {
+            assert_eq!(
+                validate_thumb_tier(&bad, &THUMB_GRID_TIERS, "列表缩略图档位无效").unwrap_err(),
+                "列表缩略图档位无效"
+            );
+        }
     }
 
     #[test]

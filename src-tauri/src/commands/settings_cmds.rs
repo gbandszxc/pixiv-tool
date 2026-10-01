@@ -11,11 +11,14 @@ use std::path::Path;
 use serde_json::{Value, json};
 use tauri::State;
 
-use crate::settings::{Settings, validate_max_wait_value, validate_output_dir_value};
+use crate::settings::{
+    Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
+    validate_max_wait_value, validate_output_dir_value, validate_thumb_tier,
+};
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
-const WRITABLE_KEYS: [&str; 7] = [
+const WRITABLE_KEYS: [&str; 11] = [
     "output_dir",
     "output_formats",
     "language",
@@ -23,6 +26,10 @@ const WRITABLE_KEYS: [&str; 7] = [
     "theme_color",
     "backend_port",
     "max_wait_seconds",
+    "show_r18",
+    "thumb_quality_grid",
+    "thumb_quality_detail",
+    "thumb_quality_fullscreen",
 ];
 
 /// 读取当前配置。
@@ -49,7 +56,8 @@ pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Resul
 }
 
 /// partial JSON → 新 Settings（纯函数，离线可测）：
-/// 1. output_dir / max_wait_seconds 先做中文校验（失败即 Err，旧 400 文案）
+/// 1. output_dir / max_wait_seconds / theme_color / 缩略图档位 / show_r18
+///    先做中文校验（失败即 Err，旧 400 文案）
 /// 2. 白名单键覆盖到当前配置序列化结果上，再反解回 Settings
 ///    （类型不合法的值在反解时以中文错误拒绝）
 pub fn apply_settings_patch(
@@ -71,6 +79,21 @@ pub fn apply_settings_patch(
         if !["pixiv", "indigo", "jade", "violet", "amber"].contains(&color) {
             return Err("主题色板无效".to_string());
         }
+    }
+    if let Some(value) = patch_obj.get("thumb_quality_grid") {
+        validate_thumb_tier(value, &THUMB_GRID_TIERS, "列表缩略图档位无效")?;
+    }
+    if let Some(value) = patch_obj.get("thumb_quality_detail") {
+        validate_thumb_tier(value, &THUMB_DETAIL_TIERS, "详情页缩略图档位无效")?;
+    }
+    if let Some(value) = patch_obj.get("thumb_quality_fullscreen") {
+        validate_thumb_tier(value, &THUMB_FULLSCREEN_TIERS, "全屏缩略图档位无效")?;
+    }
+    if patch_obj
+        .get("show_r18")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err("R-18 展示开关必须是布尔值".to_string());
     }
     let mut merged = serde_json::to_value(current)
         .map_err(|err| format!("序列化设置失败: {err}"))?
@@ -241,6 +264,87 @@ mod tests {
             )
             .unwrap_err(),
             "主题色板无效"
+        );
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_updates_new_keys() {
+        let data_dir = temp_data_dir("newkeys");
+        let updated = apply_settings_patch(
+            &Settings::default(),
+            &json!({
+                "show_r18": false,
+                "thumb_quality_grid": "small",
+                "thumb_quality_detail": "original",
+                "thumb_quality_fullscreen": "original"
+            }),
+            &data_dir,
+        )
+        .unwrap();
+        assert!(!updated.show_r18);
+        assert_eq!(updated.thumb_quality_grid, "small");
+        assert_eq!(updated.thumb_quality_detail, "original");
+        assert_eq!(updated.thumb_quality_fullscreen, "original");
+        // 只出现部分键时其余保持原值
+        let updated =
+            apply_settings_patch(&Settings::default(), &json!({"show_r18": false}), &data_dir)
+                .unwrap();
+        assert!(!updated.show_r18);
+        assert_eq!(updated.thumb_quality_grid, "medium");
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_rejects_bad_thumb_tiers() {
+        let data_dir = temp_data_dir("tiers");
+        let cases: [(&str, &str); 3] = [
+            ("thumb_quality_grid", "列表缩略图档位无效"),
+            ("thumb_quality_detail", "详情页缩略图档位无效"),
+            ("thumb_quality_fullscreen", "全屏缩略图档位无效"),
+        ];
+        for (key, message) in cases {
+            for bad in [json!("huge"), json!(3)] {
+                let mut patch = serde_json::Map::new();
+                patch.insert(key.to_string(), bad.clone());
+                assert_eq!(
+                    apply_settings_patch(&Settings::default(), &Value::Object(patch), &data_dir)
+                        .unwrap_err(),
+                    message,
+                    "key={key} bad={bad}"
+                );
+            }
+        }
+        // 各键合法值接受
+        assert!(
+            apply_settings_patch(
+                &Settings::default(),
+                &json!({
+                    "thumb_quality_grid": "large",
+                    "thumb_quality_detail": "large",
+                    "thumb_quality_fullscreen": "large"
+                }),
+                &data_dir
+            )
+            .is_ok()
+        );
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_rejects_non_bool_show_r18() {
+        let data_dir = temp_data_dir("r18bool");
+        for bad in [json!("true"), json!(1), json!(null)] {
+            assert_eq!(
+                apply_settings_patch(&Settings::default(), &json!({"show_r18": bad}), &data_dir)
+                    .unwrap_err(),
+                "R-18 展示开关必须是布尔值",
+                "bad={bad}"
+            );
+        }
+        assert!(
+            apply_settings_patch(&Settings::default(), &json!({"show_r18": true}), &data_dir)
+                .is_ok()
         );
         cleanup(&data_dir);
     }
