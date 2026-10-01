@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bytes::Bytes;
 use serde_json::Value;
 use wreq::header::{HeaderMap, HeaderValue};
 use wreq_util::Emulation;
@@ -419,12 +420,12 @@ impl PixivClient {
     /// 下载二进制（i.pximg.net 原图 / ugoira zip）。额外带
     /// `Referer: https://www.pixiv.net/`（pximg 防盗链校验）。
     /// 与 get_json 共用限速/重试/429 暂停。空 body → Client 错误。
-    pub async fn download_bytes(&self, url: &str) -> Result<Vec<u8>, PixivError> {
+    pub async fn download_bytes(&self, url: &str) -> Result<Bytes, PixivError> {
         let bytes = self
             .run_gated(|| async {
                 let resp = self.send_download(url).await?;
                 let bytes = resp.bytes().await.map_err(|e| network_err(e, url))?;
-                Ok::<Vec<u8>, PixivError>(bytes.to_vec())
+                Ok::<Bytes, PixivError>(bytes)
             })
             .await?;
         if bytes.is_empty() {
@@ -437,13 +438,13 @@ impl PixivClient {
     /// Client 错误），但**不经 `run_gated`**：不占 ajax 信号量、不等 429 暂停
     /// 闸门、不做请求间隔限速。调用方（image_proxy 的 CDN 代理）用独立闸门与
     /// 自己的重试/退避策略约束并发，故需要这条不排队 ajax 限速的通道。
-    pub(crate) async fn download_bytes_ungated(&self, url: &str) -> Result<Vec<u8>, PixivError> {
+    pub(crate) async fn download_bytes_ungated(&self, url: &str) -> Result<Bytes, PixivError> {
         let resp = self.send_download(url).await?;
         let bytes = resp.bytes().await.map_err(|e| network_err(e, url))?;
         if bytes.is_empty() {
             return Err(PixivError::Client(format!("响应无内容: {}", mask_url(url))));
         }
-        Ok(bytes.to_vec())
+        Ok(bytes)
     }
 
     /// 登录态探测专用：GET JSON 但保留 HTTP 状态码（csrf.rs 需要按精确状态码

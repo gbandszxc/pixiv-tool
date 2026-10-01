@@ -31,6 +31,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rusqlite = { version = "0.40", features = ["bundled"] }
 tokio = { version = "1", features = ["full"] }
+bytes = "1.12"
 uuid = { version = "1", features = ["v4"] }
 # keyring 3：平台凭据存储全部要显式开启 feature（keyring 3 无默认后端）。
 # linux-native-sync-persistent = linux-keyutils + Secret Service（dbus），crypto-rust 免系统 openssl。

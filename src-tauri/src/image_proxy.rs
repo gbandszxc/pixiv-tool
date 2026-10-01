@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
+use bytes::Bytes;
 use tauri::http::{Request, Response};
 
 use crate::pixiv::client::{PixivClient, PixivError, mask_url};
@@ -360,7 +361,7 @@ impl From<&PixivError> for DownloadFailure {
 
 /// 同一 URL 的在途下载（单飞 cell）：首个调用者的 future 负责取数，其余
 /// 等待者共享同一结果（失败也共享给等待者）。
-type InflightCell = Arc<tokio::sync::OnceCell<Result<Arc<Vec<u8>>, DownloadFailure>>>;
+type InflightCell = Arc<tokio::sync::OnceCell<Result<Bytes, DownloadFailure>>>;
 
 /// 在途条目：cell 承载结果，`refs` 是本条目的调用者引用计数（首个调用者与
 /// 每个等待者各计一次）。计数用于区分「已无人关心」与「只是首个调用者被取消」：
@@ -435,10 +436,10 @@ impl Drop for InflightGuard {
 async fn coalesce_download_with<F, Fut>(
     url: &str,
     fetch: F,
-) -> Result<Arc<Vec<u8>>, DownloadFailure>
+) -> Result<Bytes, DownloadFailure>
 where
     F: FnOnce() -> Fut,
-    Fut: std::future::Future<Output = Result<Vec<u8>, DownloadFailure>>,
+    Fut: Future<Output = Result<Bytes, DownloadFailure>>,
 {
     let entry = {
         let mut map = inflight_map();
@@ -461,24 +462,20 @@ where
         key: url.to_string(),
         entry: Arc::clone(&entry),
     };
-    // cell 存 `Arc<Vec<u8>>`（等待者共享同一份字节），fetch 产出裸 `Vec<u8>`，
-    // 故在初始化闭包里包一层 Arc。
-    let result = entry
-        .cell
-        .get_or_init(move || async move { fetch().await.map(Arc::new) })
-        .await;
+    // Bytes 自带共享所有权：cell 和等待者复用响应缓冲，不额外包 Arc 或复制字节。
+    let result = entry.cell.get_or_init(fetch).await;
     // 初始化已落定（成功或失败都写进 cell）：回收条目，后续同 URL 请求
     // 重新取数。若本 future 在 await 中被取消则到不了这里，由守卫兜底。
     retire_inflight(url, &entry);
     match result {
-        Ok(bytes) => Ok(Arc::clone(bytes)),
+        Ok(bytes) => Ok(bytes.clone()),
         Err(err) => Err(*err),
     }
 }
 
 /// 读空时的回源：单飞合并同一 URL，成功后落盘并修剪缓存；失败不写盘、
 /// 不记忆失败（下一次调用重新取数）。
-async fn coalesce_image(url: &str, cache_dir: &Path) -> Result<Arc<Vec<u8>>, DownloadFailure> {
+async fn coalesce_image(url: &str, cache_dir: &Path) -> Result<Bytes, DownloadFailure> {
     coalesce_download_with(url, || async {
         let bytes = download_with_retry(url).await.map_err(|err| {
             log::debug!("pixiv-img 下载失败详情: {err}");
@@ -500,7 +497,7 @@ async fn coalesce_image(url: &str, cache_dir: &Path) -> Result<Arc<Vec<u8>>, Dow
 /// 单个逻辑下载：占一个 CDN 许可（覆盖全部重试与退避），最多 3 次尝试
 /// （首次 + DOWNLOAD_RETRY_DELAYS_MS 给出的两次重试），全程受
 /// DOWNLOAD_TIMEOUT_SECS 总预算约束；终止态错误立即返回。
-async fn download_with_retry(url: &str) -> Result<Vec<u8>, PixivError> {
+async fn download_with_retry(url: &str) -> Result<Bytes, PixivError> {
     let client = cdn_client()?;
     let _permit = CDN_GATE
         .acquire()
@@ -562,7 +559,8 @@ pub async fn handle_image_request(
     }
 
     match coalesce_image(&url, cache_dir).await {
-        Ok(bytes) => image_response(&key, bytes.as_ref().clone()),
+        // Tauri 协议响应要求 Cow<[u8]>：仅在此处转换为独占 Vec。
+        Ok(bytes) => image_response(&key, bytes.to_vec()),
         Err(DownloadFailure::NotFound) => {
             log::warn!("pixiv-img 404：CDN 无此文件");
             error_response(404)
@@ -890,17 +888,23 @@ mod tests {
                     calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     // 让出一次：其余调用者先登记到同一 cell 的等待队列
                     tokio::task::yield_now().await;
-                    Ok(Vec::from(&b"IMG"[..]))
+                    Ok(Bytes::from(Vec::from(&b"IMG"[..])))
                 })
                 .await
             }));
         }
+        let mut shared_bytes: Option<Bytes> = None;
         for handle in handles {
             let bytes = handle
                 .await
                 .expect("合并任务不应 panic")
                 .expect("取数应成功");
-            assert_eq!(bytes.as_slice(), b"IMG".as_slice());
+            assert_eq!(bytes.as_ref(), b"IMG".as_slice());
+            if let Some(shared) = &shared_bytes {
+                assert_eq!(bytes.as_ptr(), shared.as_ptr(), "等待者应共享同一字节缓冲");
+            } else {
+                shared_bytes = Some(bytes);
+            }
         }
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -947,15 +951,15 @@ mod tests {
         let (a, b) = tokio::join!(
             coalesce_download_with(&url_a, || async {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(vec![b'A'])
+                Ok(Bytes::from_static(b"A"))
             }),
             coalesce_download_with(&url_b, || async {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(vec![b'B'])
+                Ok(Bytes::from_static(b"B"))
             }),
         );
-        assert_eq!(a.expect("A 应成功").as_slice(), b"A".as_slice());
-        assert_eq!(b.expect("B 应成功").as_slice(), b"B".as_slice());
+        assert_eq!(a.expect("A 应成功").as_ref(), b"A".as_slice());
+        assert_eq!(b.expect("B 应成功").as_ref(), b"B".as_slice());
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             2,
@@ -971,11 +975,11 @@ mod tests {
         for expected in 1..=2u8 {
             let bytes = coalesce_download_with(&url, || async {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(vec![expected])
+                Ok(Bytes::from(vec![expected]))
             })
             .await
             .expect("取数应成功");
-            assert_eq!(bytes.as_slice(), [expected].as_slice());
+            assert_eq!(bytes.as_ref(), [expected].as_slice());
             assert!(!inflight_contains(&url), "完成后在途条目应被回收");
         }
         assert_eq!(
@@ -1051,7 +1055,7 @@ mod tests {
                     calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     started_b.notify_one();
                     release_b.notified().await;
-                    Ok(Vec::from(&b"IMG"[..]))
+                    Ok(Bytes::from(Vec::from(&b"IMG"[..])))
                 })
                 .await
             })
@@ -1068,7 +1072,7 @@ mod tests {
             tokio::spawn(async move {
                 coalesce_download_with(&url, || async move {
                     calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Ok(vec![b'C'])
+                    Ok(Bytes::from_static(b"C"))
                 })
                 .await
             })
@@ -1085,11 +1089,11 @@ mod tests {
         let (ra, rb, rc) = tokio::join!(a, b, c);
         assert!(ra.expect_err("A 应被取消").is_cancelled());
         assert_eq!(
-            rb.expect("B 不应 panic").expect("B 应成功").as_slice(),
+            rb.expect("B 不应 panic").expect("B 应成功").as_ref(),
             b"IMG".as_slice()
         );
         assert_eq!(
-            rc.expect("C 不应 panic").expect("C 应成功").as_slice(),
+            rc.expect("C 不应 panic").expect("C 应成功").as_ref(),
             b"IMG".as_slice()
         );
         assert_eq!(

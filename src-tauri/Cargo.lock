@@ -2909,6 +2909,7 @@ name = "pixiv-tool"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "futures-util",
  "keyring",

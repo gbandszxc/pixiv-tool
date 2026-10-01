@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { shallowRef } from "vue";
 import { invoke } from "../api/tauri";
 import type { TaskMutationResult, TaskRow } from "../api/tauri";
 
@@ -7,11 +7,29 @@ import type { TaskMutationResult, TaskRow } from "../api/tauri";
 export type Task = TaskRow;
 
 export const useTaskStore = defineStore("tasks", () => {
-  const tasks = ref<Task[]>([]);
+  // 任务行只通过整批快照替换，避免为每一行建立深层响应式代理。
+  const tasks = shallowRef<Task[]>([]);
+  let refreshPromise: Promise<void> | null = null;
+  let refreshRequested = false;
 
-  async function fetchTasks() {
-    const data = await invoke<{ items: TaskRow[] }>("tasks_list");
-    tasks.value = data.items || [];
+  function fetchTasks(): Promise<void> {
+    refreshRequested = true;
+    if (!refreshPromise) {
+      refreshPromise = (async () => {
+        try {
+          do {
+            refreshRequested = false;
+            const data = await invoke<{ items: TaskRow[] }>("tasks_list");
+            tasks.value = data.items || [];
+            // 请求期间的进度事件或任务变更合并为一次尾随刷新，所有调用者等待最新快照。
+          } while (refreshRequested);
+        } finally {
+          refreshRequested = false;
+          refreshPromise = null;
+        }
+      })();
+    }
+    return refreshPromise;
   }
 
   async function createTask(sourceType: string, sourceId: string, formats: string[], category = "novel") {

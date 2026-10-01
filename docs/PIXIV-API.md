@@ -322,6 +322,7 @@
 - 回源：进程级共享的无 cookie client（`cdn_client` image_proxy.rs:329，`send_download` 自带 Referer）；全局并发 10（`CDN_MAX_CONCURRENT_DOWNLOADS` image_proxy.rs:40）；同一 URL 并发冷启动单飞合并（`coalesce_download_with` image_proxy.rs:435）。
 - 重试：`download_with_retry` image_proxy.rs:503——首次 + `[200,500]ms` 两次重试，总预算 15s（`DOWNLOAD_TIMEOUT_SECS` image_proxy.rs:42）；404 / 401 / 403 / 429 为终止态不重试（`should_retry` image_proxy.rs:338），CDN 的 429 立即 502、无跨请求退避。
 - 响应：成功 200 + 按扩展名 Content-Type + `Cache-Control: public, max-age=31536000, immutable`（image_response image_proxy.rs:577）；CDN 404 → 404，其余失败 → 502（error_response image_proxy.rs:587）。
+- 内存所有权：`download_bytes` / `download_bytes_ungated` 返回 `bytes::Bytes`，单飞等待者共享同一字节缓冲；只在 Tauri 成功响应的独占 `Cow<[u8]>` 边界转为 `Vec<u8>`。不改变 CDN 端点、请求头、响应体、错误分类或缓存策略；仍整包接收，响应收集期间的峰值未因这次减少复制而消失。
 
 ## 6. 已失效端点与勘误（截至 2026-10-01 实测）
 
