@@ -4,7 +4,7 @@
  *
  * - 状态来自详情响应 bookmarkState（父级持有并经 change 回写）：
  *   未收藏 = 空心 + 「收藏」；已收藏 = 实心 + 「已收藏」，私密收藏追加「私密」角标；
- * - 点击弹原生 details 小菜单（跟随 AccountMenu 的 details 模式）：
+ * - 点击弹原生 details 小菜单（沿用侧栏账号菜单曾用的 details 模式）：
  *   未收藏 → [公开收藏][私密收藏]；已收藏 → [取消收藏]；
  * - 请求进行中禁用（aria-busy + 降透明度）；失败 notify 归一文案；
  *   成功经 change 通知父级更新本地态并 notify；

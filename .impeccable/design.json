@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-10-01T00:00:00+08:00",
+  "generatedAt": "2026-10-01T12:36:00+08:00",
   "title": "Design System: Pixiv Tool",
   "extensions": {
     "colorMeta": {
@@ -27,7 +27,7 @@
       "label": { "displayName": "Label", "purpose": "Table headers, status pills and compact metadata." }
     },
     "shadows": [
-      { "name": "overlay-only", "value": "0 4px 12px rgb(0 0 0 / 18%)", "purpose": "Account menu and snackbar only (the only legal overlay shadow value)." }
+      { "name": "overlay-only", "value": "0 4px 12px rgb(0 0 0 / 18%)", "purpose": "Snackbar and the detail-page bookmark actions popup only (the only legal overlay shadow value)." }
     ],
     "motion": [
       { "name": "reduced-motion", "value": "0.01ms", "purpose": "Global reduced-motion override for transitions and animations." }
@@ -42,8 +42,9 @@
   "components": [
     { "name": "Filled Button", "kind": "button", "refersTo": "button-filled", "description": "Material Web primary action such as start, save, resume or confirm." },
     { "name": "Outlined Button", "kind": "button", "refersTo": "button-outlined", "description": "Material Web secondary action such as browse, sync or batch delete." },
-    { "name": "Form Controls", "kind": "input", "refersTo": "md-outlined-text-field, md-outlined-select, md-radio, md-checkbox", "description": "Material Web controls for source IDs, settings and selection, unified to 40px height and 14px input text by control-density size tokens (main.css); appearance untouched." },
-    { "name": "Sidebar Navigation", "kind": "nav", "refersTo": "navigation-item-active", "description": "256px left navigation that collapses to 72px; active item uses primary-container." },
+    { "name": "Form Controls", "kind": "input", "refersTo": "md-outlined-text-field, md-outlined-select, md-radio, md-checkbox", "description": "Material Web controls for source IDs, settings and selection, unified to 40px height and 14px input text by control-density size tokens (main.css); appearance untouched. The settings form adds two groups on the existing form/fieldset structure at the same 40px density with no new tokens: Image quality (list-grid / detail / fullscreen thumbnail tiers, defaults medium / medium / large) and Content (the R-18 toggle, default true)." },
+    { "name": "Sidebar Navigation", "kind": "nav", "refersTo": "navigation-item-active", "description": "Flat 256px left navigation that collapses to 72px via the header-row toggle button: browse section on top, one divider, then a single Tools item (/tools* prefix active); no group headings, nav scrolls when the window is short. Active item uses primary-container; footer is an avatar chip (avatar + account name + up caret, 8% primary hover) that opens the account drawer." },
+    { "name": "Account Drawer", "kind": "custom", "refersTo": "account-drawer", "description": "Modal drawer opened by the sidebar avatar chip: slides from the left over a rgb(0 0 0 / 35%) scrim, width min(420px, 92vw), surface-container background with a 16px right radius; holds the account section (switch / add / logout) above a divider and the settings form. Closes on Escape, scrim click or the header close button; 0.15s ease slide (reduced-motion covered globally); sits below the snackbar z-order." },
     { "name": "Dialog", "kind": "dialog", "refersTo": "native-dialog", "description": "Native dialog styled with surface-container, 28px radius and a scrim; Material Web's dialog component is not used." },
     { "name": "Task Progress", "kind": "custom", "refersTo": "md-linear-progress", "description": "Material Web linear progress paired with text-first status and metadata." }
     ,{ "name": "Snackbar", "kind": "feedback", "refersTo": "m3-snackbar", "description": "Global top-right notification that disappears after 3.2 seconds." }
@@ -53,7 +54,7 @@
     ,{ "name": "Work Grid", "kind": "custom", "refersTo": "work-grid", "description": "auto-fill minmax(160px,1fr) grid with static skeleton blocks (no shimmer), empty/error/retry states and no-more footer." }
     ,{ "name": "Viewer Stage", "kind": "custom", "refersTo": "viewer-stage", "description": "Full-page artwork viewer stage on neutral near-black rgb(0 0 0 / 0.78); R-18 blur(24px) mask with confirm button remembered per session." }
     ,{ "name": "Novel Reader", "kind": "custom", "refersTo": "novel-reader", "description": "720px column, 14px/1.8 body, chapter headings 16px/700, sticky pager with page select; series table rows 48px+." }
-    ,{ "name": "Section Tabs", "kind": "navigation", "refersTo": "md-tabs, section-heading", "description": "Channel section headings are 16px/600 on-surface-variant; kind/period switches use secondary md-tabs; top-three ranking badges use primary-container." }
+    ,{ "name": "Section Tabs", "kind": "navigation", "refersTo": "md-tabs, section-heading", "description": "Channel section headings are 16px/600 on-surface-variant; kind/period switches use secondary md-tabs; the Tools page reuses the same secondary tabs (SectionTabs wrapper) as its sub-route navigator; top-three ranking badges use primary-container." }
     ,{ "name": "Login Guard", "kind": "custom", "refersTo": "browse-login-guard", "description": "Browse commands on a logged-out session return a fixed message and open the existing login dialog; browse views never re-implement login UI." }
     ,{ "name": "Browse Home Header", "kind": "navigation", "refersTo": "browse-home-header", "description": "Browse home title row with the shuffle action vertically centered; auxiliary refresh actions stay at text-button level (md-text-button with an 18px stroke refresh icon), never outlined or filled." }
     ,{ "name": "Bookmark Page", "kind": "custom", "refersTo": "browse-bookmark-page", "description": "Own-bookmarks page: type secondary tabs plus a public/private pill segmented toggle (surface-container track, primary-container selected); left sticky 180px tag rail (All row with summed count, tag rows with 12px/600 count badges, empty name shown as Untagged, wrapping to chips under 640px); right side total line + WorkGrid with hover Remove-bookmark action. Other users' public bookmarks (author tab) stay rest=show without the remove action." }

@@ -1,7 +1,8 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { invoke } from "../api/tauri";
+import { isTauri, invoke } from "../api/tauri";
 import type { Settings } from "../api/tauri";
+import { mockSettingsGet, mockSettingsSave } from "../api/devMock";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 export type { Settings } from "../api/tauri";
@@ -23,10 +24,20 @@ export const useSettingsStore = defineStore("settings", () => {
   });
 
   async function fetchSettings() {
+    // 非 Tauri（浏览器视觉验收）：内存版样例配置，见 api/devMock.ts。
+    if (!isTauri()) {
+      settings.value = mockSettingsGet();
+      return;
+    }
     settings.value = await invoke<Settings>("settings_get");
   }
 
   async function saveSettings(newSettings: Partial<Settings>) {
+    if (!isTauri()) {
+      mockSettingsSave(newSettings);
+      Object.assign(settings.value, newSettings);
+      return;
+    }
     // 校验失败时后端 reject string，由视图层用 errorMessage() 展示。
     await invoke("settings_save", { settings: newSettings });
     Object.assign(settings.value, newSettings);

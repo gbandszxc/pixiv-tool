@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
-import { invoke } from "../api/tauri";
+import { isTauri, invoke } from "../api/tauri";
+import { mockAuthAccountsList, mockAuthStatus } from "../api/devMock";
 import type {
   AccountEntry,
   AuthAccountsResponse,
@@ -58,6 +59,19 @@ export const useAuthStore = defineStore("auth", () => {
   }
 
   async function checkStatus() {
+    // 非 Tauri（浏览器视觉验收）：确定性样例登录态，见 api/devMock.ts。
+    if (!isTauri()) {
+      const data = mockAuthStatus();
+      applyStatus({
+        isLoggedIn: data.is_logged_in,
+        userId: data.user_id || "",
+        pixivId: data.pixiv_id || "",
+        name: data.name || "",
+        profileImg: data.profile_img || "",
+        avatarUrl: data.avatar_url || "",
+      });
+      return;
+    }
     try {
       const data = await invoke<AuthStatusResponse>("auth_status");
       applyStatus({
@@ -126,6 +140,13 @@ export const useAuthStore = defineStore("auth", () => {
 
   /** 拉取已保存账号列表（登录 / 登出 / 切换后调用以刷新下拉）。 */
   async function fetchAccounts() {
+    // 非 Tauri（浏览器视觉验收）：样例账号列表，见 api/devMock.ts。
+    if (!isTauri()) {
+      const data = mockAuthAccountsList();
+      accounts.value = data.accounts ?? [];
+      activeAccountId.value = data.active ?? "";
+      return;
+    }
     try {
       const data = await invoke<AuthAccountsResponse>("auth_accounts_list");
       accounts.value = data.accounts ?? [];

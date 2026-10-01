@@ -95,17 +95,17 @@ Pixiv Tool 是一款以任务完成为中心的本地桌面工具。当前界面
 
 ## Layout
 
-应用外壳是全高双列 grid：默认侧栏 256px，折叠后 72px，主内容占余宽。侧栏标题高 72px；导航项最小高 48px，圆角胶囊宽度扣除左右各 12px。普通主内容的内边距为 24px，内容列最大宽度为 1120px；抓取与设置表单卡最大宽度为 600px。
+应用外壳是全高双列 grid，恒为视口高（行高钉 100vh、`overflow: hidden`）：默认侧栏 256px，折叠后 72px，主内容占余宽且是唯一滚动容器（`overflow-y: auto`），长内容不会把侧栏拉长。侧栏头部行高 72px，含 logo、标题与收起按钮（折叠态仅留居中的展开按钮）；导航项最小高 48px，圆角胶囊宽度扣除左右各 12px，窗口高度不足时导航区自身滚动。普通主内容的内边距为 24px，内容列最大宽度为 1120px；抓取表单卡最大宽度为 600px，设置字段直接排布在账号/设置抽屉内、不再使用表单卡容器。
 
 历史与任务列表在底部右对齐分页区提供每页 20、50、100 条的选择器；切换容量或分类回到第 1 页。历史页把容量传至数据库查询，任务页只对当前筛选结果分页，选择与批量操作仍保留跨页状态。
 
-空间只使用 4、6、8、12、16、24px 刻度。工具栏与控制行可以换行；任务标题在 640px 以下变为纵向排列，历史搜索框与设置路径行扩展为全宽/纵向，Pixiv 浏览工具栏允许地址栏换至下一行。表格保持最小宽度 760px 并允许横向滚动。侧栏不会因媒体查询自动隐藏，用户通过折叠按钮切换。
+空间只使用 4、6、8、12、16、24px 刻度。工具栏与控制行可以换行；任务标题在 640px 以下变为纵向排列，历史搜索框与设置路径行扩展为全宽/纵向，Pixiv 浏览工具栏允许地址栏换至下一行。表格保持最小宽度 760px 并允许横向滚动。侧栏不会因媒体查询自动隐藏，用户通过头部行的折叠按钮切换（展开态位于标题行右端，折叠态独占头部行）。
 
 **The Compact Task Rule.** 对齐、留白和换行优先服务于任务、历史和设置的扫读，而不是制造大面积空白。
 
 ## Elevation & Depth
 
-日常层级通过 surface 与 surface container 的色调差、outline 分隔线和圆角表达；普通卡片、任务列表和表格没有阴影。账号菜单与 snackbar 使用 `0 4px 12px rgb(0 0 0 / 18%)` 的轻阴影（**唯一合法值**，不要再写 `12px/14px` 这类非法或变体写法；snackbar 历史上的 14px blur 已于 2026-10-01 收敛到 12px），原生对话框的 backdrop 为 `rgb(0 0 0 / 35%)`。
+日常层级通过 surface 与 surface container 的色调差、outline 分隔线和圆角表达；普通卡片、任务列表和表格没有阴影。snackbar 与详情页收藏操作的 details 弹出菜单使用 `0 4px 12px rgb(0 0 0 / 18%)` 的轻阴影（**唯一合法值**，不要再写 `12px/14px` 这类非法或变体写法；snackbar 历史上的 14px blur 已于 2026-10-01 收敛到 12px），原生对话框的 backdrop 为 `rgb(0 0 0 / 35%)`。
 
 **The Overlay-Only Shadow Rule.** 阴影仅标示临时浮层，不应用于普通内容容器。
 
@@ -117,9 +117,10 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 
 - `md-filled-button`：主提交、恢复和确认操作；`md-outlined-button`：浏览、同步、批量删除等次要操作；`md-text-button`：取消、删除等低强调操作；`md-icon-button`：工具栏和行级图标动作。
 - `md-outlined-text-field`、`md-outlined-select`、`md-radio` 与 `md-checkbox`：所有可编辑字段和选择；字段以标签、12px–16px 间距和至少 40px 的 choice 行组织。
-- `md-tabs` / `md-primary-tab`：登录方式切换；`md-linear-progress`：任务进度。Material Web 负责它们的默认交互状态。
+- `md-tabs` / `md-primary-tab`：登录方式切换；`md-secondary-tab`（SectionTabs 封装）：浏览分区与工具页顶部页签（工具页页签即子路由导航）；`md-linear-progress`：任务进度。Material Web 负责它们的默认交互状态。
 - 原生 `dialog`：登录和危险操作确认，采用 surface-container、28px 圆角及右对齐按钮行；自定义 `.m3-snackbar` 固定在右上角，通知在 3.2 秒后消失。页面不应另建成功提示条。
-- 左侧导航：图标加文字，hover 使用 8% primary 的状态层，active 使用 primary-container。账号区位于侧栏底部，原生 `details` 菜单向上弹出。
+- 左侧导航：扁平菜单、无分组标题——浏览区在上、一条分隔线、最后是「工具」单项；图标加文字，hover 使用 8% primary 的状态层，active 使用 primary-container。账号区位于侧栏底部，为头像 chip（头像 + 账号名 + 向上箭头，hover 8% primary 状态层；折叠态居中只显示头像），点击打开账号/设置抽屉。
+- 账号/设置抽屉：M3 modal drawer 形态——左侧滑出、scrim 为既定的 `rgb(0 0 0 / 35%)`、宽 `min(420px, 92vw)`、surface-container 底、右缘 16px 圆角；内容为账号区（列表切换 / 添加账号 / 退出登录）+ 分隔线 + 设置区（SettingsPanel 表单）。Esc、点 scrim 或标题栏关闭按钮均可关闭；滑入过渡复用既有 0.15s ease（reduced-motion 由全局兜底），层级低于 snackbar。
 - alert、状态 pill、表格和表单卡是小型本地样式，复用 M3 颜色角色和上述 shape/spacing，不另建组件库。
 
 **控件密度.** Material Web 的 `md-outlined-text-field` 与 `md-outlined-select` 统一为 40px 高、14px 输入文字（组件默认 56px / 16px），与全局 14px 正文和 40px 的 choice 行对齐。实现只做尺寸 token 覆盖（`frontend/src/styles/main.css` 的「控件密度层」）：上下内距 8px（文本框 `--md-outlined-text-field-top/bottom-space`；选择器无容器高度 token，经内嵌 field 继承 `--md-outlined-field-top/bottom-space`）、输入字号 14px（选择器走 `--md-outlined-select-text-field-input-text-size`）、输入行高钉 24px（8 + 24 + 8 = 40px）。按钮维持 Material 默认的 40px 高 / 14px 标签字，不做覆盖。密度层不改颜色、圆角、描边、浮标等组件外观（Native-First Rule）。
@@ -142,7 +143,7 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 
 **The Native-First Rule.** 已由 Material Web 覆盖的按钮、输入、选择、复选、单选、标签页和进度条不重写外观；原生 `dialog`、`details` 和表格只补充当前实现所需的容器样式。
 
-设置页的主题与配色可即时预览，但只在保存后写入设置；带有未保存预览时离开页面，恢复已保存主题并显示全局 Snackbar。
+设置抽屉中的主题与配色可即时预览，但只在保存后写入设置；带有未保存预览时关闭抽屉，恢复已保存主题并显示全局 Snackbar。设置区新增「图片与缩略图」（列表·网格 / 详情页主图 / 大图·全屏三档，默认 medium / medium / large）与「内容显示」（R-18 开关，默认开启 `true`）两组，沿用既有 form / `fieldset` 结构与 40px 控件密度，不新增 token。
 
 交互动画主要来自 Material Web 组件；项目全局在 `prefers-reduced-motion: reduce` 下将过渡和动画缩短至 0.01ms、禁止平滑滚动。焦点表现依赖 Material Web 的控件实现；自定义图标按钮提供 `aria-label`，任务筛选组、任务列表、设置表单、通知及告警已有对应的语义标签或角色。新自定义可操作控件必须保留等效的键盘可达性和名称。
 

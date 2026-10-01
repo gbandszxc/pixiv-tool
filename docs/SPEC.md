@@ -129,13 +129,14 @@ pixiv-tool/
 │     └─ paths.rs / platform.rs / logging.rs
 ├─ frontend/                    # Vue3 + TS + Vite + Material Web（M3）
 │  ├─ src/
-│  │  ├─ views/                 # CrawlView / IllustrationView / TasksView / HistoryView / SettingsView
-│  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking + Work/Series/Author/Novel
-│  │  ├─ components/            # auth/ navigation/ browse/（WorkCard / WorkGrid / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
+│  │  ├─ views/                 # ToolsView（工具页签壳）/ CrawlView / IllustrationView / TasksView / HistoryView
+│  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark + Work/Series/Author/Novel
+│  │  ├─ components/            # auth/（LoginDialog / AccountDrawer）navigation/ settings/（SettingsPanel）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
 │  │  ├─ api/browse.ts          # 浏览契约类型 + 非 Tauri 环境的确定性 mock 层
+│  │  ├─ api/devMock.ts         # auth/settings 的浏览器视觉验收 mock（仅 !isTauri() 生效）
 │  │  ├─ utils/thumb.ts         # 缩略图 URL 档位改写（§6.4）
 │  │  ├─ composables/useThumbTier.ts # 设置档位 → 合法 ThumbTier 的响应式读取
 │  │  ├─ locales/               # zh-CN.ts / en-US.ts
@@ -471,23 +472,38 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 
 | 页面 | 路由 | 必需 |
 |---|---|---|
-| 抓取-小说 | `/` | ✅ |
-| 抓取-插画 | `/illustration` | ✅ |
-| 任务 | `/tasks`（支持小说/插画分类筛选） | ✅ |
-| 历史 | `/history`（支持小说/插画分类切换） | ✅ |
-| 设置 | `/settings` | ✅ |
+| 工具-小说抓取 | `/tools/novel`（页签「小说」） | ✅ |
+| 工具-插画抓取 | `/tools/illustration`（页签「插画」） | ✅ |
+| 工具-任务 | `/tools/tasks`（页签「任务」） | ✅ |
+| 工具-历史 | `/tools/history`（页签「历史」） | ✅ |
 | 浏览-首页 | `/browse/home`（推荐流，换一批去重追加） | ✅ |
-| 浏览-频道 | `/browse/illustration` `/browse/manga` `/browse/novel`（关注新作/推荐/排行/热门标签板块） | ✅ |
+| 浏览-频道 | `/browse/illustration` `/browse/manga` `/browse/novel`（关注新作/推荐/排行/热门标签板块 + 顶部 R-18 快捷筛选（全部/一般向/R18）） | ✅ |
 | 浏览-发现 | `/browse/discover`（按历史推荐，前端去重无限滚动） | ✅ |
 | 浏览-动态 | `/browse/feed`（关注的新作品：插画/小说 × 全部/R-18） | ✅ |
 | 浏览-搜索 | `/browse/search`（类型 tab + 排序/对象/匹配 + ID/链接直达） | ✅ |
 | 浏览-排行榜 | `/browse/ranking`（插画/漫画/动图/小说 × 周期 + 日期导航） | ✅ |
+| 浏览-收藏 | `/browse/bookmark`（插画·漫画/小说 × 公开/私密 + 标签筛选） | ✅ |
 | 作品查看器 | `/browse/work/illust|:kind=illust|manga>/:id`（多页翻页、R-18 遮罩、相关推荐） | ✅ |
 | 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航） | ✅ |
 | 系列目录 | `/browse/series/:id`（游标加载） | ✅ |
-| 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说 tab） | ✅ |
+| 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab） | ✅ |
 
-侧边栏分组为「工具」（抓取-小说 / 抓取-插画 / 任务 / 历史 / 设置）与「浏览」8 项；分组标题 12px/600。
+**工具页**：页签壳 `ToolsView`（`/tools`），顶部 md-secondary-tab（复用 SectionTabs 封装）
+即子路由导航、与路由双向同步；`/tools` 重定向到 `/tools/novel`。旧路径 `/`、
+`/illustration`、`/tasks`、`/history` 保留为函数式 redirect，透传 query 与 hash
+（浏览页「返填表单」跳旧路径并带 `sourceType`/`sourceId` 预填，依赖此处）。
+`/settings` 路由已移除，设置整体迁入账号/设置抽屉（见下）。
+
+**侧边栏**：扁平菜单、无分组标题——浏览区（首页/插画/漫画/小说/发现/动态/搜索/
+排行榜/收藏）在上，其后一条分隔线，最后是「工具」单项（`/tools*` 前缀高亮，
+浏览项按路径精确匹配）。头部行 = logo + 标题 + 收起侧栏按钮（折叠态仅留展开按钮）；
+折叠态 72px 只显示图标，窗口高度不足时导航区自身滚动。侧栏底部为**头像 chip**
+（头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击打开**账号/设置抽屉**：
+modal drawer 左侧滑出、带 scrim、宽 `min(420px, 92vw)`、Esc / 点 scrim / 标题栏
+✕ 关闭；内容 = 账号区（列表切换 / 添加账号复用 LoginDialog / 退出登录）+ 分隔线 +
+设置区（SettingsPanel，含主题实时预览；关闭时若预览未保存则恢复已保存主题并提示）。
+应用外壳恒为视口高，右侧内容区是唯一滚动容器，长内容不再拉长侧栏。
+
 浏览模式详见 §6.4 与 ADR 0012。
 
 ### 6.2 i18n
@@ -495,12 +511,12 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 - 框架：**vue-i18n**
 - 语言：**简体中文（默认）+ 英文**
 - 文件：`src/locales/zh-CN.ts` / `en-US.ts`
-- 设置页可切；启动期以 `localStorage["pixiv-tool-lang"]` 为准，settings.json 的
+- 设置抽屉可切；启动期以 `localStorage["pixiv-tool-lang"]` 为准，settings.json 的
   `language` 加载后回填并向 localStorage 同步（两处同写，避免首屏语言闪变）
 
 ### 6.3 主题
 
-- 选项：浅色 / 深色 / 跟随系统（设置页下拉，持久化到 `settings.json` 的 `theme`）
+- 选项：浅色 / 深色 / 跟随系统（设置抽屉下拉，持久化到 `settings.json` 的 `theme`）
 - 实现：`frontend/src/styles/main.css` 定义 M3 颜色角色（`--md-sys-color-*`）与
   `--surface` / `--ink` / `--space-*` / `--radius-*` 别名；`dark`，或 `auto` 且
   系统 `prefers-color-scheme: dark` 时，`App.vue` 给 `<html>` 加 `.dark` 类并调
@@ -698,7 +714,7 @@ macOS universal/aarch64 DMG、Linux x64 AppImage，最后**幂等覆盖**式发�
 - **格式**：`%Y-%m-%d %H:%M:%S%.3f [级别] [target] 消息`（chrono 本地时间戳）
 - **编码**：UTF-8
 - **滚动**：单文件 8MB（`MAX_LOG_FILE_SIZE`），超出轮转为 `app_old.log`
-- **清除**：设置页"清除日志"按钮（`clear_logs` 将 app.log 清空写回）
+- **清除**：设置抽屉"清除日志"按钮（`clear_logs` 将 app.log 清空写回）
 
 ---
 

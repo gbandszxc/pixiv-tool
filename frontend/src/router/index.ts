@@ -28,35 +28,30 @@ const browseWorkRoutes: RouteRecordRaw[] = [
   }),
 }));
 
+/** 旧路径 → /tools/* 的函数式 redirect：保留 query 与 hash（浏览页「返填表单」跳 / 或 /illustration 并带 query 预填，依赖此处透传）。 */
+const legacyToolRedirect = (path: string) => (to: RouteLocation) => ({ path, query: to.query, hash: to.hash });
+
 const router = createRouter({
   // Tauri 静态资源（tauri:// 或 asset 协议）下 hash 路由无需服务端回退，最稳。
   history: createWebHashHistory(),
   routes: [
+    // ===== 工具页（页签壳 ToolsView，子路由 = 顶部页签）=====
     {
-      path: "/",
-      name: "crawl",
-      component: () => import("../views/CrawlView.vue"),
+      path: "/tools",
+      component: () => import("../views/ToolsView.vue"),
+      children: [
+        { path: "", redirect: "/tools/novel" },
+        { path: "novel", name: "tools-novel", component: () => import("../views/CrawlView.vue") },
+        { path: "illustration", name: "tools-illustration", component: () => import("../views/IllustrationView.vue") },
+        { path: "tasks", name: "tools-tasks", component: () => import("../views/TasksView.vue") },
+        { path: "history", name: "tools-history", component: () => import("../views/HistoryView.vue") },
+      ],
     },
-    {
-      path: "/illustration",
-      name: "illustration",
-      component: () => import("../views/IllustrationView.vue"),
-    },
-    {
-      path: "/tasks",
-      name: "tasks",
-      component: () => import("../views/TasksView.vue"),
-    },
-    {
-      path: "/history",
-      name: "history",
-      component: () => import("../views/HistoryView.vue"),
-    },
-    {
-      path: "/settings",
-      name: "settings",
-      component: () => import("../views/SettingsView.vue"),
-    },
+    // 旧抓取页路径保留为重定向；/settings 已移除（设置迁入侧栏头像的账号/设置抽屉）。
+    { path: "/", redirect: legacyToolRedirect("/tools/novel") },
+    { path: "/illustration", redirect: legacyToolRedirect("/tools/illustration") },
+    { path: "/tasks", redirect: legacyToolRedirect("/tools/tasks") },
+    { path: "/history", redirect: legacyToolRedirect("/tools/history") },
     // ===== 浏览模式（browse-ui-v1，F1-F5 替换占位实现）=====
     {
       path: "/browse/home",
