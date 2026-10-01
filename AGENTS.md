@@ -98,7 +98,7 @@ cargo tauri build             # 生产打包（详见 docs/PACKAGING.md）
   export CMAKE_GENERATOR="Visual Studio 17 2022"
   ```
   MSVC 链接器缺失时包一层 `cmd /c "call <vs路径>VC\Auxiliary\Build\vcvars64.bat && cargo ..."`
-- **tauri CLI 用仓库内那份**：`cargo tauri` 需全局安装，本机通常没有；走 `cd frontend && pnpm tauri dev`（或 `./frontend/node_modules/.bin/tauri`）。从仓库根直接调本地 CLI 若 Vite 未自动拉起，加 `--config '{"build":{"beforeDevCommand":""}}'` 并自起 Vite
+- **tauri CLI 用仓库内那份**：`cargo tauri` 需全局安装，本机通常没有；在**仓库根**执行 `./frontend/node_modules/.bin/tauri dev`。注意 CLI 从 CWD 向下探测 `src-tauri/`，**不能** `cd frontend` 后调用（frontend 与 src-tauri 平级，会报 "Couldn't recognize the current folder as a Tauri project"）。从仓库根直接调本地 CLI 若 Vite 未自动拉起，加 `--config '{"build":{"beforeDevCommand":""}}'` 并自起 Vite
 
 ## 工程约定
 

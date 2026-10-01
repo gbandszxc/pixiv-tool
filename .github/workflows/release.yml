@@ -122,18 +122,22 @@ jobs:
           grep '"version"' src-tauri/tauri.conf.json
           grep -m1 '^version' src-tauri/Cargo.toml
 
+      - name: 前端构建（类型检查 + vite build）
+        shell: bash
+        run: pnpm -C frontend build
+
       - name: tauri build
         shell: bash
-        working-directory: frontend
         run: |
-          # Windows 与本机约定一致：MSVC 生成器 + runner 自带 LLVM 的 libclang
+          # tauri-cli 从 CWD 向下探测 src-tauri（不会找平级目录），必须从仓库根调用
+          # frontend/ 下的本地 CLI；beforeBuildCommand 由上一步显式完成，这里清空
           if [ "$RUNNER_OS" = "Windows" ]; then
             export LIBCLANG_PATH="C:\Program Files\LLVM\bin"
             export CMAKE_GENERATOR="Visual Studio 17 2022"
           fi
-          args=(--bundles "${{ matrix.bundles }}")
+          args=(--bundles "${{ matrix.bundles }}" --config '{"build":{"beforeBuildCommand":""}}')
           [ -n "${{ matrix.tauri_target }}" ] && args+=(--target "${{ matrix.tauri_target }}")
-          pnpm tauri build "${args[@]}"
+          frontend/node_modules/.bin/tauri build "${args[@]}"
 
       - name: 收集安装包
         shell: bash
