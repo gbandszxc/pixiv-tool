@@ -23,6 +23,17 @@ export default {
     browseSeriesTitle: "Series",
     browseAuthorTitle: "Artist",
     browseR18Hidden: "{count} R-18 works hidden",
+    // Shared pagination (components/common/AppPagination.vue)
+    pagination: {
+      navLabel: "Pagination",
+      total: "{count} items in total",
+      pageSizeLabel: "Rows per page",
+      pageSizeOption: "{n} / page",
+      prevPage: "Previous page",
+      nextPage: "Next page",
+      currentPage: "Page {n}",
+      pageOf: "{current} / {total}",
+    },
   },
   app: {
     exitConfirmTitle: "Quit Pixiv Tool?",

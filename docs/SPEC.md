@@ -131,7 +131,7 @@ pixiv-tool/
 │  ├─ src/
 │  │  ├─ views/                 # ToolsView（工具页签壳）/ CrawlView / IllustrationView / TasksView / HistoryView
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark + Work/Series/Author/Novel
-│  │  ├─ components/            # auth/（LoginDialog / AccountMenu）navigation/ settings/（SettingsPanel / SettingsDialog）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
+│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/ settings/（SettingsPanel / SettingsDialog）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型

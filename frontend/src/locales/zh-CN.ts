@@ -23,6 +23,17 @@ export default {
     browseSeriesTitle: "系列目录",
     browseAuthorTitle: "作者主页",
     browseR18Hidden: "已隐藏 {count} 件 R-18 作品",
+    // 公共分页组件（components/common/AppPagination.vue）
+    pagination: {
+      navLabel: "分页导航",
+      total: "共 {count} 项",
+      pageSizeLabel: "每页条数",
+      pageSizeOption: "{n} 条/页",
+      prevPage: "上一页",
+      nextPage: "下一页",
+      currentPage: "第 {n} 页",
+      pageOf: "{current} / {total}",
+    },
   },
   app: {
     exitConfirmTitle: "退出 Pixiv Tool？",
