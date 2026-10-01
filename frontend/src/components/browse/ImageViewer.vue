@@ -1,10 +1,18 @@
+<script lang="ts">
+/** 全屏浮层的阅读偏好（双图跨页 / 从右往左）：本会话记忆，不持久化。 */
+const viewerPrefs = { spread: false, rtl: true };
+</script>
+
 <script setup lang="ts">
 /**
  * 图片舞台：近黑底纵向滚动查看（深浅色主题一致的中性深底）。
  * - 多页：自上而下逐页排列，滚动到视口附近才发起加载（渐进式）；未加载页为按该页
  *   `width`/`height` 预留纵横比的纯色占位块（缺省 2:3），加载完成不产生跳动；
  * - 点击任意页进入全屏浮层并定位到该页，左右切换只发生在浮层内（‹ › / 键盘 ←/→ 与
- *   右侧胶卷缩略图）；上一页/下一页的滚动对齐由舞台内的 ←/→ 完成；
+ *   右侧胶卷缩略图）；上一页/下一页的滚动对齐由舞台内的 ←/→ 完成；浮层内另有
+ *   双图（跨页）模式与阅读方向（从右往左 / 从左往右），会话内记忆；
+ * - 浮层图片按可用高度与页面纵横比撑满，控制条与关闭按钮 hover（或键盘聚焦）才显现，
+ *   胶卷缩略图常驻；
  * - 档位：主图 thumb_quality_detail（默认 medium = 接口 regular 原样，URL 与改造前逐字一致），
  *   先铺 medium 档（540px）占位层再换高清；全屏浮层走 thumb_quality_fullscreen，
  *   胶卷缩略图走 thumb_quality_grid；
@@ -107,8 +115,8 @@ function resetPages(): void {
   // 换作品时浮层一并复位：旧的下标可能落在新数组之外
   fullscreen.value = false;
   fsPage.value = 0;
-  fsFallback.value = false;
-  fsState.value = "loading";
+  fsFallbackPages.value = [];
+  fsStates.value = {};
   // 首屏先放最靠前的两页；其余交给滚动/布局同步
   activate(0, props.restricted ? 0 : 1, 0);
 }
@@ -170,17 +178,19 @@ function onScroll(): void {
   });
 }
 
-function onLoad(index: number, e: Event): void {
+/** 页框纵横比以真实尺寸校正：接口缺尺寸或与实际不符时不至于一直错位（舞台与浮层共用）。 */
+function correctAspect(index: number, e: Event): void {
   const img = e.target as HTMLImageElement;
-  // 占位块纵横比以真实尺寸校正：接口缺尺寸或与实际不符时不至于一直错位
-  if (img.naturalWidth && img.naturalHeight) {
-    const cur = aspects.value[index];
-    if (!cur || cur.w !== img.naturalWidth || cur.h !== img.naturalHeight) {
-      const fixed = aspects.value.slice();
-      fixed[index] = { w: img.naturalWidth, h: img.naturalHeight };
-      aspects.value = fixed;
-    }
-  }
+  if (!img.naturalWidth || !img.naturalHeight) return;
+  const cur = aspects.value[index];
+  if (cur && cur.w === img.naturalWidth && cur.h === img.naturalHeight) return;
+  const fixed = aspects.value.slice();
+  fixed[index] = { w: img.naturalWidth, h: img.naturalHeight };
+  aspects.value = fixed;
+}
+
+function onLoad(index: number, e: Event): void {
+  correctAspect(index, e);
   const next = states.value.slice();
   next[index] = "ok";
   states.value = next;
@@ -236,11 +246,12 @@ function jumpPage(delta: number): void {
 // ===== 全屏浮层 =====
 
 const fullscreen = ref(false);
-/** 浮层当前页（打开时定位到被点击的那一页） */
+/** 浮层当前页（打开时定位到被点击的那一页；双图模式下为跨页起始页） */
 const fsPage = ref(0);
-const fsState = ref<"loading" | "ok" | "error">("loading");
-/** 全屏档不可用时回落到已加载的主图；只回落一次，避免与 @error 循环。 */
-const fsFallback = ref(false);
+/** 全屏档加载失败的页 → 回落到已加载的主图；按页记录，一处失败不影响其它页 */
+const fsFallbackPages = ref<number[]>([]);
+/** 全屏图按页状态（对齐 pages 下标；未记录即 loading） */
+const fsStates = ref<Record<number, "loading" | "ok" | "error">>({});
 const overlayEl = ref<HTMLElement | null>(null);
 const thumbEls: (HTMLElement | null)[] = [];
 
@@ -248,43 +259,105 @@ function setThumbRef(index: number, el: unknown): void {
   thumbEls[index] = (el as HTMLElement | null) ?? null;
 }
 
-const fsSrc = computed(() => {
-  const p = props.pages[fsPage.value];
-  if (!p) return "";
-  return fsFallback.value ? stageSrc(fsPage.value) : pageSrc(p, fullscreenTier.value);
+// ----- 双图（跨页）模式与阅读方向：会话内记忆（模块级 viewerPrefs） -----
+
+const spread = ref(viewerPrefs.spread);
+const rtl = ref(viewerPrefs.rtl);
+
+watch(spread, (v) => (viewerPrefs.spread = v));
+watch(rtl, (v) => (viewerPrefs.rtl = v));
+
+/** 双图仅对多页作品生效（单页作品没有可跨的页） */
+const spreadOn = computed(() => spread.value && multi.value);
+/** 翻页步进：双图一屏两张，步进 2 */
+const pageStep = computed(() => (spreadOn.value ? 2 : 1));
+
+/** 一屏显示的页（下标，按 DOM 从左到右排列；从右往左时当前页在右） */
+const visiblePages = computed(() => {
+  const first = fsPage.value;
+  const list = spreadOn.value && first + 1 < props.pages.length ? [first, first + 1] : [first];
+  return rtl.value ? [...list].reverse() : list;
 });
 
-const fsLowSrc = computed(() => {
-  const p = props.pages[fsPage.value];
+/** 跨页的后一页（单页模式与末页单独显示时等于当前页） */
+const spreadEnd = computed(() =>
+  visiblePages.value.length > 1 ? fsPage.value + 1 : fsPage.value
+);
+
+const pageLabel = computed(() =>
+  spreadEnd.value > fsPage.value
+    ? t("browse.work.pageRangeOf", {
+        from: fsPage.value + 1,
+        to: spreadEnd.value + 1,
+        total: props.pages.length,
+      })
+    : t("browse.work.pageOf", { current: fsPage.value + 1, total: props.pages.length })
+);
+
+interface FsSlot {
+  index: number;
+  src: string;
+  low: string;
+  state: "loading" | "ok" | "error";
+}
+
+function fsSrcOf(index: number): string {
+  const p = props.pages[index];
+  if (!p) return "";
+  return fsFallbackPages.value.includes(index)
+    ? stageSrc(index)
+    : pageSrc(p, fullscreenTier.value);
+}
+
+/** 低清占位层：接口给了 medium 且与全屏图不是同一地址时才叠加。 */
+function fsLowOf(index: number): string {
+  const p = props.pages[index];
   if (!p?.medium) return "";
   const low = thumbSrc(p.medium, "medium");
-  return low && low !== fsSrc.value ? low : "";
-});
+  return low && low !== fsSrcOf(index) ? low : "";
+}
+
+const fsSlots = computed<FsSlot[]>(() =>
+  visiblePages.value.map((index) => ({
+    index,
+    src: fsSrcOf(index),
+    low: fsLowOf(index),
+    state: fsStates.value[index] ?? "loading",
+  }))
+);
 
 const canPrev = computed(() => multi.value && fsPage.value > 0);
-const canNext = computed(() => multi.value && fsPage.value < props.pages.length - 1);
+const canNext = computed(
+  () => multi.value && fsPage.value + pageStep.value <= props.pages.length - 1
+);
 
-watch(fsSrc, () => {
-  fsState.value = "loading";
-});
+function setFsState(index: number, state: "loading" | "ok" | "error"): void {
+  if (fsStates.value[index] === state) return;
+  fsStates.value = { ...fsStates.value, [index]: state };
+}
 
-function onFullscreenError(e: Event): void {
-  if (fsFallback.value) {
-    fsState.value = "error";
+function onFsLoad(index: number, e: Event): void {
+  correctAspect(index, e);
+  setFsState(index, "ok");
+}
+
+function onFsError(index: number, e: Event): void {
+  if (fsFallbackPages.value.includes(index)) {
+    setFsState(index, "error");
     return;
   }
   const failed = (e.target as HTMLImageElement).getAttribute("src") ?? "";
-  fsFallback.value = true;
+  fsFallbackPages.value = [...fsFallbackPages.value, index];
   // 回落目标与失败地址相同时不会再触发 load/error，直接落错误态（否则永远停在加载中）
-  if (fsSrc.value === failed) fsState.value = "error";
+  if (fsSrcOf(index) === failed) setFsState(index, "error");
 }
 
 /** 进入全屏：该页主图就绪且未处于 R-18 遮罩时才可用（遮罩不可被绕过）。 */
 function openFullscreen(index: number): void {
   if (props.restricted || states.value[index] !== "ok") return;
   fsPage.value = index;
-  fsFallback.value = false;
-  fsState.value = "loading";
+  fsFallbackPages.value = [];
+  fsStates.value = {};
   fullscreen.value = true;
 }
 
@@ -297,20 +370,28 @@ function closeFullscreen(): void {
   scrollEl.value?.focus({ preventScroll: true });
 }
 
+/** 双图模式按「跨页对」对齐（1-2 / 3-4 …）：点胶卷任意一页都落到所属跨页。 */
 function stepTo(index: number): void {
-  fsPage.value = Math.min(Math.max(index, 0), props.pages.length - 1);
+  let next = Math.min(Math.max(index, 0), Math.max(props.pages.length - 1, 0));
+  if (spreadOn.value && next % 2 === 1) next -= 1;
+  fsPage.value = next;
 }
 
 function stepPage(delta: number): void {
-  stepTo(fsPage.value + delta);
+  stepTo(fsPage.value + delta * pageStep.value);
 }
 
-/**
- * 翻页时：先清掉上一页的全屏档回落（否则该回落会一路带到后续各页），
- * 再把当前缩略图滚入胶卷视野（block: nearest 不惊动已可见的项）。
- */
+function toggleSpread(): void {
+  spread.value = !spread.value;
+  if (spreadOn.value) stepTo(fsPage.value);
+}
+
+function toggleRtl(): void {
+  rtl.value = !rtl.value;
+}
+
+/** 翻页时把当前缩略图滚入胶卷视野（block: nearest 不惊动已可见的项）。 */
 watch(fsPage, async () => {
-  fsFallback.value = false;
   if (!fullscreen.value) return;
   await nextTick();
   thumbEls[fsPage.value]?.scrollIntoView({ block: "nearest" });
@@ -392,12 +473,14 @@ watch(
 
 /** 预加载相邻页：浮层翻页时立即可见（fire-and-forget），与浮层同一档位。 */
 watch(
-  () => [fullscreen.value, fsPage.value, fullscreenTier.value] as const,
+  () => [fullscreen.value, fsPage.value, pageStep.value, fullscreenTier.value] as const,
   () => {
     if (!fullscreen.value) return;
-    for (const i of [fsPage.value - 1, fsPage.value + 1]) {
+    const shown = new Set(visiblePages.value);
+    const next = fsPage.value + pageStep.value;
+    for (const i of [fsPage.value - 1, next, next + 1]) {
       const p = props.pages[i];
-      if (!p) continue;
+      if (!p || shown.has(i)) continue;
       const img = new Image();
       img.src = pageSrc(p, fullscreenTier.value);
     }
@@ -512,52 +595,90 @@ watch(
       tabindex="-1"
       @click.self="closeFullscreen"
     >
-      <div class="fs-stage" @click.self="closeFullscreen">
-        <img
-          v-if="fsLowSrc && fsState !== 'ok'"
-          class="fs-img low"
-          :src="fsLowSrc"
-          alt=""
-          aria-hidden="true"
-          decoding="async"
-        />
-        <img
-          v-show="fsState === 'ok'"
-          class="fs-img"
-          :src="fsSrc"
-          :alt="altOf(fsPage)"
-          decoding="async"
-          @load="fsState = 'ok'"
-          @error="onFullscreenError($event)"
-        />
-        <div v-if="fsState !== 'ok' && !fsLowSrc" class="fs-state">
-          <div v-if="fsState === 'loading'" class="loading-block" aria-hidden="true"></div>
-          <p v-else class="stage-text">{{ t("common.browseLoadFailed") }}</p>
+      <div class="fs-stage" :class="{ 'is-spread': spreadOn }" @click.self="closeFullscreen">
+        <!-- 一屏一页或并排两页：页框按可用高度与页面纵横比定尺寸，图片撑满该框 -->
+        <div v-for="slot in fsSlots" :key="slot.index" class="fs-slot" :style="shotStyle(slot.index)">
+          <img
+            v-if="slot.low && slot.state !== 'ok'"
+            class="fs-img low"
+            :src="slot.low"
+            alt=""
+            aria-hidden="true"
+            decoding="async"
+          />
+          <img
+            v-show="slot.state === 'ok'"
+            class="fs-img"
+            :src="slot.src"
+            :alt="altOf(slot.index)"
+            decoding="async"
+            @load="onFsLoad(slot.index, $event)"
+            @error="onFsError(slot.index, $event)"
+          />
+          <div v-if="slot.state === 'error'" class="fs-state">
+            <p class="stage-text">{{ t("common.browseLoadFailed") }}</p>
+          </div>
+          <div v-else-if="slot.state === 'loading' && !slot.low" class="fs-state">
+            <div class="loading-block" aria-hidden="true"></div>
+          </div>
         </div>
 
-        <div v-if="multi" class="fs-controls">
-          <md-icon-button :disabled="!canPrev" :aria-label="t('browse.work.prevPage')" :title="t('browse.work.prevPage')" @click="stepPage(-1)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
-          </md-icon-button>
-          <span class="fs-label" aria-live="polite">{{ t("browse.work.pageOf", { current: fsPage + 1, total: pages.length }) }}</span>
-          <md-icon-button :disabled="!canNext" :aria-label="t('browse.work.nextPage')" :title="t('browse.work.nextPage')" @click="stepPage(1)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
-          </md-icon-button>
+        <!-- 底部控制条：默认隐藏，指针进入底部热区或键盘聚焦时显现 -->
+        <div class="fs-chrome fs-chrome-bottom">
+          <div v-if="multi" class="fs-controls">
+            <md-icon-button :disabled="!canPrev" :aria-label="t('browse.work.prevPage')" :title="t('browse.work.prevPage')" @click="stepPage(-1)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+            </md-icon-button>
+            <span class="fs-label" aria-live="polite">{{ pageLabel }}</span>
+            <md-icon-button :disabled="!canNext" :aria-label="t('browse.work.nextPage')" :title="t('browse.work.nextPage')" @click="stepPage(1)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
+            </md-icon-button>
+            <span class="fs-divider" aria-hidden="true"></span>
+            <!-- 双图（跨页）开关 -->
+            <md-icon-button
+              toggle
+              :selected="spreadOn"
+              :aria-label="t('browse.work.spread')"
+              :title="t('browse.work.spread')"
+              @click="toggleSpread"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="7" y="4" width="10" height="16" rx="1.5" />
+                <rect v-if="spreadOn" x="1.5" y="6" width="4" height="12" rx="1" />
+                <rect v-if="spreadOn" x="18.5" y="6" width="4" height="12" rx="1" />
+              </svg>
+            </md-icon-button>
+            <!-- 阅读方向：从右往左 / 从左往右（仅双图模式） -->
+            <md-icon-button
+              v-if="spreadOn"
+              :aria-label="t('browse.work.readDir', { dir: rtl ? t('browse.work.dirRtl') : t('browse.work.dirLtr') })"
+              :title="t('browse.work.readDir', { dir: rtl ? t('browse.work.dirRtl') : t('browse.work.dirLtr') })"
+              @click="toggleRtl"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path :d="rtl ? 'M20 12H4' : 'M4 12h16'" />
+                <polyline :points="rtl ? '10 6 4 12 10 18' : '14 6 20 12 14 18'" />
+              </svg>
+            </md-icon-button>
+          </div>
         </div>
 
-        <md-icon-button
-          class="fs-close"
-          :aria-label="t('browse.work.exitFullscreen')"
-          :title="t('browse.work.exitFullscreen')"
-          @click="closeFullscreen"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" />
-          </svg>
-        </md-icon-button>
+        <!-- 右上角关闭：默认隐藏，hover 热区或键盘聚焦时显现 -->
+        <div class="fs-chrome fs-chrome-corner">
+          <md-icon-button
+            class="fs-close"
+            :aria-label="t('browse.work.exitFullscreen')"
+            :title="t('browse.work.exitFullscreen')"
+            @click="closeFullscreen"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" />
+            </svg>
+          </md-icon-button>
+        </div>
       </div>
 
-      <!-- 胶卷缩略图：快速切页；当前页白色描边 + aria-current，翻页时自动滚入视野 -->
+      <!-- 胶卷缩略图（常驻）：快速切页；当前屏幕上的页白色描边，翻页时自动滚入视野 -->
       <nav v-if="multi" class="fs-filmstrip" :aria-label="t('browse.work.pageThumbs')">
         <button
           v-for="(page, i) in pages"
@@ -565,7 +686,7 @@ watch(
           :ref="(el) => setThumbRef(i, el)"
           type="button"
           class="fs-thumb"
-          :class="{ active: i === fsPage }"
+          :class="{ active: visiblePages.includes(i) }"
           :aria-label="t('browse.work.gotoPage', { page: i + 1 })"
           :aria-current="i === fsPage ? 'true' : undefined"
           @click="stepTo(i)"
@@ -753,6 +874,8 @@ watch(
   /* 复用舞台近黑底（不新增颜色字面值） */
   background: rgb(0 0 0 / 0.78);
   outline: none;
+  /* 图片可用高度：视口高减去浮层上下内边距 */
+  --fs-h: calc(100vh - 2 * var(--space-lg));
 }
 
 .fs-stage {
@@ -762,19 +885,30 @@ watch(
   min-width: 0;
   align-items: center;
   justify-content: center;
+  gap: var(--space-sm);
 }
 
-.fs-img {
+/* 页框：宽 = min(可用宽, 可用高 × 页面纵横比)，纵横比由内联 --ar-w / --ar-h 给出，
+ * 所以纵向页撑满高度、横向页撑满宽度，图片再以 object-fit: contain 兜底 */
+.fs-slot {
   position: relative;
-  max-width: 100%;
+  width: min(100%, calc(var(--fs-h) * var(--ar-w, 2) / var(--ar-h, 3)));
+  aspect-ratio: var(--ar-w, 2) / var(--ar-h, 3);
   max-height: 100%;
-  object-fit: contain;
 }
 
-.fs-img.low {
+.fs-stage.is-spread .fs-slot {
+  width: min(calc(50% - var(--space-sm) / 2), calc(var(--fs-h) * var(--ar-w, 2) / var(--ar-h, 3)));
+}
+
+/* 允许放大：小图也铺满页框（否则「撑满」受原始像素限制） */
+.fs-img {
   position: absolute;
   inset: 0;
-  margin: auto;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .fs-state {
@@ -785,14 +919,68 @@ watch(
   justify-content: center;
 }
 
-.fs-controls {
+/* ===== 悬浮控件：默认隐藏，进入热区或键盘聚焦才显现 ===== */
+
+.fs-chrome {
   position: absolute;
-  left: 50%;
-  bottom: var(--space-lg);
+  z-index: 1;
+}
+
+.fs-chrome-bottom {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  justify-content: center;
+  padding: var(--space-lg) 0;
+}
+
+/* 关闭按钮落在图片区右上角，避开右侧胶卷列 */
+.fs-chrome-corner {
+  top: 0;
+  right: 0;
+  display: flex;
+  padding: var(--space-sm);
+}
+
+.fs-controls,
+.fs-close {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.fs-chrome:hover .fs-controls,
+.fs-chrome:focus-within .fs-controls,
+.fs-chrome:hover .fs-close,
+.fs-chrome:focus-within .fs-close {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 触摸设备没有 hover：控件常驻 */
+@media (hover: none) {
+  .fs-controls,
+  .fs-close {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.fs-controls {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  transform: translateX(-50%);
+  padding: var(--space-xxs) var(--space-sm);
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.78);
+}
+
+.fs-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 var(--space-xxs);
+  background: rgb(255 255 255 / 0.24);
 }
 
 .fs-label {
@@ -801,13 +989,6 @@ watch(
   font-size: 12px;
   font-weight: 600;
   text-align: center;
-}
-
-/* 关闭按钮落在图片区右上角，避开右侧胶卷列 */
-.fs-close {
-  position: absolute;
-  top: var(--space-sm);
-  right: var(--space-sm);
 }
 
 /* 胶卷列：80px 宽（64px 缩略图 + 6px 内边），自身滚动，窄窗不隐藏 */
@@ -821,6 +1002,25 @@ watch(
   overflow-y: auto;
   padding: var(--space-xs);
   margin-left: var(--space-md);
+}
+
+/* 滚动条常显（不随闲置自动隐藏）：近黑底上的既定白半透明 */
+.fs-filmstrip::-webkit-scrollbar {
+  width: 6px;
+}
+
+.fs-filmstrip::-webkit-scrollbar-track {
+  background: rgb(255 255 255 / 0.06);
+  border-radius: 999px;
+}
+
+.fs-filmstrip::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.4);
+  border-radius: 999px;
+}
+
+.fs-filmstrip::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.6);
 }
 
 /* 列内出现纵向滚动条时按剩余宽度收窄，始终方形、不出横向滚动条 */
