@@ -105,7 +105,7 @@ Pixiv Tool 是一款以任务完成为中心的本地桌面工具。当前界面
 
 ## Elevation & Depth
 
-日常层级通过 surface 与 surface container 的色调差、outline 分隔线和圆角表达；普通卡片、任务列表和表格没有阴影。账号菜单与 snackbar 使用 `0 4px 12px rgb(0 0 0 / 18%)` 的轻阴影（**唯一合法值**，不要再写 `12px/14px` 这类非法或变体写法；历史实现里 snackbar 曾用 14px blur，属待收敛的细节），原生对话框的 backdrop 为 `rgb(0 0 0 / 35%)`。
+日常层级通过 surface 与 surface container 的色调差、outline 分隔线和圆角表达；普通卡片、任务列表和表格没有阴影。账号菜单与 snackbar 使用 `0 4px 12px rgb(0 0 0 / 18%)` 的轻阴影（**唯一合法值**，不要再写 `12px/14px` 这类非法或变体写法；snackbar 历史上的 14px blur 已于 2026-10-01 收敛到 12px），原生对话框的 backdrop 为 `rgb(0 0 0 / 35%)`。
 
 **The Overlay-Only Shadow Rule.** 阴影仅标示临时浮层，不应用于普通内容容器。
 
