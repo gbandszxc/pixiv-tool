@@ -119,6 +119,13 @@ pub struct TrendingTag {
     pub count: Option<i64>,
 }
 
+/// 频道页「按标签推荐」板块（#tag 的推荐作品；实测仅插画频道返回，其余为空数组）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseChannelSection {
+    pub tag: String,
+    pub items: Vec<BrowseWorkItem>,
+}
+
 /// 频道页（/ajax/top/illust|manga|novel）组装结果。
 #[derive(Debug, Clone, Serialize)]
 pub struct BrowseChannel {
@@ -126,6 +133,7 @@ pub struct BrowseChannel {
     pub recommend: BrowseList,
     pub ranking: BrowseList,
     pub new_post: BrowseList,
+    pub tag_sections: Vec<BrowseChannelSection>,
     pub trending_tags: Vec<TrendingTag>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ranking_date: Option<String>,
@@ -672,6 +680,25 @@ fn parse_channel(body: &Value, kind: &str) -> BrowseChannel {
     let recommend = items_from_ids(ids_at("/page/recommend/ids"), &index, &users, index_key);
     let ranking = items_from_ids(ids_at("/page/ranking/items"), &index, &users, index_key);
     let new_post = items_from_ids(ids_at("/page/newPost"), &index, &users, index_key);
+    // #标签推荐板块（实测仅 illust 频道有 recommendByTag）：tag 缺失或映射不到任何作品的板块跳过
+    let tag_sections = body
+        .pointer("/page/recommendByTag")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|section| {
+                    let tag = str_field(section, "tag")?;
+                    let ids = section
+                        .get("ids")
+                        .and_then(Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    let items = items_from_ids(ids, &index, &users, index_key);
+                    (!items.is_empty()).then_some(BrowseChannelSection { tag, items })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let trending_tags = body
         .pointer("/page/trendingTags")
         .and_then(Value::as_array)
@@ -697,6 +724,7 @@ fn parse_channel(body: &Value, kind: &str) -> BrowseChannel {
         recommend: list_from_items(recommend),
         ranking: list_from_items(ranking),
         new_post: list_from_items(new_post),
+        tag_sections,
         trending_tags,
         ranking_date,
     }
@@ -2194,6 +2222,12 @@ mod tests {
                 "recommend": {"ids": [2]},
                 "ranking": {"items": [1, 3], "date": "20260929"},
                 "newPost": [4],
+                "recommendByTag": [
+                    // 实测形状：字符串 id + details（推荐跟踪信息，解析忽略）
+                    {"tag": "オリジナル", "ids": ["2", "1"], "details": {"2": {"methods": ["by_tag"]}}},
+                    {"tag": "", "ids": ["1"]},
+                    {"tag": "孤儿板块", "ids": ["999999"]}
+                ],
                 "trendingTags": [
                     {"tag": "オリジナル", "translatedName": "原创", "illustCount": 9999},
                     {"tag": ""}
@@ -2224,6 +2258,17 @@ mod tests {
             ch.new_post.items.iter().map(|i| i.id).collect::<Vec<_>>(),
             vec![4]
         );
+        // #标签板块：空 tag 与映射不到作品的板块跳过，其余按 ids 顺序映射
+        assert_eq!(ch.tag_sections.len(), 1);
+        assert_eq!(ch.tag_sections[0].tag, "オリジナル");
+        assert_eq!(
+            ch.tag_sections[0]
+                .items
+                .iter()
+                .map(|i| i.id)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
+        );
         assert_eq!(ch.ranking_date.as_deref(), Some("20260929"));
         assert_eq!(ch.trending_tags.len(), 1, "空 tag 跳过");
         assert_eq!(ch.trending_tags[0].name, "オリジナル");
@@ -2238,6 +2283,7 @@ mod tests {
         assert!(ch.recommend.items.is_empty());
         assert!(ch.ranking.items.is_empty());
         assert!(ch.new_post.items.is_empty());
+        assert!(ch.tag_sections.is_empty(), "无 recommendByTag 输出空数组不报错");
         assert!(ch.trending_tags.is_empty());
         assert!(ch.ranking_date.is_none());
     }
