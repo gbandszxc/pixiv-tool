@@ -391,6 +391,8 @@ export default {
     },
     comments: {
       title: "评论",
+      show: "查看评论",
+      hide: "返回相关推荐",
       viewReplies: "查看回复",
       moreReplies: "更多回复",
       loadMore: "加载更多评论",

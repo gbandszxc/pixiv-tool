@@ -12,9 +12,10 @@ const revealedWorkIds = new Set<number>();
  * 作品查看器（插画/漫画）：整页路由视图 /browse/work/:kind/:id。
  * 桌面 ≥960px 双列：左图片舞台（近黑底，纵向渐进加载，翻页/全屏由 ImageViewer 自理）
  * + 右信息列（固定 320px 可滚动）；窄窗纵向堆叠（图片在上）。
+ * 右列下段为可切换面板——相关推荐（默认）/ 评论，由顶栏评论按钮控制，评论按需分页拉取。
  * 相关推荐经 router.replace 原地跳转（watch 参数重拉）。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../../stores/settings";
@@ -61,6 +62,10 @@ const relatedLoading = ref(false);
 const relatedError = ref("");
 
 const infoCol = ref<HTMLElement | null>(null);
+/** 右列下段面板：相关推荐（默认）/ 评论，由顶栏评论按钮切换 */
+const panel = ref<"related" | "comments">("related");
+/** 面板锚点：切换后滚进视野用 */
+const panelEl = ref<HTMLElement | null>(null);
 /** 请求序号：快速连续跳转作品时丢弃过期响应 */
 let reqSeq = 0;
 let relSeq = 0;
@@ -146,10 +151,17 @@ function scrollReset(): void {
   window.scrollTo({ top: 0 });
 }
 
+/** 顶栏评论按钮：切换右列面板（评论只在切到该面板时挂载，首开即拉第一页）。 */
+function togglePanel(): void {
+  panel.value = panel.value === "related" ? "comments" : "related";
+  void nextTick(() => panelEl.value?.scrollIntoView({ block: "nearest" }));
+}
+
 watch(
   () => [props.kind, props.id] as const,
   () => {
     scrollReset();
+    panel.value = "related";
     void loadDetail();
   },
   { immediate: true }
@@ -206,13 +218,16 @@ function reveal(): void {
  * 在 capture 阶段拦截，浮层打开时不会冒泡到这里。
  */
 function onKeydown(e: KeyboardEvent): void {
-  if (loading.value || error.value) return;
-  const target = e.target as HTMLElement | null;
-  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-  if (e.key === "Escape") {
-    e.preventDefault();
-    goBack();
+  if (e.key !== "Escape" || e.defaultPrevented) return;
+  // md-* 输入组件的事件到 window 时已被重定向到宿主（tagName 不是 INPUT），须走 composedPath
+  for (const node of e.composedPath()) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.isContentEditable) return;
   }
+  // 模态 dialog（设置 / 登录 / 退出确认）打开时 Esc 归 dialog 自己处理
+  if (document.querySelector("dialog[open]")) return;
+  e.preventDefault();
+  goBack();
 }
 
 onMounted(() => window.addEventListener("keydown", onKeydown));
@@ -221,10 +236,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 <template>
   <div class="work-view">
-    <!-- 顶部条：返回 + 标题/作者 + 返填表单 / 在浏览器中打开 -->
+    <!-- 顶部条：返回 + 标题/作者 + 收藏 / 评论（面板切换）/ 返填表单 / 在浏览器中打开 -->
     <header class="work-topbar">
       <md-icon-button :aria-label="t('browse.work.back')" :title="t('browse.work.back')" @click="goBack">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
       </md-icon-button>
       <div class="topbar-main">
         <template v-if="loading">
@@ -248,29 +263,49 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
         :state="bookmarkState"
         @change="bookmarkState = $event"
       />
+      <!-- 评论：切换右列面板（相关推荐 ⇄ 评论）；选中态走 md-icon-button 的 toggle/selected -->
+      <md-icon-button
+        class="panel-toggle"
+        toggle
+        :selected="panel === 'comments'"
+        :aria-label="t('browse.comments.show')"
+        :aria-label-selected="t('browse.comments.hide')"
+        :title="panel === 'comments' ? t('browse.comments.hide') : t('browse.comments.show')"
+        @click="togglePanel"
+      >
+        <svg
+          class="bar-icon"
+          :fill="panel === 'comments' ? 'currentColor' : 'none'"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M20 5H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3v4l5-4h8a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+        </svg>
+      </md-icon-button>
       <!-- 返填到插画抓取页：来源=单篇，ID=当前作品 -->
-      <md-outlined-button
-        class="fill-download"
+      <md-icon-button
         :aria-label="t('browse.hooks.fillIllustForm')"
         :title="t('browse.hooks.fillIllustForm')"
         @click="fillDownloadForm({ form: 'illustration', sourceType: 'single', sourceId: props.id })"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" />
         </svg>
-      </md-outlined-button>
-      <md-outlined-button
-        class="open-pixiv"
+      </md-icon-button>
+      <md-icon-button
         :aria-label="t('browse.hooks.openInBrowser')"
         :title="t('browse.hooks.openInBrowser')"
         @click="openInPixiv"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
           <polyline points="15 3 21 3 21 9" />
           <line x1="10" y1="14" x2="21" y2="3" />
         </svg>
-      </md-outlined-button>
+      </md-icon-button>
     </header>
 
     <!-- 错误态（404 / 无权限等）：可读文案 + 返回 -->
@@ -340,17 +375,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
           <!-- 描述（剥标签纯文本） -->
           <p v-if="plainDescription" class="description">{{ plainDescription }}</p>
 
-          <!-- 相关推荐 -->
-          <RelatedGrid
-            :items="relatedItems"
-            :loading="relatedLoading"
-            :error="relatedError"
-            @retry="loadRelated"
-            @select="openRelated"
-          />
-
-          <!-- 评论（V1 只读；kind/id 变化时组件内部自重置） -->
-          <CommentsSection :kind="kind" :id="id" />
+          <!-- 面板：相关推荐（默认）/ 评论（顶栏按钮切换；评论挂载时才拉取，分页自持） -->
+          <div ref="panelEl" class="side-panel">
+            <RelatedGrid
+              v-if="panel === 'related'"
+              :items="relatedItems"
+              :loading="relatedLoading"
+              :error="relatedError"
+              @retry="loadRelated"
+              @select="openRelated"
+            />
+            <CommentsSection v-else :kind="kind" :id="id" />
+          </div>
         </template>
       </aside>
     </div>
@@ -376,7 +412,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   flex-shrink: 0;
 }
 
-.work-topbar > svg {
+/* 顶栏图标动作：统一 20px 线性图标（stroke 1.8），点击域由 md-icon-button（40px）承载 */
+.bar-icon {
   width: 20px;
   height: 20px;
   stroke-width: 1.8;
@@ -454,15 +491,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 }
 
 .open-pixiv,
-.fill-download {
+.fill-download,
+.panel-toggle {
   flex-shrink: 0;
-}
-
-.open-pixiv svg,
-.fill-download svg {
-  width: 18px;
-  height: 18px;
-  stroke-width: 1.8;
 }
 
 /* ===== 双列主体 ===== */

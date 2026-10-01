@@ -104,6 +104,11 @@ function resetPages(): void {
     p.width && p.height ? { w: p.width, h: p.height } : { w: 2, h: 3 }
   );
   focusedPage.value = 0;
+  // 换作品时浮层一并复位：旧的下标可能落在新数组之外
+  fullscreen.value = false;
+  fsPage.value = 0;
+  fsFallback.value = false;
+  fsState.value = "loading";
   // 首屏先放最靠前的两页；其余交给滚动/布局同步
   activate(0, props.restricted ? 0 : 1, 0);
 }
@@ -127,8 +132,9 @@ function activate(from: number, ahead = 1, behind = 1): void {
 }
 
 /**
- * 滚动同步：焦点页 = 视口内最靠上的页，加载窗口 = 视口内各页 + 前 1 页 + 后 2 页。
- * 用 getBoundingClientRect 而非 offsetTop：占位块高度随纵横比与窗口宽度变化。
+ * 滚动同步：焦点页 = 目标页（平滑滚动途中）或视口内最靠上的页；加载窗口 = 视口内各页
+ * 与目标页的并集，前后各留 1 页。用 getBoundingClientRect 而非 offsetTop：占位块高度
+ * 随纵横比与窗口宽度变化。
  */
 function syncFromScroll(): void {
   const el = scrollEl.value;
@@ -147,8 +153,11 @@ function syncFromScroll(): void {
     }
     if (rect.top < box.bottom - 1) last = i;
   }
-  focusedPage.value = first;
-  activate(first, last - first + 2, 1);
+  const focus = pendingFocus ?? first;
+  focusedPage.value = focus;
+  const from = Math.min(first, focus);
+  const to = Math.max(last, focus);
+  activate(from, to - from + 1, 1);
 }
 
 let rafId = 0;
@@ -199,13 +208,21 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+/**
+ * 程序化滚动期间钉住焦点页：平滑动画会持续触发 scroll，若不钉住，
+ * syncFromScroll 会把焦点页算回动画途中的旧页，连按 ←/→ 就会丢步。
+ */
+let pendingFocus: number | null = null;
+let pendingTimer = 0;
+
 function scrollToPage(index: number, behavior?: ScrollBehavior): void {
   const el = itemEls[index];
   if (!el) return;
-  el.scrollIntoView({
-    block: "start",
-    behavior: behavior ?? (prefersReducedMotion() ? "auto" : "smooth"),
-  });
+  const smooth = behavior !== "auto" && !prefersReducedMotion();
+  pendingFocus = smooth ? index : null;
+  if (pendingTimer) clearTimeout(pendingTimer);
+  if (smooth) pendingTimer = window.setTimeout(() => (pendingFocus = null), 500);
+  el.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
   focusedPage.value = index;
   activate(index);
 }
@@ -251,12 +268,15 @@ watch(fsSrc, () => {
   fsState.value = "loading";
 });
 
-function onFullscreenError(): void {
+function onFullscreenError(e: Event): void {
   if (fsFallback.value) {
     fsState.value = "error";
     return;
   }
+  const failed = (e.target as HTMLImageElement).getAttribute("src") ?? "";
   fsFallback.value = true;
+  // 回落目标与失败地址相同时不会再触发 load/error，直接落错误态（否则永远停在加载中）
+  if (fsSrc.value === failed) fsState.value = "error";
 }
 
 /** 进入全屏：该页主图就绪且未处于 R-18 遮罩时才可用（遮罩不可被绕过）。 */
@@ -285,12 +305,28 @@ function stepPage(delta: number): void {
   stepTo(fsPage.value + delta);
 }
 
-/** 翻页时把当前缩略图滚入胶卷视野（block: nearest 不惊动已可见的项）。 */
+/**
+ * 翻页时：先清掉上一页的全屏档回落（否则该回落会一路带到后续各页），
+ * 再把当前缩略图滚入胶卷视野（block: nearest 不惊动已可见的项）。
+ */
 watch(fsPage, async () => {
+  fsFallback.value = false;
   if (!fullscreen.value) return;
   await nextTick();
   thumbEls[fsPage.value]?.scrollIntoView({ block: "nearest" });
 });
+
+/**
+ * 输入焦点判定：md-* 输入组件的事件到 window 时已被重定向到宿主（tagName 不是 INPUT），
+ * 只查 e.target 会漏判，须沿 composedPath 找真实目标，否则会吃掉输入框里的 ←/→。
+ */
+function isTypingEvent(e: KeyboardEvent): boolean {
+  for (const node of e.composedPath()) {
+    if (!(node instanceof HTMLElement)) continue;
+    if (node.tagName === "INPUT" || node.tagName === "TEXTAREA" || node.isContentEditable) return true;
+  }
+  return false;
+}
 
 /**
  * 浮层键盘：Esc 关闭、←/→ 翻页。capture 阶段监听并 stopImmediatePropagation，
@@ -298,8 +334,7 @@ watch(fsPage, async () => {
  * 纵向模式下 ←/→ 为「跳上一页/下一页」（滚动对齐页顶），同样在此拦截。
  */
 function onKeydown(e: KeyboardEvent): void {
-  const target = e.target as HTMLElement | null;
-  if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+  if (isTypingEvent(e)) return;
   if (fullscreen.value) {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -343,6 +378,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown, { capture: true });
   window.removeEventListener("resize", onScroll);
   if (rafId) cancelAnimationFrame(rafId);
+  if (pendingTimer) clearTimeout(pendingTimer);
 });
 
 /** 遮罩解除（设置里打开 show_r18）后补一次窗口同步：滚动容器回到多页布局时无需等滚动。 */
@@ -492,7 +528,7 @@ watch(
           :alt="altOf(fsPage)"
           decoding="async"
           @load="fsState = 'ok'"
-          @error="onFullscreenError"
+          @error="onFullscreenError($event)"
         />
         <div v-if="fsState !== 'ok' && !fsLowSrc" class="fs-state">
           <div v-if="fsState === 'loading'" class="loading-block" aria-hidden="true"></div>
@@ -661,7 +697,7 @@ watch(
   font-weight: 600;
 }
 
-/* 页码徽标：近黑底 + 白字（与舞台同一例外） */
+/* 页码徽标：沿用舞台的既定近黑底 + 白字（同一例外，不引入新颜色） */
 .page-badge {
   position: absolute;
   right: var(--space-sm);

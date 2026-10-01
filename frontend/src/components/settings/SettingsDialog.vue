@@ -2,7 +2,11 @@
   <dialog ref="dialog" class="m3-dialog settings-dialog" :aria-label="t('settings.title')" @cancel="onCancel" @click="onBackdropClick">
     <header class="settings-dialog-header">
       <h2>{{ t("settings.title") }}</h2>
-      <md-icon-button :aria-label="t('common.close')" :title="t('common.close')" @click="close()">✕</md-icon-button>
+      <md-icon-button :aria-label="t('common.close')" :title="t('common.close')" @click="close()">
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" />
+        </svg>
+      </md-icon-button>
     </header>
     <div class="settings-dialog-body"><SettingsPanel ref="settingsPanel" /></div>
   </dialog>
@@ -39,5 +43,7 @@ dialog.settings-dialog { width: min(600px, 92vw); max-height: min(84vh, 100%); p
 dialog.settings-dialog[open] { display: flex; flex-direction: column; }
 .settings-dialog-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); padding: var(--space-md) var(--space-md) var(--space-sm) var(--space-xl); }
 .settings-dialog-header h2 { margin: 0; font-size: 18px; font-weight: 700; line-height: 1.4; }
+/* 关闭按钮：统一为与其他图标动作同规格的 20px 线性图标（不复用文本 ✕ 字形） */
+.settings-dialog-header .bar-icon { width: 20px; height: 20px; stroke-width: 1.8; }
 .settings-dialog-body { min-height: 0; overflow-y: auto; padding: 0 var(--space-xl) var(--space-xl); }
 </style>

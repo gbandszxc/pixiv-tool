@@ -2,11 +2,12 @@
 /**
  * 小说阅读器整页（/browse/work/novel/:id，browse-ui-v1 / F4）。
  *
- * 结构：吸顶顶栏（返回 / 标题 / 作者 / 在浏览器中打开）+ 居中 720px 正文列
- * （信息头 → NovelContent 分页正文 → 下一话 → 相关推荐）+ 底部吸底翻页器。
+ * 结构：吸顶顶栏（返回 / 标题 / 作者 / 收藏 / 评论 / 返填 / 在浏览器中打开）+ 居中 720px 正文列
+ * （信息头 → NovelContent 分页正文 → 下一话 → 面板）+ 底部吸底翻页器。
+ * 面板 = 相关推荐（默认）/ 评论，由顶栏评论按钮切换，评论按需分页拉取。
  * 数据来自 browseWorkDetail("novel", id)，相关推荐 browseRelated("novel", id, 12) 一次性。
  */
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import NovelContent from "../../components/browse/NovelContent.vue";
@@ -69,6 +70,7 @@ async function load(): Promise<void> {
   bookmarkState.value = null;
   relatedItems.value = [];
   relatedError.value = "";
+  panel.value = "related";
   // 进入/切换作品回到页首（SPA 内路由切换会保留上一页滚动位置）
   window.scrollTo(0, 0);
   try {
@@ -123,11 +125,16 @@ function onKeydown(event: KeyboardEvent): void {
 onMounted(() => window.addEventListener("keydown", onKeydown));
 onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
-// ===== 相关推荐 =====
+// ===== 相关推荐 / 评论面板 =====
 
 const relatedItems = shallowRef<BrowseWorkItem[]>([]);
 const relatedLoading = ref(false);
 const relatedError = ref("");
+
+/** 正文列下段面板：相关推荐（默认）/ 评论，由顶栏评论按钮切换 */
+const panel = ref<"related" | "comments">("related");
+/** 面板锚点：切换后滚进视野用 */
+const panelEl = ref<HTMLElement | null>(null);
 
 async function loadRelated(): Promise<void> {
   relatedLoading.value = true;
@@ -140,6 +147,13 @@ async function loadRelated(): Promise<void> {
   } finally {
     relatedLoading.value = false;
   }
+}
+
+/** 顶栏评论按钮：切换面板（评论只在切到该面板时挂载，首开即拉第一页）。 */
+function togglePanel(): void {
+  panel.value = panel.value === "related" ? "comments" : "related";
+  // 面板在正文之后：切换后滚进视野，否则顶栏点击时可能看不到任何反馈
+  void nextTick(() => panelEl.value?.scrollIntoView({ block: "start" }));
 }
 
 // immediate：挂载即加载；id 变化（相关推荐/下一话跳转同路由）时整页重载。
@@ -198,6 +212,27 @@ function openInPixiv(): void {
         :state="bookmarkState"
         @change="bookmarkState = $event"
       />
+      <!-- 评论：切换正文列下段面板（相关推荐 ⇄ 评论）；选中态走 md-icon-button 的 toggle/selected -->
+      <md-icon-button
+        toggle
+        :selected="panel === 'comments'"
+        :aria-label="t('browse.comments.show')"
+        :aria-label-selected="t('browse.comments.hide')"
+        :title="panel === 'comments' ? t('browse.comments.hide') : t('browse.comments.show')"
+        @click="togglePanel"
+      >
+        <svg
+          class="bar-icon"
+          :fill="panel === 'comments' ? 'currentColor' : 'none'"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M20 5H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3v4l5-4h8a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+        </svg>
+      </md-icon-button>
       <md-icon-button
         :aria-label="t('browse.hooks.fillNovelForm')"
         :title="t('browse.hooks.fillNovelForm')"
@@ -276,21 +311,21 @@ function openInPixiv(): void {
           </md-outlined-button>
         </div>
 
-        <!-- 相关推荐 -->
-        <section class="related">
-          <h2 class="section-title">{{ t("browse.novel.relatedTitle") }}</h2>
-          <WorkGrid
-            :items="relatedItems"
-            :loading="relatedLoading"
-            :error="relatedError"
-            :has-more="false"
-            @retry="loadRelated"
-            @select="goRelated"
-          />
+        <!-- 面板：相关推荐（默认）/ 评论（顶栏按钮切换；评论挂载时才拉取，分页自持） -->
+        <section ref="panelEl" class="side-panel">
+          <template v-if="panel === 'related'">
+            <h2 class="section-title">{{ t("browse.novel.relatedTitle") }}</h2>
+            <WorkGrid
+              :items="relatedItems"
+              :loading="relatedLoading"
+              :error="relatedError"
+              :has-more="false"
+              @retry="loadRelated"
+              @select="goRelated"
+            />
+          </template>
+          <CommentsSection v-else kind="novel" :id="id" />
         </section>
-
-        <!-- 评论（V1 只读；id 变化时组件内部自重置） -->
-        <CommentsSection kind="novel" :id="id" />
       </div>
 
       <!-- 翻页器：底部居中吸底 -->
@@ -579,8 +614,10 @@ function openInPixiv(): void {
   margin-left: var(--space-xs);
 }
 
-.related {
+/* 面板：相关推荐 / 评论（顶栏按钮切换）；吸顶顶栏之下留出滚动余量 */
+.side-panel {
   margin-top: var(--space-xl);
+  scroll-margin-top: 72px;
 }
 
 .section-title {

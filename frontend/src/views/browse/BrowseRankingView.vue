@@ -204,19 +204,23 @@ function openWork(item: BrowseWorkItem): void {
           </md-select-option>
         </md-outlined-select>
         <div class="date-nav">
-          <md-text-button
+          <md-icon-button
             :disabled="!prevDate || loading"
             :aria-label="t('browse.ranking.prevDate')"
+            :title="t('browse.ranking.prevDate')"
             @click="goDate(prevDate)"
-            >‹</md-text-button
           >
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+          </md-icon-button>
           <span class="date-text">{{ dateDisplay }}</span>
-          <md-text-button
+          <md-icon-button
             :disabled="!nextDate || loading"
             :aria-label="t('browse.ranking.nextDate')"
+            :title="t('browse.ranking.nextDate')"
             @click="goDate(nextDate)"
-            >›</md-text-button
           >
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
+          </md-icon-button>
         </div>
       </div>
     </div>
@@ -238,9 +242,23 @@ function openWork(item: BrowseWorkItem): void {
     <nav class="pager" :aria-label="t('nav.browseRanking')">
       <span class="pager-range">{{ rangeLabel }}</span>
       <div class="pager-buttons">
-        <md-text-button :disabled="page <= 1 || loading" @click="goPage(page - 1)">‹</md-text-button>
+        <md-icon-button
+          :disabled="page <= 1 || loading"
+          :aria-label="t('browse.novel.prevPage')"
+          :title="t('browse.novel.prevPage')"
+          @click="goPage(page - 1)"
+        >
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+        </md-icon-button>
         <span class="pager-num">{{ page }}</span>
-        <md-text-button :disabled="nextPage === null || loading" @click="goPage(page + 1)">›</md-text-button>
+        <md-icon-button
+          :disabled="nextPage === null || loading"
+          :aria-label="t('browse.novel.nextPage')"
+          :title="t('browse.novel.nextPage')"
+          @click="goPage(page + 1)"
+        >
+          <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
+        </md-icon-button>
       </div>
     </nav>
   </div>
@@ -275,6 +293,13 @@ function openWork(item: BrowseWorkItem): void {
   display: flex;
   align-items: center;
   gap: var(--space-xxs);
+}
+
+/* 日期/分页箭头：与系列分集、小说阅读器翻页器同一 recipe（md-icon-button + 20px 线性 chevron） */
+.chevron {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.8;
 }
 
 .date-text {

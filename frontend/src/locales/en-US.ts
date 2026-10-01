@@ -390,6 +390,8 @@ export default {
     },
     comments: {
       title: "Comments",
+      show: "Show comments",
+      hide: "Back to recommendations",
       viewReplies: "View replies",
       moreReplies: "More replies",
       loadMore: "Load more comments",
