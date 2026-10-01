@@ -416,6 +416,7 @@ export default {
       loadMore: "加载更多评论",
       noMore: "没有更多了",
       empty: "还没有评论",
+      closed: "作者已关闭评论区",
       replyTo: "回复 {'@'}{name}",
       stampAlt: "表情贴图",
     },

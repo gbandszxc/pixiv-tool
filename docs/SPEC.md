@@ -592,7 +592,9 @@ Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主�
   面板：默认「相关推荐」，切到「评论」时 `CommentsSection` 才挂载并拉第一页
   （roots 沿用「加载更多评论」offset 分页、回复展开后按页续拉），切换时把面板
   滚入视野（阅读器 `block: start` + 72px 吸顶余量、查看器 `block: nearest`）；
-  作品切换（kind / id 变化）时面板回到「相关推荐」。
+  作者关闭评论区的作品（roots 恒 400 → 契约 `disabled` 信封）显示「作者已关闭
+  评论区」终态提示，非错误、无重试；作品切换（kind / id 变化）时面板回到
+  「相关推荐」。
 - **R-18 显示**：全局开关 `show_r18`（§5.2）关闭后，各列表在**渲染期**过滤
   `x_restrict >= 1` 的作品——只隐藏已取得的条目，**不重新请求**；`x_restrict`
   缺失（无法判定）的条目按 fail-closed 处理：仅在「全部」档可见，一般向与
@@ -658,7 +660,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_user_works(id, kind, page)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量 |
 | `browse_novel_series(id, last_order)` | 系列元数据 + 目录（last_order 游标） |
 | `browse_watchlist(kind)` | 追更列表：manga/novel 两个子 tab（/ajax/watch_list/*，按 maxPage 聚合 ≤20 页） |
-| `browse_work_comments(kind, id, offset)` | 作品评论根列表（illusts/novels comments/roots，limit=10，offset 游标） |
+| `browse_work_comments(kind, id, offset)` | 作品评论根列表（illusts/novels comments/roots，limit=10，offset 游标；作者关闭评论区 → `{"comments":[],"disabled":true}`，非报错） |
 | `browse_comment_replies(kind, commentId, page)` | 评论回复列表（comments/replies，page 从 1） |
 | `browse_bookmark_list(kind, rest, tag, offset, limit)` | 收藏列表（自己：illusts 48/页、novels 30/页；offset + total 翻页） |
 | `browse_bookmark_tags(kind)` | 收藏标签（一次返回 public/private 两组，含「未分類」聚合标签） |

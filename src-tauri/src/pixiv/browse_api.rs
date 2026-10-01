@@ -330,6 +330,10 @@ pub struct BrowseComments {
     /// roots: hasNext ? offset+len : null；replies: hasNext ? page+1 : null。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<i64>,
+    /// 评论区被作者关闭（roots 端点恒 400 的映射，仅 roots 出现）；此时
+    /// comments 恒为空。省略 = 正常评论区。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
 }
 
 /// 小说系列详情 + 一批内容（游标分页）。
@@ -1603,14 +1607,22 @@ fn has_next_page(body: &Value) -> bool {
 fn parse_comments_roots(body: &Value, offset: i64) -> BrowseComments {
     let comments = parse_comment_list(body);
     let next = has_next_page(body).then(|| offset + comments.len() as i64);
-    BrowseComments { comments, next }
+    BrowseComments {
+        comments,
+        next,
+        disabled: None,
+    }
 }
 
 /// replies 响应 → BrowseComments。next = hasNext ? page+1 : null。
 fn parse_comments_replies(body: &Value, page: i64) -> BrowseComments {
     let comments = parse_comment_list(body);
     let next = has_next_page(body).then(|| page + 1);
-    BrowseComments { comments, next }
+    BrowseComments {
+        comments,
+        next,
+        disabled: None,
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -2243,12 +2255,26 @@ impl PixivApi {
             other => return Err(PixivError::Client(format!("不支持的作品类型: {other}"))),
         };
         let offset = offset.max(0);
-        let body = self
+        let body = match self
             .client()
             .get_json(&format!(
                 "/ajax/{seg}/comments/roots?{id_key}={id}&offset={offset}&limit=10&lang=zh"
             ))
-            .await?;
+            .await
+        {
+            Ok(body) => body,
+            // 作者关闭评论区的作品该端点恒 400，body 仅泛化「不正确的请求。」、
+            // 无专属标志（2026-10-02 实测，docs/research §评论）；详情页能打开说明
+            // 作品存在，此处 400 即「关闭」语义 → 返回 disabled 空信封而非报错。
+            Err(err) if err.is_bad_request() => {
+                return Ok(to_value(&BrowseComments {
+                    comments: Vec::new(),
+                    next: None,
+                    disabled: Some(true),
+                }));
+            }
+            Err(err) => return Err(err),
+        };
         Ok(to_value(&parse_comments_roots(&body, offset)))
     }
 
@@ -4039,5 +4065,26 @@ mod tests {
         assert_eq!(cached_self_uid().map(|(uid, _)| uid), Some(9000099));
         invalidate_self_uid();
         assert!(cached_self_uid().is_none());
+    }
+
+    #[test]
+    fn comments_closed_envelope_and_bad_request_gate() {
+        // 关闭评论区信封：disabled=true + 空列表 + 无 next；正常信封省略 disabled
+        let closed = serde_json::to_value(&BrowseComments {
+            comments: Vec::new(),
+            next: None,
+            disabled: Some(true),
+        })
+        .unwrap();
+        assert_eq!(closed, json!({"comments": [], "disabled": true}));
+        let normal = serde_json::to_value(&parse_comments_roots(&json!({ "comments": [] }), 0))
+            .unwrap();
+        assert_eq!(normal, json!({ "comments": [] }), "正常信封不应出现 disabled");
+        // 400 判定只认 classify_status 的 "HTTP 400" 文案；API 层 error body
+        // （"API error: …"）与其他状态码不触发关闭映射
+        assert!(PixivError::Client("HTTP 400".into()).is_bad_request());
+        assert!(!PixivError::Client("HTTP 418".into()).is_bad_request());
+        assert!(!PixivError::Client("API error: 不正确的请求。".into()).is_bad_request());
+        assert!(!PixivError::NotFound.is_bad_request());
     }
 }

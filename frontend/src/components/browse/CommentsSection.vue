@@ -7,6 +7,7 @@
  * - 正文纯文本渲染（white-space: pre-wrap，绝不 v-html，URL 保持纯文本）；
  *   表情评论（content 空 + stamp_url）渲染 stamp 图。
  * - 未登录错误由 api 层统一联动登录弹窗，此处只展示归一文案 + 重试。
+ * - 评论区被作者关闭（roots 恒 400 → 后端 disabled 信封）为终态提示，非错误、无重试。
  */
 import { reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -34,6 +35,8 @@ const nextOffset = ref<number | null>(0);
 const loading = ref(false);
 const loadingMore = ref(false);
 const error = ref("");
+/** 评论区被作者关闭（disabled 信封）：终态，非错误 */
+const closed = ref(false);
 
 /** 请求序号：快速切换作品时丢弃过期响应（回复请求沿用同一序号快照） */
 let reqSeq = 0;
@@ -51,6 +54,7 @@ async function fetchPage(offset: number): Promise<void> {
   try {
     const data = await browseWorkComments({ kind: props.kind, id: props.id, offset });
     if (seq !== reqSeq) return;
+    if (first) closed.value = data.disabled === true;
     comments.value = first ? data.comments : [...comments.value, ...data.comments];
     // 预建展开态，避免渲染期再写 reactive map
     ensureRepliesStates(comments.value);
@@ -153,6 +157,7 @@ function resetAll(): void {
   loading.value = false;
   loadingMore.value = false;
   error.value = "";
+  closed.value = false;
   for (const key of Object.keys(repliesMap)) delete repliesMap[key];
   expandedIds.clear();
   brokenAvatars.clear();
@@ -182,6 +187,9 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
       <p class="state-text">{{ error }}</p>
       <md-outlined-button @click="retry">{{ t("common.retry") }}</md-outlined-button>
     </div>
+
+    <!-- 评论区被作者关闭：终态提示（非错误，无重试） -->
+    <p v-else-if="closed" class="comments-state empty">{{ t("browse.comments.closed") }}</p>
 
     <!-- 空态 -->
     <p v-else-if="!comments.length" class="comments-state empty">{{ t("browse.comments.empty") }}</p>

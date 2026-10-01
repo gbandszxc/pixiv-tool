@@ -281,10 +281,13 @@ export interface BrowseComment {
 /**
  * browse_work_comments / browse_comment_replies 返回体。
  * 接口无 total；next 为续拉游标（roots：下一批 offset；replies：下一页 page），null = 到底。
+ * disabled=true = 评论区被作者关闭（roots 端点恒 400 的后端映射，仅 roots 出现），
+ * 此时 comments 恒为空数组；省略 = 正常评论区。
  */
 export interface BrowseComments {
   comments: BrowseComment[];
   next?: number | null;
+  disabled?: boolean;
 }
 
 // ===== 收藏契约（bookmark-ui-v1 v3.1）=====

@@ -277,8 +277,14 @@
 | GET | `/ajax/illust/{id}/pages?lang=zh` | - | 多页作品的每页 URL（单页作品也适用） |
 | GET | `/ajax/illust/{id}/ugoira_meta?lang=zh` | - | **仅动图（illustType=2）**。注意路径是 `ugoira_meta`，`/ugoira` 返回 404 |
 | GET | `/ajax/illust/{id}/recommend/init?limit=18&lang=zh` | `limit` | 相关推荐 |
-| GET | `/ajax/illusts/comments/roots?illust_id={id}&offset=0&limit=3&lang=zh` | `offset/limit` | 评论根列表（`hasNext` 翻页） |
+| GET | `/ajax/illusts/comments/roots?illust_id={id}&offset=0&limit=3&lang=zh` | `offset/limit` | 评论根列表（`hasNext` 翻页；作者关闭评论区恒 400，见下注） |
 | GET | `/ajax/user/{uid}/illusts?ids[]=...` | `ids[]` 可重复 | 同作者其他作品批量缩略信息 |
+
+> **关闭评论区（2026-10-02 在线探针实测）**：作者关闭评论的作品，`comments/roots`
+> 恒返回 **HTTP 400** + `{"error":true,"message":"不正确的请求。","body":[]}`
+> ——泛化文案、无专属标志（novels 同族端点未单测，语义同族）；而
+> `/ajax/illust/{id}` 详情响应**不含任何评论关闭标志字段**，前端无法提前感知。
+> 案例：illust 150326647。应用侧映射见 `docs/PIXIV-API.md` §评论。
 
 #### `/ajax/illust/{id}` 响应关键字段（body）
 

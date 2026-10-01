@@ -415,6 +415,7 @@ export default {
       loadMore: "Load more comments",
       noMore: "No more comments",
       empty: "No comments yet",
+      closed: "The author has disabled comments",
       replyTo: "Reply {'@'}{name}",
       stampAlt: "Stamp",
     },

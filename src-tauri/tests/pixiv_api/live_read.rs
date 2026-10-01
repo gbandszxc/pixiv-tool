@@ -1063,6 +1063,41 @@ async fn live_comments_roots_and_replies() {
     }
 }
 
+/// 作者关闭评论区的作品：roots 端点恒 400 → 契约映射为 disabled 空信封而非报错。
+///
+/// 关闭评论无列表过滤器可动态取样，唯一可用钉死案例 id（文件头「动态取样」
+/// 约定的例外）；案例失效（删除/不可见）时跳过而非失败，避免旧 id 拖垮测试。
+#[tokio::test]
+#[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
+async fn live_comments_closed_work() {
+    use pixiv_tool_lib::pixiv::client::PixivError;
+
+    let api = common::live_api();
+    // 固定案例：作者已关闭评论区的插画（2026-10-02 实测 roots 400）
+    const CLOSED_ILLUST_ID: i64 = 150326647;
+
+    if let Err(err) = api.get_work_detail_illust(CLOSED_ILLUST_ID).await {
+        if matches!(err, PixivError::NotFound) {
+            eprintln!("案例作品 {CLOSED_ILLUST_ID} 已删除或不可见，跳过（请在本文档更新案例 id）");
+            return;
+        }
+        panic!("案例作品详情请求失败: {err}");
+    }
+    let body = api
+        .get_work_comments("illust", CLOSED_ILLUST_ID, 0)
+        .await
+        .expect("关闭评论区的作品 roots 不应报错（应映射为 disabled 信封）");
+    assert_eq!(
+        body["disabled"], serde_json::json!(true),
+        "关闭评论区应映射 disabled=true，实际: {body}"
+    );
+    assert!(
+        body["comments"].as_array().is_some_and(|c| c.is_empty()),
+        "关闭评论区的作品 comments 应为空数组，实际: {body}"
+    );
+    assert!(body["next"].is_null(), "关闭评论区不应有续拉游标");
+}
+
 // ----------------------------------------------------------------------
 // 15. 收藏（只读）
 // ----------------------------------------------------------------------

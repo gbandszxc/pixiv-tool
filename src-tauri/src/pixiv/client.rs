@@ -70,6 +70,14 @@ pub enum PixivError {
     Network(String),
 }
 
+impl PixivError {
+    /// 是否为 classify_status 归类的 HTTP 400。「HTTP {status}」文案只在
+    /// classify_status 一处产生，字符串判断也只在这里回收，避免散点匹配。
+    pub fn is_bad_request(&self) -> bool {
+        matches!(self, PixivError::Client(msg) if msg == "HTTP 400")
+    }
+}
+
 /// 状态码 → 错误分类（200 → None 表示成功）。与 Python `_request` 的分支一一对应：
 /// 只有精确 200 走成功路径（2xx 其他码按 Python 语义进可重试的 Client 分支）。
 pub fn classify_status(status: u16) -> Option<PixivError> {

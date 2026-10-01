@@ -120,8 +120,8 @@
 | `/ajax/user/{id}/illusts / novels?ids[]=` | GET | 作者作品批量缩略 | 匿名可读 | `browse_user_works` | browse_api.rs:2033 |
 | `/ajax/novel/series/{id}` | GET | 小说系列元数据 | 匿名可读 | `browse_novel_series` | browse_api.rs:2057 |
 | `/ajax/novel/series_content/{id}` | GET | 系列目录（游标） | 匿名可读 | `browse_novel_series`；抓取 | browse_api.rs:2062 / api.rs:259 |
-| `/ajax/illusts / novels/comments/roots` | GET | 评论根列表 | 匿名可读 | `browse_work_comments` | browse_api.rs:2073 |
-| `/ajax/illusts / novels/comments/replies` | GET | 评论回复列表 | 匿名可读 | `browse_comment_replies` | browse_api.rs:2096 |
+| `/ajax/illusts / novels/comments/roots` | GET | 评论根列表（关闭评论区恒 400 → `disabled` 信封） | 匿名可读 | `browse_work_comments` | browse_api.rs:2246 |
+| `/ajax/illusts / novels/comments/replies` | GET | 评论回复列表 | 匿名可读 | `browse_comment_replies` | browse_api.rs:2283 |
 | `/ajax/user/{uid}/illusts / novels/bookmarks` | GET | 收藏列表（自己） | 需登录 | `browse_bookmark_list` | browse_api.rs:2133 |
 | `/ajax/user/{uid}/illusts / novels/bookmark/tags` | GET | 收藏标签 | 需登录 | `browse_bookmark_tags` | browse_api.rs:2168 |
 | `/ajax/illusts / novels/bookmarks/add` | POST | 添加收藏（需 csrf） | 写操作需登录 | `browse_bookmark_add` | browse_api.rs:2188 |
@@ -230,10 +230,11 @@
 - 消费字段：`page.seriesContents[].{id,title,series.contentOrder,textLength,uploadTimestamp,xRestrict}`。
 - 分页：游标 `next_last_order` = 末条 `contentOrder`；空批或条数 < limit 或已覆盖 total → null（browse_api.rs:1357）。
 
-**GET `/ajax/illusts / novels/comments/roots?{illust_id|novel_id}={id}&offset={n}&limit=10&lang=zh`** · 实现 `browse_api.rs:2073`（`get_work_comments`）· 在线 `live_read.rs::live_comments_roots_and_replies` · 离线 `parse_comments_next_cursor_semantics`、`parse_comment_maps_fields_and_completes_img_protocol`、`parse_comment_stamp_and_has_replies_forms`
+**GET `/ajax/illusts / novels/comments/roots?{illust_id|novel_id}={id}&offset={n}&limit=10&lang=zh`** · 实现 `browse_api.rs`（`get_work_comments`）· 在线 `live_read.rs::live_comments_roots_and_replies`、`live_comments_closed_work` · 离线 `parse_comments_next_cursor_semantics`、`parse_comment_maps_fields_and_completes_img_protocol`、`parse_comment_stamp_and_has_replies_forms`、`comments_closed_envelope_and_bad_request_gate`
 - kind：`illust / manga` → illusts + `illust_id`；`novel` → novels + `novel_id`。`offset` ≥ 0，`limit=10` 写死。
 - 消费字段：`comments[].{id,userId,userName,img,comment,stampId,commentDate,hasReplies,replyToUserName}`、`hasNext`。
 - 分页：`next = hasNext ? offset + len : null`（无 total）。
+- **关闭评论区**：作者关闭评论的作品该端点恒 **400**，body `{"error":true,"message":"不正确的请求。","body":[]}`——泛化文案、无专属标志，且详情 `/ajax/illust/{id}` 无任何评论关闭标志字段（2026-10-02 在线探针实测，research §7.1）。实现捕获 400（`PixivError::is_bad_request`，client.rs）返回 `{"comments":[],"disabled":true}` 空信封而非报错；能打开详情页的作品不存在其他已知 400 来源。
 
 **GET `/ajax/illusts / novels/comments/replies?comment_id={id}&page={n}&lang=zh`** · 实现 `browse_api.rs:2096`（`get_comment_replies`）· 在线同上用例 · 离线 `parse_comments_next_cursor_semantics`
 - 参数：`comment_id` 非空；`page` ≥ 1；无 `limit`（同官方 web）。
@@ -390,8 +391,8 @@
 | `/ajax/user/{id}/illusts / novels?ids[]=` | browse_api.rs:2033；`parse_user_works_batch` :1308 | `live_read.rs::live_user_works_illust_novel` | `parse_user_works_batch_object_and_array_shapes` | browse.ts:437 |
 | `/ajax/novel/series/{id}` | browse_api.rs:2057；`parse_novel_series_detail` :1349 | `live_read.rs::live_novel_series_detail_and_content` | `parse_novel_series_detail_cursor_semantics` | browse.ts:447 |
 | `/ajax/novel/series_content/{id}` | browse_api.rs:2062；`parse_series_contents` :1321；`get_series_content` api.rs:259 | `live_read.rs::live_novel_series_detail_and_content` | `parse_series_content_real_shape` | browse.ts:447；core/sources.rs:48,60 |
-| `/ajax/illusts / novels/comments/roots` | `get_work_comments` browse_api.rs:2073；`parse_comments_roots` :1454 | `live_read.rs::live_comments_roots_and_replies` | `parse_comments_next_cursor_semantics` | browse.ts:453 |
-| `/ajax/illusts / novels/comments/replies` | `get_comment_replies` browse_api.rs:2096；`parse_comments_replies` :1461 | `live_read.rs::live_comments_roots_and_replies` | `parse_comments_next_cursor_semantics` | browse.ts:464 |
+| `/ajax/illusts / novels/comments/roots` | `get_work_comments` browse_api.rs:2246；`parse_comments_roots` :1607 | `live_read.rs::live_comments_roots_and_replies`、`live_comments_closed_work` | `parse_comments_next_cursor_semantics`、`comments_closed_envelope_and_bad_request_gate` | browse.ts:453 |
+| `/ajax/illusts / novels/comments/replies` | `get_comment_replies` browse_api.rs:2283；`parse_comments_replies` :1618 | `live_read.rs::live_comments_roots_and_replies` | `parse_comments_next_cursor_semantics` | browse.ts:464 |
 | `/ajax/user/{uid}/illusts / novels/bookmarks` | `bookmark_list` browse_api.rs:2133；`bookmark_list_path` :1703 | `live_read.rs::live_bookmark_list_and_tags` | `parse_bookmark_list_total_and_next_semantics` | browse.ts:483 |
 | `/ajax/user/{uid}/illusts / novels/bookmark/tags` | `bookmark_tags` browse_api.rs:2168；`parse_bookmark_tags` :1545 | `live_read.rs::live_bookmark_list_and_tags` | `parse_bookmark_tags_groups_and_empty_name_kept` | browse.ts:495 |
 | `/ajax/illusts / novels/bookmarks/add` | `bookmark_add` browse_api.rs:2188；`parse_bookmark_add_id` :1557 | `live_write.rs::live_bookmark_add_remove_illust_roundtrip` / `..._novel_roundtrip` | `parse_bookmark_add_id_both_response_shapes` | browse.ts:501 |
@@ -415,3 +416,4 @@
 |---|---|---|
 | 2026-10-01 | 初版：定位与维护规则、通用约定、28 行端点总览、逐端点契约、图片 CDN、勘误表、未接入清单、维护矩阵与 5 步排查流程 | 代码实测（`src-tauri/src/pixiv/**`、`commands/browse_api_cmds.rs`、`image_proxy.rs`）+ `docs/research/pixiv-browse-api.md`（2026-10-01 抓包） |
 | 2026-10-01 晚 | 在线套件（`tests/pixiv_api/`，17 只读用例）实机复核后勘误 + 修复 4 处：①搜索词 percent-encode（非 ASCII 原为 400）②频道 `ranking.items` 对象形态（原整块为空）③热门标签译名改取 `tagTranslation`（`translatedName`/`illustCount` 不存在）④排行榜日期归一 `normalize_ymd`（novel 原为日文串/`2026-09-30`）；`/ajax/user/{id}` 无 `account` 记为契约事实（前端隐藏空 @handle）；全部行号按修复后工作树重校 | `./dev.ps1 test-live` 全绿（20 用例：17 只读 + 2 写跳过 + 探针已删）；离线 `parse_channel_*` / `search_path_*` / `normalize_ymd_*` 用例 |
+| 2026-10-02 | 关闭评论区语义：关闭评论的作品 roots 恒 400（body 仅泛化「不正确的请求。」、无专属标志；详情亦无关闭标志字段）；`get_work_comments` 捕获 400（新增 `PixivError::is_bad_request`）映射为 `{"comments":[],"disabled":true}` 空信封而非报错，前端 `CommentsSection` 显示「作者已关闭评论区」终态；评论端点两行行号按当前工作树重校 | 在线探针实测（illust 150326647）；离线 `comments_closed_envelope_and_bad_request_gate` + 在线 `live_read.rs::live_comments_closed_work` |
