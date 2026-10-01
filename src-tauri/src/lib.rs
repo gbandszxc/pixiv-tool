@@ -72,7 +72,8 @@ pub fn run() {
                 }
             }
         })
-        // 图片代理协议：前端 convertFileSrc(encodeURIComponent(pximgUrl), "pixiv-img")。
+        // 图片代理协议：前端 convertFileSrc(pximgUrl, "pixiv-img")——传原始 URL，
+        // 不要预编码（convertFileSrc 在 Windows 侧会编码一次，预编码会双重编码 403）。
         // pximg 防盗链需 Referer，走后端代下 + 磁盘缓存（data/cache/img）。
         // 异步注册不阻塞主线程；缓存目录从 AppState.paths 取（AppState 未就绪时
         // 兜底临时目录，正常时序下不会发生）。
@@ -185,7 +186,7 @@ pub fn run() {
 }
 
 /// 主窗口关闭（红叉 / Cmd+W）确认：prevent_close 后发事件给前端，
-/// 由前端 Naive UI 确认框统一处理（与 Cmd+Q 路径一致）。
+/// 由前端应用内确认框（原生 dialog）统一处理（与 Cmd+Q 路径一致）。
 /// （Tauri 2 没有 v1 的 on_close_requested 便捷方法，走 on_window_event。）
 fn register_close_confirmation(app: &tauri::App) {
     let Some(window) = app.get_webview_window("main") else {

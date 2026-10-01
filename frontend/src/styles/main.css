@@ -28,7 +28,7 @@
 }
 
 /* 深色主题：html.dark 下覆盖中性变量，主色不变。
- * 取值对齐 NaiveUI darkTheme 基调（body #101014 / 卡面 #18181c），
+ * 取值即 DESIGN.md 的深色角色规范（surface #101418 等），
  * 避免出现第二套设计语言；由 App.vue 按设置与系统偏好切换类名。 */
 html.dark {
   --md-sys-color-primary: #9dcbff;
