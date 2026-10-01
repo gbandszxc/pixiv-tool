@@ -1,5 +1,5 @@
 //! 浏览命令层（browse-ui-v1，IPC 契约 v2，13 个命令；bookmark-ui-v1 契约
-//! v3.1 追加 4 个收藏命令，共 17 个）。
+//! v3.1 追加 4 个收藏命令，watchlist-ui-v1 追加 1 个追更列表命令，共 18 个）。
 //!
 //! 形状约定与 history_cmds 一致：`#[tauri::command]` 薄壳 +
 //! `*_impl(&AppState, ...)` 可离线调用，业务失败统一 `Err(中文文案)`。
@@ -67,6 +67,14 @@ fn validate_id(id: i64, what: &str) -> Result<(), String> {
 fn validate_channel_kind(kind: &str) -> Result<(), String> {
     if !matches!(kind, "illust" | "illustration" | "manga" | "novel") {
         return Err(format!("不支持的频道类型: {kind}"));
+    }
+    Ok(())
+}
+
+/// 追更列表 kind（官方 /following/watchlist 只有漫画、小说两个子 tab）。
+fn validate_watchlist_kind(kind: &str) -> Result<(), String> {
+    if !matches!(kind, "manga" | "novel") {
+        return Err(format!("不支持的追更类型: {kind}"));
     }
     Ok(())
 }
@@ -226,6 +234,20 @@ pub async fn browse_channel_impl(state: &AppState, kind: &str) -> Result<Value, 
     validate_channel_kind(kind)?;
     build_browse_api(state)?
         .get_channel(kind)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// 追更列表（漫画/小说订阅系列；后端按 max_page 聚合，前端无需翻页）。
+#[tauri::command]
+pub async fn browse_watchlist(state: State<'_, AppState>, kind: String) -> Result<Value, String> {
+    browse_watchlist_impl(&state, &kind).await
+}
+
+pub async fn browse_watchlist_impl(state: &AppState, kind: &str) -> Result<Value, String> {
+    validate_watchlist_kind(kind)?;
+    build_browse_api(state)?
+        .get_watchlist(kind)
         .await
         .map_err(|err| err.to_string())
 }

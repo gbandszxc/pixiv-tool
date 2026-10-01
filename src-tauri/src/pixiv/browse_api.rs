@@ -1,8 +1,8 @@
 //! 浏览模式 ajax 接口层（browse-ui-v1，IPC 契约 v2，13 个命令）。
 //!
-//! 为契约 v2 的 13 个 browse 命令 + 契约 v3.1 的 4 个收藏（bookmark）命令
-//! 提供 `PixivApi` 方法（跨文件固有实现块），全部返回 `serde_json::Value`
-//! （结构已按契约组装，命令层原样透传前端）。
+//! 为契约 v2 的 13 个 browse 命令 + 契约 v3.1 的 4 个收藏（bookmark）命令 +
+//! 追更列表（browse_watchlist，§12）提供 `PixivApi` 方法（跨文件固有实现块），
+//! 全部返回 `serde_json::Value`（结构已按契约组装，命令层原样透传前端）。
 //!
 //! 端点与响应形状真相源：`docs/research/pixiv-browse-api.md`（2026-10-01 实测）。
 //! 两类响应形状统一 parse：
@@ -137,6 +137,44 @@ pub struct BrowseChannel {
     pub trending_tags: Vec<TrendingTag>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ranking_date: Option<String>,
+}
+
+/// 追更列表条目（用户订阅的系列；漫画来自 illustSeries + thumbnails 二次映射，
+/// 小说来自 novelSeries 自带字段，见 docs/research/pixiv-browse-api.md §12）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseWatchlistItem {
+    /// 系列 id
+    pub id: i64,
+    /// "manga" | "novel"（与请求 kind 一致）
+    pub kind: String,
+    pub title: String,
+    pub user_id: i64,
+    /// 缺失时为空串（前端兜底显示）
+    pub user_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_avatar: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
+    /// 最新话的 R-18 标记（漫画取自最新话缩略项，小说为系列本体字段）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x_restrict: Option<i64>,
+    /// 已发布话数
+    pub total: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update_date: Option<String>,
+    /// 最新话作品 id（latestIllustId / latestNovelId，「读最新话」直达）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_work_id: Option<i64>,
+}
+
+/// 追更列表（/ajax/watch_list/manga|novel；后端按 max_page 聚合至多 20 页）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseWatchlist {
+    pub kind: String,
+    /// 订阅系列总数（page.total，pixiv 侧为字符串数字）
+    pub total: i64,
+    pub max_page: i64,
+    pub items: Vec<BrowseWatchlistItem>,
 }
 
 /// 排行榜返回（契约形状：{ items, date, prev_date, next_date, next_page }）。
@@ -594,6 +632,19 @@ fn users_index(body: &Value) -> HashMap<i64, &Value> {
         .unwrap_or_default()
 }
 
+/// watch_list 的 `users` 为**数组**形状（`[{userId, name, image, imageBig}, ...]`，
+/// 与频道页的对象形状不同）：userId → 用户对象引用。
+fn users_index_array(body: &Value) -> HashMap<i64, &Value> {
+    body.get("users")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|u| u.get("userId").and_then(as_i64_loose).map(|id| (id, u)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// 按 id 列表顺序映射索引表 → items（pixiv 偶发索引缺项：跳过不报错）。
 /// 作者名/头像缺失时回退 users 索引表（imageBig 优先）。
 fn items_from_ids(
@@ -728,6 +779,113 @@ fn parse_channel(body: &Value, kind: &str) -> BrowseChannel {
         trending_tags,
         ranking_date,
     }
+}
+
+/// 追更列表聚合页数上限（官方单页约 30 条；20 页已覆盖常规订阅规模）。
+const WATCHLIST_MAX_PAGES: i64 = 20;
+
+/// GET /ajax/watch_list/manga|novel body → (items, total, max_page)。
+/// 顺序按 page.watchedSeriesIds（官方追更列表序）；表里没有或映射不到的 id 跳过，
+/// watchedSeriesIds 缺失时回退系列数组原序。漫画：illustSeries + latestIllustId →
+/// thumbnails.illust 二次映射封面/R-18，作者回退 users（数组形状）；小说：novelSeries
+/// 自带 cover.urls / xRestrict / 作者（users 仅兜底）。缺板块输出空列表不报错。
+fn parse_watchlist(body: &Value, kind: &str) -> (Vec<BrowseWatchlistItem>, i64, i64) {
+    let total = body
+        .pointer("/page/total")
+        .and_then(as_i64_loose)
+        .unwrap_or(0);
+    let max_page = body
+        .pointer("/page/maxPage")
+        .and_then(as_i64_loose)
+        .unwrap_or(1)
+        .max(1);
+    let order: Vec<i64> = body
+        .pointer("/page/watchedSeriesIds")
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(as_i64_loose).collect())
+        .unwrap_or_default();
+    let users = users_index_array(body);
+    let is_novel = kind == "novel";
+    let thumbs = if is_novel {
+        HashMap::new()
+    } else {
+        parse_index(body, "illust")
+    };
+    let series: &[Value] = body
+        .get(if is_novel { "novelSeries" } else { "illustSeries" })
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let by_id: HashMap<i64, &Value> = series
+        .iter()
+        .filter_map(|s| s.get("id").and_then(as_i64_loose).map(|id| (id, s)))
+        .collect();
+    let ids: Vec<i64> = if order.is_empty() {
+        series
+            .iter()
+            .filter_map(|s| s.get("id").and_then(as_i64_loose))
+            .collect()
+    } else {
+        order
+    };
+    let items = ids
+        .iter()
+        .filter_map(|id| {
+            let s = by_id.get(id)?;
+            let user_id = s.get("userId").and_then(as_i64_loose).unwrap_or(0);
+            let (mut user_name, mut user_avatar) =
+                (str_field(s, "userName"), str_field(s, "profileImageUrl"));
+            if let Some(u) = users.get(&user_id) {
+                if user_name.is_none() {
+                    user_name = str_field(u, "name");
+                }
+                if user_avatar.is_none() {
+                    user_avatar = str_field(u, "imageBig").or_else(|| str_field(u, "image"));
+                }
+            }
+            let latest_work_id = s
+                .get(if is_novel { "latestNovelId" } else { "latestIllustId" })
+                .and_then(as_i64_loose);
+            // 封面/R-18：小说直接取系列本体；漫画按最新话 id 映射缩略项
+            let (cover, x_restrict) = if is_novel {
+                (
+                    s.pointer("/cover/urls/240mw")
+                        .and_then(Value::as_str)
+                        .map(String::from),
+                    s.get("xRestrict").and_then(as_i64_loose),
+                )
+            } else {
+                match latest_work_id.and_then(|wid| thumbs.get(&wid)) {
+                    Some(t) => (
+                        t.pointer("/urls/240mw")
+                            .and_then(Value::as_str)
+                            .map(String::from)
+                            .or_else(|| str_field(t, "url")),
+                        t.get("xRestrict").and_then(as_i64_loose),
+                    ),
+                    None => (None, None),
+                }
+            };
+            Some(BrowseWatchlistItem {
+                id: *id,
+                kind: kind.to_string(),
+                title: title_field(s, *id),
+                user_id,
+                user_name: user_name.unwrap_or_default(),
+                user_avatar,
+                cover,
+                x_restrict,
+                total: s
+                    .get("total")
+                    .and_then(as_i64_loose)
+                    .or_else(|| s.get("publishedContentCount").and_then(as_i64_loose))
+                    .unwrap_or(0),
+                update_date: str_field(s, "updateDate"),
+                latest_work_id,
+            })
+        })
+        .collect();
+    (items, total, max_page)
 }
 
 /// GET /ajax/discovery/artworks body → BrowseList。
@@ -1555,6 +1713,43 @@ impl PixivApi {
         Ok(to_value(&parse_channel(&body, canonical)))
     }
 
+    /// GET /ajax/watch_list/manga|novel → BrowseWatchlist（追更列表，§12）。
+    /// 后端按 page.maxPage 聚合后续页（上限 20 页防异常大订阅；空页提前收尾），
+    /// 前端无需翻页。
+    pub async fn get_watchlist(&self, kind: &str) -> Result<Value, PixivError> {
+        let seg = match kind {
+            "manga" => "manga",
+            "novel" => "novel",
+            other => return Err(PixivError::Client(format!("不支持的追更类型: {other}"))),
+        };
+        let body = self
+            .client()
+            .get_json(&format!("/ajax/watch_list/{seg}?p=1&lang=zh"))
+            .await?;
+        let (mut items, total, max_page) = parse_watchlist(&body, seg);
+        let last_page = max_page.min(WATCHLIST_MAX_PAGES);
+        let mut page = 1;
+        while page < last_page {
+            page += 1;
+            let next = self
+                .client()
+                .get_json(&format!("/ajax/watch_list/{seg}?p={page}&lang=zh"))
+                .await?;
+            let (more, _, _) = parse_watchlist(&next, seg);
+            let before = items.len();
+            items.extend(more);
+            if items.len() == before {
+                break;
+            }
+        }
+        Ok(to_value(&BrowseWatchlist {
+            kind: seg.to_string(),
+            total,
+            max_page,
+            items,
+        }))
+    }
+
     /// GET /ajax/discovery/artworks?mode=all&limit=60 → BrowseList。
     /// 无翻页参数；前端重复调用按 id 去重追加。
     pub async fn get_discover(&self) -> Result<Value, PixivError> {
@@ -2286,6 +2481,138 @@ mod tests {
         assert!(ch.tag_sections.is_empty(), "无 recommendByTag 输出空数组不报错");
         assert!(ch.trending_tags.is_empty());
         assert!(ch.ranking_date.is_none());
+    }
+
+    // ---- watchlist（§12 追更列表）----
+
+    #[test]
+    fn parse_watchlist_manga_maps_thumbs_and_order() {
+        let body = json!({
+            "page": {
+                "total": "2",
+                "maxPage": 1,
+                // 官方列表序；含一个不在系列表的孤儿 id（应跳过）
+                "watchedSeriesIds": ["344074", "283930", "999999"]
+            },
+            "thumbnails": {"illust": [
+                {"id": "149896311", "illustType": 1, "title": "最新话A", "userId": "1101",
+                 "url": "https://i.pximg.net/c/250x250_80_a2/custom-thumb/a.jpg",
+                 "urls": {"240mw": "https://i.pximg.net/c/240x480/img-master/a.jpg"},
+                 "xRestrict": 1},
+                {"id": "149798080", "illustType": 1, "title": "最新话B", "userId": "2202",
+                 "url": "https://i.pximg.net/c/250x250_80_a2/custom-thumb/b.jpg",
+                 "xRestrict": 0}
+            ]},
+            "illustSeries": [
+                {"id": "283930", "userId": "2202", "title": "系列B", "total": 20,
+                 "latestIllustId": "149798080", "updateDate": "2026-09-18T12:17:48+09:00"},
+                {"id": "344074", "userId": "1101", "title": "系列A", "total": 14,
+                 "latestIllustId": "149896311", "updateDate": "2026-09-20T20:57:00+09:00"}
+            ],
+            // watch_list 的 users 是数组形状（区别于频道页的对象形状）
+            "users": [
+                {"userId": "1101", "name": "画师A", "image": "https://i.pximg.net/a50.png",
+                 "imageBig": "https://i.pximg.net/a170.png"},
+                {"userId": "2202", "name": "画师B"}
+            ]
+        });
+        let (items, total, max_page) = parse_watchlist(&body, "manga");
+        assert_eq!(total, 2, "page.total 字符串数字");
+        assert_eq!(max_page, 1);
+        assert_eq!(
+            items.iter().map(|i| i.id).collect::<Vec<_>>(),
+            vec![344074, 283930],
+            "按 watchedSeriesIds 排序，孤儿 id 跳过"
+        );
+        let first = &items[0];
+        assert_eq!(first.kind, "manga");
+        assert_eq!(first.title, "系列A");
+        assert_eq!(first.user_id, 1101);
+        assert_eq!(first.user_name, "画师A", "作者名来自 users 数组");
+        assert_eq!(
+            first.user_avatar.as_deref(),
+            Some("https://i.pximg.net/a170.png"),
+            "头像 imageBig 优先"
+        );
+        assert_eq!(
+            first.cover.as_deref(),
+            Some("https://i.pximg.net/c/240x480/img-master/a.jpg"),
+            "封面取最新话的 urls.240mw"
+        );
+        assert_eq!(first.x_restrict, Some(1), "R-18 取最新话标记");
+        assert_eq!(first.total, 14);
+        assert_eq!(first.latest_work_id, Some(149896311));
+        // 第二项：缩略项无 urls.240mw → 回退顶层 url 方图
+        assert_eq!(
+            items[1].cover.as_deref(),
+            Some("https://i.pximg.net/c/250x250_80_a2/custom-thumb/b.jpg")
+        );
+        assert_eq!(items[1].x_restrict, Some(0));
+    }
+
+    #[test]
+    fn parse_watchlist_novel_uses_series_fields() {
+        let body = json!({
+            "page": {"total": "1", "maxPage": 1, "watchedSeriesIds": ["10559822"]},
+            "thumbnails": {"illust": [], "novel": []},
+            "illustSeries": [],
+            "novelSeries": [
+                {"id": "10559822", "userId": "4501", "userName": "Daiakko",
+                 "profileImageUrl": "https://i.pximg.net/p170.jpg",
+                 "xRestrict": 1, "title": "系列N", "total": 4,
+                 "latestNovelId": "20201502",
+                 "updateDate": "2023-09-19T12:17:05+09:00",
+                 "cover": {"urls": {
+                     "240mw": "https://i.pximg.net/c/240x480_80/novel-cover-master/n.jpg",
+                     "original": "https://i.pximg.net/novel-cover-original/n.png"
+                 }}}
+            ],
+            "users": []
+        });
+        let (items, total, max_page) = parse_watchlist(&body, "novel");
+        assert_eq!(total, 1);
+        assert_eq!(max_page, 1);
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.kind, "novel");
+        assert_eq!(item.title, "系列N");
+        assert_eq!(item.user_name, "Daiakko", "小说条目自带作者名");
+        assert_eq!(
+            item.user_avatar.as_deref(),
+            Some("https://i.pximg.net/p170.jpg")
+        );
+        assert_eq!(
+            item.cover.as_deref(),
+            Some("https://i.pximg.net/c/240x480_80/novel-cover-master/n.jpg"),
+            "封面取 cover.urls.240mw"
+        );
+        assert_eq!(item.x_restrict, Some(1), "R-18 为系列本体字段");
+        assert_eq!(item.total, 4);
+        assert_eq!(item.latest_work_id, Some(20201502), "latestNovelId");
+    }
+
+    #[test]
+    fn parse_watchlist_missing_or_empty_is_not_error() {
+        // 无 page / 无系列数组：空列表、total 0、maxPage 兜底 1
+        let (items, total, max_page) = parse_watchlist(&json!({}), "manga");
+        assert!(items.is_empty());
+        assert_eq!(total, 0);
+        assert_eq!(max_page, 1);
+        // watchedSeriesIds 缺失 → 回退系列数组原序
+        let body = json!({
+            "illustSeries": [
+                {"id": "2", "userId": "1", "title": "B", "total": 2, "latestIllustId": "22"},
+                {"id": "1", "userId": "1", "title": "A", "total": 1, "latestIllustId": "11"}
+            ]
+        });
+        let (items, _, _) = parse_watchlist(&body, "manga");
+        assert_eq!(
+            items.iter().map(|i| i.id).collect::<Vec<_>>(),
+            vec![2, 1],
+            "无 watchedSeriesIds 时保持数组原序"
+        );
+        assert_eq!(items[0].user_name, "", "users 缺失时作者名兜底空串");
+        assert!(items[0].cover.is_none(), "无 thumbnails 映射时封面缺省");
     }
 
     // ---- discover ----

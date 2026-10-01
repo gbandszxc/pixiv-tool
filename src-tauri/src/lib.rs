@@ -126,6 +126,7 @@ pub fn run() {
             // 浏览数据
             commands::browse_api_cmds::browse_home_feed,
             commands::browse_api_cmds::browse_channel,
+            commands::browse_api_cmds::browse_watchlist,
             commands::browse_api_cmds::browse_discover,
             commands::browse_api_cmds::browse_follow_latest,
             commands::browse_api_cmds::browse_search,
