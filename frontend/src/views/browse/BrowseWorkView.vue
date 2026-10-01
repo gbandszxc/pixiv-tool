@@ -1,6 +1,7 @@
 <script lang="ts">
 /**
  * 本会话已确认 R-18 遮罩的作品 id（模块级存储）：
+ * 只在设置关闭 `show_r18` 时用得上（开启时详情页直接展示、不出现遮罩）；
  * 同一会话内对同一作品不再二次询问；不持久化，重启后恢复遮罩。
  */
 const revealedWorkIds = new Set<number>();
@@ -9,12 +10,14 @@ const revealedWorkIds = new Set<number>();
 <script setup lang="ts">
 /**
  * 作品查看器（插画/漫画）：整页路由视图 /browse/work/:kind/:id。
- * 桌面 ≥960px 双列：左图片舞台（近黑底）+ 右信息列（固定 320px 可滚动）；
- * 窄窗纵向堆叠（图片在上）。相关推荐经 router.replace 原地跳转（watch 参数重拉）。
+ * 桌面 ≥960px 双列：左图片舞台（近黑底，纵向渐进加载，翻页/全屏由 ImageViewer 自理）
+ * + 右信息列（固定 320px 可滚动）；窄窗纵向堆叠（图片在上）。
+ * 相关推荐经 router.replace 原地跳转（watch 参数重拉）。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
+import { useSettingsStore } from "../../stores/settings";
 import {
   browseRelated,
   browseWorkDetail,
@@ -40,6 +43,7 @@ const props = defineProps<{
 
 const router = useRouter();
 const { t } = useI18n();
+const settings = useSettingsStore();
 
 // ===== 状态 =====
 
@@ -49,9 +53,7 @@ const loading = ref(true);
 const error = ref("");
 /** 查看者收藏态（来自详情响应 bookmarkState；收藏按钮经 change 回写） */
 const bookmarkState = ref<WorkBookmarkState | null>(null);
-/** 当前页下标（0 起） */
-const current = ref(0);
-/** 本作品是否已确认 R-18 遮罩 */
+/** 本作品是否已确认 R-18 遮罩（仅关闭 show_r18 时参与判定） */
 const revealed = ref(false);
 
 const relatedItems = ref<BrowseWorkItem[]>([]);
@@ -69,18 +71,16 @@ const item = computed(() => detail.value?.item ?? null);
 const pages = computed(() => detail.value?.pages ?? []);
 /** ugoira 只显示封面帧（kind 路由侧只有 illust/manga，运行时以 item.kind 判定） */
 const isUgoira = computed(() => item.value?.kind === "ugoira");
-const multi = computed(() => pages.value.length > 1 && !isUgoira.value);
-const restricted = computed(() => !revealed.value && (item.value?.x_restrict ?? 0) > 0);
+/**
+ * R-18 遮罩只在设置关闭 `show_r18` 时出现——开启（默认）即用户已表态要看 R-18，
+ * 详情页不再二次确认；关闭时作为深链直访的兜底，保留本会话记忆。
+ */
+const restricted = computed(
+  () => !settings.settings.show_r18 && !revealed.value && (item.value?.x_restrict ?? 0) > 0
+);
 const restrictLabel = computed(() =>
   item.value?.x_restrict === 2 ? t("common.browseR18G") : t("common.browseR18")
 );
-
-const stageAlt = computed(() => {
-  if (!item.value) return "";
-  return multi.value
-    ? t("browse.work.imageAlt", { title: item.value.title, page: current.value + 1 })
-    : item.value.title;
-});
 
 /** 描述 HTML 剥标签后纯文本展示（DOMParser 惰性文档：不执行脚本、不加载图片，绝不 v-html） */
 const plainDescription = computed(() => {
@@ -104,7 +104,6 @@ async function loadDetail(): Promise<void> {
   error.value = "";
   detail.value = null;
   bookmarkState.value = null;
-  current.value = 0;
   revealed.value = revealedWorkIds.has(props.id);
   void loadRelated();
   try {
@@ -195,35 +194,22 @@ function openInPixiv(): void {
   );
 }
 
-// ===== 翻页 / 遮罩 / 键盘 =====
-
-const canPrev = computed(() => multi.value && current.value > 0);
-const canNext = computed(() => multi.value && current.value < pages.value.length - 1);
-
-function prevPage(): void {
-  if (canPrev.value) current.value -= 1;
-}
-
-function nextPage(): void {
-  if (canNext.value) current.value += 1;
-}
+// ===== 遮罩 / 键盘 =====
 
 function reveal(): void {
   revealedWorkIds.add(props.id);
   revealed.value = true;
 }
 
+/**
+ * 这里只处理 Esc（返回上一页）：图片的翻页与全屏键盘（←/→、浮层 Esc）由 ImageViewer
+ * 在 capture 阶段拦截，浮层打开时不会冒泡到这里。
+ */
 function onKeydown(e: KeyboardEvent): void {
   if (loading.value || error.value) return;
   const target = e.target as HTMLElement | null;
   if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-  if (e.key === "ArrowLeft") {
-    e.preventDefault();
-    prevPage();
-  } else if (e.key === "ArrowRight") {
-    e.preventDefault();
-    nextPage();
-  } else if (e.key === "Escape") {
+  if (e.key === "Escape") {
     e.preventDefault();
     goBack();
   }
@@ -300,15 +286,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
         <ImageViewer
           v-if="detail"
           :pages="pages"
-          :page="current"
-          :alt="stageAlt"
-          :multi="multi"
+          :alt="item?.title ?? ''"
           :restricted="restricted"
           :restrict-label="restrictLabel"
           :ugoira="isUgoira"
           @reveal="reveal"
-          @prev="prevPage"
-          @next="nextPage"
         />
         <div v-else class="stage-skeleton" aria-hidden="true"></div>
       </section>
