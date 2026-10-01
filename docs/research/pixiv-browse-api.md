@@ -682,3 +682,65 @@ query 参数语义（均实测）：
 5. **标签**：用 `/ajax/user/{uid}/(illusts|novels)/bookmark/tags` 一次拿 `{public, private}` 两组；「未分類」是聚合标签名，前端需本地化显示。
 6. **参数红线**：order 只用 `desc`（asc 静默空列表）、mode 只用 `all`（其余报错）、他人列表必须显式 `rest=show`。
 7. **写操作安全**：所有 POST 需登录 Cookie + token（JSON 端点走 `x-csrf-token` 头，旧式表单走 `tt` 字段）；建议客户端对 add/delete 做节流（实测间隔 >2s 无任何风控提示，但高频仍有 Cloudflare 风险）。
+
+## 12. 追更列表（Watch List，2026-10-01 实测）
+
+> 调研方式：已登录会话打开官方 `/following/watchlist/manga`，DevTools 网络面板抓真实请求，再用页内 `fetch()` 复现 novel 变体验证形状。
+> 官方入口：「关注」区三个 tab（已关注用户的作品 / **追更列表中的作品** / 好P友的作品）的第二个。追更对象是**系列**（漫画系列 / 小说系列），非单件作品；官方页为漫画/小说两个子 tab + 双列行式卡片 + 数字分页。
+
+### 12.0 概览
+
+| 功能 | 接口 | 方法 | 关键说明 |
+|---|---|---|---|
+| 漫画追更列表 | `/ajax/watch_list/manga?p={page}&lang=zh` | GET | 系列在 `body.illustSeries`；最新话封面/R-18 经 `thumbnails.illust` 二次映射 |
+| 小说追更列表 | `/ajax/watch_list/novel?p={page}&lang=zh` | GET | 系列在 `body.novelSeries`，自带 `cover.urls` 与 `xRestrict` |
+
+- **无 illust 变体**：官方追更只有漫画 / 小说两个子 tab（系列功能不覆盖插画单件）。
+- **分页**：`p` 从 1 起；`body.page.maxPage` 为总页数。单页容量未实测到边界（样本 total=2/1 → maxPage=1），以 `maxPage` 为准逐页聚合即可。
+- **顺序**：`body.page.watchedSeriesIds`（字符串 id 数组）即官方列表序；`illustSeries`/`novelSeries` 数组顺序实测与之一致。
+
+### 12.1 响应形状（body 顶层）
+
+| 字段 | 说明 |
+|---|---|
+| `page.total` | **字符串**数字（如 `"2"`）——订阅系列总数 |
+| `page.maxPage` | number——总页数 |
+| `page.watchedSeriesIds` | string[]——系列 id 顺序表 |
+| `thumbnails.illust` | manga 变体：每系列**最新话**缩略项（字段同 §2 缩略结构，另带 `seriesId/seriesTitle`）；novel 变体为 `[]` |
+| `thumbnails.novel` | 实测恒 `[]`（小说封面直接在 novelSeries 条目里） |
+| `illustSeries` | manga 变体的系列数组；novel 变体为 `[]` |
+| `novelSeries` | novel 变体的系列数组；manga 变体为 `[]` |
+| `users` | **数组**形状（注意：§2 频道页的 users 是 id→对象**映射**），条目 `{userId, name, image, imageBig, ...}` |
+| `zoneConfig`/`extraData`/`tagTranslation`/`requests` | 广告位与元数据，忽略 |
+
+### 12.2 illustSeries 条目（manga）
+
+```json
+{"id":"344074","userId":"11***16","title":"曦光之心-深层洗脑恶堕","total":14,
+ "firstIllustId":"146241789","latestIllustId":"149896311",
+ "updateDate":"2026-09-20T20:57:00+09:00","isWatched":true,"isNotifying":false, ...}
+```
+
+- **封面 / R-18 需二次映射**：`latestIllustId` → `thumbnails.illust` 同 id 条目；封面取 `urls.240mw`（240x480 竖版，回退顶层 `url` 方图），R-18 取该条目的 `xRestrict`（illustSeries 本体**无** xRestrict）。
+- **作者名/头像**：illustSeries 不带 → `users` 数组按 `userId` 取 `name` / `imageBig`（回退 `image`）。
+- 话数 `total`；更新时间 `updateDate`（ISO 含时区）。
+
+### 12.3 novelSeries 条目（novel）
+
+```json
+{"id":"10559822","userId":"45***04","userName":"Daiakko",
+ "profileImageUrl":"https://i.pximg.net/user-profile/img/...170.jpg",
+ "xRestrict":1,"title":"…","total":4,"latestNovelId":"20201502",
+ "updateDate":"2023-09-19T12:17:05+09:00",
+ "cover":{"urls":{"240mw":"…/c/240x480_80/novel-cover-master/…","480mw":"…","original":"…"}},
+ "isNotifying":false, ...}
+```
+
+- 小说条目**自带**作者（`userName`/`profileImageUrl`）、`xRestrict`、`cover.urls.240mw`——无需 thumbnails/users 映射（二者仍在响应里，可做兜底）。
+- 话数 `total` 与 `publishedContentCount` 同值，取 `total`。
+
+### 12.4 与应用的映射（browse_watchlist 契约）
+
+- 后端按 `maxPage` 聚合（上限 20 页防异常大订阅；空页提前收尾），一次输出 `BrowseWatchlist{kind, total, max_page, items[]}`，前端无需翻页。
+- 条目归一：`BrowseWatchlistItem{id, kind, title, user_id, user_name, user_avatar, cover, x_restrict, total, update_date, latest_work_id}`；`latest_work_id` 取 `latestIllustId`/`latestNovelId`，供「读最新话」直达。
+- `isNotifying`（官方铃铛开关）与追更/取消追更写操作 V1 不做；卡片跳转：novel → 应用内系列目录（`/browse/series/:id`），manga → 官方系列页 `https://www.pixiv.net/user/{userId}/series/{id}`。
