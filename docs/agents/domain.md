@@ -37,20 +37,21 @@
 │   ├── research/                  ← 外部接口调研（pixiv 只读浏览 API 等）
 │   ├── agents/                    ← skills 配置（本目录）
 │   └── icon/                      ← 应用图标源图（raw_icon.png）
-├── frontend/                      ← Vue3 + TS + Vite（api 层走 invoke/listen）
+├── frontend/                      ← Vue3 + TS + Vite（views/、components/、stores/、api/、styles/、locales/；UI 库 @material/web，api 层走 invoke/listen）
 ├── scripts/
 │   └── make_icon.sh               ← 图标生成（raw_icon.png → 1024×1024 源图）
 └── src-tauri/                     ← Tauri 2 + Rust 后端（单进程，IPC 通信）
     ├── Cargo.toml / tauri.conf.json / build.rs
     ├── capabilities/              ← Tauri 权限声明
     ├── icons/                     ← 全平台图标（tauri.conf.json 引用，必须入库）
-    ├── tests/                     ← IPC 冒烟测试（smoke_commands.rs）
+    ├── tests/                     ← IPC 冒烟测试（smoke_commands.rs / browse_smoke.rs）
     └── src/
         ├── main.rs / lib.rs       ← 入口薄壳 / 业务库（lib 名 pixiv_tool_lib）
-        ├── state.rs / db.rs / settings.rs / cookies.rs / paths.rs / platform.rs / logging.rs
-        ├── pixiv/                 ← API 客户端（client / api / csrf）
+        ├── state.rs / db.rs / settings.rs / cookies.rs / accounts.rs / paths.rs / platform.rs / logging.rs / image_proxy.rs
+        ├── pixiv/                 ← API 客户端（client / api / csrf / browse_api）
         ├── core/                  ← 任务模型（sources / crawler / illust_crawler / exporter / task_manager）
-        ├── auth/                  ← 登录（browser_login / cdp）
+        ├── browse/                ← 浏览模式编排（内嵌子 WebView 控制）
+        ├── auth/                  ← 登录（browser_login / cdp / webview_login）
         └── commands/              ← #[tauri::command] IPC 命令层
 ```
 
