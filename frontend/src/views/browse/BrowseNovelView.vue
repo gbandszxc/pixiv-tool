@@ -120,6 +120,11 @@ async function load(): Promise<void> {
     loading.value = false;
   }
   if (detail.value) void loadRelated();
+  // DOM 就绪后重挂 ResizeObserver（loading/error/正文分支会换掉滚动层首子节点）并回算进度
+  void nextTick(() => {
+    syncProgressResize();
+    updateProgress();
+  });
 }
 
 // ===== 翻页 =====
@@ -133,6 +138,8 @@ function gotoPage(target: number): void {
   page.value = clamped;
   // 切页回到正文顶部；默认瞬时滚动，自动跟随系统「减少动态效果」偏好。
   readerScrollEl.value?.scrollTo({ top: 0 });
+  // 顶部若原本就是 0 则不触发 scroll 事件，切页后主动回算一次进度
+  void nextTick(updateProgress);
 }
 
 /** 键盘 ←/→ 翻页；焦点在表单控件时交给控件自身。 */
@@ -145,6 +152,13 @@ function onKeydown(event: KeyboardEvent): void {
   ) {
     return;
   }
+  // md-slider 的焦点在其 shadow <input type="range"> 上，事件冒泡到 window 时 target 已被
+  // 重定向为宿主元素；用 composedPath 还原真实事件源，焦点落在滑杆（role=slider / range
+  // input）或输入类控件时，方向键交给控件自身调值，不触发翻页。
+  const source = event.composedPath()[0];
+  if (source instanceof Element && source.closest("input, select, [role=slider]")) {
+    return;
+  }
   if (event.key === "ArrowLeft") {
     event.preventDefault();
     gotoPage(page.value - 1);
@@ -154,8 +168,63 @@ function onKeydown(event: KeyboardEvent): void {
   }
 }
 
-onMounted(() => window.addEventListener("keydown", onKeydown));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
+// ===== 阅读进度（底栏右侧 #trailing：md-slider 拉条 + 百分比回显） =====
+
+/** 当前页内滚动进度百分比（0~100）；滚动层无余量（短内容）时恒 100。 */
+const progressPercent = ref(100);
+
+/** 依据滚动层几何回算进度：scrollTop / (scrollHeight - clientHeight)，余量 ≤ 0 视为读完。 */
+function updateProgress(): void {
+  const el = readerScrollEl.value;
+  if (!el) return;
+  const max = el.scrollHeight - el.clientHeight;
+  progressPercent.value = max <= 0 ? 100 : clamp(Math.round((el.scrollTop / max) * 100), 0, 100);
+}
+
+/** 滚动跟随：被动监听滚动层，滚动即回算（拖动定位时滚回值与目标恒等，无反馈环）。 */
+function onReaderScroll(): void {
+  updateProgress();
+}
+
+/** 拉条快速定位：百分比 → 正文滚动位置（拖动过程 input 持续触发；短内容无可定位余量）。
+ *  回显乐观同步：input 即更新 progressPercent，不依赖 scroll 事件回声——渲染被节流 /
+ *  窗口不可见等场景程序化 scrollTo 不派发 scroll，只靠回声会让滑杆与百分比停在旧值；
+ *  可见窗口下回声值与乐观值恒等，仅作确认，无反馈环。 */
+function onProgressSeek(event: Event): void {
+  const el = readerScrollEl.value;
+  if (!el) return;
+  const value = Number((event.target as HTMLInputElement).value);
+  if (!Number.isFinite(value)) return;
+  const max = el.scrollHeight - el.clientHeight;
+  if (max <= 0) return;
+  progressPercent.value = Math.round(clamp(value, 0, 100));
+  el.scrollTo({ top: clamp(value / 100, 0, 1) * max });
+}
+
+/** 进度随内容高度变化（内嵌图懒加载 / 字号缩放 / 面板切换）与窗口高度变化回算：
+ *  观察滚动层本身与其首个元素子节点（正文列）；加载 / 切页换 DOM 后需重挂（sync）。 */
+let progressResize: ResizeObserver | null = null;
+
+function syncProgressResize(): void {
+  const el = readerScrollEl.value;
+  if (!el || typeof ResizeObserver === "undefined") return;
+  progressResize?.disconnect();
+  progressResize ??= new ResizeObserver(updateProgress);
+  progressResize.observe(el);
+  if (el.firstElementChild) progressResize.observe(el.firstElementChild);
+}
+
+onMounted(() => {
+  window.addEventListener("keydown", onKeydown);
+  readerScrollEl.value?.addEventListener("scroll", onReaderScroll, { passive: true });
+  syncProgressResize();
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKeydown);
+  readerScrollEl.value?.removeEventListener("scroll", onReaderScroll);
+  progressResize?.disconnect();
+  progressResize = null;
+});
 
 // ===== 相关推荐 / 评论面板 =====
 
@@ -226,7 +295,7 @@ function openInPixiv(): void {
     <!-- 顶栏：返回 / 标题 / 作者 / 返填表单 / 在浏览器中打开；flex 首行，恒贴窗口上边 -->
     <header class="topbar">
       <md-icon-button :aria-label="t('browse.novel.back')" :title="t('browse.novel.back')" @click="goBack">
-        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
       </md-icon-button>
       <div class="topbar-title" :title="item?.title">
         {{ item?.title || t("common.browseReaderTitle") }}
@@ -258,11 +327,12 @@ function openInPixiv(): void {
           :fill="panel === 'comments' ? 'currentColor' : 'none'"
           viewBox="0 0 24 24"
           stroke="currentColor"
+          stroke-width="2"
           stroke-linecap="round"
           stroke-linejoin="round"
           aria-hidden="true"
         >
-          <path d="M20 5H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3v4l5-4h8a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+          <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
         </svg>
       </md-icon-button>
       <md-icon-button
@@ -270,14 +340,14 @@ function openInPixiv(): void {
         :title="t('browse.hooks.fillNovelForm')"
         @click="fillDownloadForm({ form: 'novel', sourceType: 'single', sourceId: props.id })"
       >
-        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" /></svg>
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /></svg>
       </md-icon-button>
       <md-icon-button
         :aria-label="t('browse.hooks.openInBrowser')"
         :title="t('browse.hooks.openInBrowser')"
         @click="openInPixiv"
       >
-        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /><polyline points="15 3 21 3 21 9" /><line x1="10" y1="14" x2="21" y2="3" /></svg>
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" /><path d="m21 3-9 9" /><path d="M15 3h6v6" /></svg>
       </md-icon-button>
     </header>
 
@@ -384,7 +454,7 @@ function openInPixiv(): void {
             :disabled="fontScale <= SCALE_MIN"
             @click="stepScale(-1)"
           >
-            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /></svg>
+            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /></svg>
           </md-icon-button>
           <span class="scale-value" aria-live="polite">{{ Math.round(fontScale * 100) }}%</span>
           <md-icon-button
@@ -393,7 +463,7 @@ function openInPixiv(): void {
             :disabled="fontScale >= SCALE_MAX"
             @click="stepScale(1)"
           >
-            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /><path d="M12 8v8" /></svg>
+            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /><path d="M12 8v8" /></svg>
           </md-icon-button>
           <!-- 重置：逆时针回环箭头；100% 已是默认值时禁用 -->
           <md-icon-button
@@ -402,8 +472,23 @@ function openInPixiv(): void {
             :disabled="fontScale === 1"
             @click="resetScale"
           >
-            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
           </md-icon-button>
+        </div>
+      </template>
+      <!-- 底栏右侧阅读进度：md-slider 拉条（拖动快速定位）+ 右侧百分比回显 -->
+      <template #trailing>
+        <div class="read-progress">
+          <md-slider
+            class="read-progress-slider"
+            min="0"
+            max="100"
+            step="1"
+            :value="progressPercent"
+            :aria-label="t('browse.novel.readProgress')"
+            @input="onProgressSeek"
+          ></md-slider>
+          <span class="read-progress-value" aria-hidden="true">{{ progressPercent }}%</span>
         </div>
       </template>
     </AppPagination>
@@ -741,9 +826,50 @@ function openInPixiv(): void {
   text-align: center;
 }
 
+/* 底栏右侧阅读进度（经 AppPagination #trailing 插槽渲染）：滑杆拉条 + 右侧百分比回显 */
+.read-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+/* md-slider：宿主高由 state-layer-size 驱动（默认 40px 触控域），收敛到底栏 32px 控件
+ * 约定（同时缩触控域与滑杆高，handle 视觉 20px 不受影响）；宽度约 200px（与宿主内置
+ * min-inline-size 同级，显式声明以便窄窗收窄时能压过宿主 min-width）。
+ * 主题映射只落本应用已定义的角色——包内默认 inactive track 引用 surface-container-highest、
+ * handle 阴影引用 shadow，本应用均未定义，不显式映射会漏出浅色兜底（暗色主题发灰）。 */
+.read-progress md-slider {
+  width: 200px;
+  min-width: 200px;
+  --md-slider-state-layer-size: calc(var(--space-lg) * 2);
+  --md-slider-handle-color: var(--md-sys-color-primary);
+  --md-slider-hover-handle-color: var(--md-sys-color-primary);
+  --md-slider-focus-handle-color: var(--md-sys-color-primary);
+  --md-slider-pressed-handle-color: var(--md-sys-color-primary);
+  --md-slider-active-track-color: var(--md-sys-color-primary);
+  --md-slider-inactive-track-color: color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
+  --md-slider-handle-shadow-color: transparent;
+}
+
+/* 百分比回显在滑杆右侧；定宽防 0%→100% 跳变抖动 */
+.read-progress-value {
+  min-width: 44px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  text-align: right;
+}
+
+@media (max-width: 640px) {
+  .read-progress md-slider {
+    width: 140px;
+    min-width: 140px;
+  }
+}
+
 .bar-icon {
   width: 20px;
   height: 20px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 </style>

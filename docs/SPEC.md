@@ -582,7 +582,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   `.impeccable/design.json` 与其保持同步
 - 浏览资源列表头部统一提供低强调刷新文字按钮（18px 线性图标、加载中禁用），
   Ctrl+R / Command+R 与按钮执行同一数据刷新，不重载 WebView；配方见 `DESIGN.md`。
-- 返回统一为 40×40 `md-icon-button`、20px/stroke 1.8 线性 chevron 与
+- 返回统一为 40×40 `md-icon-button`、20px lucide `chevron-left` 官方路径（stroke 2）与
   `on-surface-variant` 颜色，沿用 8px 标题行间距，无独立文字返回行、无新增 token；
   悬停提示及可访问名称为「返回上一页」，无历史时为「返回首页」。
 
@@ -668,13 +668,18 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   `[pixivimage:illustId]` 插图引用）渲染为占位块，不静默丢图。`--novel-scale` 取自设置键
   `novel_font_scale`（默认 1.0、区间 0.75~2.0，见 §5.2）；底栏左侧经 AppPagination reader
   变体的 `#leading` 插槽挂字号缩放控件 `[−] [百分比] [+] [重置]`（步进 0.1、到界禁用；
-  重置回到 100%（100% 时禁用）；`aria-live="polite"`）。键盘 ←/→ 翻页与顶栏动作不变（见下条）。
+  重置回到 100%（100% 时禁用）；`aria-live="polite"`）。底栏右侧经 `#trailing` 插槽挂阅读
+  进度条（`md-slider` 拉条 + 右侧百分比回显）：展示当前页内滚动进度（`scrollTop /
+  (scrollHeight - clientHeight)`，无滚动余量恒 100%），滚动与内容高度变化实时回显，
+  拖动按百分比快速定位正文位置（input 即乐观同步回显，scroll 回声仅作确认、不依赖）；
+  键盘 ←/→ 在滑杆聚焦时归滑杆调值、不翻页。
+  键盘 ←/→ 翻页与顶栏动作不变（见下条）。
 - **详情页顶栏与面板（查看器 / 阅读器共用）**：顶栏带文案的动作保持 40px 胶囊（收藏），
-  图标动作统一 `md-icon-button`（40×40、无描边、20px 线性自绘 SVG，stroke 1.8），
+  图标动作统一 `md-icon-button`（40×40、无描边、20px lucide 官方路径线性图标，stroke 2），
   顺序为「收藏 / 评论 / 返填表单 / 在浏览器中打开」；**不再用只有图标的
   `md-outlined-button`**（左右各 24px 内距会把单个图标撑成约 66px 宽的胶囊），
   也不再用 `‹ › ✕` 文本字形充当图标——页码翻页器统一为公共 AppPagination
-  （`components/common/`，自绘 chevron 同 20px 线性规格），排行榜日期切换用
+  （`components/common/`，自绘 chevron 同为 20px lucide 官方路径 stroke 2），排行榜日期切换用
   `md-icon-button` + 20px chevron，同规。顶栏评论按钮（toggle + selected，标签在
   「查看评论」/「返回相关推荐」间切换）切换查看器右列下段与阅读器正文列下段的
   面板：默认「相关推荐」，切到「评论」时 `CommentsSection` 才挂载并拉第一页

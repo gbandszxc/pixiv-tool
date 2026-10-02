@@ -16,7 +16,8 @@
  *
  * variant="reader"：吸底居中紧凑形态，复用小说阅读器翻页器 recipe
  * （sticky 底部、surface 底 + 上缘 divider、md-icon-button + 跳页 select），
- * 不显示页码窗口与总数区，供系列页 / 阅读器迁移。
+ * 不显示页码窗口与总数区，供系列页 / 阅读器迁移；
+ * 左右各留可选插槽——#leading（如字号缩放）/ #trailing（如阅读进度条）。
  */
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -62,6 +63,8 @@ defineSlots<{
   start?: () => unknown;
   /** reader 变体左侧插槽（如小说阅读器字号缩放控件）；无插槽时翻页组仍居中 */
   leading?: () => unknown;
+  /** reader 变体右侧插槽（如小说阅读器阅读进度条）；无插槽时第 3 列留空平衡 */
+  trailing?: () => unknown;
 }>();
 
 const { t } = useI18n();
@@ -156,7 +159,7 @@ function onJump(): void {
 
 <template>
   <!-- reader 变体：吸底居中紧凑形态（小说阅读器翻页器 recipe）；
-       三列 grid：左 leading（可选，如字号缩放）/ 中翻页组恒居中 / 右留空平衡 -->
+       三列 grid：左 leading（可选，如字号缩放）/ 中翻页组恒居中 / 右 trailing（可选，如阅读进度条） -->
   <nav v-if="variant === 'reader'" class="app-pagination is-reader" :aria-label="t('common.pagination.navLabel')">
     <div v-if="$slots.leading" class="reader-leading"><slot name="leading" /></div>
     <div class="reader-inner">
@@ -166,7 +169,7 @@ function onJump(): void {
         :disabled="disabled || prevDisabled"
         @click="goTo(currentView - 1)"
       >
-        <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+        <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
       </md-icon-button>
       <select
         v-if="pageCount !== null"
@@ -187,9 +190,10 @@ function onJump(): void {
         :disabled="disabled || nextDisabled"
         @click="goTo(currentView + 1)"
       >
-        <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
+        <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
       </md-icon-button>
     </div>
+    <div v-if="$slots.trailing" class="reader-trailing"><slot name="trailing" /></div>
   </nav>
 
   <!-- default 变体：流内分页行四段式——左总数区（或 #start）→ prev+页码窗口+next → 跳页输入组 → 最右容量下拉 -->
@@ -204,7 +208,7 @@ function onJump(): void {
       :disabled="disabled || prevDisabled"
       @click="goTo(currentView - 1)"
     >
-      <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+      <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
     </button>
 
     <template v-if="pageCount !== null">
@@ -237,7 +241,7 @@ function onJump(): void {
       :disabled="disabled || nextDisabled"
       @click="goTo(currentView + 1)"
     >
-      <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
+      <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
     </button>
     <!-- 快捷跳页输入组（对齐 antd showQuickJumper）：已知总页数且 >1 才渲染，恒在容量下拉左侧 -->
     <label
@@ -460,7 +464,8 @@ function onJump(): void {
 }
 
 /* reader 变体：与小说阅读器翻页器同 recipe（sticky 底部 + surface 底 + 上缘 divider）；
-   三列 grid 让翻页组恒居中：左右 1fr 等宽、中间 auto；无 leading 时视觉与纯居中一致（BrowseSeriesView 回归点） */
+   三列 grid 让翻页组恒居中：左右 1fr 等宽、中间 auto；左 #leading / 右 #trailing 插槽可选，
+   均无插槽时视觉与纯居中一致（BrowseSeriesView 回归点） */
 .app-pagination.is-reader {
   position: sticky;
   bottom: 0;
@@ -484,6 +489,13 @@ function onJump(): void {
 .reader-leading {
   grid-column: 1;
   justify-self: start;
+}
+
+/* 第 3 列右对齐插槽（如阅读进度条）；min-width 0 防止长内容撑破 grid */
+.reader-trailing {
+  grid-column: 3;
+  justify-self: end;
+  min-width: 0;
 }
 
 .page-select {
@@ -516,7 +528,7 @@ function onJump(): void {
 .pager-icon {
   width: 20px;
   height: 20px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 /* compact 断点：隐藏页码窗口，显示「current / pageCount」；prev/next、跳页输入组与容量下拉保留（随 wrap 自然换行），32px 高度同规 */

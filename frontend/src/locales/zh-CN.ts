@@ -462,6 +462,7 @@ export default {
       fontSmaller: "缩小字号",
       fontLarger: "放大字号",
       fontReset: "重置字号",
+      readProgress: "阅读进度",
     },
     series: {
       listLabel: "系列目录",

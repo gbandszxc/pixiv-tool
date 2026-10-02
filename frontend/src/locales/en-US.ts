@@ -462,6 +462,7 @@ export default {
       fontSmaller: "Decrease font size",
       fontLarger: "Increase font size",
       fontReset: "Reset font size",
+      readProgress: "Reading progress",
     },
     series: {
       listLabel: "Series contents",
