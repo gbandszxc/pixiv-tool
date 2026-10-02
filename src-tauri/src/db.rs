@@ -61,6 +61,21 @@ CREATE TABLE IF NOT EXISTS illustrations (
     status      TEXT NOT NULL DEFAULT 'ok'
 );
 CREATE INDEX IF NOT EXISTS idx_illustrations_author ON illustrations(author_id);
+
+-- 浏览访问历史（自有浏览 UI 的访问记录；kind='illust'|'manga'|'novel'）
+CREATE TABLE IF NOT EXISTS browse_history (
+    work_id     INTEGER NOT NULL,
+    kind        TEXT    NOT NULL,
+    title       TEXT    NOT NULL DEFAULT '',
+    author_id   INTEGER NOT NULL DEFAULT 0,
+    author_name TEXT    NOT NULL DEFAULT '',
+    cover       TEXT    NOT NULL DEFAULT '',
+    page_count  INTEGER NOT NULL DEFAULT 0,
+    x_restrict  INTEGER NOT NULL DEFAULT 0,
+    visited_at  TEXT    NOT NULL,
+    PRIMARY KEY (kind, work_id)
+);
+CREATE INDEX IF NOT EXISTS idx_browse_history_visited ON browse_history(visited_at DESC);
 ";
 
 /// 统一 UTC ISO 时间戳（等价 Python `datetime.now(timezone.utc).isoformat()`）。
@@ -131,6 +146,34 @@ pub struct HistoryRow {
     /// 仅插画有；小说为 None。
     pub illust_type: Option<i64>,
     pub captured_at: String,
+}
+
+/// browse_history 表插入参数（INSERT OR REPLACE；visited_at 由调用方给 now_iso()）。
+#[derive(Debug, Clone)]
+pub struct BrowseHistoryEntry {
+    pub kind: String,
+    pub work_id: i64,
+    pub title: String,
+    pub author_id: i64,
+    pub author_name: String,
+    pub cover: Option<String>,
+    pub page_count: i64,
+    pub x_restrict: i64,
+    pub visited_at: String,
+}
+
+/// browse_history 表整行。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseHistoryRow {
+    pub work_id: i64,
+    pub kind: String,
+    pub title: String,
+    pub author_id: i64,
+    pub author_name: String,
+    pub cover: String,
+    pub page_count: i64,
+    pub x_restrict: i64,
+    pub visited_at: String,
 }
 
 /// novels 插入参数（INSERT OR REPLACE）。
@@ -803,6 +846,70 @@ impl Db {
     }
 
     // ------------------------------------------------------------------
+    // browse_history（自有浏览 UI 的访问历史）
+    // ------------------------------------------------------------------
+
+    /// 记录一次浏览访问（同 kind+work_id 覆写并按新 visited_at 置顶）。
+    pub fn record_browse_history(&self, entry: &BrowseHistoryEntry) -> Result<(), String> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO browse_history
+                 (work_id, kind, title, author_id, author_name, cover, page_count, x_restrict, visited_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    entry.work_id,
+                    entry.kind,
+                    entry.title,
+                    entry.author_id,
+                    entry.author_name,
+                    entry.cover.as_deref().unwrap_or(""),
+                    entry.page_count,
+                    entry.x_restrict,
+                    entry.visited_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// 分页查询浏览历史（最近访问在前；同时刻按 work_id 倒序）。
+    pub fn list_browse_history(
+        &self,
+        page: i64,
+        page_size: i64,
+    ) -> Result<(Vec<BrowseHistoryRow>, i64), String> {
+        let total = self.with_conn(|conn| {
+            conn.query_row("SELECT COUNT(*) FROM browse_history", [], |row| {
+                row.get::<_, i64>(0)
+            })
+        })?;
+        let offset = (page - 1).max(0) * page_size;
+        let rows = self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT work_id, kind, title, author_id, author_name, cover,
+                        page_count, x_restrict, visited_at
+                 FROM browse_history
+                 ORDER BY visited_at DESC, work_id DESC LIMIT ?1 OFFSET ?2",
+            )?;
+            let rows = stmt
+                .query_map(params![page_size, offset], browse_history_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })?;
+        Ok((rows, total))
+    }
+
+    /// 清空浏览历史，返回删除条数。
+    pub fn clear_browse_history(&self) -> Result<usize, String> {
+        self.with_conn(|conn| {
+            let total: i64 =
+                conn.query_row("SELECT COUNT(*) FROM browse_history", [], |row| row.get(0))?;
+            conn.execute("DELETE FROM browse_history", [])?;
+            Ok(total as usize)
+        })
+    }
+
+    // ------------------------------------------------------------------
     // tasks
     // ------------------------------------------------------------------
 
@@ -1002,6 +1109,20 @@ fn history_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRow> {
         series_id: row.get("series_id")?,
         illust_type: row.get("illust_type")?,
         captured_at: row.get("captured_at")?,
+    })
+}
+
+fn browse_history_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BrowseHistoryRow> {
+    Ok(BrowseHistoryRow {
+        work_id: row.get("work_id")?,
+        kind: row.get("kind")?,
+        title: row.get("title")?,
+        author_id: row.get("author_id")?,
+        author_name: row.get("author_name")?,
+        cover: row.get("cover")?,
+        page_count: row.get("page_count")?,
+        x_restrict: row.get("x_restrict")?,
+        visited_at: row.get("visited_at")?,
     })
 }
 

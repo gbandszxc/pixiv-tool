@@ -10,13 +10,16 @@
 //! task 相关 impl（delete_tasks_impl 等）在 `commands::task_cmds` 内
 //! 已有等价单测，此处不重复。
 
+use pixiv_tool_lib::commands::browse_history_cmds::{
+    browse_history_clear_impl, browse_history_list_impl, browse_history_record_impl,
+};
 use pixiv_tool_lib::commands::history_cmds::history_list_impl;
 use pixiv_tool_lib::commands::misc_cmds::{
     illustrations_batch_delete_impl, novels_batch_delete_impl,
 };
 use pixiv_tool_lib::commands::saucenao_cmds::saucenao_search_impl;
 use pixiv_tool_lib::commands::settings_cmds::apply_settings_patch;
-use pixiv_tool_lib::db::{Db, IllustrationInsert, NovelInsert, now_iso};
+use pixiv_tool_lib::db::{BrowseHistoryEntry, Db, IllustrationInsert, NovelInsert, now_iso};
 use pixiv_tool_lib::paths::AppPaths;
 use pixiv_tool_lib::settings::Settings;
 use pixiv_tool_lib::state::AppState;
@@ -237,5 +240,74 @@ async fn saucenao_search_guards_are_offline() {
         .await
         .unwrap_err();
     assert!(err.contains("不存在"), "got {err}");
+    cleanup(&dir);
+}
+
+/// 浏览访问历史：写入（含同 key 覆写置顶）→ 分页顺序 → 清空计数 → 归零。
+#[test]
+fn browse_history_record_list_clear_round_trip() {
+    let (state, dir) = temp_state("browse-history");
+
+    // 播种 3 条（显式 visited_at 控制顺序；同 kind 不同 work_id + 跨 kind 各一）。
+    for (kind, work_id, title, ts) in [
+        ("illust", 1, "图A", "2026-01-01T00:00:01+00:00"),
+        ("manga", 2, "漫B", "2026-01-01T00:00:02+00:00"),
+        ("novel", 3, "文C", "2026-01-01T00:00:03+00:00"),
+    ] {
+        state
+            .db
+            .record_browse_history(&BrowseHistoryEntry {
+                kind: kind.into(),
+                work_id,
+                title: title.into(),
+                author_id: 0,
+                author_name: String::new(),
+                cover: Some(format!("https://i.pximg.net/{work_id}.jpg")),
+                page_count: 1,
+                x_restrict: 0,
+                visited_at: ts.into(),
+            })
+            .unwrap();
+    }
+
+    // 同 key 二次写入：经命令路径 upsert + now_iso 置顶，total 不变；cover None → ''。
+    browse_history_record_impl(
+        &state,
+        "illust".into(),
+        1,
+        "图A(改)".into(),
+        7,
+        "作者".into(),
+        None,
+        3,
+        1,
+    )
+    .unwrap();
+
+    // 分页查询：total=3，最新写入置顶，顺序 C/B/A。
+    let page1 = browse_history_list_impl(&state, 1, 2).unwrap();
+    assert_eq!(page1["total"], json!(3));
+    assert_eq!(page1["page"], json!(1));
+    assert_eq!(page1["page_size"], json!(2));
+    let items = page1["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["work_id"], json!(1), "同 key 写入置顶");
+    assert_eq!(items[0]["title"], json!("图A(改)"), "upsert 覆写字段");
+    assert_eq!(items[0]["cover"], json!(""), "cover None 归一为空串");
+    assert_eq!(items[0]["author_id"], json!(7));
+    assert_eq!(items[1]["kind"], json!("novel"), "次新为文C");
+
+    let page2 = browse_history_list_impl(&state, 2, 2).unwrap();
+    assert_eq!(page2["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(page2["items"][0]["kind"], json!("manga"), "末位为漫B");
+
+    // 清空：计数 = 当前总数。
+    let cleared = browse_history_clear_impl(&state).unwrap();
+    assert_eq!(cleared["status"], json!("success"));
+    assert_eq!(cleared["deleted"], json!(3));
+
+    // 再查归零；重复清空 deleted=0。
+    assert_eq!(browse_history_list_impl(&state, 1, 20).unwrap()["total"], json!(0));
+    assert_eq!(browse_history_clear_impl(&state).unwrap()["deleted"], json!(0));
     cleanup(&dir);
 }

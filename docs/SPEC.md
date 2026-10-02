@@ -120,7 +120,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 48 个 #[tauri::command]（auth 6 / browse_api 18 / tasks 9 / settings 3 / saucenao 1 / history 1 / misc 8 / app 1 / update 1）
+│     ├─ commands/              # 52 个 #[tauri::command]（auth 6 / browse_api 19 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 1）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
@@ -132,7 +132,7 @@ pixiv-tool/
 ├─ frontend/                    # Vue3 + TS + Vite + Material Web（M3）
 │  ├─ src/
 │  │  ├─ views/                 # ToolsView（工具页签壳）/ CrawlView / IllustrationView / TasksView / HistoryView / SaucenaoView（以图识图）
-│  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark + Work/Series/Author/Novel
+│  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark/History + Work/Series/Author/Novel
 │  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/ settings/（SettingsPanel / SettingsDialog / sections.ts 分组定义）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
@@ -396,6 +396,21 @@ CREATE TABLE illustrations (
   status      TEXT NOT NULL DEFAULT 'ok'
 );
 CREATE INDEX idx_illustrations_author ON illustrations(author_id);
+
+-- 浏览访问历史（自有浏览 UI 的访问记录；kind='illust'|'manga'|'novel'）
+CREATE TABLE IF NOT EXISTS browse_history (
+  work_id     INTEGER NOT NULL,
+  kind        TEXT    NOT NULL,
+  title       TEXT    NOT NULL DEFAULT '',
+  author_id   INTEGER NOT NULL DEFAULT 0,
+  author_name TEXT    NOT NULL DEFAULT '',
+  cover       TEXT    NOT NULL DEFAULT '',
+  page_count  INTEGER NOT NULL DEFAULT 0,
+  x_restrict  INTEGER NOT NULL DEFAULT 0,
+  visited_at  TEXT    NOT NULL,            -- ISO8601，同 kind+work_id 覆写置顶
+  PRIMARY KEY (kind, work_id)
+);
+CREATE INDEX IF NOT EXISTS idx_browse_history_visited ON browse_history(visited_at DESC);
 ```
 
 ### 5.2 配置文件
@@ -514,6 +529,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 | 浏览-搜索 | `/browse/search`（类型 tab + 排序/对象/匹配 + ID/链接直达；纯数字 ID 按类型 tab 跳插画/漫画/小说详情，链接形态自带类型不受 tab 影响） | ✅ |
 | 浏览-排行榜 | `/browse/ranking`（插画/漫画/动图/小说 × 周期 + 日期导航） | ✅ |
 | 浏览-收藏 | `/browse/bookmark`（插画·漫画/小说 × 公开/私密 + 标签筛选） | ✅ |
+| 浏览-历史 | `/browse/history`（浏览访问历史：作品级访问记录网格回显 + 分页 + 一键清空） | ✅ |
 | 作品查看器 | `/browse/work/illust|:kind=illust|manga>/:id`（多页纵向渐进加载、点击放大进入全屏翻页 + 胶卷缩略图、R-18 遮罩（仅关闭 show_r18 时）、相关推荐 / 评论面板（顶栏评论按钮切换）） | ✅ |
 | 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航、相关推荐 / 评论面板） | ✅ |
 | 系列目录 | `/browse/series/:id`（游标加载） | ✅ |
@@ -527,7 +543,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 `/settings` 路由已移除：账号菜单只留「设置」入口，设置表单承载于模态设置弹窗（见下）。
 
 **侧边栏**：扁平菜单、无分组标题——浏览区（首页/插画/漫画/小说/发现/动态/搜索/
-排行榜/收藏）在上，其后一条分隔线，然后是「工具」单项（`/tools*` 前缀高亮）
+排行榜/收藏/历史）在上，其后一条分隔线，然后是「工具」单项（`/tools*` 前缀高亮）
 与「以图识图」单项（`/saucenao`，与工具项之间无分隔线）；浏览项按路径精确匹配。头部行 = logo + 标题 + 收起侧栏按钮（折叠态仅留展开按钮）；
 折叠态 72px 只显示图标，窗口高度不足时导航区自身滚动。侧栏底部为**头像 chip**
 （头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击在 chip 上方弹出**账号
@@ -602,8 +618,9 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   端点与响应结构的契约事实源为 `docs/PIXIV-API.md`（`docs/research/pixiv-browse-api.md`
   为 2026-10-01 调研证据档案，保留当日字段细节与失效端点勘误）。
   唯一例外是首页 street 流（POST，需 csrf token，见 ADR 0012 §3）。
-- **IPC 契约**：11 个命令（§7），返回体统一 `BrowseWorkItem` 卡片结构
-  （id/kind/title/author/cover/page_count/x_restrict/tags/series…），前端契约类型与
+- **IPC 契约**：浏览相关 22 个命令（浏览端点 19 + 浏览访问历史 3，§7）。浏览端点返回体统一
+  `BrowseWorkItem` 卡片结构（id/kind/title/author/cover/page_count/x_restrict/tags/series…），
+  浏览访问历史返回 `browse_history_list` 的分页行（§7）；前端契约类型与
   mock 层在 `frontend/src/api/browse.ts`（非 Tauri 环境返回确定性样例数据，供浏览器
   视觉验收；生产不受影响）。
 - **列表刷新与返回缓存**：首页、插画/漫画/小说频道、发现、动态、追更、搜索、
@@ -757,6 +774,9 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |
+| `browse_history_record(kind, workId, title, authorId, authorName, cover?, pageCount, xRestrict)` | 记录一次浏览访问（同 kind+workId 覆写并按访问时间置顶；作品详情页加载成功后上报） |
+| `browse_history_list(page, pageSize)` | 浏览访问历史分页查询（`visited_at` 倒序，最近访问在前） |
+| `browse_history_clear()` | 清空浏览访问历史（返回 `{status, deleted}`） |
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
 | `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位 |
@@ -805,8 +825,10 @@ CDN 下载不占 ajax 限速与 400ms 请求间隔；CDN 侧的 429 不重试、
 
 历史联合查询规则：`novels` + `illustrations` 两表 UNION ALL（统一行形状
 id / category / title / author_name / pages / series_id / illust_type /
-captured_at），按 `captured_at` 倒序分页，keyword 同时过滤两表；前端抓取
-时间列按东八区固定偏移显示。"打开所在文件夹"由 Rust 侧
+`captured_at`），按 `captured_at` 倒序分页，keyword 同时过滤两表；前端抓取
+时间列按东八区固定偏移显示。浏览访问历史（`browse_history` 表 / 三个
+`browse_history_*` 命令，ADR 0014）是独立的作品级访问记录，与该联合查询无关、不参与
+UNION。"打开所在文件夹"由 Rust 侧
 `platform.rs::reveal_in_file_manager` 实现：Windows `explorer /select,`、
 macOS `open -R`、Linux `xdg-open`；文件不存在回退父目录。
 
@@ -968,6 +990,7 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 | 0011 | 登录窗必然以未登录态打开 | [adr/0011-fresh-login-window.md](adr/0011-fresh-login-window.md) |
 | 0012 | 浏览模式：自有 UI 代理 pixiv 只读接口（内嵌浏览器保留） | [adr/0012-browse-mode-own-ui.md](adr/0012-browse-mode-own-ui.md) |
 | 0013 | 移除内嵌 Pixiv 浏览器（/pixiv），自有浏览 UI 为唯一入口 | [adr/0013-remove-embedded-browser.md](adr/0013-remove-embedded-browser.md) |
+| 0014 | 浏览访问历史持久化（SQLite 表 + 3 个 IPC 命令） | [adr/0014-browse-history-persistence.md](adr/0014-browse-history-persistence.md) |
 
 ADR 按需追加，不强制一次性写完。
 

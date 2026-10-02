@@ -13,6 +13,7 @@
 pub mod app_cmds;
 pub mod auth_cmds;
 pub mod browse_api_cmds;
+pub mod browse_history_cmds;
 pub mod history_cmds;
 pub mod misc_cmds;
 pub mod saucenao_cmds;
