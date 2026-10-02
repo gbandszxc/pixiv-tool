@@ -120,7 +120,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 47 个 #[tauri::command]（auth 6 / browse_api 18 / tasks 9 / settings 3 / saucenao 1 / history 1 / misc 8 / app 1）
+│     ├─ commands/              # 48 个 #[tauri::command]（auth 6 / browse_api 18 / tasks 9 / settings 3 / saucenao 1 / history 1 / misc 8 / app 1 / update 1）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
@@ -526,7 +526,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 （头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击在 chip 上方弹出**账号
 菜单**（`AccountMenu`：轻量 popover，宽 264px、surface-container 底、12px 圆角、
 既有轻阴影；透明遮罩点击外部或 Esc 关闭，无深色 scrim）；内容 = 账号列表（当前
-账号 ✓，点击切换）/ 添加账号（复用 LoginDialog）+ 分隔线 + **「设置」入口**；
+账号 ✓，点击切换）/ 添加账号（复用 LoginDialog）+ 分隔线 + **「设置」入口**（其
+下同分组附「检查更新」入口，行为见 §7）；
 「设置」与**退出登录**（danger 色，未登录置灰；点击后经原生 confirm 弹窗确认才
 执行）之间以分隔线隔出 meta 行：左对齐**版本回显**（`getVersion()` 动态读取
 app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标按钮，关菜单后经
@@ -757,6 +758,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_bookmark_add(kind, id, restrict, tags)` | 添加收藏（全局 JSON 端点 + x-csrf-token；restrict 0 公开 / 1 非公开） |
 | `browse_bookmark_remove(kind, id, bookmarkId)` | 取消收藏：插画走 ajax form，小说走旧式 `/novel/bookmark_setting.php` 表单 |
 | `app_exit` | 退出应用（前端确认框确认后调用，与 Cmd+Q 路径一致） |
+| `check_app_update` | 检查应用更新：解析 GitHub releases 页面（非 API）取最新稳定版并与当前版本比较；发现新版本由前端弹窗询问，无更新/失败静默 |
 
 **应用菜单栏**：Windows 上默认隐藏（`SetMenu(hwnd, NULL)`），按 Alt 唤起并
 进入菜单循环、退出循环（选中 / Esc / 窗口失活）后自动收回。实现见
