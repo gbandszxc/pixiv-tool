@@ -487,25 +487,16 @@ const typeTabs = computed(() => [
           <md-select-option value="s_tc">{{ t("browse.search.sModeTc") }}</md-select-option>
         </md-outlined-select>
       </label>
-    </div>
-
-    <div class="result-bar">
-      <p v-if="total !== null" class="total-line" role="status">
-        {{ t("browse.search.total", { count: total }) }}
-      </p>
-      <span v-if="countsLoading" class="counts-progress" role="status">
-        {{ t("browse.search.countsLoading", { done: countsDone, total: countsTotal }) }}
-      </span>
       <!-- 本页排序：维度下拉 + 升降方向切换；仅对当前显示页 20 条本地排序（计数按需补取） -->
       <div class="local-sort">
         <span class="local-sort-label" aria-hidden="true">{{ t("browse.search.localSortLabel") }}</span>
         <md-outlined-select
-          :value="sortKey"
+          :value="sortKey || 'default'"
           :disabled="!items.length"
           :aria-label="t('browse.search.localSortLabel')"
           @change="onSortKeyChange"
         >
-          <md-select-option value="">{{ t("browse.search.localSortDefault") }}</md-select-option>
+          <md-select-option value="default">{{ t("browse.search.localSortDefault") }}</md-select-option>
           <md-select-option value="like">{{ t("browse.search.localSortLike") }}</md-select-option>
           <md-select-option value="bookmark">{{ t("browse.search.localSortBookmark") }}</md-select-option>
           <md-select-option value="view">{{ t("browse.search.localSortView") }}</md-select-option>
@@ -516,6 +507,15 @@ const typeTabs = computed(() => [
           @change="onSortDirChange"
         />
       </div>
+    </div>
+
+    <div class="result-bar">
+      <p v-if="total !== null" class="total-line" role="status">
+        {{ t("browse.search.total", { count: total }) }}
+      </p>
+      <span v-if="countsLoading" class="counts-progress" role="status">
+        {{ t("browse.search.countsLoading", { done: countsDone, total: countsTotal }) }}
+      </span>
     </div>
 
     <WorkGrid
@@ -562,7 +562,8 @@ const typeTabs = computed(() => [
   color: var(--ink-subtle);
 }
 
-/* 过滤行：单行不换行；窄窗由下拉自身收缩承接，640px 断点退回纵向堆叠 */
+/* 过滤行：tabs + 排序/对象/匹配 + 行尾本页排序，单行不换行；
+   窄窗先把本页排序组换到第二行（见 1040px 断点），640px 以下纵向堆叠 */
 .filter-row {
   display: flex;
   flex-wrap: nowrap;
@@ -602,7 +603,7 @@ const typeTabs = computed(() => [
   min-width: 0;
 }
 
-/* 结果行：左「约 N 件」+ 计数补取进度，右本页排序（维度下拉 + 升降方向切换） */
+/* 结果行：「约 N 件」+ 计数补取进度（本页排序控件与筛选控件同行，见 .local-sort） */
 .result-bar {
   display: flex;
   flex-wrap: wrap;
