@@ -175,7 +175,7 @@ async function confirmLogout() { logoutDialog.value?.close(); try { await authSt
 .menu-item:hover:not(:disabled) { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
 .menu-item:disabled { opacity: .65; cursor: default; }
 .menu-item:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
-.menu-icon { flex: none; width: 20px; height: 20px; font-size: 20px; color: var(--ink-muted); }
+.menu-icon { flex: none; width: 16px; height: 16px; font-size: 16px; color: var(--ink-muted); }
 .menu-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .menu-check { flex: none; color: var(--md-sys-color-primary); }
 .menu-caret { flex: none; width: 16px; height: 16px; color: var(--ink-muted); }

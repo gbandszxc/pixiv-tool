@@ -123,8 +123,8 @@ defineProps<{
 <style scoped>
 .sidebar-icon {
   display: block;
-  width: 1em;
-  height: 1em;
+  width: 20px;
+  height: 20px;
   stroke-width: 2;
 }
 </style>
