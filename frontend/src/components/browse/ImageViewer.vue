@@ -726,7 +726,9 @@ watch(
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 0;
+  /* 滚动条与图片留 6px 间距（与 BrowseWorkView 信息列同配方），图片不贴靠滚动条；
+   * 左侧不加内边距，图片仍从舞台左缘满幅开始。 */
+  padding: 0 var(--space-xs) 0 0;
   outline: none;
 }
 
@@ -772,7 +774,7 @@ watch(
 .page-item {
   display: flex;
   justify-content: center;
-  /* 舞台无内边距，翻页滚动时页顶直接贴齐舞台顶 */
+  /* 舞台上缘无内边距，翻页滚动时页顶直接贴齐舞台顶 */
   scroll-margin-top: 0;
 }
 

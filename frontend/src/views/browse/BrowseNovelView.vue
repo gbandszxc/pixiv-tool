@@ -57,6 +57,12 @@ function stepScale(delta: number): void {
   settings.saveSettings({ novel_font_scale: value }).catch((err) => notify(errorMessage(err)));
 }
 
+/** 重置为默认 100%；已在默认值时直接返回，持久化失败仅提示、不打断阅读。 */
+function resetScale(): void {
+  if (fontScale.value === 1) return;
+  settings.saveSettings({ novel_font_scale: 1 }).catch((err) => notify(errorMessage(err)));
+}
+
 // ===== 详情 =====
 
 const detail = shallowRef<BrowseNovelDetail | null>(null);
@@ -379,6 +385,15 @@ function openInPixiv(): void {
             @click="stepScale(1)"
           >
             <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /><path d="M12 8v8" /></svg>
+          </md-icon-button>
+          <!-- 重置：逆时针回环箭头；100% 已是默认值时禁用 -->
+          <md-icon-button
+            :aria-label="t('browse.novel.fontReset')"
+            :title="t('browse.novel.fontReset')"
+            :disabled="fontScale === 1"
+            @click="resetScale"
+          >
+            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
           </md-icon-button>
         </div>
       </template>

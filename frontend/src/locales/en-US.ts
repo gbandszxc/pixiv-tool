@@ -448,6 +448,7 @@ export default {
       imagePlaceholder: "Embedded image — view on Pixiv",
       fontSmaller: "Decrease font size",
       fontLarger: "Increase font size",
+      fontReset: "Reset font size",
     },
     series: {
       listLabel: "Series contents",

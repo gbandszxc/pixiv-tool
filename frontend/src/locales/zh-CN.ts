@@ -448,6 +448,7 @@ export default {
       imagePlaceholder: "内嵌图片（去 Pixiv 查看）",
       fontSmaller: "缩小字号",
       fontLarger: "放大字号",
+      fontReset: "重置字号",
     },
     series: {
       listLabel: "系列目录",
