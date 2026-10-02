@@ -525,6 +525,24 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   padding-right: var(--space-xs);
 }
 
+/* 滚动条细化：浅色底用 outline 派生色（零新字面值） */
+.info-col::-webkit-scrollbar {
+  width: 6px;
+}
+
+.info-col::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.info-col::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 40%, transparent);
+  border-radius: 999px;
+}
+
+.info-col::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
+}
+
 /* ===== 信息列内容 ===== */
 
 .restrict-pill {

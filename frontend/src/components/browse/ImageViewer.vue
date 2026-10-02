@@ -95,7 +95,7 @@ function setItemRef(index: number, el: unknown): void {
   itemEls[index] = (el as HTMLElement | null) ?? null;
 }
 
-/** 视口内焦点页：全屏入口与页码徽标的依据 */
+/** 视口内焦点页：页码徽标与 ←/→ 翻页的依据 */
 const focusedPage = ref(0);
 /** 已进入加载窗口的页（只增不减：回滚不重复请求） */
 const live = ref<boolean[]>([]);
@@ -518,13 +518,19 @@ watch(
           :ref="(el) => setItemRef(i, el)"
           class="page-item"
         >
-          <!-- 页框：纵横比先占位，图片加载完成后不再改变高度 -->
+          <!-- 页框：纵横比先占位，图片加载完成后不再改变高度；页框本身即全屏入口
+               （点击 / Enter / Space，openFullscreen 内有就绪与遮罩守卫），遮罩态不可聚焦 -->
           <div
             class="shot"
             :class="{ ready: states[i] === 'ok' && !restricted }"
             :style="shotStyle(i)"
+            :tabindex="restricted ? -1 : 0"
+            role="button"
+            :aria-label="`${altOf(i)} · ${t('browse.work.fullscreen')}`"
             :title="states[i] === 'ok' && !restricted ? t('browse.work.fullscreen') : undefined"
             @click="openFullscreen(i)"
+            @keydown.enter.prevent="openFullscreen(i)"
+            @keydown.space.prevent="openFullscreen(i)"
           >
             <!-- 先低清后高清：540 占位层在主图之下，主图就绪后即被覆盖 -->
             <img
@@ -554,19 +560,6 @@ watch(
           </div>
         </div>
       </div>
-
-      <!-- 全屏入口：焦点页主图就绪且未遮罩时才可点（浮层不做二次揭示） -->
-      <md-icon-button
-        class="fs-trigger"
-        :disabled="restricted || states[focusedPage] !== 'ok'"
-        :aria-label="t('browse.work.fullscreen')"
-        :title="t('browse.work.fullscreen')"
-        @click="openFullscreen(focusedPage)"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M4 9V4h5" /><path d="M20 9V4h-5" /><path d="M4 15v5h5" /><path d="M20 15v5h-5" />
-        </svg>
-      </md-icon-button>
 
       <!-- 页码徽标：跟随滚动（多页且未遮罩） -->
       <div v-if="multi && !restricted" class="page-badge" aria-hidden="true">
@@ -733,7 +726,7 @@ watch(
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: var(--space-lg) var(--space-lg) var(--space-xl);
+  padding: 0;
   outline: none;
 }
 
@@ -758,29 +751,54 @@ watch(
   outline-offset: calc(-1 * var(--space-xxs));
 }
 
+/* 舞台滚动条细化：常显细条，配方对齐 .fs-filmstrip（近黑底上的既定白半透明） */
+.stage-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.stage-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.stage-scroll::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.35);
+  border-radius: 999px;
+}
+
+.stage-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.55);
+}
+
 .page-item {
   display: flex;
   justify-content: center;
-  /* 翻页滚动时页顶不贴着容器上沿 */
-  scroll-margin-top: var(--space-lg);
+  /* 舞台无内边距，翻页滚动时页顶直接贴齐舞台顶 */
+  scroll-margin-top: 0;
 }
 
 .page-item + .page-item {
   margin-top: var(--space-lg);
 }
 
-/* 页框：纵横比先行占位（--ar-w / --ar-h 为内联样式），加载完成后高度不变 */
+/* 页框：纵横比先行占位（--ar-w / --ar-h 为内联样式），加载完成后高度不变；
+ * 直角（0 圆角）：避免图片角露出舞台黑底缺口，整体圆角观感由舞台 16px 圆角 + 裁剪负责 */
 .shot {
   position: relative;
   width: 100%;
   aspect-ratio: var(--ar-w, 2) / var(--ar-h, 3);
-  border-radius: var(--radius-control);
+  border-radius: 0;
   background: rgb(255 255 255 / 0.08);
   overflow: hidden;
 }
 
 .shot.ready {
   cursor: zoom-in;
+}
+
+/* 键盘焦点：近黑底上的既定白 2px 环（对齐 .stage-scroll:focus-visible 配方） */
+.shot:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
 }
 
 .shot-img {
@@ -1086,7 +1104,6 @@ watch(
 }
 
 /* 近黑底上的图标按钮统一白色图标（沿用 .stage-text 的白） */
-.fs-trigger,
 .fs-controls md-icon-button,
 .fs-close {
   --md-icon-button-icon-color: #fff;
@@ -1096,15 +1113,6 @@ watch(
   --md-icon-button-disabled-icon-color: #fff;
 }
 
-/* 全屏入口：图片区右上角，位于遮罩（z-index 2）之下、滚动容器之上 */
-.fs-trigger {
-  position: absolute;
-  top: var(--space-sm);
-  right: var(--space-sm);
-  z-index: 1;
-}
-
-.fs-trigger svg,
 .fs-controls svg {
   width: 20px;
   height: 20px;
