@@ -582,7 +582,9 @@ Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主�
   前缀插入 `/c/<尺寸段>/`**；`/img-original/`、`/img-zip-ugoira/`、`/user-profile/`
   等其它路径与 `original` 档一律原样返回（头像保留接口给的 `_50`/`_170` 后缀）。
   **绝不构造 `{datePath}` 与文件名**（拼错即 404）。
-- **作品查看器（插画/漫画）**：图片舞台为竖向滚动容器，多页作品自上而下逐页排列，
+- **作品查看器（插画/漫画）**：图片舞台为竖向滚动容器、**无自有底色**（与页面同底色，浅色
+  主题即白），图片满幅（滚动区 padding 为 0、页框直角，整体圆角由舞台 16px 圆角 +
+  `overflow: hidden` 承担）；多页作品自上而下逐页排列，
   滚动到视口附近才发起加载（渐进式；未加载页为按该页 `width` / `height` 预留纵横比的
   纯色占位块，缺省 2:3，避免加载完成后布局跳动），每页先铺 540 低清占位层再换
   `thumb_quality_detail`；单页作品与 R-18 遮罩态整幅在舞台内垂直居中。点击任意页进入
@@ -596,9 +598,19 @@ Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主�
   1-2 / 3-4 对齐（点胶卷任意一页落到所属跨页）、翻页步进 2 页、页码显示为区间，并可切换
   阅读方向「从右往左」（默认，当前页在右）/「从左往右」；从右往左时翻页组整组镜像——
   前进按钮落到左侧、箭头改为朝左、键盘 ← 为前进，双图与方向开关不参与镜像；模式与方向
-  会话内记忆、不持久化，单页作品不进入双图。舞台右上角全屏按钮是键盘入口（进入时定位到视口内当前页），
-  右下角「第 N / M 页」徽标跟随滚动，舞台可聚焦（Esc 退出浮层后焦点回到舞台）、
-  ↑/↓ 原生滚动。ugoira 仍只显示封面帧 + 说明行。
+  会话内记忆、不持久化，单页作品不进入双图。页框本身即全屏入口、可聚焦（`tabindex=0` +
+  `role="button"`，Enter / Space 进入浮层并定位到该页，`focus-visible` 为 primary 2px 内环；
+  R-18 遮罩态不可聚焦、`tabindex=-1`），右下角「第 N / M 页」深色胶囊徽标跟随滚动，舞台可聚焦
+  （Esc 退出浮层后焦点回到舞台）、↑/↓ 原生滚动；舞台滚动条与右侧信息列同配方：6px 常显、
+  thumb 为 outline 派生色（40% / hover 60%）。ugoira 仍只显示封面帧 + 说明行。
+- **小说阅读器**：整页固定 100vh 三行 flex——顶栏（非 sticky，天然贴窗口上边）/ 中间唯一
+  滚动层（`flex:1; min-height:0; overflow-y:auto`，6px 细滚动条）/ 底栏 AppPagination
+  （`variant="reader"`）；顶底栏贴窗口上下边、只有中间层滚动。正文列默认不限宽，仅
+  `@media (min-width: 1921px), (min-height: 1081px)`（大于 16:9 1080p 的屏幕）限 720px；
+  正文 16px 基准 × `--novel-scale`，章节标题 1.15em。`--novel-scale` 取自设置键
+  `novel_font_scale`（默认 1.0、区间 0.75~2.0，见 §5.2）；底栏左侧经 AppPagination reader
+  变体的 `#leading` 插槽挂字号缩放控件 `[−] [百分比] [+]`（步进 0.1、到界禁用、
+  `aria-live="polite"`）。键盘 ←/→ 翻页与顶栏动作不变（见下条）。
 - **详情页顶栏与面板（查看器 / 阅读器共用）**：顶栏带文案的动作保持 40px 胶囊（收藏），
   图标动作统一 `md-icon-button`（40×40、无描边、20px 线性自绘 SVG，stroke 1.8），
   顺序为「收藏 / 评论 / 返填表单 / 在浏览器中打开」；**不再用只有图标的
@@ -660,7 +672,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 12 键 + 校验，含 `theme_color` 与缩略图三档 / `show_r18` / `saucenao_api_key`） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 13 键 + 校验，含 `theme_color` 与缩略图三档 / `show_r18` / `novel_font_scale` / `saucenao_api_key`） |
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |
