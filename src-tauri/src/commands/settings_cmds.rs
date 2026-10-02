@@ -4,7 +4,8 @@
 //! - settings_get → Settings（snake_case 字段，等价旧 GET /api/settings）
 //! - settings_save → {"status":"success"}；output_dir 非法 → Err(中文校验消息)；
 //!   max_wait_seconds 非法 → Err("最大等待时间必须是 30~86400 秒之间的整数")；
-//!   novel_font_scale 非法 → Err("小说字号缩放必须是 0.75~2.0 之间的数字")
+//!   novel_font_scale 非法 → Err("小说字号缩放必须是 0.75~2.0 之间的数字")；
+//!   novel_bg_color 非法 → Err("阅读背景色无效")
 //! - clear_logs → {"status":"success"}（清空 <data_dir>/logs/app.log）
 
 use std::path::Path;
@@ -14,14 +15,14 @@ use tauri::State;
 
 use crate::settings::{
     Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
-    validate_max_wait_value, validate_novel_font_scale_value, validate_output_dir_value,
-    validate_thumb_tier,
+    validate_max_wait_value, validate_novel_bg_color_value, validate_novel_font_scale_value,
+    validate_output_dir_value, validate_thumb_tier,
 };
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 13] = [
+const WRITABLE_KEYS: [&str; 14] = [
     "output_dir",
     "output_formats",
     "language",
@@ -34,6 +35,7 @@ const WRITABLE_KEYS: [&str; 13] = [
     "thumb_quality_detail",
     "thumb_quality_fullscreen",
     "novel_font_scale",
+    "novel_bg_color",
     "saucenao_api_key",
 ];
 
@@ -62,7 +64,7 @@ pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Resul
 
 /// partial JSON → 新 Settings（纯函数，离线可测）：
 /// 1. output_dir / max_wait_seconds / theme_color / 缩略图档位 / show_r18 /
-///    novel_font_scale 先做中文校验（失败即 Err，旧 400 文案）
+///    novel_font_scale / novel_bg_color 先做中文校验（失败即 Err，旧 400 文案）
 /// 2. 白名单键覆盖到当前配置序列化结果上，再反解回 Settings
 ///    （类型不合法的值在反解时以中文错误拒绝）
 pub fn apply_settings_patch(
@@ -102,6 +104,9 @@ pub fn apply_settings_patch(
     }
     if let Some(value) = patch_obj.get("novel_font_scale") {
         validate_novel_font_scale_value(value)?;
+    }
+    if let Some(value) = patch_obj.get("novel_bg_color") {
+        validate_novel_bg_color_value(value)?;
     }
     let mut merged = serde_json::to_value(current)
         .map_err(|err| format!("序列化设置失败: {err}"))?
@@ -408,6 +413,52 @@ mod tests {
                 apply_settings_patch(
                     &Settings::default(),
                     &json!({ "novel_font_scale": bad }),
+                    &data_dir
+                )
+                .unwrap_err(),
+                message,
+                "bad={bad}"
+            );
+        }
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_novel_bg_color_accepts_valid_keys_and_overrides() {
+        let data_dir = temp_data_dir("novelbg");
+        // 空串（跟随主题）与五个语义键全部接受，且覆盖生效
+        for color in ["", "green", "kraft", "warm", "mist", "blush"] {
+            let updated = apply_settings_patch(
+                &Settings::default(),
+                &json!({ "novel_bg_color": color }),
+                &data_dir,
+            )
+            .unwrap();
+            assert_eq!(updated.novel_bg_color, color, "color={color}");
+        }
+        // 缺键时保持原值不变
+        let with_color = apply_settings_patch(
+            &Settings::default(),
+            &json!({ "novel_bg_color": "kraft" }),
+            &data_dir,
+        )
+        .unwrap();
+        let untouched =
+            apply_settings_patch(&with_color, &json!({ "language": "en-US" }), &data_dir).unwrap();
+        assert_eq!(untouched.novel_bg_color, "kraft");
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_rejects_bad_novel_bg_color() {
+        let data_dir = temp_data_dir("novelbg-bad");
+        let message = "阅读背景色无效";
+        // 白名单外的值 / 非字符串 / bool / null 全部拒绝，文案精确匹配
+        for bad in [json!("hotpink"), json!(1), json!(true), json!(null)] {
+            assert_eq!(
+                apply_settings_patch(
+                    &Settings::default(),
+                    &json!({ "novel_bg_color": bad }),
                     &data_dir
                 )
                 .unwrap_err(),

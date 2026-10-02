@@ -417,6 +417,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "thumb_quality_detail": "medium",
   "thumb_quality_fullscreen": "large",
   "novel_font_scale": 1.0,
+  "novel_bg_color": "",
   "saucenao_api_key": ""
 }
 ```
@@ -455,6 +456,12 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   缩放控件经 `settings_save` 写入（在白名单内）。保存时非数字 / bool /
   越界一律拒绝；手改 settings.json 写入非有限值或越出区间时，加载期回落到
   `1.0`（不强制回写文件）。
+- `novel_bg_color`：小说阅读背景色，语义键（默认空串 = 跟随主题），合法值为
+  `green`（护眼绿）/ `kraft`（牛皮纸）/ `warm`（暖杏）/ `mist`（雾蓝）/
+  `blush`（藕粉），纸面 + 墨色配对与派生规则见 DESIGN.md「小说阅读背景色板」。
+  **设置弹窗不提供该项**，仅由小说阅读器底栏色块按钮经 `settings_save` 写入
+  （在白名单内）。保存时非字符串 / 白名单外的值一律拒绝（"阅读背景色无效"）；
+  手改 settings.json 写入白名单外的值时，加载期回落到空串（不强制回写文件）。
 - `saucenao_api_key`：SauceNAO API Key（默认 `""`），「以图识图」（§7
   `saucenao_search`）的**必填前置**：trim 后为空一律拒绝发起搜索。在
   saucenao.com 免费注册后于 `user.php?page=search-api` 页面获取；仅保存在本机
@@ -668,7 +675,16 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   `[pixivimage:illustId]` 插图引用）渲染为占位块，不静默丢图。`--novel-scale` 取自设置键
   `novel_font_scale`（默认 1.0、区间 0.75~2.0，见 §5.2）；底栏左侧经 AppPagination reader
   变体的 `#leading` 插槽挂字号缩放控件 `[−] [百分比] [+] [重置]`（步进 0.1、到界禁用；
-  重置回到 100%（100% 时禁用）；`aria-live="polite"`）。底栏右侧经 `#trailing` 插槽挂阅读
+  重置回到 100%（100% 时禁用）；`aria-live="polite"`）。重置按钮右侧为**阅读背景色块
+  按钮**（`NovelBgPicker`，i18n `browse.novel.bgLabel` / `bgDefault` / `bgGreen` /
+  `bgKraft` / `bgWarm` / `bgMist` / `bgBlush`）：`md-icon-button` 内嵌 18px 圆形色块
+  回显当前色（默认态 surface 底 + outline 描边），点击向上弹出居中于按钮的一排气泡
+  （28px 圆形色块一行：默认 / 护眼绿 / 牛皮纸 / 暖杏 / 雾蓝 / 藕粉；弹出层与账号菜单
+  同 recipe——surface-container 底、`--radius-control` 圆角、既定轻阴影、透明遮罩点击
+  外部关闭 + Esc 关闭、0.15s ease 上浮），点击色块立即应用并经 `settings_save` 持久化
+  `novel_bg_color`（语义键，见 §5.2）；选中纸色后整页根节点挂 `read-bg-*` 类，
+  顶栏 + 正文 + 底栏一起落纸色 + 墨色配对（暗色主题同样以纸面呈现，配对见
+  DESIGN.md「小说阅读背景色板」）。底栏右侧经 `#trailing` 插槽挂阅读
   进度条（`md-slider` 拉条 + 右侧百分比回显）：展示当前页内滚动进度（`scrollTop /
   (scrollHeight - clientHeight)`，无滚动余量恒 100%），滚动与内容高度变化实时回显，
   拖动按百分比快速定位正文位置（input 即乐观同步回显，scroll 回声仅作确认、不依赖）；
@@ -737,7 +753,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 13 键 + 校验，含 `theme_color` 与缩略图三档 / `show_r18` / `novel_font_scale` / `saucenao_api_key`） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 14 键 + 校验，含 `theme_color` 与缩略图三档 / `show_r18` / `novel_font_scale` / `novel_bg_color` / `saucenao_api_key`） |
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |

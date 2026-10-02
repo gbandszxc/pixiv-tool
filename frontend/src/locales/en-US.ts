@@ -462,6 +462,13 @@ export default {
       fontSmaller: "Decrease font size",
       fontLarger: "Increase font size",
       fontReset: "Reset font size",
+      bgLabel: "Reading background",
+      bgDefault: "Default",
+      bgGreen: "Green",
+      bgKraft: "Kraft",
+      bgWarm: "Warm sand",
+      bgMist: "Mist blue",
+      bgBlush: "Blush",
       readProgress: "Reading progress",
     },
     series: {

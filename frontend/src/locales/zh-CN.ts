@@ -462,6 +462,13 @@ export default {
       fontSmaller: "缩小字号",
       fontLarger: "放大字号",
       fontReset: "重置字号",
+      bgLabel: "阅读背景",
+      bgDefault: "默认",
+      bgGreen: "护眼绿",
+      bgKraft: "牛皮纸",
+      bgWarm: "暖杏",
+      bgMist: "雾蓝",
+      bgBlush: "藕粉",
       readProgress: "阅读进度",
     },
     series: {

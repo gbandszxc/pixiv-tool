@@ -39,6 +39,9 @@ pub struct Settings {
     /// 小说正文字号缩放（小说阅读器底栏缩放控件写入），默认 1.0，
     /// 合法区间 [0.75, 2.0]；非法值在加载期回落 1.0。
     pub novel_font_scale: f64,
+    /// 小说阅读背景色（小说阅读器底栏色块按钮写入），语义键，默认空串 = 跟随主题，
+    /// 合法值见 [`NOVEL_BG_COLORS`]；非法值（含手改 settings.json）在加载期回落空串。
+    pub novel_bg_color: String,
     /// SauceNAO API Key（以图识图必需，saucenao.com 注册后获取；仅保存在本机
     /// 配置文件——不入库、不写日志、不进报错原文）。
     pub saucenao_api_key: String,
@@ -59,6 +62,7 @@ impl Default for Settings {
             thumb_quality_detail: "medium".into(),
             thumb_quality_fullscreen: "large".into(),
             novel_font_scale: 1.0,
+            novel_bg_color: String::new(),
             saucenao_api_key: String::new(),
         }
     }
@@ -70,6 +74,8 @@ pub const THUMB_GRID_TIERS: [&str; 3] = ["small", "medium", "large"];
 pub const THUMB_DETAIL_TIERS: [&str; 3] = ["medium", "large", "original"];
 /// 全屏浮层可选档位。
 pub const THUMB_FULLSCREEN_TIERS: [&str; 2] = ["large", "original"];
+/// 小说阅读背景色可选语义键（空串 = 跟随主题，不在此表内）。
+pub const NOVEL_BG_COLORS: [&str; 5] = ["green", "kraft", "warm", "mist", "blush"];
 
 /// 缩略图档位校验：非字符串或不在 `allowed` 集合内 → Err(message)。
 pub fn validate_thumb_tier(value: &Value, allowed: &[&str], message: &str) -> Result<(), String> {
@@ -88,7 +94,7 @@ impl Settings {
     /// - 文件不存在 → 写入默认值并返回
     /// - JSON 损坏 / 读失败 → 备份为 `settings.json.corrupt-{mtime_ns}` 后重建默认
     /// - 旧值迁移：`output_dir == "downloads"`（早期默认相对路径）→ 系统下载目录/pixiv-tool
-    /// - 加载期归一：非法缩略图档位、非法小说字号缩放重置为默认（不强制回写文件）
+    /// - 加载期归一：非法缩略图档位、非法小说字号缩放、非法阅读背景色重置为默认（不强制回写文件）
     /// - 缺键填默认（serde default）；未知键忽略（serde 默认行为）
     pub fn load_or_init(config_dir: &Path) -> Settings {
         let path = settings_path(config_dir);
@@ -124,6 +130,13 @@ impl Settings {
                     || !(0.75..=2.0).contains(&settings.novel_font_scale)
                 {
                     settings.novel_font_scale = 1.0;
+                }
+                // 小说阅读背景色：空串（跟随主题）与白名单内语义键原样保留，
+                // 白名单外的值（含手改 settings.json）回落空串（对齐缩略图档位做法）。
+                if !settings.novel_bg_color.is_empty()
+                    && !NOVEL_BG_COLORS.contains(&settings.novel_bg_color.as_str())
+                {
+                    settings.novel_bg_color = String::new();
                 }
                 settings
             }
@@ -249,6 +262,15 @@ pub fn validate_novel_font_scale_value(v: &Value) -> Result<(), String> {
     }
 }
 
+/// JSON 值形式的小说阅读背景色校验：必须是白名单语义键或空串（空串 = 跟随主题），
+/// 非字符串 / 白名单外的值一律拒绝。
+pub fn validate_novel_bg_color_value(v: &Value) -> Result<(), String> {
+    match v.as_str() {
+        Some(color) if color.is_empty() || NOVEL_BG_COLORS.contains(&color) => Ok(()),
+        _ => Err("阅读背景色无效".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +302,7 @@ mod tests {
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
         assert_eq!(s.novel_font_scale, 1.0);
+        assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
         assert!(
             s.output_dir
@@ -319,6 +342,7 @@ mod tests {
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
         assert_eq!(s.novel_font_scale, 1.0);
+        assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
         cleanup(&dir);
     }
@@ -383,6 +407,40 @@ mod tests {
         ] {
             assert_eq!(
                 validate_novel_font_scale_value(&bad).unwrap_err(),
+                message,
+                "bad={bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_novel_bg_color_falls_back_to_default_on_load() {
+        let dir = temp_config_dir("novelbg");
+        // 手改 settings.json 写入白名单外的值 → 加载期回落空串（跟随主题）
+        std::fs::write(settings_path(&dir), r#"{"novel_bg_color":"hotpink"}"#).unwrap();
+        assert_eq!(Settings::load_or_init(&dir).novel_bg_color, "");
+        // 合法值（空串 + 五个语义键）原样保留
+        for color in ["", "green", "kraft", "warm", "mist", "blush"] {
+            std::fs::write(
+                settings_path(&dir),
+                format!(r#"{{"novel_bg_color":"{color}"}}"#),
+            )
+            .unwrap();
+            assert_eq!(Settings::load_or_init(&dir).novel_bg_color, color);
+        }
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn validate_novel_bg_color_rules() {
+        use serde_json::json;
+        for ok in ["", "green", "kraft", "warm", "mist", "blush"] {
+            assert!(validate_novel_bg_color_value(&json!(ok)).is_ok(), "ok={ok}");
+        }
+        let message = "阅读背景色无效";
+        for bad in [json!("hotpink"), json!(1), json!(true), json!(null)] {
+            assert_eq!(
+                validate_novel_bg_color_value(&bad).unwrap_err(),
                 message,
                 "bad={bad}"
             );

@@ -23,6 +23,8 @@ export const useSettingsStore = defineStore("settings", () => {
     thumb_quality_fullscreen: "large",
     // 小说正文字号缩放（区间 0.75~2.0），默认 1.0
     novel_font_scale: 1.0,
+    // 阅读背景色语义键（空串=跟随主题），默认未设置
+    novel_bg_color: "",
     // SauceNAO API Key（以图识图必需），默认未配置
     saucenao_api_key: "",
   });

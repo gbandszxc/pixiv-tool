@@ -14,6 +14,7 @@ import { goBack } from "../../router";
 import AppPagination from "../../components/common/AppPagination.vue";
 import NovelContent from "../../components/browse/NovelContent.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
+import NovelBgPicker from "../../components/browse/NovelBgPicker.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import {
@@ -62,6 +63,20 @@ function stepScale(delta: number): void {
 function resetScale(): void {
   if (fontScale.value === 1) return;
   settings.saveSettings({ novel_font_scale: 1 }).catch((err) => notify(errorMessage(err)));
+}
+
+// ===== 阅读背景色 =====
+
+/** 阅读背景语义键：以 settings.novel_bg_color 为准，空串 = 跟随主题（未知值同样回落默认）。 */
+const readBg = computed(() => {
+  const value = settings.settings.novel_bg_color || "";
+  return ["green", "kraft", "warm", "mist", "blush"].includes(value) ? value : "";
+});
+
+/** 选色立即应用并持久化；失败仅提示、不打断阅读（与 stepScale 同策略）。 */
+function setReadBg(value: string): void {
+  if (value === readBg.value) return;
+  settings.saveSettings({ novel_bg_color: value }).catch((err) => notify(errorMessage(err)));
 }
 
 // ===== 详情 =====
@@ -291,7 +306,7 @@ function openInPixiv(): void {
 </script>
 
 <template>
-  <div class="novel-view" :style="{ '--novel-scale': fontScale }">
+  <div class="novel-view" :class="readBg ? `read-bg-${readBg}` : ''" :style="{ '--novel-scale': fontScale }">
     <!-- 顶栏：返回 / 标题 / 作者 / 返填表单 / 在浏览器中打开；flex 首行，恒贴窗口上边 -->
     <header class="topbar">
       <md-icon-button :aria-label="t('browse.novel.back')" :title="t('browse.novel.back')" @click="goBack">
@@ -474,6 +489,8 @@ function openInPixiv(): void {
           >
             <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
           </md-icon-button>
+          <!-- 阅读背景色块按钮：圆形回显当前色，点击向上弹出居中一排气泡，选色立即应用 -->
+          <NovelBgPicker :model-value="readBg" @update:model-value="setReadBg" />
         </div>
       </template>
       <!-- 底栏右侧阅读进度：md-slider 拉条（拖动快速定位）+ 右侧百分比回显 -->
@@ -510,6 +527,83 @@ function openInPixiv(): void {
   .novel-view {
     margin: calc(-1 * var(--space-lg));
   }
+}
+
+/* ===== 阅读背景（纸色模式） ===== */
+
+/* 纸色模式挂在整页根节点（.read-bg-*），顶栏 / 正文 / 底栏全部随继承的变量落纸色。
+ * 每档是自洽的「纸面 + 墨色」配对：surface 与 --surface 落纸面色、正文/次级文字落墨色，
+ * surface-container（ink 6% 混入纸色）与 outline（ink 45% 混入纸色）按既定规则派生，
+ * 供卡片 / 分隔线 / 滚动条 thumb 等派生色自动跟随；暗色主题下同样以浅纸面呈现
+ * （配对自含、恒可读）。五个色板字面值见 DESIGN.md「小说阅读背景色板」。 */
+.novel-view.read-bg-green {
+  background: #c8e6ce;
+  color: #1f3a2e;
+  --ink: #1f3a2e;
+  --ink-muted: #52685c;
+  --ink-subtle: color-mix(in srgb, #1f3a2e 45%, #c8e6ce);
+  --md-sys-color-on-surface: #1f3a2e;
+  --md-sys-color-on-surface-variant: #52685c;
+  --md-sys-color-surface: #c8e6ce;
+  --surface: #c8e6ce;
+  --md-sys-color-surface-container: color-mix(in srgb, #1f3a2e 6%, #c8e6ce);
+  --md-sys-color-outline: color-mix(in srgb, #1f3a2e 45%, #c8e6ce);
+}
+
+.novel-view.read-bg-kraft {
+  background: #e6d7b8;
+  color: #433722;
+  --ink: #433722;
+  --ink-muted: #75684d;
+  --ink-subtle: color-mix(in srgb, #433722 45%, #e6d7b8);
+  --md-sys-color-on-surface: #433722;
+  --md-sys-color-on-surface-variant: #75684d;
+  --md-sys-color-surface: #e6d7b8;
+  --surface: #e6d7b8;
+  --md-sys-color-surface-container: color-mix(in srgb, #433722 6%, #e6d7b8);
+  --md-sys-color-outline: color-mix(in srgb, #433722 45%, #e6d7b8);
+}
+
+.novel-view.read-bg-warm {
+  background: #f3e4d0;
+  color: #463526;
+  --ink: #463526;
+  --ink-muted: #7c6753;
+  --ink-subtle: color-mix(in srgb, #463526 45%, #f3e4d0);
+  --md-sys-color-on-surface: #463526;
+  --md-sys-color-on-surface-variant: #7c6753;
+  --md-sys-color-surface: #f3e4d0;
+  --surface: #f3e4d0;
+  --md-sys-color-surface-container: color-mix(in srgb, #463526 6%, #f3e4d0);
+  --md-sys-color-outline: color-mix(in srgb, #463526 45%, #f3e4d0);
+}
+
+.novel-view.read-bg-mist {
+  background: #e1ebf2;
+  color: #263844;
+  --ink: #263844;
+  --ink-muted: #5c7180;
+  --ink-subtle: color-mix(in srgb, #263844 45%, #e1ebf2);
+  --md-sys-color-on-surface: #263844;
+  --md-sys-color-on-surface-variant: #5c7180;
+  --md-sys-color-surface: #e1ebf2;
+  --surface: #e1ebf2;
+  --md-sys-color-surface-container: color-mix(in srgb, #263844 6%, #e1ebf2);
+  --md-sys-color-outline: color-mix(in srgb, #263844 45%, #e1ebf2);
+}
+
+.novel-view.read-bg-blush {
+  background: #f5e7e5;
+  color: #46302f;
+  --ink: #46302f;
+  --ink-muted: #7f6462;
+  --ink-subtle: color-mix(in srgb, #46302f 45%, #f5e7e5);
+  --md-sys-color-on-surface: #46302f;
+  --md-sys-color-on-surface-variant: #7f6462;
+  --md-sys-color-surface: #f5e7e5;
+  --surface: #f5e7e5;
+  --md-sys-color-surface-container: color-mix(in srgb, #46302f 6%, #f5e7e5);
+  --md-sys-color-outline: color-mix(in srgb, #46302f 45%, #f5e7e5);
 }
 
 /* ===== 顶栏 ===== */
