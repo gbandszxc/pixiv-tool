@@ -16,6 +16,7 @@ import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 import WorkCard from "../../components/browse/WorkCard.vue";
 import AppPagination from "../../components/common/AppPagination.vue";
+import { filterByR18, useGlobalR18Filter } from "../../components/browse/r18Filter";
 import {
   browseHistoryClear,
   browseHistoryList,
@@ -41,9 +42,14 @@ const confirmDialog = ref<HTMLDialogElement>();
 /** 竞态守卫：刷新 / 翻页 / 清空并发时，仅最后一次请求的结果落地。 */
 let seq = 0;
 
+/** 全局 R-18 渲染期过滤：不改数据、不改分页 total（同 WorkGrid / 排行榜口径）。 */
+const r18Filter = useGlobalR18Filter();
+const visibleItems = computed(() => filterByR18(items.value, r18Filter.value));
+const hiddenCount = computed(() => items.value.length - visibleItems.value.length);
+
 /** 历史行 → WorkCard 需要的 BrowseWorkItem 形状（字段子集）。 */
 const cards = computed(() =>
-  items.value.map((it) => ({
+  visibleItems.value.map((it) => ({
     key: `${it.kind}:${it.work_id}`,
     item: {
       id: it.work_id,
@@ -158,6 +164,7 @@ onMounted(load);
       </svg>
       <p class="state-text strong">{{ t("browseHistory.empty") }}</p>
       <p class="state-text">{{ t("browseHistory.emptyHint") }}</p>
+      <p v-if="hiddenCount > 0" class="state-text">{{ t("common.browseR18Hidden", { count: hiddenCount }) }}</p>
     </div>
 
     <div v-else class="history-grid">

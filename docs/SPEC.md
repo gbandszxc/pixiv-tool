@@ -738,8 +738,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   因此与其它列表同样参与过滤；小说排行条目自带顶层 `x_restrict`，无需补字段。
 - **分页**：统一收敛为 `next_page` / `is_last_page` / `next_last_order`（游标）语义；
   发现页与首页推荐无服务端翻页，前端重复调用按 id 去重。页码翻页 UI（历史 / 任务 /
-  排行榜 / 系列分集 / 小说阅读器）统一收敛到 `components/common/AppPagination`
-  （历史、任务为 default 变体，排行榜走未知总页数模式，系列与阅读器为
+  浏览历史 / 排行榜 / 系列分集 / 小说阅读器）统一收敛到 `components/common/AppPagination`
+  （历史、任务、浏览历史为 default 变体，排行榜走未知总页数模式，系列与阅读器为
   `variant="reader"`）；游标 / 无限滚动调用点不使用该组件。
 - **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图中
   `[pixivimage:illustId]` 插图引用（现行 pixiv 编辑器已不产出，实测见

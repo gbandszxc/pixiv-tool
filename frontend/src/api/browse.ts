@@ -4,8 +4,9 @@
  *
  * 组成：
  * - 契约类型（snake_case，与 Rust browse 命令返回体一致）
- * - 18 个命令的 invoke 封装（v2 的 11 个 + v2.1 评论补充的 2 个 + v3.1 收藏 4 个
- *   + 追更列表 1 个；未登录错误 → 派发 `pixiv-tool:open-login` 事件，App.vue 负责弹登录窗）
+ * - 22 个命令的 invoke 封装（v2 的 12 个 + v2.1 评论补充的 2 个 + v3.1 收藏 4 个
+ *   + 追更列表 1 个 + 浏览访问历史 3 个（browse-history-ui-v1）；
+ *   未登录错误 → 派发 `pixiv-tool:open-login` 事件，App.vue 负责弹登录窗）
  * - pxSrc()：pximg 封面 URL → `pixiv-img://` 代理协议（Tauri 环境）
  * - thumbSrc()：按档位改写尺寸段后再走 pxSrc（组件层唯一的缩略图出口）
  * - mock 层：`!isTauri()`（普通浏览器直接打开 dev 页）时返回样例数据，
@@ -1390,5 +1391,5 @@ async function mockHistoryClear(): Promise<{ status: string; deleted: number }> 
   await mockDelay();
   const deleted = mockHistoryEnsure().length;
   mockHistoryItems = [];
-  return { status: "ok", deleted };
+  return { status: "success", deleted };
 }
