@@ -187,6 +187,7 @@ export default {
     typeColumn: "类型",
     capturedAtColumn: "抓取时间",
     actions: "操作",
+    viewDetail: "查看作品详情",
     openFolder: "打开所在文件夹",
     openFolderFailed: "打开文件夹失败",
     deleteConfirm: "确定删除此记录？",

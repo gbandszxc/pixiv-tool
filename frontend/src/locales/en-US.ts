@@ -186,6 +186,7 @@ export default {
     typeColumn: "Type",
     capturedAtColumn: "Captured At",
     actions: "Actions",
+    viewDetail: "View detail page",
     openFolder: "Open containing folder",
     openFolderFailed: "Failed to open folder",
     deleteConfirm: "Delete this record?",
