@@ -816,9 +816,9 @@ bash ./dev.sh dev start  # 默认动作也是 start；后台 Vite + Rust 热重�
 发版走 GitHub Actions `release` 工作流（`.github/workflows/release.yml`）：
 Actions 页手动触发（workflow_dispatch），输入 semver 版本号——构建前写入
 `tauri.conf.json` / `Cargo.toml`（不回写仓库），六路并行出 Windows x64/arm64 MSI、
-macOS universal/aarch64 DMG、Linux x64 AppImage + deb + rpm、Linux arm64 deb + rpm
-（三处 arm64 均走 GitHub 原生 arm64 runner，不交叉编译；AppImage 的 linuxdeploy 在
-arm64 上缺可靠支持，故 arm64 不出 AppImage；Windows arm64 经 `src-tauri/cmake/`
+macOS universal/aarch64 DMG、Linux x64/arm64 的 AppImage + deb + rpm
+（三处 arm64 均走 GitHub 原生 arm64 runner，不交叉编译——AppImage 的 linuxdeploy
+不支持交叉出 ARM 包，原生 ARM 主机可以；Windows arm64 经 `src-tauri/cmake/`
 下的工具链文件关掉 BoringSSL 汇编，见 `docs/PACKAGING.md` §6），最后**幂等覆盖**式
 发布 `v<版本>` Release（先删旧 Release/Tag 再重建，可对同版本号重复执行）。
 产物未签名。本地 `cargo tauri build`（§8.3）保留，与 CI 独立；详见

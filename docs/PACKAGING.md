@@ -170,12 +170,13 @@ GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`�
    | `macos-universal-dmg` | `macos-latest` | universal DMG（Intel + Apple Silicon） |
    | `macos-aarch64-dmg` | `macos-latest` | aarch64 DMG |
    | `linux-x64` | `ubuntu-22.04` | AppImage + deb + rpm |
-   | `linux-arm64` | `ubuntu-22.04-arm` | deb + rpm |
+   | `linux-arm64` | `ubuntu-22.04-arm` | AppImage + deb + rpm |
 
    Linux 基线固定 22.04（官方推荐的最老 WebKitGTK 4.1 基线，保证 glibc 下限）；
-   arm64 走 GitHub **原生 arm64 runner** 编译，不做交叉编译。AppImage 的
-   linuxdeploy 在 arm64 上缺可靠支持，故 arm64 不出 AppImage。Linux 构建机额外装
-   `cmake` / `rpm`（rpm 打包）与 `go`（BoringSSL 汇编，缺失时自动补装）
+   arm64 走 GitHub **原生 arm64 runner** 编译，不做交叉编译（AppImage 的
+   linuxdeploy 不支持交叉出 ARM 包，只能由原生 ARM 主机出）。Linux 构建机额外装
+   `cmake` / `rpm`（rpm 打包）、`libfuse2`（跑 linuxdeploy 这个 AppImage）与
+   `go`（BoringSSL 汇编，缺失时自动补装）
 
    **Windows arm64 的 BoringSSL 汇编开关**：BoringSSL 的 win-aarch64 汇编
    （`gen/bcm/*-armv8-win.S`）是 GNU 汇编器语法，上游要求用 Clang 汇编；原生 arm64
@@ -192,7 +193,8 @@ GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`�
    格式缺失则显示 `—`，不会产生死链）。之所以不按构建机上的文件名拼链接：GitHub
    会规整上传的资产名（`Pixiv Tool_1.1.0_x64_en-US.msi` → `Pixiv.Tool_1.1.0_x64_en-US.msi`），
    照原文件名拼出的 URL 会带空格、在 Markdown 中被截断。表格列固定为
-   架构 ×（Windows / macOS / Linux）；Windows 列按 `_x64_` / `_arm64_` 区分两个 MSI
+   架构 ×（Windows / macOS / Linux）；同一列有多个同类产物时按架构子串区分（Windows
+   列 `_x64_` / `_arm64_` 两个 MSI，Linux 列 `amd64` 与 `arm64\|aarch64` 两个 AppImage）
 5. **幂等覆盖**：发布阶段先删除同名 `v<版本>` Release 与 Tag 再重建，
    同版本号重复执行总是覆盖；版本号不变时无需清理即可重发
 
