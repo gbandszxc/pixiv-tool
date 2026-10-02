@@ -21,6 +21,7 @@ import { goBack } from "../../router";
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../../stores/settings";
 import {
+  browseHistoryRecord,
   browseRelated,
   browseWorkDetail,
   errorMessage,
@@ -122,6 +123,17 @@ async function loadDetail(): Promise<void> {
     }
     detail.value = data;
     bookmarkState.value = data.bookmarkState ?? null;
+    // 加载成功后上报浏览历史（失败静默）
+    void browseHistoryRecord({
+      workId: data.item.id,
+      kind: props.kind,
+      title: data.item.title,
+      authorId: data.item.author_id,
+      authorName: data.item.author_name,
+      cover: data.item.cover ?? "",
+      pageCount: data.item.page_count,
+      xRestrict: data.item.x_restrict ?? 0,
+    }).catch(() => {});
   } catch (err) {
     if (seq !== reqSeq) return;
     error.value = errorMessage(err) || t("common.browseLoadFailed");

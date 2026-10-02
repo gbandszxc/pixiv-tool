@@ -18,6 +18,7 @@ import NovelBgPicker from "../../components/browse/NovelBgPicker.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import {
+  browseHistoryRecord,
   browseRelated,
   browseWorkDetail,
   errorMessage,
@@ -129,6 +130,17 @@ async function load(): Promise<void> {
     if (data.detail_kind !== "novel") throw new Error("unexpected detail kind");
     detail.value = data;
     bookmarkState.value = data.bookmarkState ?? null;
+    // 加载成功后上报浏览历史（失败静默）
+    void browseHistoryRecord({
+      workId: data.item.id,
+      kind: props.kind,
+      title: data.item.title,
+      authorId: data.item.author_id,
+      authorName: data.item.author_name,
+      cover: data.item.cover ?? "",
+      pageCount: data.item.page_count,
+      xRestrict: data.item.x_restrict ?? 0,
+    }).catch(() => {});
   } catch (err) {
     error.value = errorMessage(err) || t("common.browseLoadFailed");
   } finally {
