@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 作者主页（F5，bookmark-ui-v1 追加收藏 tab）：
  * 头部信息卡（无阴影 surface-container 区块）+ 三类作品 tab + 收藏 tab。
@@ -164,6 +165,12 @@ function resetAll(): void {
   ensureStarted("illust");
 }
 
+function refresh(): void {
+  void loadProfile();
+  if (activeTab.value === "bookmark") bookmarkOffset = 0;
+  lists[activeTab.value].reload();
+}
+
 watch(
   () => props.id,
   () => resetAll()
@@ -229,6 +236,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-view author-view">
+    <div class="browse-list-header">
+      <ListRefreshButton :busy="profileLoading || lists[activeTab].loading.value || lists[activeTab].loadingMore.value" @refresh="refresh" />
+    </div>
     <!-- ===== 头部信息卡（surface-container 区块，无阴影）===== -->
     <section class="author-card">
       <!-- 加载骨架：纯色块，无动画 -->

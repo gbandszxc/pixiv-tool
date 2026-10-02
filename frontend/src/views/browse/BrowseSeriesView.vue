@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 系列分集页（/browse/series/:kind/:id，series-episode-ui / F1）。
  *
@@ -234,6 +235,9 @@ function openInPixiv(): void {
 
 <template>
   <div class="page-view">
+    <div class="browse-list-header">
+      <ListRefreshButton :busy="loading || switching" @refresh="load(page, !hasData)" />
+    </div>
     <!-- 首屏骨架：头部色块 + 当前模式骨架，无动画 -->
     <div v-if="loading" aria-hidden="true">
       <div class="series-head">

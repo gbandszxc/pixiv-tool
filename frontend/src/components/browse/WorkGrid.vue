@@ -3,7 +3,7 @@
  * 作品网格：auto-fill 自适应列 + 骨架屏（纯色块、无动画）+ 空态 / 错误态 + 无限滚动。
  * 滚动接近底部（IntersectionObserver）时 emit load-more；错误由父级 retry。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import WorkCard from "./WorkCard.vue";
 import { filterByR18, useGlobalR18Filter } from "./r18Filter";
@@ -57,10 +57,11 @@ const hiddenCount = computed(() => props.items.length - visibleItems.value.lengt
 
 const sentinel = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
+let active = true;
 
 /** 仍按未过滤的 props.items 判断：R-18 全量过滤时保持翻页（可能短暂出现空态继续拉取）。 */
 function maybeLoadMore(): void {
-  if (!props.hasMore || props.loading || props.loadingMore || props.error || !props.items.length) return;
+  if (!active || !props.hasMore || props.loading || props.loadingMore || props.error || !props.items.length) return;
   emit("load-more");
 }
 
@@ -71,7 +72,7 @@ function onIntersect(entries: IntersectionObserverEntry[]): void {
 /** 首页数据到位后哨兵可能仍在视口内（不再触发新的 intersection），主动补查一次。 */
 function checkNearViewport(): void {
   const el = sentinel.value;
-  if (!el) return;
+  if (!active || !el?.isConnected) return;
   if (el.getBoundingClientRect().top < window.innerHeight + 480) maybeLoadMore();
 }
 
@@ -80,11 +81,20 @@ onMounted(() => {
   if (sentinel.value) observer.observe(sentinel.value);
 });
 
+onActivated(() => {
+  active = true;
+  if (sentinel.value) observer?.observe(sentinel.value);
+});
+onDeactivated(() => {
+  active = false;
+  observer?.disconnect();
+});
+
 watch(
   () => [props.items.length, props.hasMore, props.loading, props.loadingMore, props.error],
   async () => {
     await nextTick();
-    if (sentinel.value && observer) observer.observe(sentinel.value);
+    if (active && sentinel.value && observer) observer.observe(sentinel.value);
     checkNearViewport();
   }
 );

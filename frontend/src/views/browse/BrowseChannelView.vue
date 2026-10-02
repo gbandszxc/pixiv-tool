@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·频道页（插画/漫画/小说三路由共用，props.kind 区分）：
  * browse_channel 一次性快照 → 纵向分区「已关注的新作 / 为你推荐 / 每日排行 / #标签推荐（仅插画）/
@@ -31,6 +32,7 @@ const loading = ref(false);
 const error = ref("");
 
 async function load(): Promise<void> {
+  if (loading.value) return;
   loading.value = true;
   error.value = "";
   try {
@@ -42,7 +44,7 @@ async function load(): Promise<void> {
   }
 }
 
-/** 三条路由复用同一组件实例（仅 props.kind 变化），需重载。 */
+/** 独立路由实例按频道缓存；实例内 kind 改变时重载。 */
 watch(
   () => props.kind,
   () => {
@@ -133,10 +135,14 @@ function openTag(name: string): void {
 
 <template>
   <div class="page-view browse-channel">
-    <h1 class="page-title">{{ title }}</h1>
+    <div class="browse-list-header">
+      <h1 class="page-title">{{ title }}</h1>
+      <ListRefreshButton :busy="loading" @refresh="load" />
+    </div>
 
     <!-- 档位切换为纯 computed：不重新请求快照；计数提示统一在筛选条右侧 -->
     <R18FilterBar :model-value="filter" :hidden-count="hiddenCount" @update:model-value="setFilter" />
+    <p v-if="error && data" role="alert">{{ error }}</p>
 
     <!-- 整页错误（快照尚未到手）→ 文案 + 重试 -->
     <div v-if="error && !data" class="channel-state" role="alert">

@@ -15,7 +15,13 @@
         <AccountMenu :collapsed="siderCollapsed" @add-account="showLoginDialog = true" @open-settings="openSettings" />
       </footer>
     </aside>
-    <main class="app-content"><router-view /></main>
+    <main ref="contentEl" class="app-content">
+      <router-view v-slot="{ Component, route: pageRoute }">
+        <KeepAlive :key="browseSession" :include="cachedBrowseViews" :max="20">
+          <component :is="Component" :key="pageRoute.path.startsWith('/browse/') ? pageRoute.path : undefined" />
+        </KeepAlive>
+      </router-view>
+    </main>
   </div>
   <dialog ref="exitDialog" class="m3-dialog exit-dialog" @close="showExitConfirm = false"><h2>{{ t('app.exitConfirmTitle') }}</h2><p>{{ t('app.exitConfirmBody') }}</p><div class="m3-row dialog-actions"><md-text-button @click="showExitConfirm = false">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="invoke('app_exit').catch(() => {})">{{ t('app.exit') }}</md-filled-button></div></dialog>
   <LoginDialog v-model:show="showLoginDialog" />
@@ -24,7 +30,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { listen } from "@tauri-apps/api/event";
@@ -40,6 +46,40 @@ import { OPEN_SETTINGS_EVENT } from "./api/saucenao";
 
 const router = useRouter(); const route = useRoute(); const { t } = useI18n();
 const authStore = useAuthStore(); const settingsStore = useSettingsStore();
+const contentEl = ref<HTMLElement>();
+const cachedBrowseViews = [
+  "BrowseHomeView", "BrowseChannelView", "BrowseDiscoverView", "BrowseFeedView",
+  "BrowseWatchlistView", "BrowseSearchView", "BrowseRankingView", "BrowseBookmarkView",
+  "BrowseAuthorView", "BrowseSeriesView",
+];
+const browseSession = computed(() => `${authStore.isLoggedIn}:${authStore.userId}`);
+// 与 KeepAlive 相同的 20 页 LRU 边界；主内容滚动不在 window 上。
+const browseScroll = new Map<string, number>();
+function isCachedBrowsePage(path: string): boolean {
+  return path.startsWith("/browse/") && !path.startsWith("/browse/work/");
+}
+const removeBeforeEach = router.beforeEach((to, from) => {
+  if (to.path !== from.path && isCachedBrowsePage(from.path) && browseScroll.has(from.path)) {
+    browseScroll.set(from.path, contentEl.value?.scrollTop ?? 0);
+  }
+});
+const removeAfterEach = router.afterEach(async (to, from, failure) => {
+  if (failure || to.path === from.path) return;
+  const top = browseScroll.get(to.path) ?? 0;
+  if (isCachedBrowsePage(to.path)) {
+    browseScroll.delete(to.path);
+    browseScroll.set(to.path, top);
+    if (browseScroll.size > 20) browseScroll.delete(browseScroll.keys().next().value!);
+  }
+  await nextTick();
+  if (route.path === to.path) contentEl.value?.scrollTo({ top, behavior: "instant" });
+});
+watch(browseSession, () => {
+  browseScroll.clear();
+  if (isCachedBrowsePage(route.path)) browseScroll.set(route.path, 0);
+  contentEl.value?.scrollTo({ top: 0, behavior: "instant" });
+});
+onBeforeUnmount(() => { removeBeforeEach(); removeAfterEach(); });
 const showLoginDialog = ref(false); const showSettings = ref(false); const showExitConfirm = ref(false); const exitDialog = ref<HTMLDialogElement>();
 const siderCollapsed = ref(false); const notification = ref(""); let toastTimer: number | undefined; let unlistenExit: (() => void) | undefined;
 interface MenuItem { path: string; label: string; icon: SidebarIconName }

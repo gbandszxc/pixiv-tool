@@ -305,6 +305,8 @@ export default {
     fileFilterName: "Image",
   },
   browse: {
+    refresh: "Refresh",
+    refreshShortcut: "Refresh list (Ctrl+R / Command+R)",
     // Each unit appends only its own sub-groups (F1: home / channel / ranking; F2: discover / feed / search)
     // Shared across pages (channel cards and work-level pages): open original page / fill crawl form
     hooks: {

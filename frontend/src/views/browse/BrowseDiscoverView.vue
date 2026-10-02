@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·发现页（F2）。
  *
@@ -77,6 +78,14 @@ function retry(): void {
   void fetchBatch();
 }
 
+function refresh(): void {
+  seen.clear();
+  items.value = [];
+  error.value = "";
+  hasMore.value = true;
+  void fetchBatch();
+}
+
 onMounted(() => {
   void fetchBatch();
 });
@@ -110,7 +119,10 @@ function goWork(item: BrowseWorkItem): void {
 
 <template>
   <div class="page-view">
-    <h1 class="page-title">{{ t("nav.browseDiscover") }}</h1>
+    <div class="browse-list-header">
+      <h1 class="page-title">{{ t("nav.browseDiscover") }}</h1>
+      <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
+    </div>
 
     <!-- 过滤 chips：自绘胶囊，选中态 secondary-container（DESIGN.md M3 角色） -->
     <div class="chips-row" role="group" :aria-label="t('nav.browseDiscover')">

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·首页：browse_home_feed 一次性混合推荐流（illust/manga/novel/ugoira）。
  * 「换一批」重新调用并按 kind:id 去重追加；新条目 < 5 视为换不出更多，
@@ -52,6 +53,11 @@ async function shuffle(): Promise<void> {
   }
 }
 
+function refresh(): void {
+  exhausted.value = false;
+  void initialLoad();
+}
+
 /** 卡片跳转：novel → 小说阅读器；illust/manga → 作品查看器（ugoira 后端按 illust 详情 + illustType=2 处理）。 */
 function openWork(item: BrowseWorkItem): void {
   const kindPath = item.kind === "novel" ? "novel" : item.kind === "manga" ? "manga" : "illust";
@@ -65,6 +71,7 @@ onMounted(initialLoad);
   <div class="page-view browse-home">
     <div class="home-header">
       <h1 class="page-title">{{ t("nav.browseHome") }}</h1>
+      <ListRefreshButton :busy="loading || refreshing" @refresh="refresh" />
       <!-- 换一批降为文字按钮 + 线性刷新图标，弱化头部主次层级（图标风格对齐 HistoryView .row-actions） -->
       <md-text-button :disabled="loading || refreshing || exhausted" @click="shuffle">
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -74,6 +81,7 @@ onMounted(initialLoad);
         {{ refreshing ? t("browse.home.refreshing") : t("browse.home.refresh") }}
       </md-text-button>
     </div>
+    <p v-if="error && items.length" role="alert">{{ error }}</p>
 
     <WorkGrid
       :items="items"

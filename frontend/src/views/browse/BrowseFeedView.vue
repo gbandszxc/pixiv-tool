@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·关注动态页（F2）。
  *
@@ -72,7 +73,10 @@ function goWork(item: BrowseWorkItem): void {
 
 <template>
   <div class="page-view">
-    <h1 class="page-title">{{ t("nav.browseFeed") }}</h1>
+    <div class="browse-list-header">
+      <h1 class="page-title">{{ t("nav.browseFeed") }}</h1>
+      <ListRefreshButton :busy="loading || loadingMore" @refresh="list.reload" />
+    </div>
 
     <div class="feed-controls">
       <div

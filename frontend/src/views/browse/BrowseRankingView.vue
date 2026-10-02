@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·排行榜：类型 tab（插画/漫画/动图/小说）+ 周期 select + 日期导航 + 页码制分页（50/页）。
  * ?kind=&mode= query 回显（router.replace 同步）；kind/mode/页码/日期任一变更都回到第 1 页重查。
@@ -127,6 +128,7 @@ function syncQuery(): void {
 watch(
   () => route.query,
   (query) => {
+    if (route.path !== "/browse/ranking") return;
     const nextKind = normalizeKind(query.kind);
     const nextMode = normalizeMode(query.mode, nextKind);
     if (nextKind === kind.value && nextMode === mode.value) return;
@@ -189,7 +191,10 @@ function openWork(item: BrowseWorkItem): void {
 
 <template>
   <div class="page-view browse-ranking">
-    <h1 class="page-title">{{ t("nav.browseRanking") }}</h1>
+    <div class="browse-list-header">
+      <h1 class="page-title">{{ t("nav.browseRanking") }}</h1>
+      <ListRefreshButton :busy="loading" @refresh="load" />
+    </div>
 
     <div class="ranking-toolbar">
       <SectionTabs class="kind-tabs" :tabs="kindTabs" :value="kind" @change="changeKind" />

@@ -124,6 +124,16 @@ textarea {
   margin-inline: auto;
 }
 
+.browse-list-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+.browse-list-header .page-title { margin: 0; }
+
 .page-title {
   margin: 0 0 var(--space-lg);
   color: var(--ink);

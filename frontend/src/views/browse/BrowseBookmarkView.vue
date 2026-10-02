@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·收藏页（bookmark-ui-v1 / F1）—— 自己的收藏（他人公开收藏在作者页 tab）。
  *
@@ -101,6 +102,11 @@ function reloadList(): void {
   window.scrollTo({ top: 0 });
 }
 
+function refresh(): void {
+  void loadTags();
+  reloadList();
+}
+
 function onKindChange(value: string): void {
   const next = value as BookmarkKind;
   if (next === kind.value) return;
@@ -172,7 +178,10 @@ function goWork(item: BrowseWorkItem): void {
 
 <template>
   <div class="page-view bookmark-view">
-    <h1 class="page-title">{{ t("nav.browseBookmark") }}</h1>
+    <div class="browse-list-header">
+      <h1 class="page-title">{{ t("nav.browseBookmark") }}</h1>
+      <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
+    </div>
 
     <!-- 控制行：类型 tabs（左） + 公开/私密（右） -->
     <div class="bm-controls">

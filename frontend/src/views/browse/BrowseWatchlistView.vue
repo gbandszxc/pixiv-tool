@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·追更列表页（watchlist-ui-v1，官方 /following/watchlist 同构）：
  * browse_watchlist 一次返回该类型全部订阅系列（后端已按 max_page 聚合，无需翻页），
@@ -77,7 +78,10 @@ function openSeries(item: BrowseWatchlistItem): void {
 
 <template>
   <div class="page-view browse-watchlist">
-    <h1 class="page-title">{{ t("nav.browseWatchlist") }}</h1>
+    <div class="browse-list-header">
+      <h1 class="page-title">{{ t("nav.browseWatchlist") }}</h1>
+      <ListRefreshButton :busy="loading" @refresh="load" />
+    </div>
 
     <div class="control-row" role="group" :aria-label="t('browse.watchlist.tabLabel')">
       <span class="control-label">{{ t("browse.watchlist.tabLabel") }}</span>

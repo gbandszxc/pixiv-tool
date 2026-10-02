@@ -306,6 +306,8 @@ export default {
     fileFilterName: "图片",
   },
   browse: {
+    refresh: "刷新",
+    refreshShortcut: "刷新列表（Ctrl+R / Command+R）",
     // 各单元只追加自己的子分组（F1：home / channel / ranking；F2：discover / feed / search），勿动他人分组    // 跨页面共用（频道页卡片与作品级页面）：打开原页 / 返填抓取表单
     hooks: {
       openInBrowser: "在浏览器中打开",
