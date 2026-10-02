@@ -25,17 +25,17 @@
           <span v-if="account.user_id === authStore.activeAccountId" class="menu-check" aria-hidden="true">✓</span>
         </button>
         <button role="menuitem" class="menu-item" @click="addAccount()">
-          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
           <span class="menu-label">{{ t('auth.addAccount') }}</span>
         </button>
         <hr class="menu-divider" />
         <button role="menuitem" class="menu-item" @click="openSettings()">
-          <SidebarIcon class="menu-icon" name="settings" />
+          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /><circle cx="12" cy="12" r="3" /></svg>
           <span class="menu-label">{{ t('settings.title') }}</span>
           <svg class="menu-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 6 6 6-6 6" /></svg>
         </button>
         <button role="menuitem" class="menu-item" :disabled="updateChecking" @click="checkUpdate()">
-          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></svg>
+          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>
           <span class="menu-label">{{ t('auth.checkUpdate') }}</span>
         </button>
         <hr class="menu-divider" />
@@ -46,7 +46,7 @@
           </button>
         </div>
         <button role="menuitem" class="menu-item danger" :disabled="!authStore.isLoggedIn" @click="handleLogout()">
-          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4H5v16h4" /><path d="m14 8-4 4 4 4" /><path d="M10 12h9" /></svg>
+          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /></svg>
           <span class="menu-label">{{ t('auth.logout') }}</span>
         </button>
       </div>
@@ -83,7 +83,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import SidebarIcon from "../navigation/SidebarIcon.vue";
 import { useAuthStore } from "../../stores/auth";
 import { errorMessage, isTauri, type AccountEntry } from "../../api/tauri";
 import { checkAppUpdate, type UpdateCheckInfo } from "../../api/appUpdate";
