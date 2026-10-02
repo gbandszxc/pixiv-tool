@@ -8,6 +8,7 @@ export default {
     loading: "Loading...",
     search: "Search",
     retry: "Retry",
+    clear: "Clear",
     open: "Open",
     close: "Close",
     // Browse-mode shared states (api/browse.ts + components/browse)
@@ -196,6 +197,15 @@ export default {
   },
   settings: {
     title: "Settings",
+    // Left-rail group names (order lives in components/settings/sections.ts)
+    groupsLabel: "Settings groups",
+    groups: {
+      general: "General",
+      appearance: "Appearance",
+      images: "Images & Content",
+      advanced: "Advanced",
+      maintenance: "Maintenance",
+    },
     outputDir: "Output Directory",
     outputDirPlaceholder: "Default: system Downloads/pixiv-tool",
     browse: "Browse…",
@@ -226,9 +236,19 @@ export default {
     clearAuthConfirm: "Clear login state? You will need to re-login.",
     saved: "Settings saved",
     unsaved: "Settings were not saved; the saved settings have been restored.",
+    unsavedTitle: "Unsaved changes",
+    unsavedConfirm: "You have unsaved changes. Closing now discards them.",
+    keepEditing: "Keep editing",
+    discard: "Discard changes",
     saveFailed: "Save failed",
     logsCleared: "Logs cleared",
     authCleared: "Login state cleared",
+    // Maintenance group: these run immediately, independent of the Save button
+    maintenanceHint: "These actions run immediately and are not affected by Save.",
+    logsLabel: "Runtime logs",
+    clearLogsHint: "Empty the local app.log file.",
+    authLabel: "Login state",
+    clearAuthHint: "Remove the login from the system credential store; you will need to sign in again.",
     maxWait: "Max wait time (s)",
     maxWaitHint: "Tasks auto-fail after running longer than this (pause time excluded). Default 180s.",
     maxWaitInvalid: "Max wait time must be at least 30 seconds",
@@ -254,6 +274,7 @@ export default {
     showR18Hint: "When off, R-18 / R-18G works are hidden from lists; work pages stay reachable with the blur mask.",
     saucenaoApiKey: "SauceNAO API Key",
     saucenaoApiKeyHint: "Required for reverse image search. Register free at saucenao.com and find it on the user.php?page=search-api page; stored locally only",
+    appearanceHint: "Theme and palette preview instantly; they are written only when you press Save.",
   },
   saucenao: {
     // Image search page (views/SaucenaoView.vue) + sidebar entry (nav.saucenao)

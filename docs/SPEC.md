@@ -132,7 +132,7 @@ pixiv-tool/
 │  ├─ src/
 │  │  ├─ views/                 # ToolsView（工具页签壳）/ CrawlView / IllustrationView / TasksView / HistoryView / SaucenaoView（以图识图）
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark + Work/Series/Author/Novel
-│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/ settings/（SettingsPanel / SettingsDialog）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
+│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/ settings/（SettingsPanel / SettingsDialog / sections.ts 分组定义）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
@@ -530,9 +530,13 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 执行）之间以分隔线隔出 meta 行：左对齐**版本回显**（`getVersion()` 动态读取
 app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标按钮，关菜单后经
 `opener` 插件用系统默认浏览器打开仓库主页）。设置入口点击后关菜单并打开**设置弹窗**
-（`SettingsDialog`：原生 dialog、宽 `min(600px, 92vw)`、表单区自身滚动、
-Esc / 点 backdrop / 标题栏 ✕ 关闭），表单为 SettingsPanel，含主题实时预览；
-关闭弹窗时若预览未保存则恢复已保存主题并提示，设置项增多时在弹窗内分组扩展。
+（`SettingsDialog`：原生 dialog、宽 `min(840px, 94vw)`、高 `min(680px, 88vh)` 定高
+（超出部分在右栏内部滚动，头部与底部保存栏不动）；主区为 176px 分组栏 + 表单区两列，
+两栏各自滚动；底部为常驻「取消 / 保存」栏，保存整表一次写入）。表单为 SettingsPanel，按左栏选中的分组渲染
+（分组顺序见 `components/settings/sections.ts`：通用 / 外观 / 图片与内容 / 高级 /
+维护），含主题、配色与语言的实时预览；Esc / 点 backdrop / 标题栏 ✕ 关闭前先做脏检查，
+有未保存改动则弹确认弹窗（继续编辑 / 放弃修改），放弃即回滚到已保存值并提示，
+无改动直接关闭。设置项继续增多时在 `sections.ts` 与 SettingsPanel 内新增分组。
 应用外壳恒为视口高，右侧内容区是唯一滚动容器，长内容不再拉长侧栏。内容列
 （`.page-view`）在窗口宽高比 ≤16:9 时铺满内容区、不设宽度上限（列表/网格列数随
 宽度自适应补满），只有更宽的超宽窗口才按「视口高 × 16/9」封顶并居中

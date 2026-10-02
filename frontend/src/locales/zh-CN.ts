@@ -8,6 +8,7 @@ export default {
     loading: "加载中...",
     search: "搜索",
     retry: "重试",
+    clear: "清除",
     open: "打开",
     close: "关闭",
     // 浏览模式通用态（api/browse.ts + components/browse 共用）
@@ -197,6 +198,15 @@ export default {
   },
   settings: {
     title: "设置",
+    // 左栏分组名（分组顺序见 components/settings/sections.ts）
+    groupsLabel: "设置分组",
+    groups: {
+      general: "通用",
+      appearance: "外观",
+      images: "图片与内容",
+      advanced: "高级",
+      maintenance: "维护",
+    },
     outputDir: "输出目录",
     outputDirPlaceholder: "默认：系统下载目录/pixiv-tool",
     browse: "浏览…",
@@ -227,9 +237,19 @@ export default {
     clearAuthConfirm: "确定清除登录态？需要重新登录。",
     saved: "设置已保存",
     unsaved: "设置尚未保存，已恢复为已保存的设置",
+    unsavedTitle: "未保存的修改",
+    unsavedConfirm: "有尚未保存的修改，关闭后这些改动会丢失。",
+    keepEditing: "继续编辑",
+    discard: "放弃修改",
     saveFailed: "保存失败",
     logsCleared: "日志已清除",
     authCleared: "已清除登录态",
+    // 维护组：以下操作立即执行，与底部保存按钮无关
+    maintenanceHint: "以下操作立即执行，不受底部「保存」影响。",
+    logsLabel: "运行日志",
+    clearLogsHint: "清空本机 app.log 日志文件。",
+    authLabel: "登录态",
+    clearAuthHint: "从系统凭据存储中移除登录信息，之后需重新登录。",
     maxWait: "最大等待时间（秒）",
     maxWaitHint: "任务运行超过该时长自动标记失败，暂停时间不计入。默认 180s。",
     maxWaitInvalid: "最大等待时间必须 ≥ 30 秒",
@@ -255,6 +275,7 @@ export default {
     showR18Hint: "关闭后，列表会隐藏 R-18 / R-18G 作品；已打开的作品详情仍可访问并保留模糊遮罩。",
     saucenaoApiKey: "SauceNAO API Key",
     saucenaoApiKeyHint: "以图识图功能必需。在 saucenao.com 免费注册后，于 user.php?page=search-api 页面获取；仅保存在本机配置文件中",
+    appearanceHint: "主题与配色即时预览，点击「保存」后才写入设置。",
   },
   saucenao: {
     // 以图识图页（views/SaucenaoView.vue）+ 侧栏入口（nav.saucenao）
