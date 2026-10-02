@@ -666,5 +666,15 @@ function onThumbError(index: number): void {
   .input-body {
     width: 100%;
   }
+
+  /* 结果条目退化为两行：首行缩略图 + 信息占满剩余宽度，动作按钮整行右对齐换到第二行 */
+  .result-item {
+    flex-wrap: wrap;
+  }
+
+  .item-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
+  }
 }
 </style>
