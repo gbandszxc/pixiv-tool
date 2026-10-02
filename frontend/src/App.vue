@@ -50,7 +50,7 @@ const contentEl = ref<HTMLElement>();
 const cachedBrowseViews = [
   "BrowseHomeView", "BrowseChannelView", "BrowseDiscoverView", "BrowseFeedView",
   "BrowseWatchlistView", "BrowseSearchView", "BrowseRankingView", "BrowseBookmarkView",
-  "BrowseAuthorView", "BrowseSeriesView",
+  "BrowseHistoryView", "BrowseAuthorView", "BrowseSeriesView",
 ];
 const browseSession = computed(() => `${authStore.isLoggedIn}:${authStore.userId}`);
 // 与 KeepAlive 相同的 20 页 LRU 边界；主内容滚动不在 window 上。
@@ -95,6 +95,7 @@ const menuItems = computed<MenuItem[]>(() => [
   { path: "/browse/search", label: t("nav.browseSearch"), icon: "search" },
   { path: "/browse/ranking", label: t("nav.browseRanking"), icon: "ranking" },
   { path: "/browse/bookmark", label: t("nav.browseBookmark"), icon: "bookmark" },
+  { path: "/browse/history", label: t("nav.browseHistory"), icon: "history" },
 ]);
 watch(showExitConfirm, (show) => { if (!exitDialog.value) return; if (show) exitDialog.value.showModal(); else exitDialog.value.close(); });
 const systemDark = ref(window.matchMedia("(prefers-color-scheme: dark)").matches); const media = window.matchMedia("(prefers-color-scheme: dark)"); const onMediaChange = (e: MediaQueryListEvent) => systemDark.value = e.matches;

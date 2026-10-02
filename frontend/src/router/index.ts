@@ -89,6 +89,11 @@ const router = createRouter({
       name: "browse-bookmark",
       component: () => import("../views/browse/BrowseBookmarkView.vue"),
     },
+    {
+      path: "/browse/history",
+      name: "browse-history",
+      component: () => import("../views/browse/BrowseHistoryView.vue"),
+    },
     ...browseWorkRoutes,
     {
       // 系列分集页：kind = novel（小说系列）| illust（插画/漫画系列，官方接口族不区分；

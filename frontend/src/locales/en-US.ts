@@ -64,6 +64,7 @@ export default {
     browseSearch: "Search",
     browseRanking: "Ranking",
     browseBookmark: "Bookmarks",
+    browseHistory: "History",
     saucenao: "Image Search",
   },
   auth: {
@@ -204,6 +205,16 @@ export default {
     deleteAllConfirm: "Clear ALL history records? This cannot be undone. (files kept)",
     cleared: "All history records cleared",
     empty: "No crawl records yet. Try the crawl page.",
+  },
+  browseHistory: {
+    title: "Browsing History",
+    empty: "No browsing history yet",
+    emptyHint: "Illustrations, manga and novels you view will show up here",
+    clearAll: "Clear History",
+    clearAllConfirm: "Clear all browsing history? This cannot be undone.",
+    cleared: "Browsing history cleared ({count} item(s))",
+    clearFailed: "Failed to clear browsing history",
+    loadFailed: "Failed to load browsing history",
   },
   settings: {
     title: "Settings",

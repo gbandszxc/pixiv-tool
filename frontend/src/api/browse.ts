@@ -591,6 +591,68 @@ export async function browseWatchlist(kind: WatchKind): Promise<BrowseWatchlist>
   return invokeBrowse<BrowseWatchlist>("browse_watchlist", { kind });
 }
 
+// ===== 浏览访问历史契约与封装（browse-history-ui-v1；!isTauri() → mock）=====
+
+/** 浏览历史条目：来自历史行（visited_at 倒序由后端保证，前端不再排序）。 */
+export interface BrowseHistoryItem {
+  work_id: number;
+  kind: WorkKind;
+  title: string;
+  author_id: number;
+  author_name: string;
+  cover: string;
+  page_count: number;
+  x_restrict: number;
+  visited_at: string;
+}
+
+/** browse_history_list 返回体（页码制分页）。 */
+export interface BrowseHistoryList {
+  items: BrowseHistoryItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+/** browse_history_record 入参：埋点上报的一次访问（同作品去重置顶由后端处理）。 */
+export interface BrowseHistoryRecordInput {
+  workId: number;
+  kind: WorkKind;
+  title: string;
+  authorId: number;
+  authorName: string;
+  cover: string;
+  pageCount: number;
+  xRestrict: number;
+}
+
+/** browse_history_record：上报一次作品访问（去重置顶）。 */
+export async function browseHistoryRecord(input: BrowseHistoryRecordInput): Promise<void> {
+  if (!isTauri()) return mockHistoryRecord(input);
+  await invokeBrowse<void>("browse_history_record", {
+    workId: input.workId,
+    kind: input.kind,
+    title: input.title,
+    authorId: input.authorId,
+    authorName: input.authorName,
+    cover: input.cover,
+    pageCount: input.pageCount,
+    xRestrict: input.xRestrict,
+  });
+}
+
+/** browse_history_list：浏览历史分页列表（page 从 1 起）。 */
+export async function browseHistoryList(page: number, pageSize: number): Promise<BrowseHistoryList> {
+  if (!isTauri()) return mockHistoryList(page, pageSize);
+  return invokeBrowse<BrowseHistoryList>("browse_history_list", { page, pageSize });
+}
+
+/** browse_history_clear：一键清空浏览历史。 */
+export async function browseHistoryClear(): Promise<{ status: string; deleted: number }> {
+  if (!isTauri()) return mockHistoryClear();
+  return invokeBrowse<{ status: string; deleted: number }>("browse_history_clear");
+}
+
 function channelKindToWork(kind: ChannelKind): WorkKind {
   return kind === "illustration" ? "illust" : kind;
 }
@@ -1263,4 +1325,70 @@ async function mockBookmarkRemove(kind: BookmarkKind, id: number, bookmarkId: st
   await mockDelay();
   mockBookmarkStore.delete(`${kind}:${id}`);
   void bookmarkId;
+}
+
+// ===== 浏览历史 mock =====
+
+/** 浏览历史 mock 内存数组：模块级可变，record 去重置顶 / clear 清空（仅浏览器 dev mock 生效）。 */
+let mockHistoryItems: BrowseHistoryItem[] | null = null;
+
+/** 首次访问惰性生成 47 条混合历史（illust/manga/novel），visited_at 按小时递减（最新在前）。 */
+function mockHistorySeed(): BrowseHistoryItem[] {
+  const rand = mulberry32(seedFrom("browse_history"));
+  const kinds: WorkKind[] = ["illust", "manga", "novel"];
+  const now = Date.now();
+  return Array.from({ length: 47 }, (_, i) => {
+    const kind = kinds[Math.floor(rand() * kinds.length)] ?? "illust";
+    const work = makeMockItem(rand, 8000000 + i, kind);
+    return {
+      work_id: work.id,
+      kind,
+      title: work.title,
+      author_id: work.author_id,
+      author_name: work.author_name,
+      cover: work.cover ?? "",
+      page_count: work.page_count,
+      x_restrict: work.x_restrict ?? 0,
+      visited_at: new Date(now - i * 3_600_000).toISOString(),
+    };
+  });
+}
+
+function mockHistoryEnsure(): BrowseHistoryItem[] {
+  if (!mockHistoryItems) mockHistoryItems = mockHistorySeed();
+  return mockHistoryItems;
+}
+
+/** record：同 work_id + kind 去重后置顶，visited_at 取当前时刻。 */
+async function mockHistoryRecord(input: BrowseHistoryRecordInput): Promise<void> {
+  await mockDelay();
+  const arr = mockHistoryEnsure();
+  const index = arr.findIndex((it) => it.work_id === input.workId && it.kind === input.kind);
+  if (index >= 0) arr.splice(index, 1);
+  arr.unshift({
+    work_id: input.workId,
+    kind: input.kind,
+    title: input.title,
+    author_id: input.authorId,
+    author_name: input.authorName,
+    cover: input.cover,
+    page_count: input.pageCount,
+    x_restrict: input.xRestrict,
+    visited_at: new Date().toISOString(),
+  });
+}
+
+/** list：页码切片（已在内存中按 visited_at 倒序维护）。 */
+async function mockHistoryList(page: number, pageSize: number): Promise<BrowseHistoryList> {
+  await mockDelay();
+  const arr = mockHistoryEnsure();
+  const start = (Math.max(1, page) - 1) * pageSize;
+  return { items: arr.slice(start, start + pageSize), total: arr.length, page, page_size: pageSize };
+}
+
+async function mockHistoryClear(): Promise<{ status: string; deleted: number }> {
+  await mockDelay();
+  const deleted = mockHistoryEnsure().length;
+  mockHistoryItems = [];
+  return { status: "ok", deleted };
 }

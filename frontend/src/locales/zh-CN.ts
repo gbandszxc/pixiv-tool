@@ -64,6 +64,7 @@ export default {
     browseSearch: "搜索",
     browseRanking: "排行榜",
     browseBookmark: "收藏",
+    browseHistory: "历史",
     saucenao: "以图识图",
   },
   auth: {
@@ -205,6 +206,16 @@ export default {
     deleteAllConfirm: "确定清空全部历史记录？此操作不可恢复（不删除文件）。",
     cleared: "已清空全部历史记录",
     empty: "还没有抓取记录，去抓取页试试",
+  },
+  browseHistory: {
+    title: "浏览历史",
+    empty: "还没有浏览记录",
+    emptyHint: "浏览过的插画、漫画与小说会显示在这里",
+    clearAll: "清空历史",
+    clearAllConfirm: "确定清空全部浏览历史？此操作不可恢复。",
+    cleared: "已清空浏览历史（{count} 条）",
+    clearFailed: "清空浏览历史失败",
+    loadFailed: "加载浏览历史失败",
   },
   settings: {
     title: "设置",
