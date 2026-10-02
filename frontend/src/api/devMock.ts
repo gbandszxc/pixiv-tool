@@ -59,6 +59,8 @@ function ensureSettings(): Settings {
       thumb_quality_grid: "medium",
       thumb_quality_detail: "medium",
       thumb_quality_fullscreen: "large",
+      // 小说正文字号缩放（区间 0.75~2.0），默认 1.0
+      novel_font_scale: 1.0,
       saucenao_api_key: "",
     };
   }

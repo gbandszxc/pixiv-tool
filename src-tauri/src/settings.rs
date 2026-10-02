@@ -36,6 +36,9 @@ pub struct Settings {
     pub thumb_quality_detail: String,
     /// 全屏浮层档位（见 [`THUMB_FULLSCREEN_TIERS`]）。
     pub thumb_quality_fullscreen: String,
+    /// 小说正文字号缩放（小说阅读器底栏缩放控件写入），默认 1.0，
+    /// 合法区间 [0.75, 2.0]；非法值在加载期回落 1.0。
+    pub novel_font_scale: f64,
     /// SauceNAO API Key（以图识图必需，saucenao.com 注册后获取；仅保存在本机
     /// 配置文件——不入库、不写日志、不进报错原文）。
     pub saucenao_api_key: String,
@@ -55,6 +58,7 @@ impl Default for Settings {
             thumb_quality_grid: "medium".into(),
             thumb_quality_detail: "medium".into(),
             thumb_quality_fullscreen: "large".into(),
+            novel_font_scale: 1.0,
             saucenao_api_key: String::new(),
         }
     }
@@ -84,7 +88,7 @@ impl Settings {
     /// - 文件不存在 → 写入默认值并返回
     /// - JSON 损坏 / 读失败 → 备份为 `settings.json.corrupt-{mtime_ns}` 后重建默认
     /// - 旧值迁移：`output_dir == "downloads"`（早期默认相对路径）→ 系统下载目录/pixiv-tool
-    /// - 加载期归一：非法缩略图档位重置为默认（不强制回写文件）
+    /// - 加载期归一：非法缩略图档位、非法小说字号缩放重置为默认（不强制回写文件）
     /// - 缺键填默认（serde default）；未知键忽略（serde 默认行为）
     pub fn load_or_init(config_dir: &Path) -> Settings {
         let path = settings_path(config_dir);
@@ -113,6 +117,13 @@ impl Settings {
                 }
                 if !THUMB_FULLSCREEN_TIERS.contains(&settings.thumb_quality_fullscreen.as_str()) {
                     settings.thumb_quality_fullscreen = "large".into();
+                }
+                // 小说字号缩放：非有限值（NaN/inf，JSON 文本层面不可表达，纯防御）
+                // 或越出 [0.75, 2.0] 回落默认 1.0（对齐缩略图档位的加载回落做法）。
+                if !settings.novel_font_scale.is_finite()
+                    || !(0.75..=2.0).contains(&settings.novel_font_scale)
+                {
+                    settings.novel_font_scale = 1.0;
                 }
                 settings
             }
@@ -226,6 +237,18 @@ pub fn validate_max_wait_value(v: &Value) -> Result<i64, String> {
     }
 }
 
+/// JSON 值形式的小说字号缩放校验：bool / 非数字 / 非有限值（NaN/inf）/ 越界都拒绝。
+pub fn validate_novel_font_scale_value(v: &Value) -> Result<(), String> {
+    let Some(scale) = v.as_f64().filter(|s| s.is_finite()) else {
+        return Err("小说字号缩放必须是 0.75~2.0 之间的数字".into());
+    };
+    if (0.75..=2.0).contains(&scale) {
+        Ok(())
+    } else {
+        Err("小说字号缩放必须是 0.75~2.0 之间的数字".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +279,7 @@ mod tests {
         assert_eq!(s.thumb_quality_grid, "medium");
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
+        assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.saucenao_api_key, "");
         assert!(
             s.output_dir
@@ -294,6 +318,7 @@ mod tests {
         assert_eq!(s.thumb_quality_grid, "medium");
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
+        assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.saucenao_api_key, "");
         cleanup(&dir);
     }
@@ -321,6 +346,47 @@ mod tests {
         assert_eq!(s.thumb_quality_detail, "original");
         assert_eq!(s.thumb_quality_fullscreen, "original");
         cleanup(&dir);
+    }
+
+    #[test]
+    fn invalid_novel_font_scale_falls_back_to_default_on_load() {
+        let dir = temp_config_dir("novelfont");
+        // 手改 settings.json 写入越界值 → 加载期回落 1.0
+        std::fs::write(settings_path(&dir), r#"{"novel_font_scale":9.9}"#).unwrap();
+        assert_eq!(Settings::load_or_init(&dir).novel_font_scale, 1.0);
+        // 合法值（含边界）原样保留
+        for scale in [0.75, 1.25, 2.0] {
+            std::fs::write(
+                settings_path(&dir),
+                format!(r#"{{"novel_font_scale":{scale}}}"#),
+            )
+            .unwrap();
+            assert_eq!(Settings::load_or_init(&dir).novel_font_scale, scale);
+        }
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn validate_novel_font_scale_rules() {
+        use serde_json::json;
+        for ok in [json!(1.0), json!(0.75), json!(2.0), json!(1.25), json!(1)] {
+            assert!(validate_novel_font_scale_value(&ok).is_ok(), "ok={ok}");
+        }
+        let message = "小说字号缩放必须是 0.75~2.0 之间的数字";
+        for bad in [
+            json!(0.5),
+            json!(2.5),
+            json!(9.9),
+            json!("abc"),
+            json!(true),
+            json!(null),
+        ] {
+            assert_eq!(
+                validate_novel_font_scale_value(&bad).unwrap_err(),
+                message,
+                "bad={bad}"
+            );
+        }
     }
 
     #[test]

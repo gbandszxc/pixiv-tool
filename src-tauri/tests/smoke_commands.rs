@@ -50,7 +50,11 @@ fn settings_apply_round_trip_via_temp_config() {
     assert_eq!(before, Settings::default());
 
     // 等价 settings_save：patch → save → 更新内存锁
-    let patch = json!({ "language": "en-US", "max_wait_seconds": 3600 });
+    let patch = json!({
+        "language": "en-US",
+        "max_wait_seconds": 3600,
+        "novel_font_scale": 1.25
+    });
     let updated =
         apply_settings_patch(&state.settings_snapshot(), &patch, &state.paths.data_dir).unwrap();
     updated.save(&state.paths.config_dir).unwrap();
@@ -62,6 +66,7 @@ fn settings_apply_round_trip_via_temp_config() {
     assert_eq!(snapshot, reloaded);
     assert_eq!(reloaded.language, "en-US");
     assert_eq!(reloaded.max_wait_seconds, 3600);
+    assert_eq!(reloaded.novel_font_scale, 1.25);
     // 未出现在 patch 里的键保持默认
     assert_eq!(reloaded.output_dir, Settings::default().output_dir);
 

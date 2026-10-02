@@ -415,6 +415,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "thumb_quality_grid": "medium",
   "thumb_quality_detail": "medium",
   "thumb_quality_fullscreen": "large",
+  "novel_font_scale": 1.0,
   "saucenao_api_key": ""
 }
 ```
@@ -448,6 +449,11 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   `x_restrict >= 1` 的作品；详情页仍可访问；**关闭开关时**详情页对
   `x_restrict >= 1` 的作品保留模糊遮罩 + 「显示」确认（确认后本会话记忆、不持久化），
   **开启开关（默认）时不显示遮罩、直接展示**。
+- `novel_font_scale`：小说正文字号缩放（默认 `1.0`，合法区间 `0.75`~`2.0`），
+  小说阅读器（§6.4）正文渲染使用。**设置弹窗不提供该项**，仅由小说阅读器底栏
+  缩放控件经 `settings_save` 写入（在白名单内）。保存时非数字 / bool /
+  越界一律拒绝；手改 settings.json 写入非有限值或越出区间时，加载期回落到
+  `1.0`（不强制回写文件）。
 - `saucenao_api_key`：SauceNAO API Key（默认 `""`），「以图识图」（§7
   `saucenao_search`）的**必填前置**：trim 后为空一律拒绝发起搜索。在
   saucenao.com 免费注册后于 `user.php?page=search-api` 页面获取；仅保存在本机

@@ -111,6 +111,8 @@ export interface Settings {
   thumb_quality_detail: string;
   /** 大图 / 全屏浮层档位：large | original */
   thumb_quality_fullscreen: string;
+  /** 小说正文字号缩放（小说阅读器底栏缩放控件写入），默认 1.0，合法区间 0.75~2.0 */
+  novel_font_scale: number;
   /** SauceNAO API Key（以图识图必需；仅保存在本机配置文件，不写日志） */
   saucenao_api_key: string;
 }
