@@ -125,4 +125,14 @@ const router = createRouter({
   ],
 });
 
+/** 使用原生路由历史保留完整来路；深链首开用 replace 回首页，避免返回循环。 */
+export function goBack(): void {
+  const back = router.options.history.state.back;
+  if (typeof back === "string" && back.startsWith("/") && router.resolve(back).matched.length) {
+    router.back();
+  } else {
+    void router.replace("/browse/home");
+  }
+}
+
 export default router;

@@ -16,6 +16,12 @@
       </footer>
     </aside>
     <main ref="contentEl" class="app-content">
+      <div v-if="!route.path.startsWith('/browse/work/') && (router.options.history.state.back || route.path !== '/browse/home')" class="page-view app-back">
+        <md-text-button @click="goBack">
+          <svg slot="icon" class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+          {{ t(router.options.history.state.back ? 'nav.back' : 'nav.backHome') }}
+        </md-text-button>
+      </div>
       <router-view v-slot="{ Component, route: pageRoute }">
         <KeepAlive :key="browseSession" :include="cachedBrowseViews" :max="20">
           <component :is="Component" :key="pageRoute.path.startsWith('/browse/') ? pageRoute.path : undefined" />
@@ -32,6 +38,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
+import { goBack } from "./router";
 import { useI18n } from "vue-i18n";
 import { listen } from "@tauri-apps/api/event";
 import LoginDialog from "./components/auth/LoginDialog.vue";
@@ -113,6 +120,7 @@ onBeforeUnmount(() => { media.removeEventListener("change", onMediaChange); unli
 </script>
 
 <style scoped>
+.app-back { margin-bottom: var(--space-sm); }
 /* 外壳恒为视口高：行高钉 100vh + 两列 min-height:0，右侧 app-content 是唯一滚动容器，
  * 长内容不再把侧栏拉长（头像恒在侧栏底部）。 */
 .app-shell { display:grid; grid-template-columns:256px 1fr; grid-template-rows:100vh; height:100vh; overflow:hidden; background:var(--surface); }.app-shell.collapsed { grid-template-columns:72px 1fr; }.sidebar { display:flex; flex-direction:column; min-height:0; background:var(--md-sys-color-surface-container); border-right:1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }.sider-header { display:flex; align-items:center; justify-content:space-between; gap:12px; height:72px; padding:0 12px 0 20px; font-size:18px; font-weight:700; }.app-shell.collapsed .sider-header { justify-content:center; padding:0; }.sider-header img { flex:none; width:32px; height:32px; }.sider-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.sidebar nav { flex:1; min-height:0; overflow-y:auto; padding-bottom:var(--space-sm); }.nav-item { display:flex; align-items:center; gap:16px; width:calc(100% - 24px); min-height:48px; margin:2px 12px; padding:0 16px; color:var(--ink); font:inherit; text-align:left; background:transparent; border:0; border-radius:24px; cursor:pointer; }.app-shell.collapsed .nav-item { justify-content:center; padding:0; }.nav-item:hover { background:color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }.nav-item.active { color:var(--md-sys-color-on-primary-container); font-weight:600; background:var(--md-sys-color-primary-container); }.nav-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.nav-divider { height:0; margin:var(--space-sm) 12px; border-top:1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }.sider-footer { padding:12px; }/* 唯一滚动容器：接管整页滚动，长内容不再撑破 100vh 外壳（配合 .app-shell 的行高钉死与 overflow:hidden） */.app-content { min-height:0; overflow-y:auto; }/* 退出确认弹窗：容器配方走 main.css 的 .m3-dialog 通用层，这里只收窄宽度 */.exit-dialog { min-width:0; width:min(360px, 90vw); }/* 图标动作统一 20px 线性图标（stroke 1.8），点击域由 md-icon-button 承载 */.bar-icon { width:20px; height:20px; stroke-width:1.8; } </style>

@@ -13,10 +13,11 @@ const revealedWorkIds = new Set<number>();
  * 桌面 ≥960px 双列：左图片舞台（页面底色，纵向渐进加载，翻页/全屏由 ImageViewer 自理）
  * + 右信息列（固定 320px 可滚动）；窄窗纵向堆叠（图片在上）。
  * 右列下段为可切换面板——相关推荐（默认）/ 评论，由顶栏评论按钮控制，评论按需分页拉取。
- * 相关推荐经 router.replace 原地跳转（watch 参数重拉）。
+ * 相关推荐经 router.push 保留来路（watch 参数重拉）。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
+import { goBack } from "../../router";
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../../stores/settings";
 import {
@@ -175,7 +176,7 @@ function routeKindOf(kind: BrowseWorkItem["kind"]): ListWorkKind {
 }
 
 function openRelated(target: BrowseWorkItem): void {
-  void router.replace(`/browse/work/${routeKindOf(target.kind)}/${target.id}`);
+  void router.push(`/browse/work/${routeKindOf(target.kind)}/${target.id}`);
 }
 
 function openAuthor(): void {
@@ -191,12 +192,6 @@ function openSeries(): void {
   const series = detail.value?.series;
   // 作品详情（illust/manga）系列导航 → 应用内系列分集页 illust 段
   if (series) void router.push(`/browse/series/illust/${series.id}`);
-}
-
-/** 无应用内历史（直达深链）时兜底回浏览首页。 */
-function goBack(): void {
-  if (window.history.state && typeof window.history.state.back === "string") router.back();
-  else void router.push("/browse/home");
 }
 
 /** 用系统默认浏览器打开 pixiv 原页。 */
