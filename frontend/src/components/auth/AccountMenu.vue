@@ -34,6 +34,10 @@
           <span class="menu-label">{{ t('settings.title') }}</span>
           <svg class="menu-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 6 6 6-6 6" /></svg>
         </button>
+        <button role="menuitem" class="menu-item" :disabled="updateChecking" @click="checkUpdate()">
+          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></svg>
+          <span class="menu-label">{{ t('auth.checkUpdate') }}</span>
+        </button>
         <hr class="menu-divider" />
         <div class="menu-meta">
           <span class="menu-version">{{ t('auth.versionLabel', { version: appVersion }) }}</span>
@@ -55,6 +59,14 @@
         <md-filled-button @click="confirmLogout">{{ t('auth.logout') }}</md-filled-button>
       </div>
     </dialog>
+    <dialog ref="updateDialog" class="m3-dialog update-dialog" @close="updateConfirmOpen = false">
+      <h2>{{ t('auth.updateAvailableTitle') }}</h2>
+      <p>{{ t('auth.updateAvailableText', { latest: updateInfo.latest_version, current: updateInfo.current_version }) }}</p>
+      <div class="m3-row dialog-actions">
+        <md-text-button @click="cancelUpdate">{{ t('common.cancel') }}</md-text-button>
+        <md-filled-button @click="gotoUpdate">{{ t('auth.gotoUpdate') }}</md-filled-button>
+      </div>
+    </dialog>
   </div>
 </template>
 
@@ -63,7 +75,8 @@
  * 账号菜单：侧栏底部头像 chip + 锚定其上方的轻量弹出菜单（无深色 scrim，
  * 透明遮罩点击外部关闭，Esc 关闭）。内容 = 账号列表（当前 ✓，点击切换）/
  * 添加账号（emit 给 LoginDialog）+ 分隔线 + 「设置」入口（emit 出去由 App 打开
- * 模态设置弹窗）+ meta 行（版本回显 + GitHub 主页入口）+ 退出登录。
+ * 模态设置弹窗）+「检查更新」（有新版本弹确认弹窗，无更新/失败静默或提示）
+ * + meta 行（版本回显 + GitHub 主页入口）+ 退出登录。
  * 头像/首字母回退逻辑迁自原 AccountMenu 与抽屉。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -72,7 +85,8 @@ import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import SidebarIcon from "../navigation/SidebarIcon.vue";
 import { useAuthStore } from "../../stores/auth";
-import { errorMessage, type AccountEntry } from "../../api/tauri";
+import { errorMessage, isTauri, type AccountEntry } from "../../api/tauri";
+import { checkAppUpdate, type UpdateCheckInfo } from "../../api/appUpdate";
 import { notify } from "../../ui/notify";
 
 defineProps<{ collapsed: boolean }>();
@@ -80,6 +94,10 @@ const emit = defineEmits<{ (e: "add-account"): void; (e: "open-settings"): void 
 const { t } = useI18n(); const authStore = useAuthStore();
 const show = ref(false); const popover = ref<HTMLElement | null>(null);
 const logoutDialog = ref<HTMLDialogElement | null>(null); const logoutConfirmOpen = ref(false);
+const updateDialog = ref<HTMLDialogElement | null>(null); const updateConfirmOpen = ref(false);
+const updateChecking = ref(false);
+/** 弹窗正文始终要渲染版本插值，因此给一个安全的占位初始值而非 null。 */
+const updateInfo = ref<UpdateCheckInfo>({ has_update: false, current_version: "--", latest_version: "--", release_url: "" });
 const avatarFailed = ref(false); const avatarSrc = computed(() => avatarFailed.value ? "" : authStore.avatarUrl);
 
 const accountLabel = computed(() => authStore.isLoggedIn ? authStore.pixivId || authStore.name : t("auth.accounts"));
@@ -89,8 +107,40 @@ watch(() => authStore.avatarUrl, () => { avatarFailed.value = false; });
 const GITHUB_HOME = "https://github.com/gbandszxc/pixiv-tool";
 /** 版本回显动态读真实 app 版本；非 Tauri 环境读不到时保持占位符。 */
 const appVersion = ref("--");
-onMounted(async () => { try { appVersion.value = await getVersion(); } catch { /* 非 Tauri 环境 */ } });
+let startupUpdateTimer: number | undefined;
+onMounted(async () => {
+  try { appVersion.value = await getVersion(); } catch { /* 非 Tauri 环境 */ }
+  // 启动 3s 后静默检查一次更新：仅发现新版本时弹窗，无更新/失败完全静默。
+  if (isTauri()) startupUpdateTimer = window.setTimeout(() => {
+    checkAppUpdate().then((info) => { if (info.has_update) showUpdateDialog(info); }).catch(() => {});
+  }, 3000);
+});
+onBeforeUnmount(() => window.clearTimeout(startupUpdateTimer));
 async function openGitHub() { close(); try { await openUrl(GITHUB_HOME); } catch (error) { notify(errorMessage(error) || t("auth.githubOpenFailed")); } }
+
+/** 有新版本时记录信息并弹确认弹窗（手动检查与启动静默检查共用）。 */
+function showUpdateDialog(info: UpdateCheckInfo) { updateInfo.value = info; updateDialog.value?.showModal(); }
+/** 手动检查更新：期间菜单项 disabled 防重复点击；结果分支弹窗或提示。 */
+async function checkUpdate() {
+  if (updateChecking.value) return;
+  updateChecking.value = true;
+  try {
+    const info = await checkAppUpdate();
+    if (info.has_update) showUpdateDialog(info);
+    else notify(t("auth.updateUpToDate"));
+  } catch (error) {
+    notify(errorMessage(error) || t("auth.updateCheckFailed"));
+  } finally {
+    updateChecking.value = false;
+  }
+}
+function cancelUpdate() { updateDialog.value?.close(); }
+/** 前往更新：关弹窗并打开发布页；打开失败给出可读提示。 */
+async function gotoUpdate() {
+  updateDialog.value?.close();
+  try { await openUrl(updateInfo.value.release_url); }
+  catch (error) { notify(errorMessage(error) || t("auth.updateOpenFailed")); }
+}
 
 function toggle() { show.value = !show.value; }
 function close() { show.value = false; }
