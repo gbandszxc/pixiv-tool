@@ -418,7 +418,7 @@ export default {
     },
     search: {
       placeholder: "搜索插画 / 漫画 / 小说，或粘贴链接、ID",
-      help: "支持粘贴 Pixiv 链接或 ID；纯数字按作品 ID 处理",
+      help: "支持粘贴 Pixiv 链接或 ID；纯数字按上方所选类型打开详情",
       typeLabel: "类型",
       typeIllust: "插画",
       typeManga: "漫画",

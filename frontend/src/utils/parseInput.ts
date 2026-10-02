@@ -6,12 +6,16 @@
  *
  * | 输入形态                                | 识别为     | 跳转路由                      |
  * |----------------------------------------|-----------|-------------------------------|
- * | ① 纯数字                                | 作品       | /browse/work/illust/{id}      |
+ * | ① 纯数字                                | 按 numericKind 归属（见下）      |
  * | ② URL 含 /artworks/{id}                | 插画/漫画   | /browse/work/illust/{id}      |
  * | ③ URL 含 /users/{id}                   | 用户主页    | /browse/user/{id}             |
  * | ④ novel/show.php?id= 或 /novel/{id}    | 小说       | /browse/work/novel/{id}       |
  * | ⑤ /novel/series/{id}                   | 小说系列    | /browse/series/novel/{id}     |
  * | ⑥ /user/{uid}/series/{sid}             | 插画/漫画系列 | /browse/series/illust/{sid}   |
+ *
+ * ① 纯数字自身不带类型信息，按调用方传入的 numericKind（搜索页的类型 tab）归属：
+ * illust → /browse/work/illust/{id}，manga → /browse/work/manga/{id}，
+ * novel → /browse/work/novel/{id}；缺省 illust（保持 V1 约定）。
  *
  * 边界处理：
  * - 尾随斜杠：`/artworks/123/` 仍命中（正则不锚定结尾）；
@@ -24,10 +28,14 @@
  */
 export type ParsedBrowseInput =
   | { type: "illust-work"; id: number }
+  | { type: "manga-work"; id: number }
   | { type: "novel-work"; id: number }
   | { type: "user"; id: number }
   | { type: "novel-series"; id: number }
   | { type: "illust-series"; id: number };
+
+/** 纯数字输入的归属类型（搜索页的类型 tab；决定纯数字落到哪类作品详情）。 */
+export type NumericKind = "illust" | "manga" | "novel";
 
 /** 可选的 pixiv 语言前缀：`en/`、`ja/`、`zh-cn/` 等（1-2 段小写字母 + 斜杠）。 */
 const LOCALE_PREFIX = "(?:[a-z]{2}(?:-[a-z]{2})?/)?";
@@ -58,8 +66,12 @@ function toId(raw: string): number | null {
 /**
  * 解析搜索框输入；命中返回 `{type, id}`，识别不出返回 null（按普通关键词搜索）。
  *
+ * @param numericKind 纯数字输入的归属（默认 "illust"）；链接形态自带类型，不受影响。
+ *
  * @example
  * parseBrowseInput("  123456 ")            // { type: "illust-work", id: 123456 }
+ * parseBrowseInput("  123456 ", "novel")   // { type: "novel-work", id: 123456 }
+ * parseBrowseInput("  123456 ", "manga")   // { type: "manga-work", id: 123456 }
  * parseBrowseInput("https://www.pixiv.net/en/artworks/123456/") // { type: "illust-work", id: 123456 }
  * parseBrowseInput("pixiv.net/users/11")   // { type: "user", id: 11 }
  * parseBrowseInput("www.pixiv.net/novel/show.php?id=22&w=1#c") // { type: "novel-work", id: 22 }
@@ -68,14 +80,17 @@ function toId(raw: string): number | null {
  * parseBrowseInput("user/11/series/22")    // { type: "illust-series", id: 22 }
  * parseBrowseInput("風景 插画")             // null（关键词）
  */
-export function parseBrowseInput(input: string): ParsedBrowseInput | null {
+export function parseBrowseInput(input: string, numericKind: NumericKind = "illust"): ParsedBrowseInput | null {
   const text = input.trim();
   if (!text) return null;
 
-  // ① 纯数字 → 作品 ID（V1 约定按作品处理，走插画详情；小说/用户请粘贴对应链接）
+  // ① 纯数字 → 按调用方选中的类型归属（搜索页类型 tab）；小说/用户链接请粘贴对应 URL
   if (/^\d+$/.test(text)) {
     const id = toId(text);
-    return id ? { type: "illust-work", id } : null;
+    if (!id) return null;
+    if (numericKind === "novel") return { type: "novel-work", id };
+    if (numericKind === "manga") return { type: "manga-work", id };
+    return { type: "illust-work", id };
   }
 
   // 链接形态：按特异度从高到低依次匹配

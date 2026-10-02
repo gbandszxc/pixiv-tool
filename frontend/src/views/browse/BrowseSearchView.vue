@@ -8,7 +8,8 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   状态并自动搜索；执行搜索或切换过滤时 `router.replace` 写回（单一真相源是
  *   路由查询参数，本地 ref 仅作受控回显）。
  * - ID 直达：输入先经 `parseBrowseInput` 解析，命中链接/纯数字直接跳站内路由，
- *   不发起搜索；未命中按关键词搜索。
+ *   不发起搜索；纯数字按当前类型 tab（插画/漫画/小说）落到对应详情，链接形态
+ *   自带类型不受 tab 影响；未命中按关键词搜索。
  * - 端点映射：kind=illust|manga → artworks 检索（type=illust|manga）；
  *   kind=novel → novels 检索（不传 type）。
  * - 结果 WorkGrid + 「约 N 件」total + next_page 无限加载。
@@ -160,10 +161,10 @@ function commit(): void {
   void router.replace({ query: buildQuery() });
 }
 
-/** 回车 / 搜索按钮：先试 ID 直达，未命中按关键词搜索（同参数重按视为重试）。 */
+/** 回车 / 搜索按钮：先试 ID 直达（纯数字按当前类型 tab 归属），未命中按关键词搜索（同参数重按视为重试）。 */
 function doSearch(): void {
   const raw = word.value.trim();
-  const target = parseBrowseInput(raw);
+  const target = parseBrowseInput(raw, kind.value);
   if (target) {
     pushTarget(target);
     return;
@@ -201,6 +202,9 @@ function pushTarget(target: ParsedBrowseInput): void {
   switch (target.type) {
     case "illust-work":
       void router.push(`/browse/work/illust/${target.id}`);
+      break;
+    case "manga-work":
+      void router.push(`/browse/work/manga/${target.id}`);
       break;
     case "novel-work":
       void router.push(`/browse/work/novel/${target.id}`);

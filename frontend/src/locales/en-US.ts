@@ -418,7 +418,7 @@ export default {
     },
     search: {
       placeholder: "Search illustrations / manga / novels, or paste a link or ID",
-      help: "Paste a Pixiv link or ID; digits alone are treated as an artwork ID",
+      help: "Paste a Pixiv link or ID; digits alone open details of the selected type",
       typeLabel: "Type",
       typeIllust: "Illustrations",
       typeManga: "Manga",
