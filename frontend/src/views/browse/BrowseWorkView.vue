@@ -234,7 +234,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
     <!-- 顶部条：返回 + 标题/作者 + 收藏 / 评论（面板切换）/ 返填表单 / 在浏览器中打开 -->
     <header class="work-topbar">
       <md-icon-button :aria-label="t('browse.work.back')" :title="t('browse.work.back')" @click="goBack">
-        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
       </md-icon-button>
       <div class="topbar-main">
         <template v-if="loading">
@@ -272,11 +272,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
           :fill="panel === 'comments' ? 'currentColor' : 'none'"
           viewBox="0 0 24 24"
           stroke="currentColor"
+          stroke-width="2"
           stroke-linecap="round"
           stroke-linejoin="round"
           aria-hidden="true"
         >
-          <path d="M20 5H4a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h3v4l5-4h8a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+          <!-- lucide message-square -->
+          <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
         </svg>
       </md-icon-button>
       <!-- 返填到插画抓取页：来源=单篇，ID=当前作品 -->
@@ -285,8 +287,9 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
         :title="t('browse.hooks.fillIllustForm')"
         @click="fillDownloadForm({ form: 'illustration', sourceType: 'single', sourceId: props.id })"
       >
-        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" />
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <!-- lucide download -->
+          <path d="M12 15V3" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" />
         </svg>
       </md-icon-button>
       <md-icon-button
@@ -294,10 +297,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
         :title="t('browse.hooks.openInBrowser')"
         @click="openInPixiv"
       >
-        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-          <polyline points="15 3 21 3 21 9" />
-          <line x1="10" y1="14" x2="21" y2="3" />
+        <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <!-- lucide square-arrow-out-up-right -->
+          <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" />
+          <path d="m21 3-9 9" />
+          <path d="M15 3h6v6" />
         </svg>
       </md-icon-button>
     </header>
@@ -343,15 +347,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
           <!-- 计数行 -->
           <div class="count-row">
             <span class="count" :title="t('browse.work.views')">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" /></svg>
               {{ formatCount(item.view_count) }}
             </span>
             <span class="count" :title="t('browse.work.bookmarks')">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z" /></svg>
               {{ formatCount(item.bookmark_count) }}
             </span>
             <span class="count" :title="t('browse.work.likes')">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" /></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" /></svg>
               {{ formatCount(item.like_count) }}
             </span>
           </div>
@@ -406,11 +410,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   flex-shrink: 0;
 }
 
-/* 顶栏图标动作：统一 20px 线性图标（stroke 1.8），点击域由 md-icon-button（40px）承载 */
+/* 顶栏图标动作：统一 20px 线性图标（stroke 2，lucide 官方路径），点击域由 md-icon-button（40px）承载 */
 .bar-icon {
   width: 20px;
   height: 20px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 .topbar-main {

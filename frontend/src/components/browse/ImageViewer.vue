@@ -575,9 +575,10 @@ watch(
 
     <!-- ugoira 说明行 -->
     <p v-if="ugoira" class="ugoira-note">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="12" cy="12" r="9" />
-        <polygon points="10 8.5 16 12 10 15.5" fill="currentColor" stroke="none" />
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <!-- lucide circle-play -->
+        <path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z" />
+        <circle cx="12" cy="12" r="10" />
       </svg>
       {{ t("browse.work.ugoiraNote") }}
     </p>
@@ -628,11 +629,11 @@ watch(
                  阅读方向一致；双图 / 方向开关不是方向性控件，不参与镜像 -->
             <div class="fs-pager" :class="{ 'is-rtl': rtlActive }">
               <md-icon-button :disabled="!canPrev" :aria-label="t('browse.work.prevPage')" :title="t('browse.work.prevPage')" @click="stepPage(-1)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline :points="rtlActive ? '9 18 15 12 9 6' : '15 18 9 12 15 6'" /></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="rtlActive ? 'm9 18 6-6-6-6' : 'm15 18-6-6 6-6'" /></svg>
               </md-icon-button>
               <span class="fs-label" aria-live="polite">{{ pageLabel }}</span>
               <md-icon-button :disabled="!canNext" :aria-label="t('browse.work.nextPage')" :title="t('browse.work.nextPage')" @click="stepPage(1)">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline :points="rtlActive ? '15 18 9 12 15 6' : '9 18 15 12 9 6'" /></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="rtlActive ? 'm15 18-6-6 6-6' : 'm9 18 6-6-6-6'" /></svg>
               </md-icon-button>
             </div>
             <span class="fs-divider" aria-hidden="true"></span>
@@ -644,10 +645,10 @@ watch(
               :title="t('browse.work.spread')"
               @click="toggleSpread"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="7" y="4" width="10" height="16" rx="1.5" />
-                <rect v-if="spreadOn" x="1.5" y="6" width="4" height="12" rx="1" />
-                <rect v-if="spreadOn" x="18.5" y="6" width="4" height="12" rx="1" />
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <!-- lucide book-open：双图（跨页） -->
+                <path d="M12 5v16" />
+                <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" />
               </svg>
             </md-icon-button>
             <!-- 阅读方向：从右往左 / 从左往右（仅双图模式） -->
@@ -657,9 +658,10 @@ watch(
               :title="t('browse.work.readDir', { dir: rtl ? t('browse.work.dirRtl') : t('browse.work.dirLtr') })"
               @click="toggleRtl"
             >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path :d="rtl ? 'M20 12H4' : 'M4 12h16'" />
-                <polyline :points="rtl ? '10 6 4 12 10 18' : '14 6 20 12 14 18'" />
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <!-- 阅读方向：从右往左 → lucide arrow-left-to-line；从左往右 → lucide arrow-right-to-line -->
+                <template v-if="rtl"><path d="M3 19V5" /><path d="m13 6-6 6 6 6" /><path d="M7 12h14" /></template>
+                <template v-else><path d="M17 12H3" /><path d="m11 18 6-6-6-6" /><path d="M21 5v14" /></template>
               </svg>
             </md-icon-button>
           </div>
@@ -673,8 +675,9 @@ watch(
             :title="t('browse.work.exitFullscreen')"
             @click="closeFullscreen"
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <line x1="6" y1="6" x2="18" y2="18" /><line x1="18" y1="6" x2="6" y2="18" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- lucide x -->
+              <path d="M18 6 6 18" /><path d="m6 6 12 12" />
             </svg>
           </md-icon-button>
         </div>
@@ -1136,6 +1139,6 @@ watch(
 .fs-controls svg {
   width: 20px;
   height: 20px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 </style>

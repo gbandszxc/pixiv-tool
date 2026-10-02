@@ -98,11 +98,13 @@ async function remove(): Promise<void> {
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
+        stroke-width="2"
         stroke-linecap="round"
         stroke-linejoin="round"
         aria-hidden="true"
       >
-        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+        <!-- lucide heart -->
+        <path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" />
       </svg>
       <span class="bm-label">{{ label }}</span>
       <span v-if="bookmarked && isPrivate" class="bm-badge">{{ t("browse.bookmark.privateBadge") }}</span>
@@ -110,23 +112,27 @@ async function remove(): Promise<void> {
     <div class="bm-popup" role="menu" :aria-label="t('browse.bookmark.actionMenu')">
       <template v-if="!bookmarked">
         <button class="bm-option" type="button" role="menuitem" :disabled="busy" @click="add(0)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide heart -->
+            <path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" />
           </svg>
           {{ t("browse.bookmark.addPublic") }}
         </button>
         <button class="bm-option" type="button" role="menuitem" :disabled="busy" @click="add(1)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="4.5" y="10.5" width="15" height="10" rx="2" />
-            <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide lock -->
+            <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
           </svg>
           {{ t("browse.bookmark.addPrivate") }}
         </button>
       </template>
       <button v-else class="bm-option" type="button" role="menuitem" :disabled="busy" @click="remove()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
-          <line x1="4" y1="4" x2="20" y2="20" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <!-- lucide heart-off -->
+          <path d="M10.5 4.893a5.5 5.5 0 0 1 1.091.931.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 1.872-1.002 3.356-2.187 4.655" />
+          <path d="m16.967 16.967-3.459 3.346a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5a5.5 5.5 0 0 1 2.747-4.761" />
+          <path d="m2 2 20 20" />
         </svg>
         {{ t("browse.bookmark.removeBookmark") }}
       </button>
@@ -182,7 +188,7 @@ async function remove(): Promise<void> {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 .bm-heart.filled {
@@ -247,7 +253,7 @@ async function remove(): Promise<void> {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
-  stroke-width: 1.8;
+  stroke-width: 2;
   color: var(--ink-muted);
 }
 

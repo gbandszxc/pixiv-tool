@@ -270,9 +270,11 @@ onBeforeUnmount(() => {
                   @error="avatarBroken = true"
                 />
                 <div v-else class="avatar-fallback">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <circle cx="12" cy="8" r="4" />
-                    <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <!-- lucide circle-user-round -->
+                    <path d="M17.925 20.056a6 6 0 0 0-11.851.001" />
+                    <circle cx="12" cy="11" r="4" />
+                    <circle cx="12" cy="12" r="10" />
                   </svg>
                 </div>
               </div>
@@ -292,10 +294,11 @@ onBeforeUnmount(() => {
                 :title="t('browse.hooks.openInBrowser')"
                 @click="openInPixiv"
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M14 4h6v6" />
-                  <path d="M20 4 11 13" />
-                  <path d="M19 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" />
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <!-- lucide square-arrow-out-up-right -->
+                  <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" />
+                  <path d="m21 3-9 9" />
+                  <path d="M15 3h6v6" />
                 </svg>
               </md-outlined-icon-button>
             </div>
@@ -399,7 +402,7 @@ onBeforeUnmount(() => {
 .avatar-fallback svg {
   width: 32px;
   height: 32px;
-  stroke-width: 1.6;
+  stroke-width: 2;
 }
 
 .card-id {
@@ -443,7 +446,7 @@ onBeforeUnmount(() => {
 .open-browse svg {
   width: 20px;
   height: 20px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 /* ===== 简介块 ===== */

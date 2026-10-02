@@ -130,9 +130,9 @@ function handleFillForm(): void {
         />
         <span v-if="badgeText" class="badge" :class="{ restricted }">{{ badgeText }}</span>
         <span v-if="item.kind === 'novel'" class="kind-mark" :title="t('nav.browseNovel')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v18H6.5A1.5 1.5 0 0 1 5 19.5z" />
-            <path d="M5 19.5c0-.83.67-1.5 1.5-1.5H19" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide book -->
+            <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" />
           </svg>
         </span>
       </div>
@@ -149,10 +149,11 @@ function handleFillForm(): void {
           :title="t('browse.hooks.openInBrowser')"
           @click="handleOpenInBrowser"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-            <polyline points="15 3 21 3 21 9" />
-            <line x1="10" y1="14" x2="21" y2="3" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide square-arrow-out-up-right -->
+            <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" />
+            <path d="m21 3-9 9" />
+            <path d="M15 3h6v6" />
           </svg>
         </button>
         <button
@@ -162,8 +163,11 @@ function handleFillForm(): void {
           :title="fillLabel"
           @click="handleFillForm"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" />
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide download -->
+            <path d="M12 15V3" />
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <path d="m7 10 5 5 5-5" />
           </svg>
         </button>
       </template>
@@ -176,8 +180,9 @@ function handleFillForm(): void {
         :title="t('browse.bookmark.removeBookmark')"
         @click="emit('remove-bookmark')"
       >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <!-- lucide heart -->
+          <path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" />
         </svg>
       </button>
     </div>
@@ -235,7 +240,7 @@ function handleFillForm(): void {
 .cover-action svg {
   width: 16px;
   height: 16px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -339,7 +344,7 @@ function handleFillForm(): void {
 .kind-mark svg {
   width: 13px;
   height: 13px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 .title,

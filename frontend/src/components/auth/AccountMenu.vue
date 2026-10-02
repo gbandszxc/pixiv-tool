@@ -12,7 +12,7 @@
       <img v-if="avatarSrc" class="avatar avatar-image" :src="avatarSrc" alt="" @error="avatarFailed = true" />
       <span v-else class="avatar">{{ chipInitial }}</span>
       <span v-if="!collapsed" class="account-name">{{ accountLabel }}</span>
-      <svg v-if="!collapsed" class="chip-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 6-6 6 6" /></svg>
+      <svg v-if="!collapsed" class="chip-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6" /></svg>
     </button>
     <div v-if="show" class="menu-backdrop" @click="close()" />
     <Transition name="menu">
@@ -22,17 +22,17 @@
           <img v-if="account.avatar_url" class="avatar avatar-image" :src="account.avatar_url" alt="" />
           <span v-else class="avatar">{{ accountInitial(account) }}</span>
           <span class="menu-label">{{ displayName(account) }}</span>
-          <span v-if="account.user_id === authStore.activeAccountId" class="menu-check" aria-hidden="true">✓</span>
+          <span v-if="account.user_id === authStore.activeAccountId" class="menu-check" aria-hidden="true"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg></span>
         </button>
         <button role="menuitem" class="menu-item" @click="addAccount()">
-          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="M12 5v14" /></svg>
           <span class="menu-label">{{ t('auth.addAccount') }}</span>
         </button>
         <hr class="menu-divider" />
         <button role="menuitem" class="menu-item" @click="openSettings()">
           <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /><circle cx="12" cy="12" r="3" /></svg>
           <span class="menu-label">{{ t('settings.title') }}</span>
-          <svg class="menu-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m10 6 6 6-6 6" /></svg>
+          <svg class="menu-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
         </button>
         <button role="menuitem" class="menu-item" :disabled="updateChecking" @click="checkUpdate()">
           <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>

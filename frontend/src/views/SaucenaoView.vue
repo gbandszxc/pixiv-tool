@@ -235,10 +235,11 @@ function onThumbError(index: number): void {
           <span class="preview-filename" :title="fileName">{{ fileName }}</span>
         </template>
         <template v-else>
-          <svg class="preview-placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="4" y="5" width="16" height="14" rx="2" />
-            <circle cx="9" cy="10" r="1.5" />
-            <path d="m6.5 16.5 4-4 3 3 2.5-2.5 3 3" />
+          <svg class="preview-placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide image -->
+            <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+            <circle cx="9" cy="9" r="2" />
+            <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
           </svg>
           <span class="preview-placeholder-text">{{ t("saucenao.previewEmpty") }}</span>
         </template>
@@ -249,9 +250,10 @@ function onThumbError(index: number): void {
           :title="t('saucenao.removeImage')"
           @click="removeImage"
         >
-          <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M6 6l12 12" />
+          <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide x -->
             <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
           </svg>
         </md-icon-button>
       </div>
@@ -322,10 +324,11 @@ function onThumbError(index: number): void {
             @error="onThumbError(i)"
           />
           <div v-else class="thumb-placeholder" :title="t('saucenao.thumbUnavailable')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="4" y="5" width="16" height="14" rx="2" />
-              <circle cx="9" cy="10" r="1.5" />
-              <path d="m6.5 16.5 4-4 3 3 2.5-2.5 3 3" />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- lucide image -->
+              <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+              <circle cx="9" cy="9" r="2" />
+              <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
             </svg>
           </div>
         </div>
@@ -350,10 +353,11 @@ function onThumbError(index: number): void {
             :title="t('saucenao.openOriginal')"
             @click="openResult(item)"
           >
-            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-              <polyline points="15 3 21 3 21 9" />
-              <line x1="10" y1="14" x2="21" y2="3" />
+            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- lucide square-arrow-out-up-right -->
+              <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" />
+              <path d="m21 3-9 9" />
+              <path d="M15 3h6v6" />
             </svg>
           </md-icon-button>
         </div>
@@ -421,7 +425,7 @@ function onThumbError(index: number): void {
 .preview-placeholder-icon {
   width: 40px;
   height: 40px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 .preview-placeholder-text {
@@ -585,7 +589,7 @@ function onThumbError(index: number): void {
 .thumb-placeholder svg {
   width: 32px;
   height: 32px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 .item-main {
@@ -651,11 +655,11 @@ function onThumbError(index: number): void {
   gap: var(--space-xs);
 }
 
-/* 图标动作统一 20px 线性图标（stroke 1.8），与仓库其他视图一致 */
+/* 图标动作统一 20px 线性图标（stroke 2，lucide 官方路径），与仓库其他视图一致 */
 .bar-icon {
   width: 20px;
   height: 20px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 @media (max-width: 640px) {

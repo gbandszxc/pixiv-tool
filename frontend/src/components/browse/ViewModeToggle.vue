@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
- * 系列分集页·展示模式切换：宫格 / 列表两枚自绘 SVG icon toggle
- * （grid_view / view_list，stroke 1.8，与 SidebarIcon 同风格，不引外部图标库）。
+ * 系列分集页·展示模式切换：宫格 / 列表两枚 inline SVG icon toggle
+ * （lucide.dev 官方 layout-grid / list 路径，内联且零依赖、不引外部图标库）。
  * 选中态 secondary-container 底 / on-secondary-container，未选中透明底 + ink；
  * 30px、aria-pressed + aria-label、focus-visible primary 2px 外环。
  */
@@ -30,11 +30,12 @@ function select(mode: SeriesViewMode): void {
       :title="t('browse.series.viewGrid')"
       @click="select('grid')"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
-        <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
-        <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
-        <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <!-- lucide layout-grid -->
+        <rect width="7" height="7" x="3" y="3" rx="1" />
+        <rect width="7" height="7" x="14" y="3" rx="1" />
+        <rect width="7" height="7" x="14" y="14" rx="1" />
+        <rect width="7" height="7" x="3" y="14" rx="1" />
       </svg>
     </button>
     <button
@@ -46,13 +47,14 @@ function select(mode: SeriesViewMode): void {
       :title="t('browse.series.viewList')"
       @click="select('list')"
     >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3.5" y="4.5" width="4" height="4" rx="1" />
-        <line x1="10.5" y1="6.5" x2="20.5" y2="6.5" />
-        <rect x="3.5" y="10" width="4" height="4" rx="1" />
-        <line x1="10.5" y1="12" x2="20.5" y2="12" />
-        <rect x="3.5" y="15.5" width="4" height="4" rx="1" />
-        <line x1="10.5" y1="17.5" x2="20.5" y2="17.5" />
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <!-- lucide list -->
+        <path d="M3 5h.01" />
+        <path d="M3 12h.01" />
+        <path d="M3 19h.01" />
+        <path d="M8 5h13" />
+        <path d="M8 12h13" />
+        <path d="M8 19h13" />
       </svg>
     </button>
   </div>
@@ -97,7 +99,7 @@ function select(mode: SeriesViewMode): void {
 .mode-btn svg {
   width: 18px;
   height: 18px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 @media (prefers-reduced-motion: reduce) {

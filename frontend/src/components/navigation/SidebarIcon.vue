@@ -1,4 +1,7 @@
 <script setup lang="ts">
+/**
+ * 侧栏图标：全部使用 lucide.dev 官方 path 数据（内联，零依赖，不引外部图标库）。
+ */
 export type SidebarIconName =
   | "crawl"
   | "tasks"
@@ -27,88 +30,92 @@ defineProps<{
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
+    stroke-width="2"
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"
   >
     <template v-if="name === 'crawl'">
-      <path d="M4 5.5c2.4-.9 4.9-.5 7 1.1v12c-2.1-1.6-4.6-2-7-1.1z" />
-      <path d="M20 5.5c-2.4-.9-4.9-.5-7 1.1v12c2.1-1.6 4.6-2 7-1.1z" />
-      <path d="M11 6.6h2" />
+      <!-- lucide book-open -->
+      <path d="M12 5v16" />
+      <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" />
     </template>
     <template v-else-if="name === 'tasks'">
-      <path d="M9 5h6" />
-      <path d="M9 3h6v4H9z" />
-      <path d="M7 5H5v16h14V5h-2" />
-      <path d="m8 13 1.5 1.5L12 11" />
-      <path d="M14 13h3" />
-      <path d="m8 18 1.5 1.5L12 16" />
-      <path d="M14 18h3" />
+      <!-- lucide clipboard-check -->
+      <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+      <path d="m9 14 2 2 4-4" />
     </template>
     <template v-else-if="name === 'history'">
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="M12 7v5l3.5 2" />
-      <path d="M6.4 5.6 4.8 4" />
+      <!-- lucide history -->
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+      <path d="M3 3v5h5" />
+      <path d="M12 7v5l4 2" />
     </template>
     <template v-else-if="name === 'home'">
-      <path d="m3 10.2 9-7 9 7" />
-      <path d="M5.5 8.5V20a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V8.5" />
-      <path d="M10 21v-6h4v6" />
+      <!-- lucide house -->
+      <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" />
+      <path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
     </template>
     <template v-else-if="name === 'image'">
-      <rect x="4" y="5" width="16" height="14" rx="2" />
-      <circle cx="9" cy="10" r="1.5" />
-      <path d="m6.5 16.5 4-4 3 3 2.5-2.5 3 3" />
+      <!-- lucide image -->
+      <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+      <circle cx="9" cy="9" r="2" />
+      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
     </template>
     <template v-else-if="name === 'manga'">
-      <rect x="4" y="4.5" width="16" height="15" rx="2" />
-      <path d="M12 4.5v15" />
-      <path d="M4 12.5h8" />
-      <path d="M15 8.5h2.5" />
-      <path d="M15 15.5h2.5" />
+      <!-- lucide columns-2 -->
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M12 3v18" />
     </template>
     <template v-else-if="name === 'novel'">
-      <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v18H6.5A1.5 1.5 0 0 1 5 19.5z" />
-      <path d="M5 19.5c0-.83.67-1.5 1.5-1.5H19" />
-      <path d="M9 7.5h6" />
-      <path d="M9 11h6" />
+      <!-- lucide book -->
+      <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20" />
     </template>
     <template v-else-if="name === 'discover'">
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="m15.2 8.8-1.7 4.7-4.7 1.7 1.7-4.7z" />
+      <!-- lucide compass -->
+      <circle cx="12" cy="12" r="10" />
+      <path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z" />
     </template>
     <template v-else-if="name === 'feed'">
-      <path d="M5 11.5a7.5 7.5 0 0 1 7.5 7.5" />
-      <path d="M5 5.5A13.5 13.5 0 0 1 18.5 19" />
-      <circle cx="6.2" cy="17.8" r="1.3" />
+      <!-- lucide rss -->
+      <path d="M4 11a9 9 0 0 1 9 9" />
+      <path d="M4 4a16 16 0 0 1 16 16" />
+      <circle cx="5" cy="19" r="1" />
     </template>
     <template v-else-if="name === 'watchlist'">
-      <path d="M6 9.5a6 6 0 0 1 12 0c0 4.6 1.8 5.8 1.8 5.8H4.2S6 14.1 6 9.5" />
-      <path d="M10.4 19.5a1.8 1.8 0 0 0 3.2 0" />
-      <path d="M12 3.5V2" />
+      <!-- lucide bell -->
+      <path d="M10.268 21a2 2 0 0 0 3.464 0" />
+      <path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326" />
     </template>
     <template v-else-if="name === 'search'">
-      <circle cx="11" cy="11" r="6.5" />
-      <path d="m20 20-4.4-4.4" />
+      <!-- lucide search -->
+      <path d="m21 21-4.34-4.34" />
+      <circle cx="11" cy="11" r="8" />
     </template>
     <template v-else-if="name === 'saucenao'">
-      <!-- 放大镜内含山形图片：以图识图（反搜图片找原图） -->
-      <circle cx="10.5" cy="10.5" r="6.75" />
-      <path d="m7 14 3-4.5 2.5 3.5 1.5-2" />
-      <path d="m15.4 15.4 4.6 4.6" />
+      <!-- lucide scan-search：以图识图（反搜图片找原图） -->
+      <path d="M3 7V5a2 2 0 0 1 2-2h2" />
+      <path d="M17 3h2a2 2 0 0 1 2 2v2" />
+      <path d="M21 17v2a2 2 0 0 1-2 2h-2" />
+      <path d="M7 21H5a2 2 0 0 1-2-2v-2" />
+      <circle cx="12" cy="12" r="3" />
+      <path d="m16 16-1.9-1.9" />
     </template>
     <template v-else-if="name === 'ranking'">
-      <path d="M9 20v-9h6v9" />
-      <path d="M4 20v-5h5" />
-      <path d="M15 20v-5h5v5" />
-      <path d="M3 20h18" />
+      <!-- lucide chart-no-axes-column -->
+      <path d="M5 21v-6" />
+      <path d="M12 21V3" />
+      <path d="M19 21V9" />
     </template>
     <template v-else-if="name === 'bookmark'">
-      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+      <!-- lucide heart -->
+      <path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5" />
     </template>
     <template v-else>
+      <!-- lucide settings（fallback） -->
+      <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
       <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-3v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-2.1-2.1.1-.1A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.5-1H5.3v-3h.2A1.7 1.7 0 0 0 7 10a1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h3v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1A1.7 1.7 0 0 0 19 10a1.7 1.7 0 0 0 1.5 1h.2v3h-.2a1.7 1.7 0 0 0-1.1 1z" />
     </template>
   </svg>
 </template>
@@ -118,6 +125,6 @@ defineProps<{
   display: block;
   width: 1em;
   height: 1em;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 </style>

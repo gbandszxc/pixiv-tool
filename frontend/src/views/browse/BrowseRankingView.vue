@@ -217,7 +217,7 @@ function openWork(item: BrowseWorkItem): void {
             :title="t('browse.ranking.prevDate')"
             @click="goDate(prevDate)"
           >
-            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
           </md-icon-button>
           <span class="date-text">{{ dateDisplay }}</span>
           <md-icon-button
@@ -226,7 +226,7 @@ function openWork(item: BrowseWorkItem): void {
             :title="t('browse.ranking.nextDate')"
             @click="goDate(nextDate)"
           >
-            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6" /></svg>
+            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
           </md-icon-button>
         </div>
       </div>
@@ -296,7 +296,7 @@ function openWork(item: BrowseWorkItem): void {
 .chevron {
   width: 20px;
   height: 20px;
-  stroke-width: 1.8;
+  stroke-width: 2;
 }
 
 .date-text {

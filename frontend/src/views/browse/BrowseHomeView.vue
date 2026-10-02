@@ -88,8 +88,11 @@ onMounted(initialLoad);
       <!-- 换一批降为文字按钮 + 线性刷新图标，弱化头部主次层级（图标风格对齐 HistoryView .row-actions） -->
       <md-text-button :disabled="loading || refreshing || exhausted" @click="shuffle">
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+          <!-- lucide refresh-cw -->
+          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
           <path d="M21 3v5h-5" />
+          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+          <path d="M8 16H3v5" />
         </svg>
         {{ refreshing ? t("browse.home.refreshing") : t("browse.home.refresh") }}
       </md-text-button>
