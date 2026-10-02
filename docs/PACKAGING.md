@@ -161,11 +161,12 @@ GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`�
    （仅本次构建环境内，不回写仓库）；**发版后需手动把仓库内四处版本号同步为
    刚发布的版本**：`tauri.conf.json` / `Cargo.toml` / `Cargo.lock` /
    `frontend/package.json`，否则本地 dev 构建与账号菜单版本回显仍是旧值
-3. 五路并行构建：
+3. 六路并行构建：
 
    | 任务 | Runner | 产物 |
    |---|---|---|
    | `windows-x64-msi` | `windows-latest` | MSI |
+   | `windows-arm64-msi` | `windows-11-arm` | MSI |
    | `macos-universal-dmg` | `macos-latest` | universal DMG（Intel + Apple Silicon） |
    | `macos-aarch64-dmg` | `macos-latest` | aarch64 DMG |
    | `linux-x64` | `ubuntu-22.04` | AppImage + deb + rpm |
@@ -173,14 +174,25 @@ GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`�
 
    Linux 基线固定 22.04（官方推荐的最老 WebKitGTK 4.1 基线，保证 glibc 下限）；
    arm64 走 GitHub **原生 arm64 runner** 编译，不做交叉编译。AppImage 的
-   linuxdeploy 在 arm64 上缺可靠支持，故 arm64 不出 AppImage。构建机额外装
+   linuxdeploy 在 arm64 上缺可靠支持，故 arm64 不出 AppImage。Linux 构建机额外装
    `cmake` / `rpm`（rpm 打包）与 `go`（BoringSSL 汇编，缺失时自动补装）
+
+   **Windows arm64 的 BoringSSL 汇编开关**：BoringSSL 的 win-aarch64 汇编
+   （`gen/bcm/*-armv8-win.S`）是 GNU 汇编器语法，上游要求用 Clang 汇编；原生 arm64
+   下 CMake 只会选到 MSVC 的 `armasm64`，汇编阶段必失败。btls-sys 自身只在
+   **Windows 交叉编译**时关汇编（`build/main.rs` 里 `OPENSSL_NO_ASM=YES`），原生
+   同架构构建不会关，因此发版 CI 经 btls-sys 的工具链文件入口
+   `CMAKE_TOOLCHAIN_FILE_aarch64_pc_windows_msvc` 注入
+   `src-tauri/cmake/btls-windows-arm64.cmake` 显式关闭汇编（走 C 实现，代价是 TLS
+   少了 ARMv8 汇编加速；本应用以网络 I/O 为主，无实质影响）。同架构 arm64 Windows
+   本地出包需自行 `export` 同一个环境变量；若将来要保留汇编，把该文件改为指定
+   `clang` 作 ASM 编译器即可（镜像自带 LLVM）
 4. **Release 正文拼装**：先取 `docs/releases/<版本>.md` 作为更新说明（无则跳过）
    创建 Release，再**读回平台实际存储的资产名**动态生成安装包表格并改正文（某种
    格式缺失则显示 `—`，不会产生死链）。之所以不按构建机上的文件名拼链接：GitHub
    会规整上传的资产名（`Pixiv Tool_1.1.0_x64_en-US.msi` → `Pixiv.Tool_1.1.0_x64_en-US.msi`），
    照原文件名拼出的 URL 会带空格、在 Markdown 中被截断。表格列固定为
-   架构 ×（Windows / macOS / Linux）
+   架构 ×（Windows / macOS / Linux）；Windows 列按 `_x64_` / `_arm64_` 区分两个 MSI
 5. **幂等覆盖**：发布阶段先删除同名 `v<版本>` Release 与 Tag 再重建，
    同版本号重复执行总是覆盖；版本号不变时无需清理即可重发
 
