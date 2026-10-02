@@ -14,7 +14,8 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   kind=novel → novels 检索（不传 type）。
  * - 结果 WorkGrid + 「约 N 件」total；页码分页（AppPagination）：接口每页 60 条
  *   固定，前端切 3 个显示页（20/页），接口页缓存在内存供跨页复用。
- * - 本页排序：点赞/收藏/浏览 三键升降序，仅对当前显示页 20 条本地排序；
+ * - 本页排序：维度（点赞/收藏/浏览）下拉 + 升降方向切换（SortDirectionToggle），
+ *   仅对当前显示页 20 条本地排序；
  *   三项计数列表接口不返回（官方页面亦逐项请求详情），按需经 browse_work_counts
  *   分批补取（全局限速），会话内缓存 + 进度提示，缺失项垫底。
  */
@@ -29,6 +30,7 @@ import {
   type WorkCounts,
 } from "../../api/browse";
 import AppPagination from "../../components/common/AppPagination.vue";
+import SortDirectionToggle from "../../components/common/SortDirectionToggle.vue";
 import SectionTabs from "../../components/browse/SectionTabs.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import { notify } from "../../ui/notify";
@@ -177,24 +179,15 @@ async function load(): Promise<void> {
 /** 整页替换后的收尾：回页首；处于计数排序时为新页补取计数。 */
 function afterLoad(): void {
   window.scrollTo({ top: 0 });
-  if (sortMode.value !== "default") void ensureCounts();
+  if (sortKey.value) void ensureCounts();
 }
 
 // ===== 本页排序（点赞 / 收藏 / 浏览 × 升/降；仅当前显示页本地排序）=====
 
 type SortKey = "like" | "bookmark" | "view";
-type SortMode = "default" | `${SortKey}_desc` | `${SortKey}_asc`;
-const SORT_MODES: readonly SortMode[] = [
-  "default",
-  "like_desc",
-  "like_asc",
-  "bookmark_desc",
-  "bookmark_asc",
-  "view_desc",
-  "view_asc",
-];
-
-const sortMode = ref<SortMode>("default");
+/** 本页排序维度：空串 = 默认顺序（接口顺序）；方向独立选择、跨维度保留。 */
+const sortKey = ref<"" | SortKey>("");
+const sortDir = ref<"asc" | "desc">("desc");
 
 /** 三项计数缓存（`kind:id` → counts）；会话级，跨搜索 / 翻页复用。 */
 const countsCache = new Map<string, WorkCounts>();
@@ -268,10 +261,9 @@ function metricOf(item: BrowseWorkItem, key: SortKey): number | null {
 /** 展示条目：默认 = 接口顺序；计数缺失项恒垫底。 */
 const sortedItems = computed<BrowseWorkItem[]>(() => {
   void countsVersion.value; // 建立响应式依赖（countsCache 为普通 Map）
-  const mode = sortMode.value;
-  if (mode === "default") return items.value;
-  const [key, dir] = mode.split("_") as [SortKey, "desc" | "asc"];
-  const sign = dir === "desc" ? -1 : 1;
+  const key = sortKey.value;
+  if (!key) return items.value;
+  const sign = sortDir.value === "desc" ? -1 : 1;
   return [...items.value].sort((a, b) => {
     const av = metricOf(a, key);
     const bv = metricOf(b, key);
@@ -282,10 +274,15 @@ const sortedItems = computed<BrowseWorkItem[]>(() => {
   });
 });
 
-function onSortChange(event: Event): void {
+function onSortKeyChange(event: Event): void {
   const value = (event.target as HTMLSelectElement).value;
-  sortMode.value = (SORT_MODES as readonly string[]).includes(value) ? (value as SortMode) : "default";
-  if (sortMode.value !== "default") void ensureCounts();
+  sortKey.value = value === "like" || value === "bookmark" || value === "view" ? value : "";
+  if (sortKey.value) void ensureCounts();
+}
+
+/** 方向切换：计数已就绪时由 sortedItems 立即重排（未选维度时控件禁用）。 */
+function onSortDirChange(dir: "asc" | "desc"): void {
+  sortDir.value = dir;
 }
 
 /** 翻页：整页替换（页码制）；回页首由 afterLoad 处理。 */
@@ -499,24 +496,26 @@ const typeTabs = computed(() => [
       <span v-if="countsLoading" class="counts-progress" role="status">
         {{ t("browse.search.countsLoading", { done: countsDone, total: countsTotal }) }}
       </span>
-      <!-- 本页排序：仅对当前显示页 20 条本地排序（计数按需补取） -->
-      <label class="select-item local-sort">
-        <span>{{ t("browse.search.localSortLabel") }}</span>
+      <!-- 本页排序：维度下拉 + 升降方向切换；仅对当前显示页 20 条本地排序（计数按需补取） -->
+      <div class="local-sort">
+        <span class="local-sort-label" aria-hidden="true">{{ t("browse.search.localSortLabel") }}</span>
         <md-outlined-select
-          :value="sortMode"
+          :value="sortKey"
           :disabled="!items.length"
           :aria-label="t('browse.search.localSortLabel')"
-          @change="onSortChange"
+          @change="onSortKeyChange"
         >
-          <md-select-option value="default">{{ t("browse.search.localSortDefault") }}</md-select-option>
-          <md-select-option value="like_desc">{{ t("browse.search.localSortLikeDesc") }}</md-select-option>
-          <md-select-option value="like_asc">{{ t("browse.search.localSortLikeAsc") }}</md-select-option>
-          <md-select-option value="bookmark_desc">{{ t("browse.search.localSortBookmarkDesc") }}</md-select-option>
-          <md-select-option value="bookmark_asc">{{ t("browse.search.localSortBookmarkAsc") }}</md-select-option>
-          <md-select-option value="view_desc">{{ t("browse.search.localSortViewDesc") }}</md-select-option>
-          <md-select-option value="view_asc">{{ t("browse.search.localSortViewAsc") }}</md-select-option>
+          <md-select-option value="">{{ t("browse.search.localSortDefault") }}</md-select-option>
+          <md-select-option value="like">{{ t("browse.search.localSortLike") }}</md-select-option>
+          <md-select-option value="bookmark">{{ t("browse.search.localSortBookmark") }}</md-select-option>
+          <md-select-option value="view">{{ t("browse.search.localSortView") }}</md-select-option>
         </md-outlined-select>
-      </label>
+        <SortDirectionToggle
+          :value="sortDir"
+          :disabled="!sortKey || !items.length"
+          @change="onSortDirChange"
+        />
+      </div>
     </div>
 
     <WorkGrid
@@ -563,41 +562,47 @@ const typeTabs = computed(() => [
   color: var(--ink-subtle);
 }
 
+/* 过滤行：单行不换行；窄窗由下拉自身收缩承接，640px 断点退回纵向堆叠 */
 .filter-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-md);
   margin-top: var(--space-lg);
+  min-width: 0;
 }
 
 .type-tabs-wrap {
-  flex: 0 1 auto;
+  flex: none;
   min-width: 0;
   overflow: hidden;
 }
 
 .select-item {
   display: flex;
-  flex: 1;
+  flex: 0 1 auto;
   align-items: center;
   gap: var(--space-xs);
-  min-width: 200px;
+  min-width: 0;
 }
 
-.select-item > span {
+/* 标签 12px 小字；下拉贴合选中项文本宽度（不设 flex: 1，避免等分撑满整行） */
+.select-item > span,
+.local-sort-label {
   flex: none;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-muted);
 }
 
+/* 下拉按选中项文本定宽、不收缩：宽度不足时 Material 内部标签会换行增高（64px） */
 .select-item md-outlined-select {
-  flex: 1;
+  flex: none;
+  width: auto;
   min-width: 0;
 }
 
-/* 结果行：左「约 N 件」+ 计数补取进度，右本页排序下拉（窄屏换行） */
+/* 结果行：左「约 N 件」+ 计数补取进度，右本页排序（维度下拉 + 升降方向切换） */
 .result-bar {
   display: flex;
   flex-wrap: wrap;
@@ -619,19 +624,30 @@ const typeTabs = computed(() => [
 }
 
 .local-sort {
+  display: flex;
   flex: 0 0 auto;
-  min-width: 0;
+  align-items: center;
+  gap: var(--space-xs);
   margin-left: auto;
 }
 
 .local-sort md-outlined-select {
-  width: 200px;
+  flex: none;
+  width: auto;
   min-width: 0;
 }
 
 /* 分页行：仅负责与网格的间距（行内布局由 AppPagination 承担） */
 .pager {
   margin-top: var(--space-lg);
+}
+
+/* 视口 < 1040px 时内容区已放不下完整筛选行（约 740px）：退回换行；
+   640px 以下进一步纵向堆叠（见下） */
+@media (max-width: 1040px) {
+  .filter-row {
+    flex-wrap: wrap;
+  }
 }
 
 @media (max-width: 640px) {
@@ -651,6 +667,13 @@ const typeTabs = computed(() => [
   }
 
   .select-item {
+    min-width: 0;
+  }
+
+  /* 堆叠布局下下拉撑满整行 */
+  .select-item md-outlined-select,
+  .local-sort md-outlined-select {
+    flex: 1;
     min-width: 0;
   }
 }
