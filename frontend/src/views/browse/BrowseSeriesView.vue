@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 系列分集页（/browse/series/:kind/:id，series-episode-ui / F1）。
@@ -238,32 +239,21 @@ function openInPixiv(): void {
     <div class="browse-list-header">
       <ListRefreshButton :busy="loading || switching" @refresh="load(page, !hasData)" />
     </div>
-    <!-- 首屏骨架：头部色块 + 当前模式骨架，无动画 -->
-    <div v-if="loading" aria-hidden="true">
-      <div class="series-head">
-        <div class="sk sk-cover"></div>
-        <div class="head-info">
-          <div class="sk sk-title"></div>
-          <div class="sk sk-line w40"></div>
-          <div class="sk sk-line w60"></div>
+    <!-- 系列头始终保留返回入口，骨架不能遮蔽可操作控件。 -->
+    <header class="series-head">
+      <div v-if="loading" class="sk sk-cover" aria-hidden="true"></div>
+      <img v-else-if="cover" class="cover" :src="cover" alt="" @error="onCoverError" />
+      <div class="head-info">
+        <div class="page-heading">
+          <PageBackButton />
+          <div v-if="loading" class="sk sk-title" aria-hidden="true"></div>
+          <h1 v-else class="page-title" :title="head?.title">{{ head?.title || t("common.browseSeriesTitle") }}</h1>
         </div>
-      </div>
-      <SeriesEpisodeGrid v-if="mode === 'grid'" :kind="kind" :items="[]" loading />
-      <SeriesEpisodeList v-else :kind="kind" :items="[]" loading />
-    </div>
-
-    <!-- 首屏错误态：文案 + 重试 -->
-    <div v-else-if="error" class="series-state" role="alert">
-      <p class="state-text strong">{{ error }}</p>
-      <md-outlined-button @click="load(1, true)">{{ t("common.retry") }}</md-outlined-button>
-    </div>
-
-    <template v-else-if="head">
-      <!-- 系列头 -->
-      <header class="series-head">
-        <img v-if="cover" class="cover" :src="cover" alt="" @error="onCoverError" />
-        <div class="head-info">
-          <h1 class="page-title" :title="head.title">{{ head.title }}</h1>
+        <template v-if="loading">
+          <div class="sk sk-line w40" aria-hidden="true"></div>
+          <div class="sk sk-line w60" aria-hidden="true"></div>
+        </template>
+        <template v-else-if="head">
           <router-link class="author-link" :to="`/browse/user/${head.userId}`">
             {{ head.userName }}
           </router-link>
@@ -280,8 +270,23 @@ function openInPixiv(): void {
               {{ t("browse.hooks.openInBrowser") }}
             </md-outlined-button>
           </div>
-        </div>
-      </header>
+        </template>
+      </div>
+    </header>
+
+    <!-- 首屏骨架：当前模式骨架，无动画 -->
+    <div v-if="loading" aria-hidden="true">
+      <SeriesEpisodeGrid v-if="mode === 'grid'" :kind="kind" :items="[]" loading />
+      <SeriesEpisodeList v-else :kind="kind" :items="[]" loading />
+    </div>
+
+    <!-- 首屏错误态：文案 + 重试 -->
+    <div v-else-if="error" class="series-state" role="alert">
+      <p class="state-text strong">{{ error }}</p>
+      <md-outlined-button @click="load(1, true)">{{ t("common.retry") }}</md-outlined-button>
+    </div>
+
+    <template v-else-if="head">
 
       <!-- 工具行：目录标签 + 宫格/列表模式切换（会话内记忆） -->
       <div class="series-toolbar">
@@ -360,8 +365,11 @@ function openInPixiv(): void {
 }
 
 .head-info {
+  flex: 1;
   min-width: 0;
 }
+
+.head-info > .page-heading { margin-bottom: var(--space-lg); }
 
 .head-info .page-title {
   overflow: hidden;

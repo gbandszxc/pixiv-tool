@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·发现页（F2）。
@@ -120,7 +121,7 @@ function goWork(item: BrowseWorkItem): void {
 <template>
   <div class="page-view">
     <div class="browse-list-header">
-      <h1 class="page-title">{{ t("nav.browseDiscover") }}</h1>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseDiscover") }}</h1></div>
       <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
     </div>
 

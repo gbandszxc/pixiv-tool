@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 作者主页（F5，bookmark-ui-v1 追加收藏 tab）：
@@ -241,69 +242,74 @@ onBeforeUnmount(() => {
     </div>
     <!-- ===== 头部信息卡（surface-container 区块，无阴影）===== -->
     <section class="author-card">
-      <!-- 加载骨架：纯色块，无动画 -->
-      <div v-if="profileLoading && !profile" class="card-skeleton" aria-hidden="true">
-        <div class="avatar skeleton-avatar"></div>
-        <div class="skeleton-lines">
-          <div class="skeleton-line w45"></div>
-          <div class="skeleton-line w30"></div>
-        </div>
-      </div>
-
-      <!-- 错误态：api 层文案（含未登录/无权限）+ 重试 -->
-      <div v-else-if="profileError && !profile" class="card-state" role="alert">
-        <p class="state-text">{{ profileError }}</p>
-        <md-outlined-button @click="loadProfile">{{ t("common.retry") }}</md-outlined-button>
-      </div>
-
-      <template v-else-if="profile">
-        <div class="card-top">
-          <div class="avatar">
-            <img
-              v-if="!avatarBroken"
-              :src="pxSrc(profile.profile_img)"
-              alt=""
-              @error="avatarBroken = true"
-            />
-            <div v-else class="avatar-fallback">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="8" r="4" />
-                <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
-              </svg>
+      <div class="author-heading">
+        <PageBackButton class="author-back" />
+        <div class="author-profile">
+          <!-- 加载骨架：纯色块，无动画 -->
+          <div v-if="profileLoading && !profile" class="card-skeleton" aria-hidden="true">
+            <div class="avatar skeleton-avatar"></div>
+            <div class="skeleton-lines">
+              <div class="skeleton-line w45"></div>
+              <div class="skeleton-line w30"></div>
             </div>
           </div>
-          <div class="card-id">
-            <h1 class="author-name">{{ profile.name }}</h1>
-            <!-- /ajax/user/{id} 实测不返回 account（2026-10-01），pixiv_id 恒为空 → 隐藏整行 -->
-            <p v-if="profile.pixiv_id" class="author-pixiv-id">@{{ profile.pixiv_id }}</p>
-            <p class="author-stats">
-              {{ t("browse.author.followingCount", { n: profile.following_count ?? 0 }) }}
-              <span class="stats-divider" aria-hidden="true">·</span>
-              {{ t("browse.author.myPixivCount", { n: profile.mypixiv_count ?? 0 }) }}
-            </p>
-          </div>
-          <md-outlined-icon-button
-            class="open-browse"
-            :aria-label="t('browse.hooks.openInBrowser')"
-            :title="t('browse.hooks.openInBrowser')"
-            @click="openInPixiv"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M14 4h6v6" />
-              <path d="M20 4 11 13" />
-              <path d="M19 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" />
-            </svg>
-          </md-outlined-icon-button>
-        </div>
 
-        <!-- 简介：剥标签纯文本，3 行截断 + 展开/收起 -->
-        <div v-if="bioText" class="bio-block">
-          <p ref="bioEl" class="bio-text" :class="{ clamped: !bioExpanded }">{{ bioText }}</p>
-          <md-text-button v-if="bioOverflow || bioExpanded" class="bio-toggle" @click="toggleBio">
-            {{ bioExpanded ? t("browse.author.collapseBio") : t("browse.author.expandBio") }}
-          </md-text-button>
+          <!-- 错误态：api 层文案（含未登录/无权限）+ 重试 -->
+          <div v-else-if="profileError && !profile" class="card-state" role="alert">
+            <p class="state-text">{{ profileError }}</p>
+            <md-outlined-button @click="loadProfile">{{ t("common.retry") }}</md-outlined-button>
+          </div>
+
+          <template v-else-if="profile">
+            <div class="card-top">
+              <div class="avatar">
+                <img
+                  v-if="!avatarBroken"
+                  :src="pxSrc(profile.profile_img)"
+                  alt=""
+                  @error="avatarBroken = true"
+                />
+                <div v-else class="avatar-fallback">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="8" r="4" />
+                    <path d="M4.5 20a7.5 7.5 0 0 1 15 0" />
+                  </svg>
+                </div>
+              </div>
+              <div class="card-id">
+                <h1 class="author-name">{{ profile.name }}</h1>
+                <!-- /ajax/user/{id} 实测不返回 account（2026-10-01），pixiv_id 恒为空 → 隐藏整行 -->
+                <p v-if="profile.pixiv_id" class="author-pixiv-id">@{{ profile.pixiv_id }}</p>
+                <p class="author-stats">
+                  {{ t("browse.author.followingCount", { n: profile.following_count ?? 0 }) }}
+                  <span class="stats-divider" aria-hidden="true">·</span>
+                  {{ t("browse.author.myPixivCount", { n: profile.mypixiv_count ?? 0 }) }}
+                </p>
+              </div>
+              <md-outlined-icon-button
+                class="open-browse"
+                :aria-label="t('browse.hooks.openInBrowser')"
+                :title="t('browse.hooks.openInBrowser')"
+                @click="openInPixiv"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M14 4h6v6" />
+                  <path d="M20 4 11 13" />
+                  <path d="M19 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5" />
+                </svg>
+              </md-outlined-icon-button>
+            </div>
+
+            <!-- 简介：剥标签纯文本，3 行截断 + 展开/收起 -->
+            <div v-if="bioText" class="bio-block">
+              <p ref="bioEl" class="bio-text" :class="{ clamped: !bioExpanded }">{{ bioText }}</p>
+              <md-text-button v-if="bioOverflow || bioExpanded" class="bio-toggle" @click="toggleBio">
+                {{ bioExpanded ? t("browse.author.collapseBio") : t("browse.author.expandBio") }}
+              </md-text-button>
+            </div>
+          </template>
         </div>
-      </template>
+      </div>
     </section>
 
     <!-- ===== 作品区：四类 tab + 返填（目标随当前 tab）===== -->
@@ -353,6 +359,10 @@ onBeforeUnmount(() => {
   border-radius: 16px;
   background: var(--md-sys-color-surface-container);
 }
+
+.author-heading { display: flex; align-items: flex-start; gap: var(--space-sm); }
+.author-back { margin-top: var(--space-lg); }
+.author-profile { flex: 1; min-width: 0; }
 
 .card-top {
   display: flex;

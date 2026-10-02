@@ -134,6 +134,11 @@ textarea {
 }
 .browse-list-header .page-title { margin: 0; }
 
+/* 返回与页面身份共用一行，窄窗标题可换行，图标保持完整点击区域。 */
+.page-heading { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; }
+.browse-list-header > .page-heading, .home-header > .page-heading { flex: 1; }
+.page-heading .page-title { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+
 .page-title {
   margin: 0 0 var(--space-lg);
   color: var(--ink);

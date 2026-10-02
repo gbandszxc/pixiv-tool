@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·频道页（插画/漫画/小说三路由共用，props.kind 区分）：
@@ -136,7 +137,7 @@ function openTag(name: string): void {
 <template>
   <div class="page-view browse-channel">
     <div class="browse-list-header">
-      <h1 class="page-title">{{ title }}</h1>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ title }}</h1></div>
       <ListRefreshButton :busy="loading" @refresh="load" />
     </div>
 

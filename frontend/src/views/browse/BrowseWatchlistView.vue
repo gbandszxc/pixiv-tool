@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·追更列表页（watchlist-ui-v1，官方 /following/watchlist 同构）：
@@ -79,7 +80,7 @@ function openSeries(item: BrowseWatchlistItem): void {
 <template>
   <div class="page-view browse-watchlist">
     <div class="browse-list-header">
-      <h1 class="page-title">{{ t("nav.browseWatchlist") }}</h1>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseWatchlist") }}</h1></div>
       <ListRefreshButton :busy="loading" @refresh="load" />
     </div>
 

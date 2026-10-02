@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·首页：browse_home_feed 一次性混合推荐流（illust/manga/novel/ugoira）。
@@ -70,7 +71,7 @@ onMounted(initialLoad);
 <template>
   <div class="page-view browse-home">
     <div class="home-header">
-      <h1 class="page-title">{{ t("nav.browseHome") }}</h1>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseHome") }}</h1></div>
       <ListRefreshButton :busy="loading || refreshing" @refresh="refresh" />
       <!-- 换一批降为文字按钮 + 线性刷新图标，弱化头部主次层级（图标风格对齐 HistoryView .row-actions） -->
       <md-text-button :disabled="loading || refreshing || exhausted" @click="shuffle">

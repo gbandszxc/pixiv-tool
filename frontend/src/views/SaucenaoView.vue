@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageBackButton from "../components/navigation/PageBackButton.vue";
 /**
  * 以图识图页（SauceNAO 反向图片搜索）。
  *
@@ -222,7 +223,7 @@ function onThumbError(index: number): void {
 
 <template>
   <div class="page-view">
-    <h1 class="page-title">{{ t("saucenao.title") }}</h1>
+    <div class="page-heading saucenao-heading"><PageBackButton /><h1 class="page-title">{{ t("saucenao.title") }}</h1></div>
     <p class="page-subtitle">{{ t("saucenao.subtitle") }}</p>
 
     <!-- 输入卡片：左预览 + 右操作 -->
@@ -362,6 +363,7 @@ function onThumbError(index: number): void {
 </template>
 
 <style scoped>
+.saucenao-heading { margin-bottom: var(--space-lg); }
 .page-subtitle {
   margin: calc(-1 * var(--space-sm)) 0 var(--space-lg);
   color: var(--ink-muted);

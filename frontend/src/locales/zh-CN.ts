@@ -45,7 +45,7 @@ export default {
     exit: "退出",
   },
   nav: {
-    back: "返回",
+    back: "返回上一页",
     backHome: "返回首页",
     tools: "工具",
     crawlNovel: "小说",

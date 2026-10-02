@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·收藏页（bookmark-ui-v1 / F1）—— 自己的收藏（他人公开收藏在作者页 tab）。
@@ -179,7 +180,7 @@ function goWork(item: BrowseWorkItem): void {
 <template>
   <div class="page-view bookmark-view">
     <div class="browse-list-header">
-      <h1 class="page-title">{{ t("nav.browseBookmark") }}</h1>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseBookmark") }}</h1></div>
       <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
     </div>
 

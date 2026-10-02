@@ -1,6 +1,9 @@
 <template>
   <div class="page-view tools-view">
-    <SectionTabs class="tools-tabs" :tabs="tabs" :value="activeTab" @change="onTabChange" />
+    <div class="page-heading tools-header">
+      <PageBackButton />
+      <SectionTabs class="tools-tabs" :tabs="tabs" :value="activeTab" @change="onTabChange" />
+    </div>
     <div class="tools-body"><router-view /></div>
   </div>
 </template>
@@ -15,6 +18,7 @@ import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import SectionTabs, { type SectionTab } from "../components/browse/SectionTabs.vue";
+import PageBackButton from "../components/navigation/PageBackButton.vue";
 
 const { t } = useI18n(); const route = useRoute(); const router = useRouter();
 const tabs = computed<SectionTab[]>(() => [
@@ -29,5 +33,6 @@ function onTabChange(value: string) { if (value !== activeTab.value) router.push
 </script>
 
 <style scoped>
-.tools-tabs { margin-bottom: var(--space-lg); }
+.tools-header { margin-bottom: var(--space-lg); }
+.tools-tabs { flex: 1; min-width: 0; }
 </style>

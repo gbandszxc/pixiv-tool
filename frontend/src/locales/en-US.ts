@@ -45,7 +45,7 @@ export default {
     exit: "Quit",
   },
   nav: {
-    back: "Back",
+    back: "Back to previous page",
     backHome: "Back to home",
     tools: "Tools",
     crawlNovel: "Novel",
