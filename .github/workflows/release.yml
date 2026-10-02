@@ -231,37 +231,49 @@ jobs:
           sleep 3
           ls -la dist/
 
-          # 安装包表格按实际下载到的产物生成：产物文件名带版本与架构，写死会随
-          # 打包器命名规则变化而失效（缺哪个格式就显示 —）
-          link() { # link <文件匹配式> <链接文字>
+          BODY="release-body.md"
+          if [ -f "docs/releases/$VERSION.md" ]; then
+            cat "docs/releases/$VERSION.md" > "$BODY"
+          else
+            : > "$BODY"
+          fi
+
+          # 先建 Release（正文暂只有更新说明），再读回平台实际存储的资产名补表格：
+          # GitHub 会规整上传的资产名（如空格换成 .），照 runner 上的文件名拼链接会
+          # 得到带空格/失效的 URL，因此链接一律以发布后的资产名为准
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "Pixiv Tool v$VERSION" \
+            --notes-file "$BODY" \
+            dist/*
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+
+          link() { # link <资产名匹配子串> <链接文字>
             local f
-            f=$(find dist -maxdepth 1 -type f -name "$1" | head -1)
+            f=$(printf '%s\n' "$ASSETS" | grep -F -- "$1" | head -1 || true)
             if [ -n "$f" ]; then
-              printf '[%s](%s/%s)' "$2" "$BASE" "$(basename "$f")"
+              printf '[%s](%s/%s)' "$2" "$BASE" "$(printf '%s' "$f" | sed 's/ /%20/g')"
             else
               printf '—'
             fi
           }
 
           {
-            if [ -f "docs/releases/$VERSION.md" ]; then
-              cat "docs/releases/$VERSION.md"
-              echo
-            fi
+            cat "$BODY"
             echo "## 安装包"
             echo
             echo "| 架构 | Windows | macOS | Linux |"
             echo "| --- | --- | --- | --- |"
             printf '| x86-64 (64-bit) | %s | %s | %s · %s · %s |\n' \
-              "$(link '*_x64_*.msi' MSI)" \
-              "$(link '*_universal.dmg' '通用 DMG')" \
-              "$(link '*_amd64.AppImage' AppImage)" \
-              "$(link '*_amd64.deb' deb)" \
-              "$(link '*.x86_64.rpm' rpm)"
+              "$(link '.msi' MSI)" \
+              "$(link 'universal.dmg' '通用 DMG')" \
+              "$(link '.AppImage' AppImage)" \
+              "$(link '_amd64.deb' deb)" \
+              "$(link 'x86_64.rpm' rpm)"
             printf '| ARM64 | — | %s | %s · %s |\n' \
-              "$(link '*_aarch64.dmg' 'DMG')" \
-              "$(link '*_arm64.deb' deb)" \
-              "$(link '*.aarch64.rpm' rpm)"
+              "$(link 'aarch64.dmg' DMG)" \
+              "$(link '_arm64.deb' deb)" \
+              "$(link 'aarch64.rpm' rpm)"
             echo
             echo "macOS 通用 DMG 同时支持 Intel 与 Apple Silicon（Intel 机器用它即可），ARM64 一行另给 Apple Silicon 专用包。"
             echo
@@ -269,8 +281,5 @@ jobs:
           } > release-notes.md
 
           cat release-notes.md
-          gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
-            --title "Pixiv Tool v$VERSION" \
-            --notes-file release-notes.md \
-            dist/*
+          # 缺某种格式时对应单元格显示 —，不会产生死链
+          gh release edit "$TAG" --notes-file release-notes.md
