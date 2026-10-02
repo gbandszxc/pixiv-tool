@@ -60,6 +60,8 @@ const emit = defineEmits<{
 defineSlots<{
   /** 覆盖左侧总数区（如排行榜「第 from-to 名」）；无插槽且有 total 时默认渲染「共 {total} 项」 */
   start?: () => unknown;
+  /** reader 变体左侧插槽（如小说阅读器字号缩放控件）；无插槽时翻页组仍居中 */
+  leading?: () => unknown;
 }>();
 
 const { t } = useI18n();
@@ -153,8 +155,10 @@ function onJump(): void {
 </script>
 
 <template>
-  <!-- reader 变体：吸底居中紧凑形态（小说阅读器翻页器 recipe） -->
+  <!-- reader 变体：吸底居中紧凑形态（小说阅读器翻页器 recipe）；
+       三列 grid：左 leading（可选，如字号缩放）/ 中翻页组恒居中 / 右留空平衡 -->
   <nav v-if="variant === 'reader'" class="app-pagination is-reader" :aria-label="t('common.pagination.navLabel')">
+    <div v-if="$slots.leading" class="reader-leading"><slot name="leading" /></div>
     <div class="reader-inner">
       <md-icon-button
         :aria-label="t('common.pagination.prevPage')"
@@ -455,21 +459,31 @@ function onJump(): void {
   white-space: nowrap;
 }
 
-/* reader 变体：与小说阅读器翻页器同 recipe（sticky 底部 + surface 底 + 上缘 divider） */
+/* reader 变体：与小说阅读器翻页器同 recipe（sticky 底部 + surface 底 + 上缘 divider）；
+   三列 grid 让翻页组恒居中：左右 1fr 等宽、中间 auto；无 leading 时视觉与纯居中一致（BrowseSeriesView 回归点） */
 .app-pagination.is-reader {
   position: sticky;
   bottom: 0;
   z-index: 10;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
   padding: var(--space-sm) var(--space-md);
   background: var(--surface);
   border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
 }
 
+/* 显式落第 2 列：无 leading 插槽时首项默认落第 1 列会左移 */
 .reader-inner {
+  grid-column: 2;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+}
+
+.reader-leading {
+  grid-column: 1;
+  justify-self: start;
 }
 
 .page-select {

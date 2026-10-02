@@ -425,6 +425,8 @@ export default {
       pageInfo: "第 {current} / {total} 页",
       pageSelect: "跳转到页",
       imagePlaceholder: "内嵌图片（去 Pixiv 查看）",
+      fontSmaller: "缩小字号",
+      fontLarger: "放大字号",
     },
     series: {
       listLabel: "系列目录",

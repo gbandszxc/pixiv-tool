@@ -25,6 +25,7 @@ import {
   type WorkBookmarkState,
 } from "../../api/browse";
 import { notify } from "../../ui/notify";
+import { useSettingsStore } from "../../stores/settings";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
 
@@ -32,6 +33,29 @@ const props = defineProps<{ kind: "illust" | "manga" | "novel"; id: number }>();
 
 const { t } = useI18n();
 const router = useRouter();
+const settings = useSettingsStore();
+
+// ===== 正文字号缩放 =====
+
+/** 缩放区间与步进（与设置键 novel_font_scale 的后端校验区间一致）。 */
+const SCALE_MIN = 0.75;
+const SCALE_MAX = 2;
+const SCALE_STEP = 0.1;
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** 正文缩放系数：以 settings.novel_font_scale 为准，越界 / 缺省容错后挂到 --novel-scale。 */
+const fontScale = computed(() => clamp(settings.settings.novel_font_scale || 1, SCALE_MIN, SCALE_MAX));
+
+/** 步进 ±0.1（取两位小数）；到边界直接返回，持久化失败仅提示、不打断阅读。 */
+function stepScale(delta: number): void {
+  const next = Math.round((fontScale.value + delta * SCALE_STEP) * 100) / 100;
+  const value = clamp(next, SCALE_MIN, SCALE_MAX);
+  if (value === fontScale.value) return;
+  settings.saveSettings({ novel_font_scale: value }).catch((err) => notify(errorMessage(err)));
+}
 
 // ===== 详情 =====
 
@@ -40,6 +64,8 @@ const loading = ref(false);
 const error = ref("");
 /** 查看者收藏态（来自详情响应 bookmarkState；收藏按钮经 change 回写） */
 const bookmarkState = ref<WorkBookmarkState | null>(null);
+/** 中间滚动层：顶栏/底栏恒定贴边，只有正文区滚动（滚动复位目标）。 */
+const readerScrollEl = ref<HTMLElement | null>(null);
 
 const item = computed(() => detail.value?.item ?? null);
 const content = computed(() => detail.value?.content ?? "");
@@ -73,7 +99,7 @@ async function load(): Promise<void> {
   relatedError.value = "";
   panel.value = "related";
   // 进入/切换作品回到页首（SPA 内路由切换会保留上一页滚动位置）
-  window.scrollTo(0, 0);
+  readerScrollEl.value?.scrollTo({ top: 0 });
   try {
     const data = await browseWorkDetail("novel", props.id);
     if (data.detail_kind !== "novel") throw new Error("unexpected detail kind");
@@ -97,7 +123,7 @@ function gotoPage(target: number): void {
   if (clamped === page.value) return;
   page.value = clamped;
   // 切页回到正文顶部；默认瞬时滚动，自动跟随系统「减少动态效果」偏好。
-  window.scrollTo(0, 0);
+  readerScrollEl.value?.scrollTo({ top: 0 });
 }
 
 /** 键盘 ←/→ 翻页；焦点在表单控件时交给控件自身。 */
@@ -187,8 +213,8 @@ function openInPixiv(): void {
 </script>
 
 <template>
-  <div class="novel-view">
-    <!-- 顶栏：返回 / 标题 / 作者 / 返填表单 / 在浏览器中打开 -->
+  <div class="novel-view" :style="{ '--novel-scale': fontScale }">
+    <!-- 顶栏：返回 / 标题 / 作者 / 返填表单 / 在浏览器中打开；flex 首行，恒贴窗口上边 -->
     <header class="topbar">
       <md-icon-button :aria-label="t('browse.novel.back')" :title="t('browse.novel.back')" @click="router.back()">
         <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6" /></svg>
@@ -246,25 +272,26 @@ function openInPixiv(): void {
       </md-icon-button>
     </header>
 
-    <!-- 详情骨架：纯色块，无动画 -->
-    <div v-if="loading" class="reader-column" aria-hidden="true">
-      <div class="skeleton">
-        <div class="sk sk-title"></div>
-        <div class="sk sk-sub"></div>
-        <div v-for="n in 8" :key="n" class="sk sk-line" :class="{ short: n % 3 === 0 }"></div>
+    <!-- 中间滚动层：顶栏/底栏恒定贴窗口上下边，仅本层滚动（loading / error / 正文三个分支都在此层内） -->
+    <div ref="readerScrollEl" class="reader-scroll">
+      <!-- 详情骨架：纯色块，无动画 -->
+      <div v-if="loading" class="reader-column" aria-hidden="true">
+        <div class="skeleton">
+          <div class="sk sk-title"></div>
+          <div class="sk sk-sub"></div>
+          <div v-for="n in 8" :key="n" class="sk sk-line" :class="{ short: n % 3 === 0 }"></div>
+        </div>
       </div>
-    </div>
 
-    <!-- 错误态：文案 + 重试 -->
-    <div v-else-if="error" class="reader-column">
-      <div class="reader-state" role="alert">
-        <p class="state-text strong">{{ error }}</p>
-        <md-outlined-button @click="load">{{ t("common.retry") }}</md-outlined-button>
+      <!-- 错误态：文案 + 重试 -->
+      <div v-else-if="error" class="reader-column">
+        <div class="reader-state" role="alert">
+          <p class="state-text strong">{{ error }}</p>
+          <md-outlined-button @click="load">{{ t("common.retry") }}</md-outlined-button>
+        </div>
       </div>
-    </div>
 
-    <template v-else-if="detail && item">
-      <div class="reader-column">
+      <div v-else-if="detail && item" class="reader-column">
         <!-- 信息头 -->
         <div class="info-head">
           <h1 class="work-title" :title="item.title">{{ item.title }}</h1>
@@ -324,22 +351,49 @@ function openInPixiv(): void {
           <CommentsSection v-else kind="novel" :id="id" />
         </section>
       </div>
+    </div>
 
-      <!-- 翻页器：底部居中吸底（AppPagination reader 变体）；键盘 ←/→ 翻页仍由本视图层监听 -->
-      <AppPagination
-        v-if="hasContent"
-        variant="reader"
-        :current-page="page"
-        :total-pages="totalPages"
-        @update:currentPage="gotoPage"
-      />
-    </template>
+    <!-- 翻页器：flex 尾行贴窗口下边（AppPagination reader 变体）；#leading = 字号缩放控件；键盘 ←/→ 翻页仍由本视图层监听 -->
+    <AppPagination
+      v-if="hasContent"
+      variant="reader"
+      :current-page="page"
+      :total-pages="totalPages"
+      @update:currentPage="gotoPage"
+    >
+      <template #leading>
+        <div class="font-scale">
+          <md-icon-button
+            :aria-label="t('browse.novel.fontSmaller')"
+            :title="t('browse.novel.fontSmaller')"
+            :disabled="fontScale <= SCALE_MIN"
+            @click="stepScale(-1)"
+          >
+            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /></svg>
+          </md-icon-button>
+          <span class="scale-value" aria-live="polite">{{ Math.round(fontScale * 100) }}%</span>
+          <md-icon-button
+            :aria-label="t('browse.novel.fontLarger')"
+            :title="t('browse.novel.fontLarger')"
+            :disabled="fontScale >= SCALE_MAX"
+            @click="stepScale(1)"
+          >
+            <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M8 12h8" /><path d="M12 8v8" /></svg>
+          </md-icon-button>
+        </div>
+      </template>
+    </AppPagination>
   </div>
 </template>
 
 <style scoped>
-/* 满血宽度：抵消 .app-content 的 24px 内边距（640px 下为 16px），让顶栏/翻页器整行贴边。 */
+/* 满血宽度：抵消 .app-content 的 24px 内边距（640px 下为 16px），让顶栏/翻页器整行贴边。
+   固定高度 flex 列：顶栏 / 滚动层 / 翻页器三行铺满视口，负 margin 抵消后顶栏贴窗口上边、
+   翻页器贴窗口下边，.app-content 高度恰为 100vh 不再滚动，成为纯壳。 */
 .novel-view {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
   margin: calc(-1 * var(--space-xl)) calc(-1 * var(--space-xl)) calc(-1 * var(--space-xl));
 }
 
@@ -351,10 +405,9 @@ function openInPixiv(): void {
 
 /* ===== 顶栏 ===== */
 
+/* flex 首行，天然贴窗口上边（负 margin 抵消 .app-content padding 后无上缝隙）。 */
 .topbar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
@@ -427,12 +480,45 @@ function openInPixiv(): void {
   }
 }
 
+/* ===== 中间滚动层 ===== */
+
+/* 阅读区唯一滚动容器：顶栏/底栏在层外恒定可见，文字只在本层滚动 */
+.reader-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 滚动条细化：与 BrowseWorkView 信息列同 recipe（track 透明 / thumb outline 派生色） */
+.reader-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.reader-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.reader-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 40%, transparent);
+  border-radius: 999px;
+}
+
+.reader-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
+}
+
 /* ===== 正文列 ===== */
 
+/* 默认铺满中间区（≤16:9 1080p 不限宽）；更大屏幕才限 720px 保持行宽可读 */
 .reader-column {
-  max-width: 720px;
   margin: 0 auto;
   padding: var(--space-lg) var(--space-lg) var(--space-xl);
+}
+
+@media (min-width: 1921px), (min-height: 1081px) {
+  .reader-column {
+    max-width: 720px;
+  }
 }
 
 /* 骨架与状态 */
@@ -593,10 +679,10 @@ function openInPixiv(): void {
   margin-left: var(--space-xs);
 }
 
-/* 面板：相关推荐 / 评论（顶栏按钮切换）；吸顶顶栏之下留出滚动余量 */
+/* 面板：相关推荐 / 评论（顶栏按钮切换）；滚动区内滚入视野只需少量上缘余量（顶栏在本层之外不遮挡） */
 .side-panel {
   margin-top: var(--space-xl);
-  scroll-margin-top: 72px;
+  scroll-margin-top: var(--space-md);
 }
 
 .section-title {
@@ -608,6 +694,20 @@ function openInPixiv(): void {
 }
 
 /* ===== 翻页器（AppPagination reader 变体自带吸底样式，此处无本地翻页器样式） ===== */
+
+/* 底栏左侧字号缩放控件（经 AppPagination #leading 插槽渲染） */
+.font-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.scale-value {
+  min-width: 44px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  text-align: center;
+}
 
 .bar-icon {
   width: 20px;

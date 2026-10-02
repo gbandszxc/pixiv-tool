@@ -132,7 +132,8 @@ const hasMorePages = computed(() => props.page < pages.value.length);
 <style scoped>
 .novel-content {
   color: var(--ink);
-  font-size: 14px;
+  /* 基准 16px；阅读器在根节点注入 --novel-scale（缺省 1），字号缩放随设置生效 */
+  font-size: calc(16px * var(--novel-scale, 1));
   line-height: 1.8;
   overflow-wrap: anywhere;
 }
@@ -144,7 +145,8 @@ const hasMorePages = computed(() => props.page < pages.value.length);
 .chapter {
   margin: 1.6em 0 0.8em;
   color: var(--ink);
-  font-size: 16px;
+  /* 1.15em ≈ 原 16px/14px 比例，随正文字号等比缩放 */
+  font-size: 1.15em;
   font-weight: 700;
   line-height: 1.5;
 }

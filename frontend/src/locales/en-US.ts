@@ -425,6 +425,8 @@ export default {
       pageInfo: "Page {current} / {total}",
       pageSelect: "Jump to page",
       imagePlaceholder: "Embedded image — view on Pixiv",
+      fontSmaller: "Decrease font size",
+      fontLarger: "Increase font size",
     },
     series: {
       listLabel: "Series contents",
