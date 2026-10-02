@@ -6,6 +6,12 @@
 //! 的稳定版 tag（手写字符校验，不引入 regex 依赖），预发布（含 `-` 后缀）
 //! 跳过继续找下一个。
 //!
+//! 网络策略（双通道）：wreq 默认**不跟随重定向**（builder 默认
+//! `redirect_policy = none()`），必须显式 `Policy::limited`，否则 `releases/latest`
+//! 停在 302、永远解析不到 tag。先走系统代理感知通道（用户开系统代理时与其
+//! 浏览器同链路），网络层失败（连接错误或非 2xx）再用 `.no_proxy()` 强制直连
+//! 通道重试一次，两者都失败才报错。
+//!
 //! 安全边界：HTTP 客户端独立构建、进程内缓存，**绝不复用 PixivClient**——
 //! 它带 pixiv cookie，发给 GitHub 属于凭据泄漏。错误文案一律用固定中文短句，
 //! 不回显网络错误原文（错误 Display 可能内嵌完整 URL）。
@@ -16,6 +22,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use wreq::header::{HeaderMap, HeaderValue};
+use wreq::redirect::Policy as RedirectPolicy;
 use wreq_util::Emulation;
 
 use crate::pixiv::client::{ACCEPT_LANGUAGE, USER_AGENT};
@@ -24,10 +31,20 @@ use crate::pixiv::client::{ACCEPT_LANGUAGE, USER_AGENT};
 const RELEASES_LATEST_URL: &str = "https://github.com/gbandszxc/pixiv-tool/releases/latest";
 /// 发布列表页（无更新时给前端的跳转目标）。
 const RELEASES_URL: &str = "https://github.com/gbandszxc/pixiv-tool/releases";
-/// 单请求超时（秒）。
-const REQUEST_TIMEOUT_SECS: u64 = 10;
+/// 单请求超时（秒）。直连 TLS 握手可能慢，比常规接口放宽。
+const REQUEST_TIMEOUT_SECS: u64 = 15;
 /// 最终 URL / HTML 里 tag 路径的公共前缀。
 const TAG_PATH_MARKER: &str = "/releases/tag/";
+
+/// 单通道请求结果。
+enum FetchOutcome {
+    /// 拿到最新稳定版 tag。
+    Tag(String),
+    /// 网络层通了但页面里解析不出稳定版 tag（不重试另一条通道）。
+    NoTag,
+    /// 网络层失败（连接错误或非 2xx），值得用另一条通道重试。
+    Unreachable,
+}
 
 /// 更新检查结果（IPC 返回体，字段保持 snake_case）。
 #[derive(Debug, Serialize)]
@@ -51,31 +68,48 @@ pub async fn check_app_update(app: tauri::AppHandle) -> Result<UpdateCheckInfo, 
 
 /// 命令实现（current_version 参数化，便于离线测试构造）。
 pub async fn check_app_update_impl(current_version: &str) -> Result<UpdateCheckInfo, String> {
-    let client = shared_client()?;
-    let response = client
-        .get(RELEASES_LATEST_URL)
-        .send()
-        .await
-        .map_err(|_| "无法访问 GitHub 发布页".to_string())?;
+    let (system_client, direct_client) = shared_clients()?;
+    // 双通道：先走系统代理感知通道，网络层失败再用强制直连通道重试一次。
+    let outcome = match fetch_release_tag(system_client).await {
+        FetchOutcome::Unreachable => fetch_release_tag(direct_client).await,
+        outcome => outcome,
+    };
+    match outcome {
+        FetchOutcome::Tag(tag) => Ok(update_info(&tag, current_version)),
+        FetchOutcome::NoTag => Err("未找到有效的发布版本".to_string()),
+        FetchOutcome::Unreachable => Err("无法访问 GitHub 发布页".to_string()),
+    }
+}
+
+/// 单通道取最新稳定版 tag：请求 `releases/latest`（跟随 302 到 tag 页），
+/// 先从最终生效 URL 取 tag，拿不到再回退扫描响应 HTML。
+async fn fetch_release_tag(client: &wreq::Client) -> FetchOutcome {
+    let response = match client.get(RELEASES_LATEST_URL).send().await {
+        Ok(response) => response,
+        Err(_) => return FetchOutcome::Unreachable,
+    };
     if !response.status().is_success() {
-        return Err("无法访问 GitHub 发布页".to_string());
+        return FetchOutcome::Unreachable;
     }
     // uri() 即跟随重定向后的最终 URL；releases/latest 302 后形如
     // .../releases/tag/v1.2.3，直接从中取 tag，HTML 扫描只做回退。
     let final_url = response.uri().to_string();
-    let body = response
-        .text()
-        .await
-        .map_err(|_| "无法访问 GitHub 发布页".to_string())?;
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(_) => return FetchOutcome::Unreachable,
+    };
+    match tag_from_url(&final_url).or_else(|| first_stable_tag_in_html(&body)) {
+        Some(tag) => FetchOutcome::Tag(tag),
+        None => FetchOutcome::NoTag,
+    }
+}
 
-    let tag = tag_from_url(&final_url)
-        .or_else(|| first_stable_tag_in_html(&body))
-        .ok_or_else(|| "未找到有效的发布版本".to_string())?;
-
-    // tag 允许 v 前缀，版本号本体统一去掉 v 再比较与展示。
-    let latest = tag.strip_prefix('v').unwrap_or(&tag).to_string();
+/// 由稳定版 tag 与当前版本组装返回体（tag 允许 v 前缀，版本号本体统一
+/// 去掉 v 再比较与展示）。
+fn update_info(tag: &str, current_version: &str) -> UpdateCheckInfo {
+    let latest = tag.strip_prefix('v').unwrap_or(tag).to_string();
     let has_update = compare_versions(&latest, current_version) == Ordering::Greater;
-    Ok(UpdateCheckInfo {
+    UpdateCheckInfo {
         has_update,
         current_version: current_version.to_string(),
         latest_version: if has_update {
@@ -88,29 +122,39 @@ pub async fn check_app_update_impl(current_version: &str) -> Result<UpdateCheckI
         } else {
             RELEASES_URL.to_string()
         },
-    })
+    }
 }
 
-/// 独立无 cookie 客户端（Chrome147 指纹，与 saucenao 同款），进程内缓存。
-fn shared_client() -> Result<&'static wreq::Client, String> {
-    static CLIENT: OnceLock<Option<wreq::Client>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            let mut default_headers = HeaderMap::new();
-            default_headers.insert("user-agent", HeaderValue::from_static(USER_AGENT));
-            default_headers.insert(
-                "accept-language",
-                HeaderValue::from_static(ACCEPT_LANGUAGE),
-            );
-            wreq::Client::builder()
-                .emulation(Emulation::Chrome147)
-                .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
-                .default_headers(default_headers)
-                .build()
-                .ok()
-        })
+/// 双通道无 cookie 客户端（Chrome147 指纹，与 saucenao 同款 builder），
+/// 进程内缓存：(系统代理感知, 强制直连)。
+fn shared_clients() -> Result<&'static (wreq::Client, wreq::Client), String> {
+    static CLIENTS: OnceLock<Option<(wreq::Client, wreq::Client)>> = OnceLock::new();
+    CLIENTS
+        .get_or_init(build_clients)
         .as_ref()
         .ok_or_else(|| "创建 HTTP 客户端失败".to_string())
+}
+
+/// 构建双通道客户端。两条通道共用同一 builder，仅代理语义不同：
+/// - system：默认 builder，跟随系统代理 / 环境变量（用户开代理时同浏览器链路）；
+/// - direct：`.no_proxy()` 强制直连，system 通道失败后的兜底。
+/// 重定向必须显式开启：wreq 默认 `redirect_policy = none()`，不跟随的话
+/// `releases/latest` 停在 302，永远拿不到最终 tag 页。
+fn build_clients() -> Option<(wreq::Client, wreq::Client)> {
+    let mut default_headers = HeaderMap::new();
+    default_headers.insert("user-agent", HeaderValue::from_static(USER_AGENT));
+    default_headers.insert(
+        "accept-language",
+        HeaderValue::from_static(ACCEPT_LANGUAGE),
+    );
+    let builder = || {
+        wreq::Client::builder()
+            .emulation(Emulation::Chrome147)
+            .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+            .redirect(RedirectPolicy::limited(10))
+            .default_headers(default_headers.clone())
+    };
+    Some((builder().build().ok()?, builder().no_proxy().build().ok()?))
 }
 
 /// 语义化版本比较：按 `.` 分段转 u64 逐段比较，段数不齐按 0 补齐

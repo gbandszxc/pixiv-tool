@@ -43,7 +43,12 @@ keyring = { version = "3.6", features = [
 ] }
 # wreq/wreq-util 版本精确锁定：spike 已验证该组合通过 pixiv 风控；
 # wreq-util < 3.0.0-rc.12 是 GPL 不能用。升级前必须重新验证风控。
-wreq = "=6.0.0-rc.31"
+# system-proxy：启用系统代理感知（Windows 读注册表 Internet Settings、
+# macOS 读系统配置），让 GitHub 检查更新在用户开了系统代理时走代理，
+# 与用户浏览器同链路；只加 feature，不改锁定的版本与 TLS 指纹语义。
+# 该感知对进程内所有 wreq client（含 pixiv 抓取）生效——期望行为：
+# 与用户浏览器同链路，弱网环境抓取成功率同浏览器。
+wreq = { version = "=6.0.0-rc.31", features = ["system-proxy"] }
 wreq-util = "=3.0.0-rc.14"
 # CDP WebSocket（ws://127.0.0.1 本机调试端口，无需 TLS feature）
 tokio-tungstenite = "0.28"

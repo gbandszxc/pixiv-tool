@@ -758,7 +758,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_bookmark_add(kind, id, restrict, tags)` | 添加收藏（全局 JSON 端点 + x-csrf-token；restrict 0 公开 / 1 非公开） |
 | `browse_bookmark_remove(kind, id, bookmarkId)` | 取消收藏：插画走 ajax form，小说走旧式 `/novel/bookmark_setting.php` 表单 |
 | `app_exit` | 退出应用（前端确认框确认后调用，与 Cmd+Q 路径一致） |
-| `check_app_update` | 检查应用更新：解析 GitHub releases 页面（非 API）取最新稳定版并与当前版本比较；发现新版本由前端弹窗询问，无更新/失败静默 |
+| `check_app_update` | 检查应用更新：解析 GitHub releases 页面（非 API）取最新稳定版并与当前版本比较；请求跟随系统代理、失败回退直连；发现新版本由前端弹窗询问，无更新/失败静默 |
 
 **应用菜单栏**：Windows 上默认隐藏（`SetMenu(hwnd, NULL)`），按 Alt 唤起并
 进入菜单循环、退出循环（选中 / Esc / 窗口失活）后自动收回。实现见
