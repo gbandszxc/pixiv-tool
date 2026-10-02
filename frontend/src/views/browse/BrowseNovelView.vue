@@ -534,7 +534,7 @@ function openInPixiv(): void {
 /* ===== 正文列 ===== */
 
 /* 默认铺满中间区（≤16:9 1080p 不限宽）；更大屏幕才限 1280px 保持行宽可读
-   （1280px ≈ 100% 字号下 75 个全角字/行；1920×1080 及以下仍为满宽） */
+   （列内边距 --space-lg 16px，100% 字号下约 78 个全角字/行；1920×1080 及以下仍为满宽） */
 .reader-column {
   margin: 0 auto;
   padding: var(--space-lg) var(--space-lg) var(--space-xl);
