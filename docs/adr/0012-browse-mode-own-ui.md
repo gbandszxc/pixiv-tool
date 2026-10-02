@@ -79,6 +79,9 @@ street 无翻页参数（前端重复调用 + 按 id 去重）；相关推荐为
   在途合并，缓存落盘 `data/cache/img/`（该目录已在 gitignore 的 data/cache/ 规则内）。
 - V1 限制：ugoira 只显示封面帧；小说内嵌图（`[pixivimage:]`）显示占位块；
   写操作、评论浏览、收藏夹浏览留待 V2。
+  （2026-10-02 更新：`[uploadedimage:]` 内嵌图已直接出图——URL 来自详情响应自带的
+  `textEmbeddedImages`，无额外请求，见 SPEC §6.4；仅历史写法 `[pixivimage:illustId]`
+  仍走占位块，故本条对 `[pixivimage:]` 的限制继续有效。决策本身未变、未新增外部契约。）
 - 测试：全部接口解析为离线单测（内嵌样例 JSON），命令层离线冒烟
   （`tests/pixiv_api/offline_guard.rs`），真实链路由人工/实机冒烟覆盖。
   （2026-10-01 追加：真实链路已有 `test-live` 在线用例覆盖——`./dev.ps1 test-live`

@@ -256,8 +256,11 @@ pub struct BrowseIllustDetail {
 pub struct BrowseNovelDetail {
     pub detail_kind: &'static str,
     pub item: BrowseWorkItem,
-    /// 全文，保留 [newpage]/[chapter:]/[rb:]/[pixivimage:] 原始标记，前端切分。
+    /// 全文，保留 [newpage]/[chapter:]/[rb:]/[uploadedimage:] 原始标记，前端切分。
     pub content: String,
+    /// 正文内嵌插画：`[uploadedimage:id]` 的 id → pximg URL（无内嵌图时为空表）。
+    /// URL 来自同一响应体的 textEmbeddedImages，不产生额外请求。
+    pub embedded_images: HashMap<String, String>,
     pub series: Option<BrowseSeriesRef>,
     /// 当前查看者的收藏态（bookmarkData 三态；未收藏省略）。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1296,6 +1299,28 @@ fn parse_ugoira(body: &Value) -> Option<BrowseUgoira> {
     Some(BrowseUgoira { src, frames })
 }
 
+/// 小说内嵌插画索引：`textEmbeddedImages` → `图片 id → pximg URL`。
+///
+/// 正文里 `[uploadedimage:id]` 的 id 即此表的键（2026-10-02 实测 novel 28669064）。
+/// 每条目的 `urls` 有 1200x1200 / 128x128 / 240mw / 480mw / original 五档，
+/// 展示取 1200x1200；缺失时按 original → 480mw → 240mw → 128x128 回退。
+/// 无任何可用 URL 的条目跳过（前端按缺失渲染占位）。
+fn parse_novel_embedded_images(body: &Value) -> HashMap<String, String> {
+    /// 展示档位偏好：1200x1200 足够正文宽度且明显小于 original。
+    const TIERS: [&str; 5] = ["1200x1200", "original", "480mw", "240mw", "128x128"];
+    let Some(table) = body.get("textEmbeddedImages").and_then(Value::as_object) else {
+        return HashMap::new();
+    };
+    table
+        .iter()
+        .filter_map(|(id, entry)| {
+            let urls = entry.get("urls")?;
+            let url = TIERS.iter().find_map(|tier| str_field(urls, tier))?;
+            Some((id.clone(), url))
+        })
+        .collect()
+}
+
 /// /ajax/novel/{id} body → (item, series)。
 fn parse_novel_detail(body: &Value) -> (BrowseWorkItem, Option<BrowseSeriesRef>) {
     let id = body.get("id").and_then(as_i64_loose).unwrap_or(0);
@@ -2105,6 +2130,7 @@ impl PixivApi {
             detail_kind: "novel",
             item,
             content,
+            embedded_images: parse_novel_embedded_images(&body),
             series,
             // 详情体 bookmarkData 三态：null/缺失 → 字段省略
             bookmark_state: parse_bookmark_data(body.get("bookmarkData")),
@@ -3270,6 +3296,50 @@ mod tests {
         // 无系列
         let (_, series) = parse_novel_detail(&json!({"id": "1", "content": "c"}));
         assert!(series.is_none());
+    }
+
+    /// 内嵌图索引：键 = [uploadedimage:] 的 id，档位偏好 1200x1200 且逐档回退。
+    #[test]
+    fn parse_novel_embedded_images_prefers_display_tier() {
+        let body = json!({
+            "textEmbeddedImages": {
+                "25163259": {"novelImageId": "25163259", "urls": {
+                    "1200x1200": "https://i.pximg.net/c/1200x1200/a.jpg",
+                    "480mw": "https://i.pximg.net/c/480x960/a.jpg",
+                    "original": "https://i.pximg.net/novel-cover-original/a.jpg"
+                }},
+                // 缺 1200x1200 → 回退 original
+                "25163261": {"urls": {"original": "https://i.pximg.net/orig/b.jpg"}},
+                // 只有小档 → 取 480mw
+                "25163263": {"urls": {"480mw": "https://i.pximg.net/c/480x960/c.jpg"}},
+                // 无 urls / 空表 → 整条跳过
+                "25163264": {"novelImageId": "25163264"},
+                "25163266": {"urls": {}}
+            }
+        });
+        let images = parse_novel_embedded_images(&body);
+        assert_eq!(images.len(), 3, "无可用 URL 的条目应跳过");
+        assert_eq!(
+            images.get("25163259").map(String::as_str),
+            Some("https://i.pximg.net/c/1200x1200/a.jpg")
+        );
+        assert_eq!(
+            images.get("25163261").map(String::as_str),
+            Some("https://i.pximg.net/orig/b.jpg")
+        );
+        assert_eq!(
+            images.get("25163263").map(String::as_str),
+            Some("https://i.pximg.net/c/480x960/c.jpg")
+        );
+        assert!(!images.contains_key("25163264"));
+    }
+
+    /// 无内嵌图（缺字段 / 非对象）→ 空表，不报错。
+    #[test]
+    fn parse_novel_embedded_images_tolerates_missing() {
+        assert!(parse_novel_embedded_images(&json!({"id": "1"})).is_empty());
+        assert!(parse_novel_embedded_images(&json!({"textEmbeddedImages": null})).is_empty());
+        assert!(parse_novel_embedded_images(&json!({"textEmbeddedImages": []})).is_empty());
     }
 
     // ---- related ----

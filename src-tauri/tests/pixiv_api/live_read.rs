@@ -698,6 +698,81 @@ async fn live_novel_detail() {
             "话序应 >= 1"
         );
     }
+    // 内嵌图索引恒为对象（无内嵌图时为空表）；出现即必须是 pximg URL
+    let images = detail["embedded_images"]
+        .as_object()
+        .expect("embedded_images 应为对象");
+    for (id, url) in images {
+        let url = url
+            .as_str()
+            .unwrap_or_else(|| panic!("embedded_images[{id}] 应为字符串 URL"));
+        common::assert_pixiv_url(url, "embedded_images");
+    }
+}
+
+/// 小说内嵌插画：样本 28669064（用户报障篇目，24 张 `[uploadedimage:]`）。
+/// 断言正文标记与 embedded_images 索引一一对应，且取到展示档 1200x1200。
+#[tokio::test]
+#[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
+async fn live_novel_embedded_images() {
+    const SAMPLE: i64 = 28669064;
+    let detail = common::live_api()
+        .get_work_detail_novel(SAMPLE)
+        .await
+        .unwrap_or_else(|e| panic!("小说详情失败（novel {SAMPLE}）: {e}"));
+    let content = detail["content"].as_str().expect("content 应为字符串");
+    let markers: Vec<&str> = content
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| {
+            line.strip_prefix("[uploadedimage:")
+                .and_then(|rest| rest.strip_suffix(']'))
+        })
+        .collect();
+    assert!(
+        !markers.is_empty(),
+        "样本篇目应含 [uploadedimage:] 标记（正文结构变化即需复核解析）"
+    );
+    let images = detail["embedded_images"]
+        .as_object()
+        .expect("embedded_images 应为对象");
+    for marker in &markers {
+        let url = images
+            .get(*marker)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("标记 [uploadedimage:{marker}] 缺少 URL"));
+        common::assert_pixiv_url(url, "embedded_images");
+        assert!(
+            url.contains("/c/1200x1200/"),
+            "展示档应为 1200x1200，实际: {url}"
+        );
+    }
+    assert!(
+        images.len() >= markers.len(),
+        "索引条目数不应少于正文标记数（{} < {}）",
+        images.len(),
+        markers.len()
+    );
+    // 挑第一张实下：图片代理（pixiv-img）走的就是这条下载路径 + Referer 防盗链
+    let first = markers
+        .first()
+        .and_then(|m| images.get(*m))
+        .and_then(Value::as_str)
+        .expect("首个标记应有对应 URL");
+    let bytes = common::live_api()
+        .client()
+        .download_bytes(first)
+        .await
+        .unwrap_or_else(|e| panic!("内嵌图下载失败（Referer 伪装可能失效）: {e}"));
+    assert!(bytes.len() > 100, "内嵌图字节数过小: {}", bytes.len());
+    let magic_ok = bytes.starts_with(&[0xFF, 0xD8])
+        || bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47])
+        || bytes.starts_with(b"GIF8");
+    assert!(
+        magic_ok,
+        "内嵌图首字节不是 JPEG/PNG/GIF 魔数: {:02X?}",
+        &bytes[..bytes.len().min(4)]
+    );
 }
 
 // ----------------------------------------------------------------------

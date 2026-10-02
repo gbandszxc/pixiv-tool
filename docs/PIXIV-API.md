@@ -194,10 +194,11 @@
 - 浏览消费字段：`src`、`frames[].{file,delay}`；抓取消费字段：`originalSrc`（优先）、`zip_urls.original`（兜底），两者皆空 → Client 错误。
 - 分页：无。注意路径是 `ugoira_meta`，不是 `/ugoira`（见 §6）。
 
-**GET `/ajax/novel/{id}`** · 实现 `browse_api.rs:1936`（`get_work_detail_novel`）；抓取 `api.rs:248` · 在线 `live_read.rs::live_novel_detail` · 离线 `parse_novel_detail_fields`、`parse_novel_full_shape`、`parse_novel_missing_series_and_defaults`
+**GET `/ajax/novel/{id}`** · 实现 `browse_api.rs:1936`（`get_work_detail_novel`）；抓取 `api.rs:248` · 在线 `live_read.rs::live_novel_detail`、`live_read.rs::live_novel_embedded_images` · 离线 `parse_novel_detail_fields`、`parse_novel_full_shape`、`parse_novel_missing_series_and_defaults`、`parse_novel_embedded_images_prefers_display_tier`
 - 浏览消费字段：`id, title, userId, userName, coverUrl, pageCount, xRestrict, tags, createDate, description, characterCount, bookmarkCount, readingTime, content, bookmarkData, seriesNavData.{seriesId,title,orderNumber,next.id}`。
 - 抓取消费字段：`title, userId, userName, pageCount, updateDate, content, seriesNavData.{seriesId,title}`。
 - 分页：无；全文一次返回，多页由 `content` 内 `[newpage]` 标记，前端切分。
+- **正文内嵌图**：`textEmbeddedImages` 为 `图片 id → {novelImageId, sl, urls}` 索引表（键即正文 `[uploadedimage:id]` 的 id）；`urls` 有 `1200x1200 / 128x128 / 240mw / 480mw / original` 五档，浏览取 `1200x1200`（缺失按 `original → 480mw → 240mw → 128x128` 回退），组装为契约 `embedded_images`（`id → URL`），前端经 `pixiv-img` 代理显示。实测形状与样本见 research §7.2。现行编辑器只产出 `[uploadedimage:]`；`[pixivimage:illustId]`（含 `-N` 页号）需另查 `/ajax/illust/{id}` 或 `/pages`，V1 不解析、前端走占位块。
 
 ### 4.4 相关推荐 / 作者页
 

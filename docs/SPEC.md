@@ -25,7 +25,8 @@
 - ~~搜索小说~~、~~用户收藏夹 / 插画作品列表页浏览~~：**只读浏览**已于 v1.2 随浏览模式落地
   （§6.4、ADR 0012）；「按搜索结果 / 收藏夹批量抓取」与收藏夹浏览仍不做。列表页下载本身见 ADR 0007
 - 按 tag 批量抓取
-- 小说内嵌图片下载（`[pixivimage:...]` / `[uploadedimage:...]` 标记）
+- 小说内嵌图片**落盘下载**（`[pixivimage:...]` / `[uploadedimage:...]` 标记；阅读器
+  内直接显示见 §6.4，此处指抓取产物不入图）
 - EPUB 输出（架构预留接口，不实现）
 - 自适应限速（V1 用固定并发 + 429 暂停）
 - 任务断点启动弹窗恢复
@@ -656,8 +657,14 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 - **小说阅读器**：整页固定 100vh 三行 flex——顶栏（非 sticky，天然贴窗口上边）/ 中间唯一
   滚动层（`flex:1; min-height:0; overflow-y:auto`，6px 细滚动条）/ 底栏 AppPagination
   （`variant="reader"`）；顶底栏贴窗口上下边、只有中间层滚动。正文列默认不限宽，仅
-  `@media (min-width: 1921px), (min-height: 1081px)`（大于 16:9 1080p 的屏幕）限 720px；
-  正文 16px 基准 × `--novel-scale`，章节标题 1.15em。`--novel-scale` 取自设置键
+  `@media (min-width: 1921px), (min-height: 1081px)`（大于 16:9 1080p 的屏幕）限 1280px
+  （≈100% 字号下 75 个全角字/行；1920×1080 及以下仍满宽）；
+  正文 16px 基准 × `--novel-scale`，章节标题 1.15em。**正文内嵌图**：
+  `[uploadedimage:id]` 的 id 由详情响应 `embedded_images`（`id → pximg URL`，取自同一
+  响应的 `textEmbeddedImages`，无额外请求）解析为图片，整行成块居中、限宽于正文列、
+  `--radius-control` 圆角、`loading="lazy"`，经 `pixiv-img` 协议代理与磁盘缓存显示；
+  混排段落内的内嵌图按行内小图渲染。取不到 URL 的标记（未收录的 id、
+  `[pixivimage:illustId]` 插图引用）渲染为占位块，不静默丢图。`--novel-scale` 取自设置键
   `novel_font_scale`（默认 1.0、区间 0.75~2.0，见 §5.2）；底栏左侧经 AppPagination reader
   变体的 `#leading` 插槽挂字号缩放控件 `[−] [百分比] [+] [重置]`（步进 0.1、到界禁用；
   重置回到 100%（100% 时禁用）；`aria-live="polite"`）。键盘 ←/→ 翻页与顶栏动作不变（见下条）。
@@ -695,8 +702,10 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   排行榜 / 系列分集 / 小说阅读器）统一收敛到 `components/common/AppPagination`
   （历史、任务为 default 变体，排行榜走未知总页数模式，系列与阅读器为
   `variant="reader"`）；游标 / 无限滚动调用点不使用该组件。
-- **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图
-  （`[pixivimage:]`）显示占位块；评论只在详情页面板内按需加载（只读，无评论/回复发布）。
+- **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图中
+  `[pixivimage:illustId]` 插图引用（现行 pixiv 编辑器已不产出，实测见
+  `docs/research/pixiv-browse-api.md` §7.2）与未收录 id 显示占位块，`[uploadedimage:]`
+  正常出图；评论只在详情页面板内按需加载（只读，无评论/回复发布）。
 - **打开原页 / 返填**：浏览页的「在浏览器中打开」走系统默认浏览器
   （官方 `tauri-plugin-opener`，capability `opener:default`）；
   频道页卡片与作品级页面另有「返填表单」→ 跳对应抓取页并预填 `sourceType` / `sourceId`。
@@ -735,7 +744,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_follow_latest(kind, mode, page)` | 关注的新作品（p + isLastPage） |
 | `browse_search(kind, word, order, mode, s_mode, type, page)` | 插画/漫画/小说搜索（total + lastPage） |
 | `browse_ranking(kind, mode, page, date)` | 排行榜：illust/manga/ugoira 走 ranking.php?format=json，novel 走 /ajax/ranking/novel（每页 50，含 prev/next_date） |
-| `browse_work_detail(kind, id)` | 作品详情：illust+pages+ugoira_meta / novel 全文（含 series 导航） |
+| `browse_work_detail(kind, id)` | 作品详情：illust+pages+ugoira_meta / novel 全文（含 series 导航 + 正文内嵌图索引 `embedded_images`） |
 | `browse_related(kind, id, limit)` | 相关推荐一次性池（recommend/init，page 参数无效） |
 | `browse_user_profile(id)` | 作者资料（/ajax/user/{id}?full=1） |
 | `browse_user_works(id, kind, page)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量 |

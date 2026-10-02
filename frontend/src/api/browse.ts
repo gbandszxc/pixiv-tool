@@ -163,7 +163,7 @@ export interface BrowseIllustDetail {
   bookmarkState?: WorkBookmarkState | null;
 }
 
-/** browse_work_detail（novel）返回体；content 为全文（保留 [newpage]/[chapter:]/[rb:]/[pixivimage:] 原始标记，前端切分）。 */
+/** browse_work_detail（novel）返回体；content 为全文（保留 [newpage]/[chapter:]/[rb:]/[uploadedimage:] 原始标记，前端切分）。 */
 export interface BrowseNovelDetail {
   detail_kind: "novel";
   item: BrowseWorkItem & {
@@ -172,6 +172,11 @@ export interface BrowseNovelDetail {
     reading_time?: number;
   };
   content: string;
+  /**
+   * 正文内嵌插画：`[uploadedimage:id]` 的 id → pximg URL（显示经 pxSrc）。
+   * 后端取自同一详情响应的 textEmbeddedImages，无内嵌图时为空对象。
+   */
+  embedded_images?: Record<string, string>;
   /** seriesNavData：系列导航（order 为本书在系列中的序号） */
   series?: { id: number; title: string; order: number; next_id?: number | null } | null;
   /** 查看者的收藏态（未收藏 null；B1 契约扩展字段，后端未上线时缺省 = 未知 → 视为未收藏） */
@@ -900,9 +905,17 @@ async function mockNovelDetail(id: number): Promise<BrowseNovelDetail> {
     },
     content:
       "[chapter:序]\n这是 mock 正文第一段，用于小说阅读器的视觉验收。正文正文正文正文正文正文正文正文正文正文。\n\n" +
-      "第二段：[rb:注音/よみ] 与 [pixivimage:9000010] 内嵌图占位标记保留原样。\n" +
+      "第二段：[rb:注音/よみ] 与 [uploadedimage:9000010] 内嵌图标记，图片由 embedded_images 解析显示。\n" +
+      "[uploadedimage:9000011]\n" +
+      "[pixivimage:9000012]\n" +
       "[newpage]\n[chapter:第一章]\n分页后的第一章正文。正文正文正文正文正文正文正文正文正文正文正文正文正文正文。\n\n" +
       "结尾段落。系列导航见 series。",
+    // mock 内嵌图：data URI 在浏览器内可直接显示；9000012 故意不给 URL，
+    // 用于视觉验收「无 URL 的内嵌图（pixivimage）走占位块」分支。
+    embedded_images: {
+      "9000010": mockCover((id * 17) % 360, "landscape"),
+      "9000011": mockCover((id * 23) % 360, "landscape"),
+    },
     series:
       item.series_id != null && item.series_title
         ? { id: item.series_id, title: item.series_title, order: 1 + (id % 8), next_id: id + 1 }

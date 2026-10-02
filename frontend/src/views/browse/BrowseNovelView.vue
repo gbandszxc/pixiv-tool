@@ -77,6 +77,8 @@ const readerScrollEl = ref<HTMLElement | null>(null);
 const item = computed(() => detail.value?.item ?? null);
 const content = computed(() => detail.value?.content ?? "");
 const hasContent = computed(() => content.value.trim().length > 0);
+/** 内嵌图 id → URL（详情响应 embedded_images）；正文渲染时按 id 取图 */
+const embeddedImages = computed(() => detail.value?.embedded_images ?? {});
 const series = computed(() => detail.value?.series ?? null);
 const nextEpisodeId = computed(() => series.value?.next_id ?? null);
 
@@ -329,8 +331,14 @@ function openInPixiv(): void {
           <p v-if="metaText" class="work-meta">{{ metaText }}</p>
         </div>
 
-        <!-- 正文（NovelContent 分页渲染）；空内容容错 -->
-        <NovelContent v-if="hasContent" :content="content" :page="page" @pages-change="totalPages = $event" />
+        <!-- 正文（NovelContent 分页渲染，内嵌图经 images 取 URL）；空内容容错 -->
+        <NovelContent
+          v-if="hasContent"
+          :content="content"
+          :page="page"
+          :images="embeddedImages"
+          @pages-change="totalPages = $event"
+        />
         <div v-else class="reader-state">
           <p class="state-text strong">{{ t("browse.novel.emptyContent") }}</p>
         </div>
@@ -525,7 +533,8 @@ function openInPixiv(): void {
 
 /* ===== 正文列 ===== */
 
-/* 默认铺满中间区（≤16:9 1080p 不限宽）；更大屏幕才限 720px 保持行宽可读 */
+/* 默认铺满中间区（≤16:9 1080p 不限宽）；更大屏幕才限 1280px 保持行宽可读
+   （1280px ≈ 100% 字号下 75 个全角字/行；1920×1080 及以下仍为满宽） */
 .reader-column {
   margin: 0 auto;
   padding: var(--space-lg) var(--space-lg) var(--space-xl);
@@ -533,7 +542,7 @@ function openInPixiv(): void {
 
 @media (min-width: 1921px), (min-height: 1081px) {
   .reader-column {
-    max-width: 720px;
+    max-width: 1280px;
   }
 }
 

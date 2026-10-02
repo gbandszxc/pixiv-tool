@@ -347,7 +347,8 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 | 字段 | 类型 | 含义/示例 |
 |---|---|---|
 | `id` / `title` / `description` | string | 基本信息（description 为 HTML） |
-| `content` | string | **全文纯文本**。多页小说用 `[newpage]` 标记分页（`[newpage]` 数量 = pageCount - 1），章节标题用 `[chapter:标题]` 标记（渲染为节标题）；正文内嵌插画用 `[pixivimage:illustId]`、外链跳转用 `[jumpurl:文字:URL]`、嵌入图片 `textEmbeddedImages` |
+| `content` | string | **全文纯文本**。多页小说用 `[newpage]` 标记分页（`[newpage]` 数量 = pageCount - 1），章节标题用 `[chapter:标题]` 标记（渲染为节标题）；正文内嵌插画用 `[uploadedimage:novelImageId]`（见下「正文内嵌图」）、站内链接用 `[[jumpuri:文字 > URL]]`、旧式跳转 `[jump:...]` / `[jumpurl:文字:URL]` |
+| `textEmbeddedImages` | Object | **正文内嵌图索引**：键 = `novelImageId`（即 `[uploadedimage:]` 的 id），值 `{novelImageId, sl, urls}`；`urls` 五档见下 |
 | `pageCount` | number | 页数（按 `[newpage]` 切分；一次请求返回全部页内容，没有按页拉取的接口） |
 | `tags` | Array | 同插画 tags 结构 |
 | `seriesNavData` | Object/null | `{seriesType:"novel", seriesId, title, orderNumber, isConcluded, next}` |
@@ -359,6 +360,32 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 | `userNovels` | Object | 作者其他小说锚点 |
 
 > 注：旧资料中的 `totalPages` / `pageNo` 字段在当前响应中不存在；多页即 `pageCount` + `content` 内 `[newpage]`，由客户端切分。
+
+**正文内嵌图（2026-10-02 实测 novel 28669064）**
+
+正文里的内嵌插画是**整行**的 `[uploadedimage:novelImageId]`；同一响应的 `textEmbeddedImages` 就是它的 URL 索引表（键 = id，值按档位给 URL）。该样本 24 张图，`content` 内的 24 个 `[uploadedimage:]` 标记与 `textEmbeddedImages` 的 24 个键**一一对应**：
+
+```json
+"textEmbeddedImages": {
+  "25163259": {
+    "novelImageId": "25163259",
+    "sl": "6",
+    "urls": {
+      "1200x1200": "https://i.pximg.net/c/1200x1200/novel-cover-master/img/2026/07/22/19/21/12/tei…_master1200.jpg",
+      "128x128":   "https://i.pximg.net/c/128x128/novel-cover-master/img/…_square1200.jpg",
+      "240mw":     "https://i.pximg.net/c/240x480_80/novel-cover-master/img/…_master1200.jpg",
+      "480mw":     "https://i.pximg.net/c/480x960/novel-cover-master/img/…_master1200.jpg",
+      "original":  "https://i.pximg.net/novel-cover-original/img/…/tei…jpg"
+    }
+  }
+}
+```
+
+- 路径段为 `novel-cover-master`（缩略档）与 `novel-cover-original`（`original`），均在 `i.pximg.net`，与作品封面同源同防盗链（需 Referer）。
+- 正文渲染取 `1200x1200`（正文列宽度足够，且明显小于 `original`）。
+- `sl` 语义未确认（样本恒 `"6"`），不消费。
+- 另有一处站内链接标记形如 `[[jumpuri:文字 > https://www.pixiv.net/novel/show.php?id=…]]`（**双层方括号**）——旧的单层 `[jumpuri:文字>URL]` 记法在本样本中未出现。
+- **`[pixivimage:illustId]` 在本样本与同期小说日榜前 30 条中均未出现**（0 例）：现行编辑器把插画以 `[uploadedimage:]` 内嵌，`[pixivimage:]`（连同 `-N` 页号后缀）属历史写法。若要支持，需对每个 id 另查 `/ajax/illust/{id}`（第 0 页）或 `/ajax/illust/{id}/pages`（第 N 页），成本为每图一次 ajax 请求，V1 不做，前端渲染占位块。
 
 #### 小说系列
 
