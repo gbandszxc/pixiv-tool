@@ -320,7 +320,7 @@
 - 入口 `handle_image_request` image_proxy.rs:539；前端 `convertFileSrc(encodeURIComponent(url), "pixiv-img")`。
 - 白名单 `is_allowed_pximg_url` image_proxy.rs:174：仅 `https` 且 host 以 `.pximg.net` 结尾（挡 userinfo 诱导、后缀欺骗）；路径兼容 percent-encoded 与未编码（`path_to_pximg_url` image_proxy.rs:203）。白名单外 → 403。
 - 缓存：键 = `SHA-256(完整 URL)` + 原扩展名（`cache_key` image_proxy.rs:238）；目录 `<data>/cache/img/`；上限 1GB（`IMAGE_CACHE_MAX_BYTES` image_proxy.rs:46），超出按 mtime 从旧到新清理（`trim_cache` image_proxy.rs:290）。
-- 回源：进程级共享的无 cookie client（`cdn_client` image_proxy.rs:329，`send_download` 自带 Referer）；全局并发 10（`CDN_MAX_CONCURRENT_DOWNLOADS` image_proxy.rs:40）；同一 URL 并发冷启动单飞合并（`coalesce_download_with` image_proxy.rs:435）。
+- 回源：进程级共享的无 cookie client（`cdn_client`，`send_download` 自带 Referer）；全局并发 10（`CDN_MAX_CONCURRENT_DOWNLOADS`）；同一 URL 并发冷启动单飞合并（`coalesce_download_with`）。下载完成即回传，后台串行缓存写入临时文件后原子重命名，目录扫描与淘汰用 `spawn_blocking`；写盘维护结束前在途条目保留共享字节，避免重复回源。缓存失败不影响图片响应。离线回归：`returns_before_cache_write_and_shares_until_persisted`。
 - 重试：`download_with_retry` image_proxy.rs:503——首次 + `[200,500]ms` 两次重试，总预算 15s（`DOWNLOAD_TIMEOUT_SECS` image_proxy.rs:42）；404 / 401 / 403 / 429 为终止态不重试（`should_retry` image_proxy.rs:338），CDN 的 429 立即 502、无跨请求退避。
 - 响应：成功 200 + 按扩展名 Content-Type + `Cache-Control: public, max-age=31536000, immutable`（image_response image_proxy.rs:577）；CDN 404 → 404，其余失败 → 502（error_response image_proxy.rs:587）。
 - 内存所有权：`download_bytes` / `download_bytes_ungated` 返回 `bytes::Bytes`，单飞等待者共享同一字节缓冲；只在 Tauri 成功响应的独占 `Cow<[u8]>` 边界转为 `Vec<u8>`。不改变 CDN 端点、请求头、响应体、错误分类或缓存策略；仍整包接收，响应收集期间的峰值未因这次减少复制而消失。

@@ -14,6 +14,8 @@ import { pixivWorkUrl } from "../../utils/pixivUrl";
 const props = defineProps<{
   item: BrowseWorkItem;
   disabled?: boolean;
+  /** 首屏卡片立即请求小图，其余沿用浏览器懒加载。 */
+  priority?: boolean;
   /** 封面快捷动作（打开原页 / 返填表单）：仅浏览频道页显式开启 */
   hooks?: boolean;
   /** 显示「取消收藏」快捷动作（收藏页卡片；无 bookmarkId 的条目由父级控制不传） */
@@ -49,21 +51,28 @@ const gridTier = useThumbTier("thumb_quality_grid");
 
 /**
  * 改写后地址（含 novel-cover 等路径）一旦 404，回落到接口给的原始 URL 重试一次；
- * item.cover 变化视为新封面，重置回退标记。
+ * 小图先显示，设定档位就绪后覆盖；高清失败保留小图并尝试原始 URL。
+ * 封面或档位变化时重置所有状态。
  */
+const previewFailed = ref(false);
 const coverFailed = ref(false);
-const coverSrc = computed(() =>
-  coverFailed.value ? pxSrc(props.item.cover) : thumbSrc(props.item.cover, gridTier.value)
-);
+const previewLoaded = ref(false);
+const coverLoaded = ref(false);
+const coverSrc = computed(() => coverFailed.value ? pxSrc(props.item.cover) : thumbSrc(props.item.cover, gridTier.value));
+const previewSrc = computed(() => previewFailed.value ? coverSrc.value : thumbSrc(props.item.cover, "small"));
 
-function onCoverError(): void {
-  coverFailed.value = true;
+function onPreviewError(): void {
+  if (previewFailed.value) coverFailed.value = true;
+  else previewFailed.value = true;
 }
 
 watch(
-  () => props.item.cover,
+  () => [props.item.cover, gridTier.value],
   () => {
+    previewFailed.value = false;
     coverFailed.value = false;
+    previewLoaded.value = false;
+    coverLoaded.value = false;
   }
 );
 
@@ -96,7 +105,29 @@ function handleFillForm(): void {
       @keydown.space.prevent="handleClick"
     >
       <div class="cover" :class="{ portrait }">
-        <img v-if="item.cover" :src="coverSrc" alt="" loading="lazy" decoding="async" @error="onCoverError" />
+        <img
+          v-if="item.cover && !coverLoaded"
+          :key="previewSrc"
+          :src="previewSrc"
+          alt=""
+          :loading="priority ? 'eager' : 'lazy'"
+          :fetchpriority="priority ? 'high' : 'auto'"
+          decoding="async"
+          @load="previewLoaded = true"
+          @error="onPreviewError"
+        />
+        <img
+          v-if="previewLoaded && coverSrc !== previewSrc"
+          v-show="coverLoaded"
+          :key="coverSrc"
+          class="cover-upgrade"
+          :src="coverSrc"
+          alt=""
+          fetchpriority="low"
+          decoding="async"
+          @load="coverLoaded = true"
+          @error="coverFailed = true"
+        />
         <span v-if="badgeText" class="badge" :class="{ restricted }">{{ badgeText }}</span>
         <span v-if="item.kind === 'novel'" class="kind-mark" :title="t('nav.browseNovel')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -262,6 +293,11 @@ function handleFillForm(): void {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.cover .cover-upgrade {
+  position: absolute;
+  inset: 0;
 }
 
 .badge {

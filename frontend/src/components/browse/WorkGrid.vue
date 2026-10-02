@@ -138,9 +138,10 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="work-grid">
         <WorkCard
-          v-for="item in visibleItems"
+          v-for="(item, index) in visibleItems"
           :key="`${item.kind}:${item.id}`"
           :item="item"
+          :priority="index < 12"
           :hooks="hooks"
           :removable="removable && !!item.bookmarkId"
           @click="emit('select', item)"

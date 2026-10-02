@@ -6,17 +6,23 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  * 「换一批」重新调用并按 kind:id 去重追加；新条目 < 5 视为换不出更多，
  * 停止追加、仅由 WorkGrid 的「没有更多了」收尾提示。
  */
-import { onMounted, ref, shallowRef } from "vue";
+import { onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { browseHomeFeed, errorMessage, type BrowseWorkItem } from "../../api/browse";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import { notify } from "../../ui/notify";
+import { useAuthStore } from "../../stores/auth";
+import { readHomeCache, saveHomeCache } from "../../utils/homeCache";
 
 const { t } = useI18n();
 const router = useRouter();
 
-const items = shallowRef<BrowseWorkItem[]>([]);
+const auth = useAuthStore();
+const cacheUserId = auth.isLoggedIn ? auth.userId : "";
+const items = shallowRef<BrowseWorkItem[]>(readHomeCache(cacheUserId));
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; });
 const loading = ref(false);
 const refreshing = ref(false);
 const error = ref("");
@@ -29,9 +35,12 @@ async function initialLoad(): Promise<void> {
   loading.value = true;
   error.value = "";
   try {
-    items.value = (await browseHomeFeed()).items;
+    const data = await browseHomeFeed();
+    if (disposed) return;
+    items.value = data.items;
+    saveHomeCache(cacheUserId, items.value);
   } catch (err) {
-    error.value = errorMessage(err);
+    if (!disposed) error.value = errorMessage(err);
   } finally {
     loading.value = false;
   }
@@ -43,12 +52,15 @@ async function shuffle(): Promise<void> {
   refreshing.value = true;
   try {
     const data = await browseHomeFeed();
+    if (disposed) return;
     const seen = new Set(items.value.map((it) => `${it.kind}:${it.id}`));
     const fresh = data.items.filter((it) => !seen.has(`${it.kind}:${it.id}`));
-    if (fresh.length >= 5) items.value = items.value.concat(fresh);
-    else exhausted.value = true;
+    if (fresh.length >= 5) {
+      items.value = items.value.concat(fresh);
+      saveHomeCache(cacheUserId, items.value);
+    } else exhausted.value = true;
   } catch {
-    notify(t("common.browseLoadFailed"));
+    if (!disposed) notify(t("common.browseLoadFailed"));
   } finally {
     refreshing.value = false;
   }

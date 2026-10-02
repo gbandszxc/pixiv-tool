@@ -8,7 +8,7 @@
 //! 路径 percent-decode（兼容编码与未编码两种形态）→ pximg 白名单校验 →
 //! 磁盘缓存（`<data>/cache/img/`）命中直接回读；未命中则经进程级共享的
 //! 无 cookie PixivClient 代下（`send_download` 自带 Referer 过防盗链）→
-//! 落盘缓存 → 回传字节（Content-Type 按扩展名，成功响应统一
+//! 立即回传字节、后台原子落盘缓存（Content-Type 按扩展名，成功响应统一
 //! `Cache-Control: public, max-age=31536000, immutable`——pximg 路径是稳定的
 //! 内容寻址，同 URL 内容不变，命中与回源共用同一响应头）。
 //!
@@ -49,6 +49,8 @@ const IMAGE_CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 /// 全局 CDN 下载闸门（进程级，与具体 client 无关）。
 static CDN_GATE: LazyLock<tokio::sync::Semaphore> =
     LazyLock::new(|| tokio::sync::Semaphore::new(CDN_MAX_CONCURRENT_DOWNLOADS));
+// ponytail: 缓存维护串行，避免每张图同时扫描目录；写盘吞吐成为瓶颈时再批量维护。
+static CACHE_WRITE_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 // ----------------------------------------------------------------------
 // SHA-256（FIPS 180-4）
@@ -388,10 +390,9 @@ fn inflight_map() -> std::sync::MutexGuard<'static, HashMap<String, Arc<Inflight
 /// 重建的条目；幂等，任何持有者都可调用。
 fn retire_inflight(key: &str, entry: &Arc<InflightEntry>) {
     let mut map = inflight_map();
-    if map
-        .get(key)
-        .is_some_and(|current| Arc::ptr_eq(current, entry))
-    {
+    if map.get(key).is_some_and(|current| {
+        Arc::ptr_eq(current, entry) && current.refs.load(std::sync::atomic::Ordering::Acquire) == 0
+    }) {
         map.remove(key);
     }
 }
@@ -411,9 +412,8 @@ fn inflight_refs(key: &str) -> Option<usize> {
 }
 
 /// 在途条目清理守卫：每个调用者持有一份，退出（正常返回或 future 被取消）
-/// 时递减引用计数。初始化已在途时释放条目是错误行为——tokio OnceCell 会把
-/// 初始化权移交给某个等待者，条目仍需为后续调用者合并请求；只有计数归零且
-/// 初始化从未发生时（所有人都取消了）条目才失去意义，可以移除。
+/// 时递减引用计数。初始化者取消时，tokio OnceCell 会把初始化权移交给等待者。
+/// 所有调用者和后台缓存写入都退出、计数归零后才移除；写盘期间新请求仍共享字节。
 struct InflightGuard {
     key: String,
     entry: Arc<InflightEntry>,
@@ -423,7 +423,7 @@ impl Drop for InflightGuard {
     fn drop(&mut self) {
         use std::sync::atomic::Ordering;
         let remaining = self.entry.refs.fetch_sub(1, Ordering::AcqRel) - 1;
-        if remaining == 0 && !self.entry.cell.initialized() {
+        if remaining == 0 {
             retire_inflight(&self.key, &self.entry);
         }
     }
@@ -435,6 +435,7 @@ impl Drop for InflightGuard {
 /// 取到 cell 后立即释放 std 锁（持锁跨 await 会串行化全部下载）。
 async fn coalesce_download_with<F, Fut>(
     url: &str,
+    cache_dir: Option<&Path>,
     fetch: F,
 ) -> Result<Bytes, DownloadFailure>
 where
@@ -463,32 +464,52 @@ where
         entry: Arc::clone(&entry),
     };
     // Bytes 自带共享所有权：cell 和等待者复用响应缓冲，不额外包 Arc 或复制字节。
-    let result = entry.cell.get_or_init(fetch).await;
-    // 初始化已落定（成功或失败都写进 cell）：回收条目，后续同 URL 请求
-    // 重新取数。若本 future 在 await 中被取消则到不了这里，由守卫兜底。
-    retire_inflight(url, &entry);
+    let result = entry
+        .cell
+        .get_or_init(|| async {
+            let bytes = fetch().await?;
+            if let Some(cache_dir) = cache_dir {
+                entry.refs.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                let cache_guard = InflightGuard {
+                    key: url.to_string(),
+                    entry: Arc::clone(&entry),
+                };
+                let cache_dir = cache_dir.to_path_buf();
+                let cache_path = cache_dir.join(cache_key(url));
+                let shared = bytes.clone();
+                tokio::spawn(async move {
+                    let _guard = cache_guard;
+                    let _permit = CACHE_WRITE_GATE.lock().await;
+                    match write_cache_file(&cache_path, &shared).await {
+                        Ok(()) => {
+                            log::info!("图片已缓存: {}", cache_path.display());
+                            // 目录扫描与淘汰是阻塞 I/O，只在后台阻塞线程运行。
+                            let _ = tokio::task::spawn_blocking(move || {
+                                trim_cache(&cache_dir, &cache_path, IMAGE_CACHE_MAX_BYTES);
+                            })
+                            .await;
+                        }
+                        Err(err) => log::warn!("图片缓存写入失败（已返回字节）: {err}"),
+                    }
+                });
+            }
+            Ok(bytes)
+        })
+        .await;
     match result {
         Ok(bytes) => Ok(bytes.clone()),
         Err(err) => Err(*err),
     }
 }
 
-/// 读空时的回源：单飞合并同一 URL，成功后落盘并修剪缓存；失败不写盘、
+/// 读空时的回源：单飞合并同一 URL，成功即返回、后台落盘并修剪缓存；失败不写盘、
 /// 不记忆失败（下一次调用重新取数）。
 async fn coalesce_image(url: &str, cache_dir: &Path) -> Result<Bytes, DownloadFailure> {
-    coalesce_download_with(url, || async {
+    coalesce_download_with(url, Some(cache_dir), || async {
         let bytes = download_with_retry(url).await.map_err(|err| {
             log::debug!("pixiv-img 下载失败详情: {err}");
             DownloadFailure::from(&err)
         })?;
-        let cache_path = cache_dir.join(cache_key(url));
-        match write_cache_file(&cache_path, &bytes).await {
-            Ok(()) => {
-                trim_cache(cache_dir, &cache_path, IMAGE_CACHE_MAX_BYTES);
-                log::info!("图片已缓存: {}", cache_path.display());
-            }
-            Err(err) => log::warn!("图片缓存写入失败（仍返回字节）: {err}"),
-        }
         Ok(bytes)
     })
     .await
@@ -528,7 +549,17 @@ async fn write_cache_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    tokio::fs::write(path, bytes).await
+    // 不让并发读缓存的请求读到半张图片。
+    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result = async {
+        tokio::fs::write(&temporary, bytes).await?;
+        tokio::fs::rename(&temporary, path).await
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result
 }
 
 /// 协议请求主入口：解析 → 校验 → 缓存回读 / 代下落盘 → 响应。
@@ -875,6 +906,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn returns_before_cache_write_and_shares_until_persisted() {
+        let url = uuid_url("background-cache");
+        let dir = temp_dir("background-cache");
+        let gate = CACHE_WRITE_GATE.lock().await;
+        let bytes = tokio::time::timeout(
+            Duration::from_millis(200),
+            coalesce_download_with(&url, Some(&dir), || async {
+                Ok(Bytes::from_static(b"IMG"))
+            }),
+        )
+        .await
+        .expect("磁盘维护阻塞时仍应立即返回图片")
+        .expect("下载成功");
+        assert_eq!(bytes.as_ref(), b"IMG");
+        assert!(!dir.join(cache_key(&url)).exists(), "回传不等缓存落盘");
+        let shared = coalesce_download_with(&url, Some(&dir), || async {
+            panic!("缓存写入期间不应再次下载同一图片")
+        })
+        .await
+        .expect("应共享已经下载的图片");
+        assert_eq!(bytes.as_ptr(), shared.as_ptr());
+        drop(gate);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while inflight_contains(&url) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("后台写盘应完成并回收在途条目");
+        assert_eq!(
+            tokio::fs::read(dir.join(cache_key(&url))).await.unwrap(),
+            b"IMG"
+        );
+        assert_eq!(
+            std::fs::read_dir(&dir).unwrap().count(),
+            1,
+            "只留下完整缓存文件"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
     async fn coalesce_shares_one_fetch_among_concurrent_callers() {
         const CALLERS: usize = 4;
         let url = uuid_url("share");
@@ -884,7 +957,7 @@ mod tests {
             let url = url.clone();
             let calls = calls.clone();
             handles.push(tokio::spawn(async move {
-                coalesce_download_with(&url, || async move {
+                coalesce_download_with(&url, None, || async move {
                     calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     // 让出一次：其余调用者先登记到同一 cell 的等待队列
                     tokio::task::yield_now().await;
@@ -924,7 +997,7 @@ mod tests {
             let url = url.clone();
             let calls = calls.clone();
             handles.push(tokio::spawn(async move {
-                coalesce_download_with(&url, || async move {
+                coalesce_download_with(&url, None, || async move {
                     calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     tokio::task::yield_now().await;
                     Err(DownloadFailure::NotFound)
@@ -949,11 +1022,11 @@ mod tests {
         let url_b = uuid_url("indep-b");
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (a, b) = tokio::join!(
-            coalesce_download_with(&url_a, || async {
+            coalesce_download_with(&url_a, None, || async {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(Bytes::from_static(b"A"))
             }),
-            coalesce_download_with(&url_b, || async {
+            coalesce_download_with(&url_b, None, || async {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(Bytes::from_static(b"B"))
             }),
@@ -973,7 +1046,7 @@ mod tests {
         let url = uuid_url("refetch");
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         for expected in 1..=2u8 {
-            let bytes = coalesce_download_with(&url, || async {
+            let bytes = coalesce_download_with(&url, None, || async {
                 calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(Bytes::from(vec![expected]))
             })
@@ -997,7 +1070,7 @@ mod tests {
             let url = url.clone();
             let started = started.clone();
             tokio::spawn(async move {
-                coalesce_download_with(&url, || async move {
+                coalesce_download_with(&url, None, || async move {
                     started.notify_one();
                     // 挂起直到调用方取消（合并任务被 abort）
                     std::future::pending::<()>().await;
@@ -1033,7 +1106,7 @@ mod tests {
             let calls = calls.clone();
             let started_a = started_a.clone();
             tokio::spawn(async move {
-                coalesce_download_with(&url, || async move {
+                coalesce_download_with(&url, None, || async move {
                     calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     started_a.notify_one();
                     std::future::pending::<()>().await;
@@ -1051,7 +1124,7 @@ mod tests {
             let started_b = started_b.clone();
             let release_b = release_b.clone();
             tokio::spawn(async move {
-                coalesce_download_with(&url, || async move {
+                coalesce_download_with(&url, None, || async move {
                     calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     started_b.notify_one();
                     release_b.notified().await;
@@ -1070,7 +1143,7 @@ mod tests {
             let url = url.clone();
             let calls = calls.clone();
             tokio::spawn(async move {
-                coalesce_download_with(&url, || async move {
+                coalesce_download_with(&url, None, || async move {
                     calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     Ok(Bytes::from_static(b"C"))
                 })
