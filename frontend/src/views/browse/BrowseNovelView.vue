@@ -695,6 +695,13 @@ function openInPixiv(): void {
 
 /* ===== 翻页器（AppPagination reader 变体自带吸底样式，此处无本地翻页器样式） ===== */
 
+/* 翻页器在本视图是 flex 尾行、天然贴窗口下边；抵消 AppPagination reader 变体的
+ * sticky（该 sticky 为系列分集页的长滚动页而设）——否则它会相对 .app-content
+ * 内容盒（含 24px padding）上移，底栏下方漏出滚动内容。 */
+:deep(.app-pagination.is-reader) {
+  position: static;
+}
+
 /* 底栏左侧字号缩放控件（经 AppPagination #leading 插槽渲染） */
 .font-scale {
   display: inline-flex;
