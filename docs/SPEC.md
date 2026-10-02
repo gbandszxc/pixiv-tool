@@ -658,7 +658,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   滚动层（`flex:1; min-height:0; overflow-y:auto`，6px 细滚动条）/ 底栏 AppPagination
   （`variant="reader"`）；顶底栏贴窗口上下边、只有中间层滚动。正文列默认不限宽，仅
   `@media (min-width: 1921px), (min-height: 1081px)`（大于 16:9 1080p 的屏幕）限 1280px
-  （≈100% 字号下 75 个全角字/行；1920×1080 及以下仍满宽）；
+  （列内边距 `--space-lg` 16px，100% 字号下约 78 个全角字/行；1920×1080 及以下仍满宽）；
   正文 16px 基准 × `--novel-scale`，章节标题 1.15em。**正文内嵌图**：
   `[uploadedimage:id]` 的 id 由详情响应 `embedded_images`（`id → pximg URL`，取自同一
   响应的 `textEmbeddedImages`，无额外请求）解析为图片，整行成块居中、限宽于正文列、
