@@ -518,14 +518,17 @@ const typeTabs = computed(() => [
       </span>
     </div>
 
-    <WorkGrid
-      :items="sortedItems"
-      :loading="loading"
-      :error="error"
-      paginated
-      @retry="load()"
-      @select="goWork"
-    />
+    <!-- 查询容器：供 WorkGrid 的分页列数档位（2/4/5/10 列）按实际内容宽度查询 -->
+    <div class="grid-host">
+      <WorkGrid
+        :items="sortedItems"
+        :loading="loading"
+        :error="error"
+        paginated
+        @retry="load()"
+        @select="goWork"
+      />
+    </div>
 
     <!-- 页码分页（显示页 20 条；接口每页 60 条由本页切成 3 页） -->
     <AppPagination
@@ -601,6 +604,11 @@ const typeTabs = computed(() => [
   flex: none;
   width: auto;
   min-width: 0;
+}
+
+/* 分页网格的查询容器：WorkGrid.paginated 按内容宽度切换 2/4/5/10 列（20 条的因数） */
+.grid-host {
+  container-type: inline-size;
 }
 
 /* 结果行：「约 N 件」+ 计数补取进度（本页排序控件与筛选控件同行，见 .local-sort） */

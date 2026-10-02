@@ -115,7 +115,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="work-grid-wrap">
     <!-- 首屏骨架：纯 surface-container 色块，不做闪烁动画（DESIGN.md 克制动效 / reduced-motion） -->
-    <div v-if="loading && !visibleItems.length" class="work-grid" aria-hidden="true">
+    <div v-if="loading && !visibleItems.length" class="work-grid" :class="{ paginated }" aria-hidden="true">
       <div v-for="n in skeletonCount" :key="n" class="skeleton-card">
         <div class="skeleton-cover" :class="{ portrait: n % 5 === 0 }"></div>
         <div class="skeleton-line w70"></div>
@@ -144,7 +144,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
-      <div class="work-grid">
+      <div class="work-grid" :class="{ paginated }">
         <WorkCard
           v-for="(item, index) in visibleItems"
           :key="`${item.kind}:${item.id}`"
@@ -180,6 +180,34 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: var(--space-md) var(--space-lg);
+}
+
+/*
+ * 页码分页模式：每页条数固定（搜索页 20 条），列数只取该页数的因数（2 / 4 / 5 / 10），
+ * 保证任何响应宽度下每行都排满。档位由外层查询容器宽度决定（搜索页 `.grid-host`
+ * 提供 container-type: inline-size）；无容器时退回基础 2 列。
+ * 阈值 = 列数 × 140px 最小卡宽 + (列数 - 1) × 16px 列间距。
+ */
+.work-grid.paginated {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@container (min-width: 608px) {
+  .work-grid.paginated {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+@container (min-width: 764px) {
+  .work-grid.paginated {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+
+@container (min-width: 1544px) {
+  .work-grid.paginated {
+    grid-template-columns: repeat(10, 1fr);
+  }
 }
 
 .skeleton-card {
