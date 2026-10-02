@@ -260,6 +260,7 @@ jobs:
 
           {
             cat "$BODY"
+            echo
             echo "## 安装包"
             echo
             echo "| 架构 | Windows | macOS | Linux |"
