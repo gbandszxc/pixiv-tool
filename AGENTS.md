@@ -58,6 +58,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 | `docs/PACKAGING.md` | 打包 / 分发 / 构建环境 / 三平台图标 / macOS 签名 | 改构建命令、工具链、Tauri 权限声明、图标流程、发布或签名策略 |
 | `docs/PIXIV-API.md` | pixiv 接口契约事实源（端点 / 参数 / 分页 / 实现与测试映射 / 维护矩阵） | 任何 pixiv 端点、参数、响应解析、分页语义变化时，与代码、`src-tauri/tests/pixiv_api/` 同批更新 |
 | `docs/research/` | 外部接口调研证据档案（pixiv 只读浏览 API 等） | 补充新的抓包 / 实测证据；契约或分页语义变化改 `docs/PIXIV-API.md` 并回填勘误 |
+| `docs/releases/<版本>.md` | 各版本 Release 的更新说明正文（发版 CI 读取后拼上安装包表格） | 每次发版前新建该版本文件；改 CI 正文拼装逻辑时同批更新 |
 | `docs/agents/` | skills 配置：issue tracker / triage 标签 / domain 导航 | 改 issue 路径或编号规则、triage 标签、领域文档布局 |
 | `PRODUCT.md` | 产品定位、目标用户、范围边界 | 产品定位或用户可见范围变化 |
 | `.scratch/` · `.archive/pywebview-era/` | **非项目文档**：本机 issue tracker / 旧栈归档，被 `.gitignore` 忽略 | 不维护、不索引，换台机器 clone 不到 |

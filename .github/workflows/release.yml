@@ -1,6 +1,8 @@
 # 发版流水线：手动触发、指定版本号、幂等覆盖、三平台安装包
-# 用法：仓库 Actions → Release → Run workflow → 输入版本号（semver，如 1.0.0）
-# 产物：Windows x64 MSI / macOS universal + aarch64 DMG / Linux x64 AppImage
+# 用法：仓库 Actions → Release → Run workflow → 输入版本号（semver，如 1.1.0）
+# 产物：Windows x64 MSI / macOS universal + aarch64 DMG /
+#       Linux x64 AppImage + deb + rpm / Linux arm64 deb + rpm
+# Release 正文：docs/releases/<版本>.md（存在则作为更新说明）＋ 按实际产物生成的安装包表格
 # 幂等：同版本号重复执行会先删除旧 v<版本> Release 与 Tag，再重建并覆盖产物
 name: Release
 
@@ -8,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（semver，如 1.0.0）'
+        description: '版本号（semver，如 1.1.0）'
         required: true
         type: string
 
@@ -31,7 +33,7 @@ jobs:
       - name: semver 校验（不合法直接失败，避免白跑 40 分钟构建）
         run: |
           if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
-            echo "::error::版本号不合法：'$VERSION'（期望 semver，如 1.0.0）"
+            echo "::error::版本号不合法：'$VERSION'（期望 semver，如 1.1.0）"
             exit 1
           fi
           echo "本次发布：v$VERSION"
@@ -59,11 +61,19 @@ jobs:
             rust_targets: 'aarch64-apple-darwin'
             tauri_target: aarch64-apple-darwin
             bundles: dmg
-          - id: linux-x64-appimage
+          # Linux 基线取 22.04（官方推荐的 WebKitGTK 4.1 最老基线，保证 glibc 下限）
+          - id: linux-x64
             os: ubuntu-22.04
             rust_targets: ''
             tauri_target: ''
-            bundles: appimage
+            bundles: appimage,deb,rpm
+          # arm64 用 GitHub 原生 arm64 runner 原生编译（不走交叉编译）；
+          # AppImage 的 linuxdeploy 在 arm64 上缺可靠支持，因此 arm64 只出 deb/rpm
+          - id: linux-arm64
+            os: ubuntu-22.04-arm
+            rust_targets: ''
+            tauri_target: ''
+            bundles: deb,rpm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -87,14 +97,16 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.id }}
 
-      - name: 安装 Linux 系统依赖（webkit2gtk-4.1 / libclang 等）
+      - name: 安装 Linux 系统依赖（webkit2gtk-4.1 / libclang / rpm 等）
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev \
-            librsvg2-dev libclang-dev
+            librsvg2-dev libclang-dev cmake rpm
+          # BoringSSL 在部分平台需要 go 生成汇编；arm64 镜像不保证预装
+          command -v go >/dev/null 2>&1 || sudo apt-get install -y golang-go
 
       - name: 安装 NASM（windows-2025-vs2026 镜像未预装，BoringSSL 汇编需要）
         if: runner.os == 'Windows'
@@ -180,7 +192,8 @@ jobs:
         run: |
           mkdir -p dist
           find src-tauri/target -path '*/bundle/*' -type f \
-            \( -name '*.msi' -o -name '*.dmg' -o -name '*.AppImage' \) \
+            \( -name '*.msi' -o -name '*.dmg' -o -name '*.AppImage' \
+               -o -name '*.deb' -o -name '*.rpm' \) \
             -exec cp -v {} dist/ \;
           [ -n "$(ls -A dist)" ] || { echo "::error::未找到任何安装包产物"; exit 1; }
           ls -la dist/
@@ -211,13 +224,53 @@ jobs:
         run: |
           set -euo pipefail
           TAG="v$VERSION"
+          BASE="${{ github.server_url }}/${{ github.repository }}/releases/download/$TAG"
           # 幂等：先删同名 Release（连带 Tag），同版本号重复执行即整体覆盖
           gh release delete "$TAG" --yes --cleanup-tag || true
           git push origin ":refs/tags/$TAG" || true
           sleep 3
           ls -la dist/
+
+          # 安装包表格按实际下载到的产物生成：产物文件名带版本与架构，写死会随
+          # 打包器命名规则变化而失效（缺哪个格式就显示 —）
+          link() { # link <文件匹配式> <链接文字>
+            local f
+            f=$(find dist -maxdepth 1 -type f -name "$1" | head -1)
+            if [ -n "$f" ]; then
+              printf '[%s](%s/%s)' "$2" "$BASE" "$(basename "$f")"
+            else
+              printf '—'
+            fi
+          }
+
+          {
+            if [ -f "docs/releases/$VERSION.md" ]; then
+              cat "docs/releases/$VERSION.md"
+              echo
+            fi
+            echo "## 安装包"
+            echo
+            echo "| 架构 | Windows | macOS | Linux |"
+            echo "| --- | --- | --- | --- |"
+            printf '| x86-64 (64-bit) | %s | %s | %s · %s · %s |\n' \
+              "$(link '*_x64_*.msi' MSI)" \
+              "$(link '*_universal.dmg' '通用 DMG')" \
+              "$(link '*_amd64.AppImage' AppImage)" \
+              "$(link '*_amd64.deb' deb)" \
+              "$(link '*.x86_64.rpm' rpm)"
+            printf '| ARM64 | — | %s | %s · %s |\n' \
+              "$(link '*_aarch64.dmg' 'DMG')" \
+              "$(link '*_arm64.deb' deb)" \
+              "$(link '*.aarch64.rpm' rpm)"
+            echo
+            echo "macOS 通用 DMG 同时支持 Intel 与 Apple Silicon（Intel 机器用它即可），ARM64 一行另给 Apple Silicon 专用包。"
+            echo
+            echo "安装包未做代码签名：macOS 首次打开需右键 → 打开；Windows SmartScreen 提示属正常现象。"
+          } > release-notes.md
+
+          cat release-notes.md
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "Pixiv Tool v$VERSION" \
-            --notes "$(printf 'GitHub Actions 自动构建。\n\n- Windows x64：*.msi\n- macOS 通用（Intel + Apple Silicon）：*_universal.dmg\n- macOS Apple Silicon：*_aarch64.dmg\n- Linux x64：*_amd64.AppImage\n\n安装包未做代码签名：macOS 首次打开需右键→打开；Windows SmartScreen 提示属正常现象。')" \
+            --notes-file release-notes.md \
             dist/*

@@ -161,9 +161,25 @@ GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`�
    （仅本次构建环境内，不回写仓库）；**发版后需手动把仓库内四处版本号同步为
    刚发布的版本**：`tauri.conf.json` / `Cargo.toml` / `Cargo.lock` /
    `frontend/package.json`，否则本地 dev 构建与账号菜单版本回显仍是旧值
-3. 四路并行构建：Windows x64 **MSI** / macOS **universal DMG** /
-   macOS **aarch64 DMG** / Linux x64 **AppImage**
-4. **幂等覆盖**：发布阶段先删除同名 `v<版本>` Release 与 Tag 再重建，
+3. 五路并行构建：
+
+   | 任务 | Runner | 产物 |
+   |---|---|---|
+   | `windows-x64-msi` | `windows-latest` | MSI |
+   | `macos-universal-dmg` | `macos-latest` | universal DMG（Intel + Apple Silicon） |
+   | `macos-aarch64-dmg` | `macos-latest` | aarch64 DMG |
+   | `linux-x64` | `ubuntu-22.04` | AppImage + deb + rpm |
+   | `linux-arm64` | `ubuntu-22.04-arm` | deb + rpm |
+
+   Linux 基线固定 22.04（官方推荐的最老 WebKitGTK 4.1 基线，保证 glibc 下限）；
+   arm64 走 GitHub **原生 arm64 runner** 编译，不做交叉编译。AppImage 的
+   linuxdeploy 在 arm64 上缺可靠支持，故 arm64 不出 AppImage。构建机额外装
+   `cmake` / `rpm`（rpm 打包）与 `go`（BoringSSL 汇编，缺失时自动补装）
+4. **Release 正文拼装**：取 `docs/releases/<版本>.md` 作为更新说明（无则跳过）＋
+   按本次实际下载到的产物**动态生成**安装包表格（带下载直链；某种格式缺失则显示
+   `—`），避免文件名写死随打包器命名规则变化而失效。表格列固定为
+   架构 ×（Windows / macOS / Linux）
+5. **幂等覆盖**：发布阶段先删除同名 `v<版本>` Release 与 Tag 再重建，
    同版本号重复执行总是覆盖；版本号不变时无需清理即可重发
 
 产物为未签名包（macOS ad-hoc，无 Developer ID 公证；本机自签名方案见 §7，
