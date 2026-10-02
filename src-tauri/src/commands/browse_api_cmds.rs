@@ -107,6 +107,23 @@ fn validate_search(kind: &str, word: &str, mode: Option<&str>) -> Result<(), Str
     Ok(())
 }
 
+/// 计数批量 kind/ids 粗校验（illust/manga/ugoira 同走 /ajax/illust/{id} 详情）。
+fn validate_work_counts(kind: &str, ids: &[i64]) -> Result<(), String> {
+    if !matches!(kind, "illust" | "manga" | "ugoira" | "novel") {
+        return Err(format!("不支持的搜索类型: {kind}"));
+    }
+    if ids.is_empty() {
+        return Err("作品 ID 列表不能为空".to_string());
+    }
+    if ids.len() > 60 {
+        return Err(format!("单次最多查询 60 个作品（收到 {}）", ids.len()));
+    }
+    if ids.iter().any(|id| *id <= 0) {
+        return Err("作品 ID 必须为正整数".to_string());
+    }
+    Ok(())
+}
+
 /// 排行榜 mode 白名单（与 api 层 validate_ranking 同表；Premium 限定榜不在表内）。
 const RANKING_MODES_ILLUST: [&str; 6] = [
     "daily",
@@ -333,6 +350,29 @@ pub async fn browse_search_impl(
     validate_page(page)?;
     build_browse_api(state)?
         .get_search(kind, word, order, mode, s_mode, type_, page)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// 作品三项计数批量（搜索页本页排序用）。ids 上限 60（= 一个接口页）；
+/// 逐项失败由 api 层跳过（返回表缺该 id，前端按未知处理）。
+#[tauri::command]
+pub async fn browse_work_counts(
+    state: State<'_, AppState>,
+    kind: String,
+    ids: Vec<i64>,
+) -> Result<Value, String> {
+    browse_work_counts_impl(&state, &kind, &ids).await
+}
+
+pub async fn browse_work_counts_impl(
+    state: &AppState,
+    kind: &str,
+    ids: &[i64],
+) -> Result<Value, String> {
+    validate_work_counts(kind, ids)?;
+    build_browse_api(state)?
+        .get_work_counts(kind, ids)
         .await
         .map_err(|err| err.to_string())
 }

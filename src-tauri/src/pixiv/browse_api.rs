@@ -108,6 +108,23 @@ pub struct BrowseList {
     pub next_page: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_last_page: Option<bool>,
+    /// search 专用：最后一页页码（接口每页 60，pixiv 上限 1000）；
+    /// 供前端页码分页换算总页数（接口页 × 每接口页的显示页数）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_page: Option<i64>,
+}
+
+/// 作品三项计数（搜索页本页排序用）。列表端点不返回计数，逐项请求详情提取；
+/// `/ajax/illust/{id}` 与 `/ajax/novel/{id}` 三项字段名一致（实测 2026-10-02）。
+/// 单项请求失败 → 该 id 不出现在返回表中（前端按未知处理）。
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkCounts {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub like_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bookmark_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_count: Option<i64>,
 }
 
 /// 频道页热门标签。
@@ -672,6 +689,15 @@ fn parse_work_thumb(v: &Value, fallback_kind: &str) -> Option<BrowseWorkItem> {
     })
 }
 
+/// 详情 body → 三项计数（`/ajax/illust/{id}` 与 `/ajax/novel/{id}` 同名字段）。
+fn parse_work_counts(body: &Value) -> WorkCounts {
+    WorkCounts {
+        like_count: body.get("likeCount").and_then(as_i64_loose),
+        bookmark_count: body.get("bookmarkCount").and_then(as_i64_loose),
+        view_count: body.get("viewCount").and_then(as_i64_loose),
+    }
+}
+
 /// `thumbnails.illust|novel` 索引表：id → 条目引用（缺 id 的条目跳过）。
 fn parse_index<'a>(body: &'a Value, key: &str) -> HashMap<i64, &'a Value> {
     let mut map = HashMap::new();
@@ -761,6 +787,7 @@ fn list_from_items(items: Vec<BrowseWorkItem>) -> BrowseList {
         total: None,
         next_page: None,
         is_last_page: None,
+        last_page: None,
     }
 }
 
@@ -1047,6 +1074,7 @@ fn parse_follow_latest(body: &Value, kind: &str, page: i64) -> BrowseList {
         items,
         total: None,
         next_page,
+        last_page: None,
     }
 }
 
@@ -1072,10 +1100,10 @@ fn parse_search(body: &Value, kind: &str, page: i64) -> BrowseList {
     let total = container
         .and_then(|c| c.get("total"))
         .and_then(as_i64_loose);
-    let (next_page, is_last_page) = match container
+    let last_page = container
         .and_then(|c| c.get("lastPage"))
-        .and_then(as_i64_loose)
-    {
+        .and_then(as_i64_loose);
+    let (next_page, is_last_page) = match last_page {
         Some(last_page) => (
             (page < last_page).then(|| page + 1),
             Some(page >= last_page),
@@ -1087,6 +1115,7 @@ fn parse_search(body: &Value, kind: &str, page: i64) -> BrowseList {
         total,
         next_page,
         is_last_page,
+        last_page,
     }
 }
 
@@ -2051,6 +2080,37 @@ impl PixivApi {
         Ok(to_value(&parse_search(&body, kind, page)))
     }
 
+    /// 作品三项计数批量（搜索页本页排序用）：逐项请求详情端点提取。
+    /// 并发经既有全局限速（2 并发 + 400ms 间隔）自然排队，不额外放开频率；
+    /// 单项失败跳过（warn 日志），不整体失败——无任何成功时返回空表。
+    pub async fn get_work_counts(&self, kind: &str, ids: &[i64]) -> Result<Value, PixivError> {
+        let novel = kind == "novel";
+        let client = self.client();
+        let requests = ids.iter().map(|&id| {
+            let path = if novel {
+                format!("/ajax/novel/{id}")
+            } else {
+                format!("/ajax/illust/{id}")
+            };
+            async move {
+                match client.get_json(&path).await {
+                    Ok(body) => Some((id, parse_work_counts(&body))),
+                    Err(err) => {
+                        log::warn!("作品计数获取失败（{kind} {id}）: {err}");
+                        None
+                    }
+                }
+            }
+        });
+        let counts: HashMap<String, WorkCounts> = futures_util::future::join_all(requests)
+            .await
+            .into_iter()
+            .flatten()
+            .map(|(id, counts)| (id.to_string(), counts))
+            .collect();
+        Ok(json!({ "counts": counts }))
+    }
+
     /// 排行榜：illust/manga/ugoira → /ranking.php；novel → /ajax/ranking/novel。
     /// 返回 { items, date, prev_date, next_date, next_page }；date 为 yyyymmdd。
     pub async fn get_ranking(
@@ -2207,6 +2267,7 @@ impl PixivApi {
                 total: Some(total),
                 next_page: None,
                 is_last_page: Some(true),
+                last_page: None,
             }));
         }
         // ids 均为数字，固定 ASCII 键名 ids[] 直拼；重复 ids[] 参数
@@ -2227,6 +2288,7 @@ impl PixivApi {
             total: Some(total),
             next_page: has_more.then(|| page + 1),
             is_last_page: Some(!has_more),
+            last_page: None,
         }))
     }
 
@@ -3011,6 +3073,7 @@ mod tests {
         assert_eq!(list.total, Some(2345));
         assert_eq!(list.next_page, Some(3), "p=2 < lastPage=3");
         assert_eq!(list.is_last_page, Some(false));
+        assert_eq!(list.last_page, Some(3), "lastPage 原样回传（前端页码分页用）");
 
         let novels = json!({
             "novel": {
@@ -3022,6 +3085,7 @@ mod tests {
         assert_eq!(list.total, Some(30));
         assert_eq!(list.next_page, None, "p=1 >= lastPage=1");
         assert_eq!(list.is_last_page, Some(true));
+        assert_eq!(list.last_page, Some(1));
         assert_eq!(list.items[0].series_id, Some(1));
     }
 
@@ -3031,6 +3095,26 @@ mod tests {
         assert!(list.items.is_empty());
         assert!(list.total.is_none());
         assert!(list.next_page.is_none());
+        assert!(list.last_page.is_none());
+    }
+
+    // ---- 作品计数批量（browse_work_counts）----
+
+    #[test]
+    fn parse_work_counts_reads_three_fields() {
+        // /ajax/illust/{id} 与 /ajax/novel/{id} 同名字段（2026-10-02 实测）
+        let counts = parse_work_counts(&json!({
+            "likeCount": 3033, "bookmarkCount": 4610, "viewCount": 51994
+        }));
+        assert_eq!(counts.like_count, Some(3033));
+        assert_eq!(counts.bookmark_count, Some(4610));
+        assert_eq!(counts.view_count, Some(51994));
+
+        // 字段缺失 → None（序列化时省略）；字符串数字容错
+        let counts = parse_work_counts(&json!({"bookmarkCount": "88"}));
+        assert_eq!(counts.like_count, None);
+        assert_eq!(counts.bookmark_count, Some(88));
+        assert_eq!(counts.view_count, None);
     }
 
     // ---- ranking ----

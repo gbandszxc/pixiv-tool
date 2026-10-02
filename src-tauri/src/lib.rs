@@ -131,6 +131,7 @@ pub fn run() {
             commands::browse_api_cmds::browse_discover,
             commands::browse_api_cmds::browse_follow_latest,
             commands::browse_api_cmds::browse_search,
+            commands::browse_api_cmds::browse_work_counts,
             commands::browse_api_cmds::browse_ranking,
             commands::browse_api_cmds::browse_work_detail,
             commands::browse_api_cmds::browse_related,

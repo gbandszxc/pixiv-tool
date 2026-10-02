@@ -25,7 +25,7 @@ use pixiv_tool_lib::commands::browse_api_cmds::{
     browse_discover_impl, browse_follow_latest_impl, browse_home_feed_impl,
     browse_illust_series_impl, browse_novel_series_impl, browse_ranking_impl, browse_related_impl,
     browse_search_impl, browse_user_profile_impl, browse_user_works_impl, browse_watchlist_impl,
-    browse_work_comments_impl, browse_work_detail_impl, build_browse_api,
+    browse_work_comments_impl, browse_work_counts_impl, browse_work_detail_impl, build_browse_api,
 };
 use pixiv_tool_lib::cookies::CookieStore;
 use pixiv_tool_lib::db::Db;
@@ -84,6 +84,12 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
     );
     assert_eq!(
         browse_search_impl(&state, "novel", "オリジナル", None, None, None, None, 1)
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    assert_eq!(
+        browse_work_counts_impl(&state, "illust", &[9000001, 9000002])
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
@@ -219,6 +225,30 @@ async fn invalid_params_rejected_before_login_guard() {
             .await
             .unwrap_err(),
         "不支持的搜索类型: video"
+    );
+    // 计数批量：非法 kind / 空 ids / 超 60 / 非正 id（均在登录守卫之前）
+    assert_eq!(
+        browse_work_counts_impl(&state, "video", &[1])
+            .await
+            .unwrap_err(),
+        "不支持的搜索类型: video"
+    );
+    assert_eq!(
+        browse_work_counts_impl(&state, "illust", &[]).await.unwrap_err(),
+        "作品 ID 列表不能为空"
+    );
+    let too_many: Vec<i64> = (1..=61).collect();
+    assert_eq!(
+        browse_work_counts_impl(&state, "illust", &too_many)
+            .await
+            .unwrap_err(),
+        "单次最多查询 60 个作品（收到 61）"
+    );
+    assert_eq!(
+        browse_work_counts_impl(&state, "novel", &[9000001, 0])
+            .await
+            .unwrap_err(),
+        "作品 ID 必须为正整数"
     );
     assert_eq!(
         browse_work_detail_impl(&state, "video", 1)

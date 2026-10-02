@@ -206,6 +206,15 @@
 | `relatedTags` | Array | 相关标签（`{tag, translatedName, count}`） |
 | `tagTranslation` / `suggestChips` / `extraData.meta` | - | 翻译 / 搜索建议 chips / 页面 meta（canonical 等） |
 
+> **列表项不含三项计数（2026-10-02 实测）**：`illustManga.data[]` 项**没有**
+> `likeCount` / `bookmarkCount` / `viewCount`（novels 项仅自带 `bookmarkCount`，
+> 无 like/view）。三项计数只在详情端点 `/ajax/illust/{id}` 与 `/ajax/novel/{id}`
+> （字段名一致）。官方搜索页卡片上的收藏数（❤️N）为**逐项请求详情端点**所得
+> （登录态抓包：一次搜索页加载触发 60 个 `/ajax/illust/{id}` 请求）；应用侧对应
+> `browse_work_counts`（详见 `docs/PIXIV-API.md` §搜索）。
+> **每页固定 60 条**：`limit` / `per_page` / `rows` / `count` 参数实测均无效
+> （返回条数不变）；`lastPage` 上限 1000。
+
 ### 按 ID 直达的 URL 形态（客户端路由）
 
 | 内容 | URL |

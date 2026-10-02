@@ -28,6 +28,11 @@ const props = withDefaults(
     removable?: boolean;
     /** 隐藏网格内的 R-18 计数提示（频道页自带的筛选条已在页级显示同一口径计数） */
     hideR18Hint?: boolean;
+    /**
+     * 页码分页模式：关闭无限滚动（不注册 IntersectionObserver / 不 emit load-more /
+     * 不显示「没有更多」），翻页完全由父级 AppPagination 驱动。
+     */
+    paginated?: boolean;
   }>(),
   {
     loading: false,
@@ -38,6 +43,7 @@ const props = withDefaults(
     hooks: false,
     removable: false,
     hideR18Hint: false,
+    paginated: false,
   }
 );
 
@@ -61,7 +67,7 @@ let active = true;
 
 /** 仍按未过滤的 props.items 判断：R-18 全量过滤时保持翻页（可能短暂出现空态继续拉取）。 */
 function maybeLoadMore(): void {
-  if (!active || !props.hasMore || props.loading || props.loadingMore || props.error || !props.items.length) return;
+  if (props.paginated || !active || !props.hasMore || props.loading || props.loadingMore || props.error || !props.items.length) return;
   emit("load-more");
 }
 
@@ -77,13 +83,14 @@ function checkNearViewport(): void {
 }
 
 onMounted(() => {
+  if (props.paginated) return;
   observer = new IntersectionObserver(onIntersect, { rootMargin: "480px 0px" });
   if (sentinel.value) observer.observe(sentinel.value);
 });
 
 onActivated(() => {
   active = true;
-  if (sentinel.value) observer?.observe(sentinel.value);
+  if (!props.paginated && sentinel.value) observer?.observe(sentinel.value);
 });
 onDeactivated(() => {
   active = false;
@@ -94,7 +101,7 @@ watch(
   () => [props.items.length, props.hasMore, props.loading, props.loadingMore, props.error],
   async () => {
     await nextTick();
-    if (active && sentinel.value && observer) observer.observe(sentinel.value);
+    if (!props.paginated && active && sentinel.value && observer) observer.observe(sentinel.value);
     checkNearViewport();
   }
 );
@@ -157,10 +164,10 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </div>
-      <p v-if="!hasMore" class="grid-end">{{ t("common.browseNoMore") }}</p>
+      <p v-if="!paginated && !hasMore" class="grid-end">{{ t("common.browseNoMore") }}</p>
     </template>
 
-    <div ref="sentinel" class="grid-sentinel" aria-hidden="true"></div>
+    <div v-if="!paginated" ref="sentinel" class="grid-sentinel" aria-hidden="true"></div>
   </div>
 </template>
 

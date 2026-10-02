@@ -12,15 +12,26 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   自带类型不受 tab 影响；未命中按关键词搜索。
  * - 端点映射：kind=illust|manga → artworks 检索（type=illust|manga）；
  *   kind=novel → novels 检索（不传 type）。
- * - 结果 WorkGrid + 「约 N 件」total + next_page 无限加载。
+ * - 结果 WorkGrid + 「约 N 件」total；页码分页（AppPagination）：接口每页 60 条
+ *   固定，前端切 3 个显示页（20/页），接口页缓存在内存供跨页复用。
+ * - 本页排序：点赞/收藏/浏览 三键升降序，仅对当前显示页 20 条本地排序；
+ *   三项计数列表接口不返回（官方页面亦逐项请求详情），按需经 browse_work_counts
+ *   分批补取（全局限速），会话内缓存 + 进度提示，缺失项垫底。
  */
-import { computed, ref, watch } from "vue";
+import { computed, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter, type LocationQuery } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { browseSearch, type BrowseWorkItem } from "../../api/browse";
+import {
+  browseSearch,
+  browseWorkCounts,
+  errorMessage,
+  type BrowseWorkItem,
+  type WorkCounts,
+} from "../../api/browse";
+import AppPagination from "../../components/common/AppPagination.vue";
 import SectionTabs from "../../components/browse/SectionTabs.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
-import { useInfiniteList } from "../../composables/useInfiniteList";
+import { notify } from "../../ui/notify";
 import { parseBrowseInput, type ParsedBrowseInput } from "../../utils/parseInput";
 
 const { t } = useI18n();
@@ -88,30 +99,213 @@ function sigOf(p: SearchParams): string {
   return [p.word, p.kind, p.order, p.mode, p.sMode].join("\u0000");
 }
 
-// ===== 结果列表 =====
+// ===== 结果列表（页码分页：接口每页 60 条固定，前端切 3 个显示页）=====
 
+/** 显示页条数（AppPagination 每页容量）。 */
+const PAGE_SIZE = 20;
+/** 一个接口页（60 条）切成几个显示页。 */
+const SEGMENTS_PER_API_PAGE = 3;
+/** 接口页缓存上限（超出淘汰最旧；被淘汰页再访问时重新请求）。 */
+const MAX_API_PAGES = 30;
+
+const page = ref(1);
 const total = ref<number | null>(null);
-const list = useInfiniteList<BrowseWorkItem>(async (page) => {
-  const data = await browseSearch(kind.value, word.value.trim(), {
-    order: order.value,
-    mode: mode.value,
-    s_mode: sMode.value,
-    // novel 走 novels 端点不带 type；illust/manga 走 artworks 端点并带 type
-    type: kind.value === "novel" ? undefined : kind.value,
-    page,
-  });
-  if (page === 1) total.value = data.total ?? null;
-  return data;
+const lastPage = ref<number | null>(null);
+const items = shallowRef<BrowseWorkItem[]>([]);
+const loading = ref(false);
+const error = ref("");
+
+/** 接口页缓存（apiPage → 60 条）；搜索参数变化时清空，跨显示页复用避免重复请求。 */
+const apiPages = new Map<number, BrowseWorkItem[]>();
+/** 请求序号守卫：快速翻页 / 切条件时丢弃过期响应。 */
+let seq = 0;
+
+/** 显示页数：total÷20 与 lastPage×3 取小（lastPage 是 pixiv 端硬上限）。 */
+const pageCount = computed<number | null>(() => {
+  const byTotal = total.value != null ? Math.ceil(total.value / PAGE_SIZE) : null;
+  const byLast = lastPage.value != null ? lastPage.value * SEGMENTS_PER_API_PAGE : null;
+  if (byTotal == null) return byLast;
+  if (byLast == null) return byTotal;
+  return Math.min(byTotal, byLast);
 });
-const { items, loading, loadingMore, error, hasMore, loadMore, retry } = list;
+
+/** 加载当前显示页：命中接口页缓存直接切片，否则请求该接口页并缓存。 */
+async function load(): Promise<void> {
+  const keyword = word.value.trim();
+  if (!keyword) return;
+  const token = ++seq;
+  loading.value = true;
+  error.value = "";
+  const apiPage = Math.ceil(page.value / SEGMENTS_PER_API_PAGE);
+  const offset = ((page.value - 1) % SEGMENTS_PER_API_PAGE) * PAGE_SIZE;
+  const cached = apiPages.get(apiPage);
+  if (cached) {
+    items.value = cached.slice(offset, offset + PAGE_SIZE);
+    loading.value = false;
+    afterLoad();
+    return;
+  }
+  try {
+    const data = await browseSearch(kind.value, keyword, {
+      order: order.value,
+      mode: mode.value,
+      s_mode: sMode.value,
+      // novel 走 novels 端点不带 type；illust/manga 走 artworks 端点并带 type
+      type: kind.value === "novel" ? undefined : kind.value,
+      page: apiPage,
+    });
+    if (token !== seq) return;
+    apiPages.set(apiPage, data.items);
+    if (apiPages.size > MAX_API_PAGES) {
+      apiPages.delete(apiPages.keys().next().value!);
+    }
+    total.value = data.total ?? null;
+    lastPage.value = data.last_page ?? null;
+    items.value = data.items.slice(offset, offset + PAGE_SIZE);
+  } catch (err) {
+    if (token !== seq) return;
+    items.value = [];
+    total.value = null;
+    lastPage.value = null;
+    error.value = errorMessage(err);
+  } finally {
+    if (token === seq) loading.value = false;
+  }
+  if (token === seq) afterLoad();
+}
+
+/** 整页替换后的收尾：回页首；处于计数排序时为新页补取计数。 */
+function afterLoad(): void {
+  window.scrollTo({ top: 0 });
+  if (sortMode.value !== "default") void ensureCounts();
+}
+
+// ===== 本页排序（点赞 / 收藏 / 浏览 × 升/降；仅当前显示页本地排序）=====
+
+type SortKey = "like" | "bookmark" | "view";
+type SortMode = "default" | `${SortKey}_desc` | `${SortKey}_asc`;
+const SORT_MODES: readonly SortMode[] = [
+  "default",
+  "like_desc",
+  "like_asc",
+  "bookmark_desc",
+  "bookmark_asc",
+  "view_desc",
+  "view_asc",
+];
+
+const sortMode = ref<SortMode>("default");
+
+/** 三项计数缓存（`kind:id` → counts）；会话级，跨搜索 / 翻页复用。 */
+const countsCache = new Map<string, WorkCounts>();
+/** 计数缓存上限（超出淘汰最旧；被淘汰条目重选排序时重新补取）。 */
+const MAX_COUNT_ENTRIES = 5000;
+/** 缓存版本：普通 Map 非响应式，写入后自增以驱动 sortedItems 重算。 */
+const countsVersion = ref(0);
+const countsLoading = ref(false);
+const countsDone = ref(0);
+const countsTotal = ref(0);
+/** 补取期间又来了新页请求：本轮结束后补跑一次。 */
+let countsPending = false;
+
+function countKey(item: BrowseWorkItem): string {
+  return `${item.kind}:${item.id}`;
+}
+
+/** 当前显示页中尚无计数的条目。 */
+function missingCountItems(): BrowseWorkItem[] {
+  return items.value.filter((it) => !countsCache.has(countKey(it)));
+}
+
+/**
+ * 分批补取当前显示页计数（每批 10 个，进度可见）。
+ * 单项请求失败由后端跳过 → 该条计数缺失、排序垫底；整批网络失败提示并保留缺失。
+ */
+async function ensureCounts(): Promise<void> {
+  if (countsLoading.value) {
+    countsPending = true;
+    return;
+  }
+  const missing = missingCountItems();
+  if (!missing.length) return;
+  countsLoading.value = true;
+  countsTotal.value = missing.length;
+  countsDone.value = 0;
+  try {
+    for (let i = 0; i < missing.length; i += 10) {
+      const batch = missing.slice(i, i + 10);
+      const data = await browseWorkCounts(kind.value, batch.map((it) => it.id));
+      for (const it of batch) {
+        const counts = data.counts[String(it.id)];
+        if (!counts) continue;
+        countsCache.set(countKey(it), counts);
+        if (countsCache.size > MAX_COUNT_ENTRIES) {
+          countsCache.delete(countsCache.keys().next().value!);
+        }
+      }
+      countsVersion.value += 1;
+      countsDone.value = Math.min(i + batch.length, missing.length);
+    }
+  } catch (err) {
+    notify(errorMessage(err) || t("browse.search.countsFailed"));
+  } finally {
+    countsLoading.value = false;
+    if (countsPending) {
+      countsPending = false;
+      void ensureCounts();
+    }
+  }
+}
+
+function metricOf(item: BrowseWorkItem, key: SortKey): number | null {
+  const counts = countsCache.get(countKey(item));
+  if (!counts) return null;
+  const value =
+    key === "like" ? counts.like_count : key === "bookmark" ? counts.bookmark_count : counts.view_count;
+  return value ?? null;
+}
+
+/** 展示条目：默认 = 接口顺序；计数缺失项恒垫底。 */
+const sortedItems = computed<BrowseWorkItem[]>(() => {
+  void countsVersion.value; // 建立响应式依赖（countsCache 为普通 Map）
+  const mode = sortMode.value;
+  if (mode === "default") return items.value;
+  const [key, dir] = mode.split("_") as [SortKey, "desc" | "asc"];
+  const sign = dir === "desc" ? -1 : 1;
+  return [...items.value].sort((a, b) => {
+    const av = metricOf(a, key);
+    const bv = metricOf(b, key);
+    if (av === null && bv === null) return 0;
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    return sign * (av - bv);
+  });
+});
+
+function onSortChange(event: Event): void {
+  const value = (event.target as HTMLSelectElement).value;
+  sortMode.value = (SORT_MODES as readonly string[]).includes(value) ? (value as SortMode) : "default";
+  if (sortMode.value !== "default") void ensureCounts();
+}
+
+/** 翻页：整页替换（页码制）；回页首由 afterLoad 处理。 */
+function onPagerChange({ page: next }: { page: number; pageSize: number | undefined }): void {
+  if (next === page.value || loading.value) return;
+  page.value = next;
+  void load();
+}
 
 /** 最近一次已发起搜索的参数签名：URL 回显到达时据此去重，避免 replace 触发二次请求。 */
 let lastFetchedSig = "";
 
 function runSearch(sig: string): void {
   lastFetchedSig = sig;
+  page.value = 1;
   total.value = null;
-  list.reload();
+  lastPage.value = null;
+  apiPages.clear();
+  items.value = [];
+  void load();
 }
 
 // ===== URL ⇄ 状态 =====
@@ -129,7 +323,14 @@ function applyQuery(): void {
     // 无关键词（如从侧栏重新进入）：回到初始空态
     lastFetchedSig = "";
     total.value = null;
-    if (items.value.length || loading.value || loadingMore.value || error.value) list.reset();
+    lastPage.value = null;
+    apiPages.clear();
+    if (items.value.length || loading.value || error.value) {
+      seq += 1; // 丢弃在途响应
+      items.value = [];
+      loading.value = false;
+      error.value = "";
+    }
     return;
   }
   const sig = sigOf(params);
@@ -241,7 +442,7 @@ const typeTabs = computed(() => [
   <div class="page-view">
     <div class="browse-list-header">
       <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseSearch") }}</h1></div>
-      <ListRefreshButton :busy="loading || loadingMore" :disabled="!word.trim()" @refresh="runSearch(sigOf(currentParams()))" />
+      <ListRefreshButton :busy="loading" :disabled="!word.trim()" @refresh="runSearch(sigOf(currentParams()))" />
     </div>
 
     <!-- 搜索工具行：大而醒目的输入框 + 搜索按钮 -->
@@ -291,26 +492,51 @@ const typeTabs = computed(() => [
       </label>
     </div>
 
-    <p v-if="total !== null" class="total-line" role="status">
-      {{ t("browse.search.total", { count: total }) }}
-    </p>
+    <div class="result-bar">
+      <p v-if="total !== null" class="total-line" role="status">
+        {{ t("browse.search.total", { count: total }) }}
+      </p>
+      <span v-if="countsLoading" class="counts-progress" role="status">
+        {{ t("browse.search.countsLoading", { done: countsDone, total: countsTotal }) }}
+      </span>
+      <!-- 本页排序：仅对当前显示页 20 条本地排序（计数按需补取） -->
+      <label class="select-item local-sort">
+        <span>{{ t("browse.search.localSortLabel") }}</span>
+        <md-outlined-select
+          :value="sortMode"
+          :disabled="!items.length"
+          :aria-label="t('browse.search.localSortLabel')"
+          @change="onSortChange"
+        >
+          <md-select-option value="default">{{ t("browse.search.localSortDefault") }}</md-select-option>
+          <md-select-option value="like_desc">{{ t("browse.search.localSortLikeDesc") }}</md-select-option>
+          <md-select-option value="like_asc">{{ t("browse.search.localSortLikeAsc") }}</md-select-option>
+          <md-select-option value="bookmark_desc">{{ t("browse.search.localSortBookmarkDesc") }}</md-select-option>
+          <md-select-option value="bookmark_asc">{{ t("browse.search.localSortBookmarkAsc") }}</md-select-option>
+          <md-select-option value="view_desc">{{ t("browse.search.localSortViewDesc") }}</md-select-option>
+          <md-select-option value="view_asc">{{ t("browse.search.localSortViewAsc") }}</md-select-option>
+        </md-outlined-select>
+      </label>
+    </div>
 
     <WorkGrid
-      :items="items"
+      :items="sortedItems"
       :loading="loading"
       :error="error"
-      :loading-more="loadingMore"
-      :has-more="hasMore"
-      @load-more="loadMore"
-      @retry="retry"
+      paginated
+      @retry="load()"
       @select="goWork"
     />
 
-    <!-- 追加失败的页内重试（WorkGrid 错误态仅在无内容时出现） -->
-    <div v-if="error && items.length" class="append-error">
-      <span>{{ error }}</span>
-      <md-outlined-button @click="retry">{{ t("common.retry") }}</md-outlined-button>
-    </div>
+    <!-- 页码分页（显示页 20 条；接口每页 60 条由本页切成 3 页） -->
+    <AppPagination
+      v-if="pageCount !== null && pageCount > 1"
+      class="pager"
+      :current-page="page"
+      :total-pages="pageCount"
+      :disabled="loading"
+      @change="onPagerChange"
+    />
   </div>
 </template>
 
@@ -371,22 +597,41 @@ const typeTabs = computed(() => [
   min-width: 0;
 }
 
+/* 结果行：左「约 N 件」+ 计数补取进度，右本页排序下拉（窄屏换行） */
+.result-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-md);
+  margin-top: var(--space-md);
+}
+
 .total-line {
-  margin: var(--space-md) 0 0;
+  margin: 0;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-muted);
 }
 
-.append-error {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-md);
+.counts-progress {
+  font-size: 12px;
+  color: var(--ink-subtle);
+}
+
+.local-sort {
+  flex: 0 0 auto;
+  min-width: 0;
+  margin-left: auto;
+}
+
+.local-sort md-outlined-select {
+  width: 200px;
+  min-width: 0;
+}
+
+/* 分页行：仅负责与网格的间距（行内布局由 AppPagination 承担） */
+.pager {
   margin-top: var(--space-lg);
-  color: var(--ink-muted);
-  font-size: 13px;
 }
 
 @media (max-width: 640px) {

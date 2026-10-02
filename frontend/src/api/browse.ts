@@ -101,6 +101,20 @@ export interface BrowseList {
   next_page?: number | null;
   /** follow_latest 等命令的后端终页标记 */
   is_last_page?: boolean;
+  /** search 专用：最后一页页码（接口每页 60，上限 1000）；页码分页换算显示页数用 */
+  last_page?: number | null;
+}
+
+/** 单项三项计数（browse_work_counts 的 counts 值；字段缺失 = 详情响应无该字段）。 */
+export interface WorkCounts {
+  like_count?: number;
+  bookmark_count?: number;
+  view_count?: number;
+}
+
+/** browse_work_counts 返回体：id（字符串化）→ 三项计数；缺失 = 该次请求失败。 */
+export interface WorkCountsMap {
+  counts: Record<string, WorkCounts>;
 }
 
 /** 频道页「按标签推荐」板块（#tag 的推荐作品；实测仅插画频道返回，其余为空数组）。 */
@@ -451,6 +465,15 @@ export async function browseSearch(
     type: options?.type,
     page,
   });
+}
+
+/** browse_work_counts：作品三项计数批量（搜索页本页排序用；ids 上限 60）。 */
+export async function browseWorkCounts(
+  kind: ListWorkKind,
+  ids: number[]
+): Promise<WorkCountsMap> {
+  if (!isTauri()) return mockWorkCounts(kind, ids);
+  return invokeBrowse<WorkCountsMap>("browse_work_counts", { kind, ids });
 }
 
 /** browse_ranking：排行榜（p 每页 50；date 供历史榜单切换）。 */
@@ -839,7 +862,23 @@ function mockPaginated(
     total: opts?.withTotal ? MOCK_MAX_PAGES * items.length : null,
     next_page: next,
     is_last_page: next === null,
+    last_page: opts?.withTotal ? MOCK_MAX_PAGES : undefined,
   };
+}
+
+/** 计数批量 mock：按 id 派生确定性三项计数（浏览器视觉验收用）。 */
+async function mockWorkCounts(kind: ListWorkKind, ids: number[]): Promise<WorkCountsMap> {
+  await mockDelay();
+  const counts: WorkCountsMap["counts"] = {};
+  for (const id of ids) {
+    const rand = mulberry32(seedFrom(`counts:${kind}:${id}`));
+    counts[String(id)] = {
+      like_count: Math.floor(rand() * 20000),
+      bookmark_count: Math.floor(rand() * 30000),
+      view_count: Math.floor(rand() * 200000),
+    };
+  }
+  return { counts };
 }
 
 async function mockChannel(kind: ChannelKind): Promise<BrowseChannel> {

@@ -107,7 +107,8 @@
 | `/ajax/watch_list/manga / novel` | GET | 追更系列列表 | 需登录 | `browse_watchlist` | browse_api.rs:1780 |
 | `/ajax/discovery/artworks` | GET | 发现推荐 | 未验证匿名 | `browse_discover` | browse_api.rs:1816 |
 | `/ajax/follow_latest/illust / novel` | GET | 关注的新作品 | 未验证匿名 | `browse_follow_latest` | browse_api.rs:1826 |
-| `/ajax/search/artworks / novels/{word}` | GET | 插画 / 小说搜索 | 匿名基本可用 | `browse_search` | browse_api.rs:1852 |
+| `/ajax/search/artworks / novels/{word}` | GET | 插画 / 小说搜索（列表项**不含**点赞/收藏/浏览计数） | 匿名基本可用 | `browse_search` | browse_api.rs:2067 |
+| `/ajax/illust/{id}` · `/ajax/novel/{id}` | GET | 作品三项计数批量（搜索页本页排序补取） | 匿名可读 | `browse_work_counts` | browse_api.rs:2086 |
 | `/ranking.php?format=json` | GET | 插画 / 漫画 / 动图排行 | 匿名基本可用 | `browse_ranking` | browse_api.rs:1870 |
 | `/ajax/ranking/novel` | GET | 小说排行 | 匿名基本可用 | `browse_ranking` | browse_api.rs:1870 |
 | `/ajax/illust/{id}` | GET | 作品主信息 | 匿名可读 | `browse_work_detail`；抓取 | browse_api.rs:1904 / api.rs:282 |
@@ -161,11 +162,12 @@
 - 消费字段：`page.ids[]`、`page.isLastPage`、`thumbnails.illust / novel`、`users{}`。
 - 分页：`next_page = isLastPage ? null : p+1`；`isLastPage` 缺失时按每页 60 条估算（browse_api.rs:975）。
 
-**GET `/ajax/search/artworks / novels/{word}?order=&mode=&s_mode=&type=&p=&lang=zh`** · 实现 `browse_api.rs:1852`（`get_search`）· 在线 `live_read.rs::live_search_artworks_novels` · 离线 `search_path_builds_artworks_and_novels`、`sanitize_search_word_rules`、`parse_search_artworks_and_novels`
-- word 在路径段：先清理 `?` `#` 与控制字符、trim（`sanitize_search_word` browse_api.rs:1594），空 → 报错，长度 > 200 字符 → 报错；随后**必须 percent-encode**（`search_path`，`percent_encode` browse_api.rs:1688）——wreq 不会对路径里的非 ASCII 自动编码，直拼日文/中文标签实测 **HTTP 400**（2026-10-01 修复），编码后 200。
-- 参数白名单（`search_path` browse_api.rs:1610）：`order` = `date_d`(默认) / `date` / `date_asc` / `popular_d`；`mode` = `all`(默认) / `safe` / `r18`；`s_mode` = `s_tag_full` / `s_tag` / `s_tc`（可选）；`type` = `illust` / `manga` / `ugoira`（仅 artworks，默认取 kind）；`p` ≥ 1；artworks 固定带 `ai_type=0`（排除 AI）；`lang=zh`。
+**GET `/ajax/search/artworks / novels/{word}?order=&mode=&s_mode=&type=&p=&lang=zh`** · 实现 `browse_api.rs:2067`（`get_search`）· 在线 `live_read.rs::live_search_artworks_novels` · 离线 `search_path_builds_artworks_and_novels`、`sanitize_search_word_rules`、`parse_search_artworks_and_novels`
+- word 在路径段：先清理 `?` `#` 与控制字符、trim（`sanitize_search_word` browse_api.rs:1809），空 → 报错，长度 > 200 字符 → 报错；随后**必须 percent-encode**（`search_path` browse_api.rs:1825，`percent_encode` browse_api.rs:1903）——wreq 不会对路径里的非 ASCII 自动编码，直拼日文/中文标签实测 **HTTP 400**（2026-10-01 修复），编码后 200。
+- 参数白名单（`search_path` browse_api.rs:1825）：`order` = `date_d`(默认) / `date` / `date_asc` / `popular_d`；`mode` = `all`(默认) / `safe` / `r18`；`s_mode` = `s_tag_full` / `s_tag` / `s_tc`（可选）；`type` = `illust` / `manga` / `ugoira`（仅 artworks，默认取 kind）；`p` ≥ 1；artworks 固定带 `ai_type=0`（排除 AI）；`lang=zh`。**每页固定 60 条**（`limit` / `per_page` 等参数实测无效，2026-10-02）。
 - 消费字段：`illustManga.data[]` 或 `novel.data[]`（缩略字段见 4.8）、`total`、`lastPage`。
-- 分页：`next_page = page < lastPage ? page+1 : null`。
+- **列表项不含三项计数（2026-10-02 实测）**：artworks 项无 `likeCount` / `bookmarkCount` / `viewCount`；novels 项仅自带 `bookmarkCount`。三项计数只在详情端点（`/ajax/illust/{id}` 与 `/ajax/novel/{id}`，字段名一致）；官方搜索页卡片的收藏数亦为逐项请求详情所得（浏览器抓包证实）。前端「本页排序」经 `browse_work_counts`（`get_work_counts` browse_api.rs:2086；命令层 `browse_work_counts_impl` browse_api_cmds.rs:368，校验 `validate_work_counts` browse_api_cmds.rs:111）按需补取，逐项请求走既有全局限速排队，单项失败跳过（返回表缺该 id）。
+- 分页：`next_page = page < lastPage ? page+1 : null`；`last_page` 原样回传（前端页码分页换算总显示页数：接口每页 60 条切 3 个显示页 × 20 条）。
 
 **GET `/ranking.php?format=json&mode={mode}&content={kind}&p={p}&lang=zh[&date=]`**（illust / manga / ugoira） · 实现 `browse_api.rs:1870`（`get_ranking`）· 在线 `live_read.rs::live_ranking_illust_and_novel` · 离线 `parse_ranking_illust_next_semantics`、`parse_ranking_illust_reads_r18_flag`、`validate_ranking_modes_table`
 - mode 白名单（browse_api.rs:1580）：`daily / weekly / monthly / rookie / daily_r18 / weekly_r18`（Premium 限定榜不收录）；`date` 可选、必须 8 位数字 `yyyymmdd`（browse_api.rs:1676）。
@@ -379,7 +381,8 @@
 | `/ajax/watch_list/*` | `get_watchlist` browse_api.rs:1780；`parse_watchlist` :842 | `live_read.rs::live_watchlist_manga_novel` | `parse_watchlist_manga_maps_thumbs_and_order` | browse.ts:524 |
 | `/ajax/discovery/artworks` | `get_discover` browse_api.rs:1816；`parse_discover` :943 | `live_read.rs::live_discover` | `parse_discover_maps_ids_in_order` | browse.ts:366 |
 | `/ajax/follow_latest/*` | `get_follow_latest` browse_api.rs:1826；`parse_follow_latest` :961 | `live_read.rs::live_follow_latest_illust_novel` | `parse_follow_latest_pagination_semantics` | browse.ts:372 |
-| `/ajax/search/artworks / novels/{word}` | `get_search` browse_api.rs:1852；`search_path` :1610 | `live_read.rs::live_search_artworks_novels` | `search_path_builds_artworks_and_novels` / `search_path_percent_encodes_non_ascii_word` | browse.ts:382 |
+| `/ajax/search/artworks / novels/{word}` | `get_search` browse_api.rs:2067；`search_path` :1825；`parse_search` :1083 | `live_read.rs::live_search_artworks_novels` | `search_path_builds_artworks_and_novels` / `search_path_percent_encodes_non_ascii_word` / `parse_search_artworks_and_novels` | browse.ts:452 |
+| `/ajax/illust/{id}` · `/ajax/novel/{id}`（计数批量） | `get_work_counts` browse_api.rs:2086；`parse_work_counts` :693；命令 `browse_work_counts_impl` browse_api_cmds.rs:368 | —（沿用详情在线用例 `live_illust_detail_pages_ugoira` / `live_novel_detail`） | `parse_work_counts_reads_three_fields` / `offline_guard::not_logged_in_blocks_all_commands_with_login_error` / `invalid_params_rejected_before_login_guard` | browse.ts:471（`browseWorkCounts`） |
 | `/ranking.php?format=json` | `get_ranking` browse_api.rs:1870；`parse_ranking_illust` :1027 | `live_read.rs::live_ranking_illust_and_novel` | `parse_ranking_illust_next_semantics` / `parse_ranking_dates_normalized_to_yyyymmdd` | browse.ts:401 |
 | `/ajax/ranking/novel` | `get_ranking` browse_api.rs:1870；`parse_ranking_novel` :1088 | `live_read.rs::live_ranking_illust_and_novel` | `parse_ranking_novel_shape_and_last_page` / `parse_ranking_dates_normalized_to_yyyymmdd` | browse.ts:401 |
 | `/ajax/illust/{id}` | `get_work_detail_illust` browse_api.rs:1904；`get_illust` api.rs:282 | `live_read.rs::live_illust_detail_pages_ugoira` | `parse_illust_detail_fields` / `parse_illust_full_shape` | browse.ts:412；core/sources.rs:106、core/crawler.rs:475,615 |
@@ -418,3 +421,4 @@
 | 2026-10-01 | 初版：定位与维护规则、通用约定、28 行端点总览、逐端点契约、图片 CDN、勘误表、未接入清单、维护矩阵与 5 步排查流程 | 代码实测（`src-tauri/src/pixiv/**`、`commands/browse_api_cmds.rs`、`image_proxy.rs`）+ `docs/research/pixiv-browse-api.md`（2026-10-01 抓包） |
 | 2026-10-01 晚 | 在线套件（`tests/pixiv_api/`，17 只读用例）实机复核后勘误 + 修复 4 处：①搜索词 percent-encode（非 ASCII 原为 400）②频道 `ranking.items` 对象形态（原整块为空）③热门标签译名改取 `tagTranslation`（`translatedName`/`illustCount` 不存在）④排行榜日期归一 `normalize_ymd`（novel 原为日文串/`2026-09-30`）；`/ajax/user/{id}` 无 `account` 记为契约事实（前端隐藏空 @handle）；全部行号按修复后工作树重校 | `./dev.ps1 test-live` 全绿（20 用例：17 只读 + 2 写跳过 + 探针已删）；离线 `parse_channel_*` / `search_path_*` / `normalize_ymd_*` 用例 |
 | 2026-10-02 | 关闭评论区语义：关闭评论的作品 roots 恒 400（body 仅泛化「不正确的请求。」、无专属标志；详情亦无关闭标志字段）；`get_work_comments` 捕获 400（新增 `PixivError::is_bad_request`）映射为 `{"comments":[],"disabled":true}` 空信封而非报错，前端 `CommentsSection` 显示「作者已关闭评论区」终态；评论端点两行行号按当前工作树重校 | 在线探针实测（illust 150326647）；离线 `comments_closed_envelope_and_bad_request_gate` + 在线 `live_read.rs::live_comments_closed_work` |
+| 2026-10-02 | 搜索列表契约补充：**列表项不含点赞/收藏/浏览计数**（artworks 全无、novels 仅 `bookmarkCount`）、**每页固定 60 条**（`limit` 等参数无效）、`last_page` 原样回传；新增 `browse_work_counts`（详情端点逐项补取三项计数，ids ≤ 60、单项失败跳过、全局限速排队）供搜索页「本页排序」；搜索相关行号按当前工作树重校 | 浏览器实测（pixiv 登录态：搜索响应字段、`limit`/`per_page` 无效、官方搜索页卡片收藏数逐项请求详情证实）+ 离线 `parse_work_counts_reads_three_fields`、`offline_guard` 计数批量用例 |
