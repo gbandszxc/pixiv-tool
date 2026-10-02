@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_browse_history_visited ON browse_history(visited_
 | 命令 | 返回体 |
 |---|---|
 | `browse_history_record(kind, workId, title, authorId, authorName, cover?, pageCount, xRestrict)` | `{status:"success"}` |
-| `browse_history_list(page, pageSize)` | `{items:[…], total, page, page_size}`（`ORDER BY visited_at DESC, work_id DESC`） |
+| `browse_history_list(page, pageSize, kind?)` | `{items:[…], total, page, page_size}`（`ORDER BY visited_at DESC, work_id DESC`；`kind` 省略=全部，否则 illust/manga/novel 过滤） |
 | `browse_history_clear()` | `{status:"success", deleted:n}` |
 
 沿用现有薄壳结构：`#[tauri::command] pub async fn` 转发到 `*_impl(&AppState, …)`，

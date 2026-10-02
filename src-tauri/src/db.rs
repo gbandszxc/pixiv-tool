@@ -873,26 +873,44 @@ impl Db {
     }
 
     /// 分页查询浏览历史（最近访问在前；同时刻按 work_id 倒序）。
+    ///
+    /// - `kind=None` 查全部；`Some("illust"|"manga"|"novel")` 按类别过滤（COUNT 与 SELECT
+    ///   同时生效）；其它值 → Err("未知浏览历史类别: {kind}")。
     pub fn list_browse_history(
         &self,
         page: i64,
         page_size: i64,
+        kind: Option<&str>,
     ) -> Result<(Vec<BrowseHistoryRow>, i64), String> {
+        if let Some(k) = kind {
+            if !matches!(k, "illust" | "manga" | "novel") {
+                return Err(format!("未知浏览历史类别: {k}"));
+            }
+        }
+        let where_sql = if kind.is_some() { " WHERE kind = ?" } else { "" };
+        let mut params: Vec<SqlValue> = Vec::new();
+        if let Some(k) = kind {
+            params.push(SqlValue::from(k.to_string()));
+        }
         let total = self.with_conn(|conn| {
-            conn.query_row("SELECT COUNT(*) FROM browse_history", [], |row| {
-                row.get::<_, i64>(0)
-            })
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM browse_history{where_sql}"),
+                params_from_iter(params.iter()),
+                |row| row.get::<_, i64>(0),
+            )
         })?;
         let offset = (page - 1).max(0) * page_size;
+        params.push(SqlValue::Integer(page_size));
+        params.push(SqlValue::Integer(offset));
         let rows = self.with_conn(|conn| {
-            let mut stmt = conn.prepare(
+            let mut stmt = conn.prepare(&format!(
                 "SELECT work_id, kind, title, author_id, author_name, cover,
                         page_count, x_restrict, visited_at
-                 FROM browse_history
-                 ORDER BY visited_at DESC, work_id DESC LIMIT ?1 OFFSET ?2",
-            )?;
+                 FROM browse_history{where_sql}
+                 ORDER BY visited_at DESC, work_id DESC LIMIT ? OFFSET ?"
+            ))?;
             let rows = stmt
-                .query_map(params![page_size, offset], browse_history_from_row)?
+                .query_map(params_from_iter(params.iter()), browse_history_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })?;

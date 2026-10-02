@@ -285,7 +285,7 @@ fn browse_history_record_list_clear_round_trip() {
     .unwrap();
 
     // 分页查询：total=3，最新写入置顶，顺序 C/B/A。
-    let page1 = browse_history_list_impl(&state, 1, 2).unwrap();
+    let page1 = browse_history_list_impl(&state, 1, 2, None).unwrap();
     assert_eq!(page1["total"], json!(3));
     assert_eq!(page1["page"], json!(1));
     assert_eq!(page1["page_size"], json!(2));
@@ -297,9 +297,25 @@ fn browse_history_record_list_clear_round_trip() {
     assert_eq!(items[0]["author_id"], json!(7));
     assert_eq!(items[1]["kind"], json!("novel"), "次新为文C");
 
-    let page2 = browse_history_list_impl(&state, 2, 2).unwrap();
+    let page2 = browse_history_list_impl(&state, 2, 2, None).unwrap();
     assert_eq!(page2["items"].as_array().map(Vec::len), Some(1));
     assert_eq!(page2["items"][0]["kind"], json!("manga"), "末位为漫B");
+
+    // 类别筛选：kind 同时作用于 COUNT 与 SELECT（total 为过滤后总数）。
+    let illust = browse_history_list_impl(&state, 1, 20, Some("illust".into())).unwrap();
+    assert_eq!(illust["total"], json!(1), "过滤后 total 为该类别总数");
+    let illust_items = illust["items"].as_array().unwrap();
+    assert_eq!(illust_items.len(), 1);
+    assert_eq!(illust_items[0]["kind"], json!("illust"));
+
+    // 过滤 + 分页边界：越界页返回空 items 但 total 仍为过滤后总数。
+    let beyond = browse_history_list_impl(&state, 2, 1, Some("manga".into())).unwrap();
+    assert_eq!(beyond["total"], json!(1));
+    assert_eq!(beyond["items"].as_array().map(Vec::len), Some(0));
+
+    // 非法类别 → Err（同 list_history「未知历史分类」先例）。
+    let err = browse_history_list_impl(&state, 1, 20, Some("nope".into())).unwrap_err();
+    assert_eq!(err, "未知浏览历史类别: nope");
 
     // 清空：计数 = 当前总数。
     let cleared = browse_history_clear_impl(&state).unwrap();
@@ -307,7 +323,7 @@ fn browse_history_record_list_clear_round_trip() {
     assert_eq!(cleared["deleted"], json!(3));
 
     // 再查归零；重复清空 deleted=0。
-    assert_eq!(browse_history_list_impl(&state, 1, 20).unwrap()["total"], json!(0));
+    assert_eq!(browse_history_list_impl(&state, 1, 20, None).unwrap()["total"], json!(0));
     assert_eq!(browse_history_clear_impl(&state).unwrap()["deleted"], json!(0));
     cleanup(&dir);
 }

@@ -65,14 +65,15 @@ pub fn browse_history_record_impl(
     Ok(json!({ "status": "success" }))
 }
 
-/// 分页查询浏览历史（page 从 1 起）。
+/// 分页查询浏览历史（page 从 1 起；`kind` 省略=全部，否则 illust/manga/novel）。
 #[tauri::command]
 pub async fn browse_history_list(
     state: State<'_, AppState>,
     page: u32,
     page_size: u32,
+    kind: Option<String>,
 ) -> Result<Value, String> {
-    browse_history_list_impl(&state, page, page_size)
+    browse_history_list_impl(&state, page, page_size, kind)
 }
 
 /// 命令实现（离线可直调）。
@@ -80,8 +81,12 @@ pub fn browse_history_list_impl(
     state: &AppState,
     page: u32,
     page_size: u32,
+    kind: Option<String>,
 ) -> Result<Value, String> {
-    let (items, total) = state.db.list_browse_history(page as i64, page_size as i64)?;
+    let (items, total) =
+        state
+            .db
+            .list_browse_history(page as i64, page_size as i64, kind.as_deref())?;
     Ok(json!({
         "items": items,
         "total": total,
