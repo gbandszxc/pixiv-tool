@@ -5,7 +5,7 @@ const viewerPrefs = { spread: false, rtl: true };
 
 <script setup lang="ts">
 /**
- * 图片舞台：近黑底纵向滚动查看（深浅色主题一致的中性深底）。
+ * 图片舞台：无自有底色——舞台背景即页面底色（随主题），图片满幅纵向滚动查看。
  * - 多页：自上而下逐页排列，滚动到视口附近才发起加载（渐进式）；未加载页为按该页
  *   `width`/`height` 预留纵横比的纯色占位块（缺省 2:3），加载完成不产生跳动；
  * - 点击任意页进入全屏浮层并定位到该页，左右切换只发生在浮层内（‹ › / 键盘 ←/→ 与
@@ -709,14 +709,14 @@ watch(
   min-height: 0;
 }
 
-/* 近黑底：中性深色，深浅色主题下一致（主会话既定决策） */
+/* 无自有底色：舞台背景即页面底色（随主题），图片满幅铺满 */
 .stage {
   position: relative;
   display: flex;
   flex: 1;
   min-height: 320px;
   border-radius: 16px;
-  background: rgb(0 0 0 / 0.78);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -745,13 +745,13 @@ watch(
   margin-bottom: auto;
 }
 
-/* 近黑底上的焦点环用既定白（primary 在深底上对比不足） */
+/* 键盘焦点环：应用标准主色（与全局 focus-visible 口径一致） */
 .stage-scroll:focus-visible {
-  outline: 2px solid #fff;
+  outline: 2px solid var(--md-sys-color-primary);
   outline-offset: calc(-1 * var(--space-xxs));
 }
 
-/* 舞台滚动条细化：常显细条，配方对齐 .fs-filmstrip（近黑底上的既定白半透明） */
+/* 舞台滚动条细化：常显 6px 细条，拇指用 outline 派生描边色（与 .info-col 同配方） */
 .stage-scroll::-webkit-scrollbar {
   width: 6px;
 }
@@ -761,12 +761,12 @@ watch(
 }
 
 .stage-scroll::-webkit-scrollbar-thumb {
-  background: rgb(255 255 255 / 0.35);
+  background: color-mix(in srgb, var(--md-sys-color-outline) 40%, transparent);
   border-radius: 999px;
 }
 
 .stage-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgb(255 255 255 / 0.55);
+  background: color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
 }
 
 .page-item {
@@ -781,13 +781,14 @@ watch(
 }
 
 /* 页框：纵横比先行占位（--ar-w / --ar-h 为内联样式），加载完成后高度不变；
- * 直角（0 圆角）：避免图片角露出舞台黑底缺口，整体圆角观感由舞台 16px 圆角 + 裁剪负责 */
+ * 直角（0 圆角）：图片满幅，整体圆角观感由舞台 16px 圆角 + 裁剪负责；
+ * 未就绪时铺骨架色占位块（与全应用骨架配方一致，浅底可见） */
 .shot {
   position: relative;
   width: 100%;
   aspect-ratio: var(--ar-w, 2) / var(--ar-h, 3);
   border-radius: 0;
-  background: rgb(255 255 255 / 0.08);
+  background: var(--md-sys-color-surface-container);
   overflow: hidden;
 }
 
@@ -795,9 +796,9 @@ watch(
   cursor: zoom-in;
 }
 
-/* 键盘焦点：近黑底上的既定白 2px 环（对齐 .stage-scroll:focus-visible 配方） */
+/* 键盘焦点：应用标准主色 2px 环（对齐 .stage-scroll:focus-visible 配方） */
 .shot:focus-visible {
-  outline: 2px solid #fff;
+  outline: 2px solid var(--md-sys-color-primary);
   outline-offset: -2px;
 }
 
@@ -830,22 +831,39 @@ watch(
   width: 200px;
   height: 200px;
   border-radius: var(--radius-control);
-  background: rgb(255 255 255 / 0.08);
+  background: var(--md-sys-color-surface-container);
 }
 
 .stage-text {
   margin: 0;
-  color: rgb(255 255 255 / 0.85);
+  color: var(--ink-muted);
   font-size: 14px;
   line-height: 1.5;
 }
 
 .stage-text.strong {
-  color: #fff;
+  color: var(--ink);
   font-weight: 600;
 }
 
-/* 页码徽标：沿用舞台的既定近黑底 + 白字（同一例外，不引入新颜色） */
+/* 深色背板上的文案覆盖回白：R-18 遮罩洗层与全屏浮层（基色已随主题为浅色） */
+.restrict-overlay .stage-text {
+  color: rgb(255 255 255 / 0.9);
+}
+
+.restrict-overlay .stage-text.strong {
+  color: #fff;
+}
+
+.fs-overlay .stage-text {
+  color: rgb(255 255 255 / 0.85);
+}
+
+.fs-overlay .stage-text.strong {
+  color: #fff;
+}
+
+/* 页码徽标：浮于图片之上的深色胶囊 + 白字（阅读器惯例，不引入新颜色） */
 .page-badge {
   position: absolute;
   right: var(--space-sm);
@@ -898,7 +916,7 @@ watch(
   z-index: 800;
   display: flex;
   padding: var(--space-lg);
-  /* 复用舞台近黑底（不新增颜色字面值） */
+  /* 全屏背板：深色遮罩（既定设计，深色图片浏览器惯例） */
   background: rgb(0 0 0 / 0.78);
   outline: none;
   /* 图片可用高度：视口高减去浮层上下内边距 */
@@ -1103,7 +1121,7 @@ watch(
   }
 }
 
-/* 近黑底上的图标按钮统一白色图标（沿用 .stage-text 的白） */
+/* 全屏背板上的图标按钮统一白色图标（与浮层文案同色） */
 .fs-controls md-icon-button,
 .fs-close {
   --md-icon-button-icon-color: #fff;

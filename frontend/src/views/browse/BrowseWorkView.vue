@@ -10,7 +10,7 @@ const revealedWorkIds = new Set<number>();
 <script setup lang="ts">
 /**
  * 作品查看器（插画/漫画）：整页路由视图 /browse/work/:kind/:id。
- * 桌面 ≥960px 双列：左图片舞台（近黑底，纵向渐进加载，翻页/全屏由 ImageViewer 自理）
+ * 桌面 ≥960px 双列：左图片舞台（页面底色，纵向渐进加载，翻页/全屏由 ImageViewer 自理）
  * + 右信息列（固定 320px 可滚动）；窄窗纵向堆叠（图片在上）。
  * 右列下段为可切换面板——相关推荐（默认）/ 评论，由顶栏评论按钮控制，评论按需分页拉取。
  * 相关推荐经 router.replace 原地跳转（watch 参数重拉）。
