@@ -13,7 +13,8 @@ export type SidebarIconName =
   | "watchlist"
   | "search"
   | "ranking"
-  | "bookmark";
+  | "bookmark"
+  | "saucenao";
 
 defineProps<{
   name: SidebarIconName;
@@ -89,6 +90,12 @@ defineProps<{
     <template v-else-if="name === 'search'">
       <circle cx="11" cy="11" r="6.5" />
       <path d="m20 20-4.4-4.4" />
+    </template>
+    <template v-else-if="name === 'saucenao'">
+      <!-- 放大镜内含山形图片：以图识图（反搜图片找原图） -->
+      <circle cx="10.5" cy="10.5" r="6.75" />
+      <path d="m7 14 3-4.5 2.5 3.5 1.5-2" />
+      <path d="m15.4 15.4 4.6 4.6" />
     </template>
     <template v-else-if="name === 'ranking'">
       <path d="M9 20v-9h6v9" />

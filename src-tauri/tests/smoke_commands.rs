@@ -14,6 +14,7 @@ use pixiv_tool_lib::commands::history_cmds::history_list_impl;
 use pixiv_tool_lib::commands::misc_cmds::{
     illustrations_batch_delete_impl, novels_batch_delete_impl,
 };
+use pixiv_tool_lib::commands::saucenao_cmds::saucenao_search_impl;
 use pixiv_tool_lib::commands::settings_cmds::apply_settings_patch;
 use pixiv_tool_lib::db::{Db, IllustrationInsert, NovelInsert, now_iso};
 use pixiv_tool_lib::paths::AppPaths;
@@ -194,5 +195,42 @@ fn batch_delete_counts_and_keeps_unspecified() {
     assert_eq!(body["deleted"], json!(2), "不存在的 id 不计入 deleted");
     assert!(state.db.get_illustration(11).is_none());
     assert!(state.db.get_illustration(12).is_none());
+    cleanup(&dir);
+}
+
+/// saucenao_search 离线冒烟：参数粗校验 → key 检查 → 文件预检都发生在真实
+/// 网络请求之前，以下场景全部不触网（解析与错误分类的单测在 saucenao.rs 内）。
+#[tokio::test]
+async fn saucenao_search_guards_are_offline() {
+    let (state, dir) = temp_state("saucenao");
+
+    // key 未配置 → reject 文案含「设置」（前端据此引导用户去设置页）
+    let err = saucenao_search_impl(&state, "url", "https://example.com/a.jpg", None)
+        .await
+        .unwrap_err();
+    assert!(err.contains("设置"), "got {err}");
+
+    // 参数粗校验在 key 检查之前：非法来源类型 / 空 source / numres 越界
+    for (source_type, source, numres) in [
+        ("web", "https://example.com/a.jpg", None),
+        ("file", "   ", None),
+        ("url", "https://example.com/a.jpg", Some(0)),
+        ("url", "https://example.com/a.jpg", Some(41)),
+    ] {
+        let err = saucenao_search_impl(&state, source_type, source, numres)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("来源类型") || err.contains("不能为空") || err.contains("numres"),
+            "source_type={source_type} source={source:?} numres={numres:?} got {err}"
+        );
+    }
+
+    // 配置 key 后：不存在的本地文件在请求前被预检拦截（仍不触网）
+    state.settings.lock().unwrap().saucenao_api_key = "test-key".into();
+    let err = saucenao_search_impl(&state, "file", "Z:/definitely-missing.png", None)
+        .await
+        .unwrap_err();
+    assert!(err.contains("不存在"), "got {err}");
     cleanup(&dir);
 }

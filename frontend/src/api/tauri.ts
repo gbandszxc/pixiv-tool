@@ -111,6 +111,8 @@ export interface Settings {
   thumb_quality_detail: string;
   /** 大图 / 全屏浮层档位：large | original */
   thumb_quality_fullscreen: string;
+  /** SauceNAO API Key（以图识图必需；仅保存在本机配置文件，不写日志） */
+  saucenao_api_key: string;
 }
 
 export interface HistoryItem {

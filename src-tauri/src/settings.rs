@@ -36,6 +36,9 @@ pub struct Settings {
     pub thumb_quality_detail: String,
     /// 全屏浮层档位（见 [`THUMB_FULLSCREEN_TIERS`]）。
     pub thumb_quality_fullscreen: String,
+    /// SauceNAO API Key（以图识图必需，saucenao.com 注册后获取；仅保存在本机
+    /// 配置文件——不入库、不写日志、不进报错原文）。
+    pub saucenao_api_key: String,
 }
 
 impl Default for Settings {
@@ -52,6 +55,7 @@ impl Default for Settings {
             thumb_quality_grid: "medium".into(),
             thumb_quality_detail: "medium".into(),
             thumb_quality_fullscreen: "large".into(),
+            saucenao_api_key: String::new(),
         }
     }
 }
@@ -252,6 +256,7 @@ mod tests {
         assert_eq!(s.thumb_quality_grid, "medium");
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
+        assert_eq!(s.saucenao_api_key, "");
         assert!(
             s.output_dir
                 .replace('\\', "/")
@@ -289,6 +294,7 @@ mod tests {
         assert_eq!(s.thumb_quality_grid, "medium");
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
+        assert_eq!(s.saucenao_api_key, "");
         cleanup(&dir);
     }
 

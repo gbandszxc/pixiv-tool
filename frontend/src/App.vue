@@ -9,6 +9,7 @@
         <button v-for="item in menuItems" :key="item.path" class="nav-item" :class="{ active: route.path === item.path }" @click="router.push(item.path)"><SidebarIcon :name="item.icon" /><span v-if="!siderCollapsed" class="nav-label">{{ item.label }}</span></button>
         <div class="nav-divider" aria-hidden="true"></div>
         <button class="nav-item" :class="{ active: route.path.startsWith('/tools') }" @click="router.push('/tools')"><SidebarIcon name="tasks" /><span v-if="!siderCollapsed">{{ t('nav.tools') }}</span></button>
+        <button class="nav-item" :class="{ active: route.path === '/saucenao' }" @click="router.push('/saucenao')"><SidebarIcon name="saucenao" /><span v-if="!siderCollapsed">{{ t('nav.saucenao') }}</span></button>
       </nav>
       <footer class="sider-footer">
         <AccountMenu :collapsed="siderCollapsed" @add-account="showLoginDialog = true" @open-settings="openSettings" />
@@ -35,6 +36,7 @@ import { useAuthStore } from "./stores/auth";
 import { useSettingsStore } from "./stores/settings";
 import { invoke, setWindowTheme } from "./api/tauri";
 import { OPEN_LOGIN_EVENT } from "./api/browse";
+import { OPEN_SETTINGS_EVENT } from "./api/saucenao";
 
 const router = useRouter(); const route = useRoute(); const { t } = useI18n();
 const authStore = useAuthStore(); const settingsStore = useSettingsStore();
@@ -62,10 +64,12 @@ watch(() => settingsStore.settings.theme_color, (palette) => { document.document
 function onNotification(event: Event) { notification.value = (event as CustomEvent<string>).detail; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => notification.value = "", 3200); }
 /** 浏览接口报未登录（api/browse.ts 派发）→ 复用现有登录弹窗。 */
 function onOpenLogin() { showLoginDialog.value = true; }
+/** 以图识图页「打开设置」引导（api/saucenao.ts 派发）→ 复用设置弹窗。 */
+function onOpenSettings() { showSettings.value = true; }
 /** 账号菜单的「设置」入口：开模态设置弹窗（菜单自行关闭）。 */
 function openSettings() { showSettings.value = true; }
-onMounted(() => { media.addEventListener("change", onMediaChange); settingsStore.fetchSettings().catch(() => {}); authStore.checkStatus(); authStore.fetchAccounts(); listen("app://confirm-exit", () => showExitConfirm.value = true).then(fn => unlistenExit = fn); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); });
-onBeforeUnmount(() => { media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); });
+onMounted(() => { media.addEventListener("change", onMediaChange); settingsStore.fetchSettings().catch(() => {}); authStore.checkStatus(); authStore.fetchAccounts(); listen("app://confirm-exit", () => showExitConfirm.value = true).then(fn => unlistenExit = fn); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
+onBeforeUnmount(() => { media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
 </script>
 
 <style scoped>

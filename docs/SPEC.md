@@ -119,23 +119,25 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 46 个 #[tauri::command]（auth 6 / browse_api 18 / tasks 9 / settings 3 / history 1 / misc 8 / app 1）
+│     ├─ commands/              # 47 个 #[tauri::command]（auth 6 / browse_api 18 / tasks 9 / settings 3 / saucenao 1 / history 1 / misc 8 / app 1）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
 │     ├─ accounts.rs            # 多账号索引（accounts.json）+ 每账号凭据条目
 │     ├─ image_proxy.rs         # pixiv-img 协议核心（磁盘缓存 + CDN 并发闸门 + 同 URL 在途合并 + immutable 长缓存响应头）
+│     ├─ saucenao.rs            # SauceNAO 以图识图客户端（file/url 两通道搜索、响应解析、错误分类；契约见 §7，接口调研见 docs/research/saucenao-api.md）
 │     ├─ menu_bar.rs            # Windows 菜单栏默认隐藏 / Alt 唤出（AcceleratorKeyPressed + WM_EXITMENULOOP 收回）
 │     └─ paths.rs / platform.rs / logging.rs
 ├─ frontend/                    # Vue3 + TS + Vite + Material Web（M3）
 │  ├─ src/
-│  │  ├─ views/                 # ToolsView（工具页签壳）/ CrawlView / IllustrationView / TasksView / HistoryView
+│  │  ├─ views/                 # ToolsView（工具页签壳）/ CrawlView / IllustrationView / TasksView / HistoryView / SaucenaoView（以图识图）
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark + Work/Series/Author/Novel
 │  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/ settings/（SettingsPanel / SettingsDialog）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
 │  │  ├─ api/browse.ts          # 浏览契约类型 + 非 Tauri 环境的确定性 mock 层
+│  │  ├─ api/saucenao.ts        # SauceNAO 契约类型 + invoke 封装 + 非 Tauri 环境的确定性 mock 层
 │  │  ├─ api/devMock.ts         # auth/settings 的浏览器视觉验收 mock（仅 !isTauri() 生效）
 │  │  ├─ utils/thumb.ts         # 缩略图 URL 档位改写（§6.4）
 │  │  ├─ composables/useThumbTier.ts # 设置档位 → 合法 ThumbTier 的响应式读取
@@ -412,7 +414,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "show_r18": true,
   "thumb_quality_grid": "medium",
   "thumb_quality_detail": "medium",
-  "thumb_quality_fullscreen": "large"
+  "thumb_quality_fullscreen": "large",
+  "saucenao_api_key": ""
 }
 ```
 
@@ -445,7 +448,12 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   `x_restrict >= 1` 的作品；详情页仍可访问；**关闭开关时**详情页对
   `x_restrict >= 1` 的作品保留模糊遮罩 + 「显示」确认（确认后本会话记忆、不持久化），
   **开启开关（默认）时不显示遮罩、直接展示**。
-- 以上四键与既有键一样都在 `settings_save` 白名单内（见 §7）。
+- `saucenao_api_key`：SauceNAO API Key（默认 `""`），「以图识图」（§7
+  `saucenao_search`）的**必填前置**：trim 后为空一律拒绝发起搜索。在
+  saucenao.com 免费注册后于 `user.php?page=search-api` 页面获取；仅保存在本机
+  settings.json——不入库、不写日志、不进报错原文。接口行为与错误形态见
+  `docs/research/saucenao-api.md`。
+- 以上各键与既有键一样都在 `settings_save` 白名单内（见 §7）。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
 
@@ -496,6 +504,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 | 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航、相关推荐 / 评论面板） | ✅ |
 | 系列目录 | `/browse/series/:id`（游标加载） | ✅ |
 | 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab） | ✅ |
+| 以图识图 | `/saucenao`（SauceNAO 反搜：本地文件/拖拽/URL，pixiv 结果跳作品详情；需在设置中配置 API Key） | ✅ |
 
 **工具页**：页签壳 `ToolsView`（`/tools`），顶部 md-secondary-tab（复用 SectionTabs 封装）
 即子路由导航、与路由双向同步；`/tools` 重定向到 `/tools/novel`。旧路径 `/`、
@@ -504,8 +513,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 `/settings` 路由已移除：账号菜单只留「设置」入口，设置表单承载于模态设置弹窗（见下）。
 
 **侧边栏**：扁平菜单、无分组标题——浏览区（首页/插画/漫画/小说/发现/动态/搜索/
-排行榜/收藏）在上，其后一条分隔线，最后是「工具」单项（`/tools*` 前缀高亮，
-浏览项按路径精确匹配）。头部行 = logo + 标题 + 收起侧栏按钮（折叠态仅留展开按钮）；
+排行榜/收藏）在上，其后一条分隔线，然后是「工具」单项（`/tools*` 前缀高亮）
+与「以图识图」单项（`/saucenao`，与工具项之间无分隔线）；浏览项按路径精确匹配。头部行 = logo + 标题 + 收起侧栏按钮（折叠态仅留展开按钮）；
 折叠态 72px 只显示图标，窗口高度不足时导航区自身滚动。侧栏底部为**头像 chip**
 （头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击在 chip 上方弹出**账号
 菜单**（`AccountMenu`：轻量 popover，宽 264px、surface-container 底、12px 圆角、
@@ -645,8 +654,9 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 11 键 + 校验，含 `theme_color` 与 §5.2 四个新键） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 12 键 + 校验，含 `theme_color` 与缩略图三档 / `show_r18` / `saucenao_api_key`） |
 | `clear_logs` | 清空 app.log |
+| `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |

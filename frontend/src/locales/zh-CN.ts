@@ -61,6 +61,7 @@ export default {
     browseSearch: "搜索",
     browseRanking: "排行榜",
     browseBookmark: "收藏",
+    saucenao: "以图识图",
   },
   auth: {
     openAccountMenu: "打开账号菜单",
@@ -252,10 +253,39 @@ export default {
     contentDisplay: "内容显示",
     showR18: "展示 R-18 内容",
     showR18Hint: "关闭后，列表会隐藏 R-18 / R-18G 作品；已打开的作品详情仍可访问并保留模糊遮罩。",
+    saucenaoApiKey: "SauceNAO API Key",
+    saucenaoApiKeyHint: "以图识图功能必需。在 saucenao.com 免费注册后，于 user.php?page=search-api 页面获取；仅保存在本机配置文件中",
+  },
+  saucenao: {
+    // 以图识图页（views/SaucenaoView.vue）+ 侧栏入口（nav.saucenao）
+    title: "以图识图",
+    subtitle: "通过 SauceNAO 反向搜索图片，识别动漫图源与 pixiv 原作",
+    dragHint: "把图片拖到这里，或",
+    chooseFile: "选择文件",
+    or: "—— 或 ——",
+    urlLabel: "图片 URL",
+    urlPlaceholder: "https:// 开头的公网图片直链",
+    searching: "正在搜索…",
+    noMatch: "未找到匹配来源",
+    idleHint: "选择本地图片或粘贴公网图片 URL，点击「搜索」开始识别",
+    invalidUrl: "请输入以 http:// 或 https:// 开头的图片直链",
+    resultCount: "找到 {count} 个可能来源",
+    quotaLine: "本窗口剩余 {shortRemaining}/{shortLimit} · 今日剩余 {longRemaining}/{longLimit}",
+    needKey: "需要 SauceNAO API Key 才能搜索，请在设置中配置（注册免费获取）",
+    openSettings: "打开设置",
+    inApp: "站内打开",
+    openOriginal: "在浏览器中打开来源",
+    openFailed: "无法打开系统浏览器",
+    sourcePixiv: "pixiv",
+    noTitle: "（无标题）",
+    workId: "作品 {id}",
+    previewEmpty: "图片预览",
+    thumbUnavailable: "缩略图加载失败",
+    removeImage: "移除所选图片",
+    fileFilterName: "图片",
   },
   browse: {
-    // 各单元只追加自己的子分组（F1：home / channel / ranking；F2：discover / feed / search），勿动他人分组
-    // 跨页面共用（频道页卡片与作品级页面）：打开原页 / 返填抓取表单
+    // 各单元只追加自己的子分组（F1：home / channel / ranking；F2：discover / feed / search），勿动他人分组    // 跨页面共用（频道页卡片与作品级页面）：打开原页 / 返填抓取表单
     hooks: {
       openInBrowser: "在浏览器中打开",
       fillNovelForm: "返填抓取表单",

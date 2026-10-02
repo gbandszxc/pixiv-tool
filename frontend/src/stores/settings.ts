@@ -21,6 +21,8 @@ export const useSettingsStore = defineStore("settings", () => {
     thumb_quality_grid: "medium",
     thumb_quality_detail: "medium",
     thumb_quality_fullscreen: "large",
+    // SauceNAO API Key（以图识图必需），默认未配置
+    saucenao_api_key: "",
   });
 
   async function fetchSettings() {

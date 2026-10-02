@@ -59,6 +59,7 @@ function ensureSettings(): Settings {
       thumb_quality_grid: "medium",
       thumb_quality_detail: "medium",
       thumb_quality_fullscreen: "large",
+      saucenao_api_key: "",
     };
   }
   return mockSettings;

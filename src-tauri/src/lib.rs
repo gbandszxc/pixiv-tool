@@ -20,6 +20,7 @@ mod menu_bar;
 pub mod paths;
 pub mod pixiv;
 pub mod platform;
+pub mod saucenao;
 pub mod settings;
 pub mod state;
 
@@ -158,6 +159,8 @@ pub fn run() {
             commands::settings_cmds::settings_get,
             commands::settings_cmds::settings_save,
             commands::settings_cmds::clear_logs,
+            // saucenao（以图识图）
+            commands::saucenao_cmds::saucenao_search,
             // history
             commands::history_cmds::history_list,
             // novels / illustrations

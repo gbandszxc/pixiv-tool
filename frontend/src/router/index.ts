@@ -116,6 +116,12 @@ const router = createRouter({
       component: () => import("../views/browse/BrowseAuthorView.vue"),
       props: (route: RouteLocation) => ({ id: Number(route.params.id) }),
     },
+    // ===== 以图识图（SauceNAO 反搜，独立前缀避免 /tools* 前缀高亮冲突）=====
+    {
+      path: "/saucenao",
+      name: "saucenao",
+      component: () => import("../views/SaucenaoView.vue"),
+    },
   ],
 });
 

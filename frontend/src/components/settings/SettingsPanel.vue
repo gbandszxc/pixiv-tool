@@ -45,6 +45,10 @@
       <span class="field-hint">{{ t("settings.showR18Hint") }}</span>
     </fieldset>
     <div class="m3-field">
+      <label for="saucenao-api-key">{{ t("settings.saucenaoApiKey") }}</label>
+      <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /><span class="field-hint">{{ t("settings.saucenaoApiKeyHint") }}</span></div>
+    </div>
+    <div class="m3-field">
       <label for="max-wait">{{ t("settings.maxWait") }}</label>
       <div class="m3-row"><md-outlined-text-field id="max-wait" class="settings-number-input" type="number" min="30" max="86400" step="30" :value="String(form.max_wait_seconds)" @input="form.max_wait_seconds = Number(($event.target as HTMLInputElement).value)" /><span class="field-hint">{{ t("settings.maxWaitHint") }}</span></div>
     </div>
@@ -76,7 +80,7 @@ const authStore = useAuthStore();
 const formats = ["txt", "markdown"];
 const confirmDialog = ref<HTMLDialogElement | null>(null);
 const confirmAction = ref<"logs" | "auth" | null>(null);
-const form = ref({ output_dir: "downloads", output_formats: ["txt", "markdown"], language: locale.value, theme: "auto", theme_color: "pixiv", max_wait_seconds: 180, show_r18: true, thumb_quality_grid: "medium", thumb_quality_detail: "medium", thumb_quality_fullscreen: "large" });
+const form = ref({ output_dir: "downloads", output_formats: ["txt", "markdown"], language: locale.value, theme: "auto", theme_color: "pixiv", max_wait_seconds: 180, show_r18: true, thumb_quality_grid: "medium", thumb_quality_detail: "medium", thumb_quality_fullscreen: "large", saucenao_api_key: "" });
 const savedSnapshot = ref("");
 const langOptions = computed(() => [{ label: t("settings.languages.zh-CN"), value: "zh-CN" }, { label: t("settings.languages.en-US"), value: "en-US" }]);
 const themeOptions = computed(() => [{ label: t("settings.themes.light"), value: "light" }, { label: t("settings.themes.dark"), value: "dark" }, { label: t("settings.themes.auto"), value: "auto" }]);

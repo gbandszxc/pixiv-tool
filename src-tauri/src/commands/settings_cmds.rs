@@ -18,7 +18,8 @@ use crate::settings::{
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
-const WRITABLE_KEYS: [&str; 11] = [
+/// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
+const WRITABLE_KEYS: [&str; 12] = [
     "output_dir",
     "output_formats",
     "language",
@@ -30,6 +31,7 @@ const WRITABLE_KEYS: [&str; 11] = [
     "thumb_quality_grid",
     "thumb_quality_detail",
     "thumb_quality_fullscreen",
+    "saucenao_api_key",
 ];
 
 /// 读取当前配置。
@@ -104,6 +106,17 @@ pub fn apply_settings_patch(
         if let Some(value) = patch_obj.get(key) {
             merged.insert(key.to_string(), value.clone());
         }
+    }
+    // saucenao_api_key 保存前 trim（必须字符串；不做长度上限，保持简单）。
+    // key 属用户凭据：只进配置文件，任何日志不得输出该值。
+    if let Some(value) = patch_obj.get("saucenao_api_key") {
+        let key = value
+            .as_str()
+            .ok_or("SauceNAO API Key 必须是字符串".to_string())?;
+        merged.insert(
+            "saucenao_api_key".to_string(),
+            Value::String(key.trim().to_string()),
+        );
     }
     serde_json::from_value(Value::Object(merged))
         .map_err(|err| format!("设置字段格式不正确: {err}"))
@@ -346,6 +359,42 @@ mod tests {
             apply_settings_patch(&Settings::default(), &json!({"show_r18": true}), &data_dir)
                 .is_ok()
         );
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_trims_saucenao_api_key() {
+        let data_dir = temp_data_dir("saucenao");
+        // trim 首尾空白
+        let updated = apply_settings_patch(
+            &Settings::default(),
+            &json!({"saucenao_api_key": "  abc123  "}),
+            &data_dir,
+        )
+        .unwrap();
+        assert_eq!(updated.saucenao_api_key, "abc123");
+        // 空白串合法（trim 后等价未配置）
+        let updated = apply_settings_patch(
+            &Settings::default(),
+            &json!({"saucenao_api_key": " "}),
+            &data_dir,
+        )
+        .unwrap();
+        assert_eq!(updated.saucenao_api_key, "");
+        // 非字符串拒绝
+        assert_eq!(
+            apply_settings_patch(
+                &Settings::default(),
+                &json!({"saucenao_api_key": 42}),
+                &data_dir
+            )
+            .unwrap_err(),
+            "SauceNAO API Key 必须是字符串"
+        );
+        // 未出现在 patch 里保持原值
+        let updated =
+            apply_settings_patch(&updated, &json!({"language": "en-US"}), &data_dir).unwrap();
+        assert_eq!(updated.saucenao_api_key, "");
         cleanup(&data_dir);
     }
 }
