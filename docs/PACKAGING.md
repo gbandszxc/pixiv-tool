@@ -175,8 +175,9 @@ GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`�
    Linux 基线固定 22.04（官方推荐的最老 WebKitGTK 4.1 基线，保证 glibc 下限）；
    arm64 走 GitHub **原生 arm64 runner** 编译，不做交叉编译（AppImage 的
    linuxdeploy 不支持交叉出 ARM 包，只能由原生 ARM 主机出）。Linux 构建机额外装
-   `cmake` / `rpm`（rpm 打包）、`libfuse2`（跑 linuxdeploy 这个 AppImage）与
-   `go`（BoringSSL 汇编，缺失时自动补装）
+   `cmake` / `rpm`（rpm 打包）、`libfuse2` 与 `xdg-utils`（AppImage 打包：跑
+   linuxdeploy 这个 AppImage，并把 xdg-open 打进包内；arm64 镜像不预装 xdg-utils）
+   与 `go`（BoringSSL 汇编，缺失时自动补装）
 
    **Windows arm64 的 BoringSSL 汇编开关**：BoringSSL 的 win-aarch64 汇编
    （`gen/bcm/*-armv8-win.S`）是 GNU 汇编器语法，上游要求用 Clang 汇编；原生 arm64

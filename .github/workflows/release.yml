@@ -113,7 +113,7 @@ jobs:
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev \
-            librsvg2-dev libclang-dev cmake rpm libfuse2
+            librsvg2-dev libclang-dev cmake rpm libfuse2 xdg-utils
           # BoringSSL 在部分平台需要 go 生成汇编；arm64 镜像不保证预装
           command -v go >/dev/null 2>&1 || sudo apt-get install -y golang-go
 
