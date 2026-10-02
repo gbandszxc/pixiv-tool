@@ -215,6 +215,11 @@ export default {
     cleared: "Browsing history cleared ({count} item(s))",
     clearFailed: "Failed to clear browsing history",
     loadFailed: "Failed to load browsing history",
+    filterLabel: "Filter by type",
+    filterAll: "All",
+    filterIllust: "Illustrations",
+    filterManga: "Manga",
+    filterNovel: "Novels",
   },
   settings: {
     title: "Settings",

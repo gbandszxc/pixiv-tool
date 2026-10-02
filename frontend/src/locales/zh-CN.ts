@@ -216,6 +216,11 @@ export default {
     cleared: "已清空浏览历史（{count} 条）",
     clearFailed: "清空浏览历史失败",
     loadFailed: "加载浏览历史失败",
+    filterLabel: "按类别筛选",
+    filterAll: "全部",
+    filterIllust: "插画",
+    filterManga: "漫画",
+    filterNovel: "小说",
   },
   settings: {
     title: "设置",

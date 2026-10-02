@@ -642,10 +642,15 @@ export async function browseHistoryRecord(input: BrowseHistoryRecordInput): Prom
   });
 }
 
-/** browse_history_list：浏览历史分页列表（page 从 1 起）。 */
-export async function browseHistoryList(page: number, pageSize: number): Promise<BrowseHistoryList> {
-  if (!isTauri()) return mockHistoryList(page, pageSize);
-  return invokeBrowse<BrowseHistoryList>("browse_history_list", { page, pageSize });
+/** browse_history_list：浏览历史分页列表（page 从 1 起；kind 省略 = 全部）。 */
+export async function browseHistoryList(
+  page: number,
+  pageSize: number,
+  kind?: WorkKind
+): Promise<BrowseHistoryList> {
+  if (!isTauri()) return mockHistoryList(page, pageSize, kind);
+  // kind 为 undefined 时 JSON 序列化丢弃该键 → Rust Option::None（不过滤）。
+  return invokeBrowse<BrowseHistoryList>("browse_history_list", { page, pageSize, kind });
 }
 
 /** browse_history_clear：一键清空浏览历史。 */
@@ -1379,10 +1384,14 @@ async function mockHistoryRecord(input: BrowseHistoryRecordInput): Promise<void>
   });
 }
 
-/** list：页码切片（已在内存中按 visited_at 倒序维护）。 */
-async function mockHistoryList(page: number, pageSize: number): Promise<BrowseHistoryList> {
+/** list：按 kind（省略 = 全部）过滤后页码切片（内存已按 visited_at 倒序维护）。 */
+async function mockHistoryList(
+  page: number,
+  pageSize: number,
+  kind?: WorkKind
+): Promise<BrowseHistoryList> {
   await mockDelay();
-  const arr = mockHistoryEnsure();
+  const arr = kind ? mockHistoryEnsure().filter((it) => it.kind === kind) : mockHistoryEnsure();
   const start = (Math.max(1, page) - 1) * pageSize;
   return { items: arr.slice(start, start + pageSize), total: arr.length, page, page_size: pageSize };
 }

@@ -7,9 +7,11 @@
  * - 状态：骨架 / 错误重试 / 空态（插画占位 + 引导文案）；
  * - 分页：AppPagination 已知总页数模式，默认 20/页（20/50/100），容量切换回第 1 页；
  * - 清空：原生 dialog 二次确认 → 成功后通知 + 回第 1 页 + 重新加载；
- * - 数据来自历史行（非 BrowseWorkItem），仅展示，不做单条删除 / 搜索 / 筛选。
+ * - 类别筛选：全部 / 插画 / 漫画 / 小说胶囊（默认全部），切换回第 1 页重新加载；
+ * - 进入自动刷新：KeepAlive 下 onActivated 每次激活都重新加载（筛选与页码保留）；
+ * - 数据来自历史行（非 BrowseWorkItem），仅展示，不做单条删除 / 搜索。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onActivated, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
@@ -30,8 +32,11 @@ const { t } = useI18n();
 const router = useRouter();
 
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
+/** 类别筛选值：all = 全部（不传 kind）。 */
+type HistoryKind = "all" | "illust" | "manga" | "novel";
 const page = ref(1);
 const pageSize = ref(20);
+const kind = ref<HistoryKind>("all");
 const items = ref<BrowseHistoryItem[]>([]);
 const total = ref(0);
 const loading = ref(false);
@@ -46,6 +51,22 @@ let seq = 0;
 const r18Filter = useGlobalR18Filter();
 const visibleItems = computed(() => filterByR18(items.value, r18Filter.value));
 const hiddenCount = computed(() => items.value.length - visibleItems.value.length);
+
+/** 类别筛选按钮（顺序：全部 / 插画 / 漫画 / 小说）。 */
+const kindOptions = computed(() => [
+  { value: "all" as const, label: t("browseHistory.filterAll") },
+  { value: "illust" as const, label: t("browseHistory.filterIllust") },
+  { value: "manga" as const, label: t("browseHistory.filterManga") },
+  { value: "novel" as const, label: t("browseHistory.filterNovel") },
+]);
+
+/** 切换类别：回第 1 页并重新加载；重复点击当前项不请求。 */
+function selectKind(next: HistoryKind): void {
+  if (next === kind.value) return;
+  kind.value = next;
+  page.value = 1;
+  void load();
+}
 
 /** 历史行 → WorkCard 需要的 BrowseWorkItem 形状（字段子集）。 */
 const cards = computed(() =>
@@ -69,7 +90,11 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = "";
   try {
-    const data = await browseHistoryList(page.value, pageSize.value);
+    const data = await browseHistoryList(
+      page.value,
+      pageSize.value,
+      kind.value === "all" ? undefined : kind.value
+    );
     if (token !== seq) return;
     items.value = data.items;
     total.value = data.total;
@@ -118,7 +143,7 @@ function openWork(item: BrowseWorkItem): void {
   void router.push(`/browse/work/${kind}/${item.id}`);
 }
 
-onMounted(load);
+onActivated(load);
 </script>
 
 <template>
@@ -138,6 +163,21 @@ onMounted(load);
           {{ t("browseHistory.clearAll") }}
         </md-text-button>
       </div>
+    </div>
+
+    <!-- 类别筛选：全部 / 插画 / 漫画 / 小说（默认全部），切换回第 1 页重新加载 -->
+    <div class="kind-filter" role="group" :aria-label="t('browseHistory.filterLabel')">
+      <button
+        v-for="option in kindOptions"
+        :key="option.value"
+        type="button"
+        class="chip"
+        :class="{ selected: kind === option.value }"
+        :aria-pressed="kind === option.value"
+        @click="selectKind(option.value)"
+      >
+        {{ option.label }}
+      </button>
     </div>
 
     <!-- 首屏骨架：纯 surface-container 色块，无闪烁动画（对齐 WorkGrid 骨架规范） -->
@@ -209,6 +249,43 @@ onMounted(load);
 /* danger 文案色沿用既有规范值 #ba1a1a（AccountMenu / SettingsPanel） */
 .clear-btn {
   --md-text-button-label-text-color: #ba1a1a;
+}
+
+/* 类别筛选胶囊：与频道页「内容筛选」同一 recipe（透明底、outline 60% 描边、选中 secondary-container） */
+.kind-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-lg);
+}
+
+.chip {
+  padding: 6px 16px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.chip:hover {
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent);
+}
+
+.chip.selected {
+  color: var(--md-sys-color-on-secondary-container);
+  background: var(--md-sys-color-secondary-container);
+  border-color: transparent;
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 .pager {
