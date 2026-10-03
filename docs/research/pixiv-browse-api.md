@@ -18,6 +18,8 @@
 
 > **2026-10-03 详情标签勘误**：插画、漫画、小说详情的 `tags` 实为 `{authorId,isLocked,tags:[{tag,...}],writable}` 对象，标签数组在 `tags.tags`，不能按顶层数组解析。三类均带 `likeCount` / `bookmarkCount` / `viewCount`；小说此前仅消费 bookmarkCount，已补全。另外描述 HTML 的换行须在转文本时保留。现行契约与回归映射见 `docs/PIXIV-API.md` §4.3 / §8.1。
 
+> **2026-10-03 搜索计数复核**：真实 Chrome 登录会话与 Rust `live_search_count_fields` 均核对 `original` 首屏：小说 30 条全部自带 `bookmarkCount`（Chrome 样本中 27 条为零），不带 `likeCount` / `viewCount`；插画 59 条有效作品均无这三项。列表收藏数可直接复用，不能把零视为缺失。已通过 `parse_work_thumb` 透传可用计数，本页排序仅补取所选维度缺失项。证据只输出字段覆盖条数，不保存响应或凭据；当前契约与回归映射见 `docs/PIXIV-API.md` §4.2 / §8.1。
+
 > 调研方式：2026-10-01 对已登录 pixiv 的真实 Chrome 会话（中文界面，pixiv-web-next 前端）做只读抓包，逐页面用浏览器内 `fetch()` 复调确认响应结构。
 > 基础域名：`https://www.pixiv.net`（接口同源）；图片 `https://i.pximg.net`；静态资源 `https://s.pximg.net`；嵌入图 `https://embed.pixiv.net`。
 > 本文只记录浏览（读）类接口；点赞/收藏/关注等写操作接口未调研。

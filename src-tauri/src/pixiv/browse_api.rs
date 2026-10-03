@@ -687,6 +687,9 @@ fn parse_work_thumb(v: &Value, fallback_kind: &str) -> Option<BrowseWorkItem> {
         series_title: str_field(v, "seriesTitle"),
         bookmark_id,
         bookmark_restrict,
+        like_count: v.get("likeCount").and_then(as_i64_loose),
+        bookmark_count: v.get("bookmarkCount").and_then(as_i64_loose),
+        view_count: v.get("viewCount").and_then(as_i64_loose),
         ..BrowseWorkItem::default()
     })
 }
@@ -3137,6 +3140,25 @@ mod tests {
         assert!(list.total.is_none());
         assert!(list.next_page.is_none());
         assert!(list.last_page.is_none());
+    }
+
+    #[test]
+    fn parse_search_preserves_available_counts() {
+        let body = json!({"novel": {"data": [
+            {"id": "1", "bookmarkCount": 0},
+            {"id": "2", "bookmarkCount": "88", "likeCount": 3, "viewCount": "100"},
+            {"id": "3", "bookmarkCount": null}
+        ]}});
+        let items = to_value(&parse_search(&body, "novel", 1))["items"].clone();
+        assert_eq!(items[0]["bookmark_count"], 0, "零值必须保留");
+        assert!(items[0].get("like_count").is_none());
+        assert_eq!(items[1]["bookmark_count"], 88);
+        assert_eq!(items[1]["like_count"], 3);
+        assert_eq!(items[1]["view_count"], 100);
+        assert!(
+            items[2].get("bookmark_count").is_none(),
+            "缺失值不能冒充零"
+        );
     }
 
     // ---- 作品计数批量（browse_work_counts）----

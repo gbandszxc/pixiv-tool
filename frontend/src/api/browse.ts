@@ -60,7 +60,7 @@ export type RankingMode =
   | "female";
 
 /** 浏览列表通用作品条目。 */
-export interface BrowseWorkItem {
+export interface BrowseWorkItem extends WorkCounts {
   id: number;
   kind: WorkKind;
   title: string;
@@ -105,7 +105,7 @@ export interface BrowseList {
   last_page?: number | null;
 }
 
-/** 单项三项计数（browse_work_counts 的 counts 值；字段缺失 = 详情响应无该字段）。 */
+/** 列表已有计数或 browse_work_counts 的 counts 值；缺失字段需按排序维度补取。 */
 export interface WorkCounts {
   like_count?: number;
   bookmark_count?: number;

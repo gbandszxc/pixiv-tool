@@ -377,6 +377,36 @@ async fn live_follow_latest_illust_novel() {
 // 7. 搜索
 // ----------------------------------------------------------------------
 
+/// 搜索原始计数字段回归：小说收藏数可复用，只输出覆盖条数。
+#[tokio::test]
+#[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
+async fn live_search_count_fields() {
+    let api = common::live_api();
+    for (segment, container) in [("novels", "novel"), ("artworks", "illustManga")] {
+        let raw = api
+            .client()
+            .get_json(&format!(
+                "/ajax/search/{segment}/original?order=date_d&mode=all&p=1&lang=zh"
+            ))
+            .await
+            .expect("原始搜索响应应成功");
+        let items = raw[container]["data"]
+            .as_array()
+            .expect("搜索 data 应为数组");
+        assert!(!items.is_empty(), "搜索样本不能为空");
+        for field in ["bookmarkCount", "likeCount", "viewCount"] {
+            let covered = items
+                .iter()
+                .filter(|item| common::as_i64_loose(&item[field]).is_some())
+                .count();
+            eprintln!("{segment} {field}: {covered}/{}", items.len());
+            if segment == "novels" && field == "bookmarkCount" {
+                assert_eq!(covered, items.len(), "小说搜索应自带收藏数（包括零值）");
+            }
+        }
+    }
+}
+
 /// /ajax/search/{artworks,novels}/{word}：total>=1、lastPage>=1、items 非空。
 #[tokio::test]
 #[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
@@ -460,6 +490,12 @@ async fn live_search_artworks_novels() {
         "搜索小说条目 kind 应全为 novel"
     );
     common::assert_work_item(&novel_items[0], "search novels items[0]", Some("novel"));
+    assert!(
+        novel_items
+            .iter()
+            .all(|item| item["bookmark_count"].as_i64().is_some()),
+        "小说搜索自带收藏数应完整透传（包括零值）"
+    );
 
     let raw_novel = api
         .client()

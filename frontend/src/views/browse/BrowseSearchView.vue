@@ -16,7 +16,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   固定，前端切 3 个显示页（20/页），接口页缓存在内存供跨页复用。
  * - 本页排序：维度（点赞/收藏/浏览）下拉 + 升降方向切换（SortDirectionToggle），
  *   仅对当前显示页 20 条本地排序；
- *   三项计数列表接口不返回（官方页面亦逐项请求详情），按需经 browse_work_counts
+ *   优先复用列表已有计数（小说自带收藏数），仅所选维度缺失时经 browse_work_counts
  *   分批补取（全局限速），会话内缓存 + 进度提示，缺失项垫底。
  */
 import { computed, ref, shallowRef, watch } from "vue";
@@ -205,9 +205,10 @@ function countKey(item: BrowseWorkItem): string {
   return `${item.kind}:${item.id}`;
 }
 
-/** 当前显示页中尚无计数的条目。 */
+/** 当前显示页中所选排序维度仍缺计数的条目（零值是已知计数）。 */
 function missingCountItems(): BrowseWorkItem[] {
-  return items.value.filter((it) => !countsCache.has(countKey(it)));
+  const key = sortKey.value;
+  return key ? items.value.filter((it) => metricOf(it, key) === null) : [];
 }
 
 /**
@@ -221,13 +222,16 @@ async function ensureCounts(): Promise<void> {
   }
   const missing = missingCountItems();
   if (!missing.length) return;
+  const requestKind = kind.value;
+  const requestSeq = seq;
   countsLoading.value = true;
   countsTotal.value = missing.length;
   countsDone.value = 0;
   try {
     for (let i = 0; i < missing.length; i += 10) {
+      if (requestSeq !== seq || !sortKey.value) break;
       const batch = missing.slice(i, i + 10);
-      const data = await browseWorkCounts(kind.value, batch.map((it) => it.id));
+      const data = await browseWorkCounts(requestKind, batch.map((it) => it.id));
       for (const it of batch) {
         const counts = data.counts[String(it.id)];
         if (!counts) continue;
@@ -252,10 +256,8 @@ async function ensureCounts(): Promise<void> {
 
 function metricOf(item: BrowseWorkItem, key: SortKey): number | null {
   const counts = countsCache.get(countKey(item));
-  if (!counts) return null;
-  const value =
-    key === "like" ? counts.like_count : key === "bookmark" ? counts.bookmark_count : counts.view_count;
-  return value ?? null;
+  const field = key === "like" ? "like_count" : key === "bookmark" ? "bookmark_count" : "view_count";
+  return counts?.[field] ?? item[field] ?? null;
 }
 
 /** 展示条目：默认 = 接口顺序；计数缺失项恒垫底。 */
