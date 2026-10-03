@@ -7,7 +7,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  * 最新投稿」+ 底部热门标签。各板块 WorkGrid 只展示前 12 条；排行榜板块附 ranking_date，
  * 「查看完整榜单」跳 /browse/ranking 并预选对应类型；标签点击 → 搜索页预填关键词。
  */
-import { computed, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, onBeforeUnmount, ref, shallowRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import {
@@ -31,30 +31,34 @@ const { filter, setFilter } = useChannelR18Filter(() => props.kind);
 const data = shallowRef<ChannelSnapshot | null>(null);
 const loading = ref(false);
 const error = ref("");
+const serverMode = computed(() => filter.value === "r18" ? "r18" : "all");
+let requestId = 0;
 
 async function load(): Promise<void> {
-  if (loading.value) return;
+  const currentRequest = ++requestId;
   loading.value = true;
   error.value = "";
   try {
-    data.value = await browseChannel(props.kind);
+    const snapshot = await browseChannel(props.kind, serverMode.value);
+    if (currentRequest === requestId) data.value = snapshot;
   } catch (err) {
-    error.value = errorMessage(err);
+    if (currentRequest === requestId) error.value = errorMessage(err);
   } finally {
-    loading.value = false;
+    if (currentRequest === requestId) loading.value = false;
   }
 }
 
-/** 独立路由实例按频道缓存；实例内 kind 改变时重载。 */
+/** R-18 使用独立服务端频道；一般向与全部复用普通快照，只改变本地过滤。 */
 watch(
-  () => props.kind,
+  [() => props.kind, serverMode],
   () => {
     data.value = null;
     void load();
-  }
+  },
+  { immediate: true }
 );
 
-onMounted(load);
+onBeforeUnmount(() => { requestId++; });
 
 const title = computed(() => {
   if (props.kind === "illustration") return t("nav.browseIllustration");
@@ -125,12 +129,12 @@ function openWork(item: BrowseWorkItem): void {
 /** 完整榜单：预选对应类型（频道 illustration 对应 ranking 的 illust）。 */
 function openRanking(): void {
   const kindParam = props.kind === "illustration" ? "illust" : props.kind;
-  void router.push({ path: "/browse/ranking", query: { kind: kindParam } });
+  void router.push({ path: "/browse/ranking", query: { kind: kindParam, mode: serverMode.value === "r18" ? "daily_r18" : "daily" } });
 }
 
 /** 热门标签 → 搜索页并预填关键词（query.word）。 */
 function openTag(name: string): void {
-  void router.push({ path: "/browse/search", query: { word: name } });
+  void router.push({ path: "/browse/search", query: { word: name, mode: filter.value } });
 }
 </script>
 
@@ -141,7 +145,7 @@ function openTag(name: string): void {
       <ListRefreshButton :busy="loading" @refresh="load" />
     </div>
 
-    <!-- 档位切换为纯 computed：不重新请求快照；计数提示统一在筛选条右侧 -->
+    <!-- R-18 切换服务端频道；计数提示统一在筛选条右侧 -->
     <R18FilterBar :model-value="filter" :hidden-count="hiddenCount" @update:model-value="setFilter" />
     <p v-if="error && data" role="alert">{{ error }}</p>
 
@@ -156,14 +160,14 @@ function openTag(name: string): void {
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.followNew") }}</h2>
         </div>
-        <WorkGrid :items="followItems" :loading="loading" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="followItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
       </section>
 
       <section class="channel-section">
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.recommend") }}</h2>
         </div>
-        <WorkGrid :items="recommendItems" :loading="loading" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="recommendItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
       </section>
 
       <section class="channel-section">
@@ -174,7 +178,7 @@ function openTag(name: string): void {
             <md-text-button @click="openRanking">{{ t("browse.channel.viewFullRanking") }}</md-text-button>
           </div>
         </div>
-        <WorkGrid :items="rankingItems" :loading="loading" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="rankingItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
       </section>
 
       <!-- #标签推荐板块（官方 /illustration 同位置：排行之后、最新投稿之前；仅插画频道有数据） -->
@@ -185,14 +189,14 @@ function openTag(name: string): void {
             <span>{{ t("browse.channel.tagRecommendSuffix") }}</span>
           </h2>
         </div>
-        <WorkGrid :items="section.items" :loading="loading" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="section.items" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
       </section>
 
       <section class="channel-section">
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.newPost") }}</h2>
         </div>
-        <WorkGrid :items="newPostItems" :loading="loading" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="newPostItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
       </section>
 
       <section v-if="trendingTags.length" class="channel-section">

@@ -427,9 +427,9 @@ export async function browseHomeFeed(): Promise<BrowseList> {
 }
 
 /** browse_channel：频道页快照（插画 / 漫画 / 小说），一次返回四板块 + 热门标签。 */
-export async function browseChannel(kind: ChannelKind): Promise<BrowseChannel> {
-  if (!isTauri()) return mockChannel(kind);
-  return invokeBrowse<BrowseChannel>("browse_channel", { kind });
+export async function browseChannel(kind: ChannelKind, mode: "all" | "r18" = "all"): Promise<BrowseChannel> {
+  if (!isTauri()) return mockChannel(kind, mode);
+  return invokeBrowse<BrowseChannel>("browse_channel", { kind, mode });
 }
 
 /** browse_discover：发现（仅作品无小说；无翻页参数，前端重复调用按 id 去重追加）。 */
@@ -881,16 +881,17 @@ async function mockWorkCounts(kind: ListWorkKind, ids: number[]): Promise<WorkCo
   return { counts };
 }
 
-async function mockChannel(kind: ChannelKind): Promise<BrowseChannel> {
+async function mockChannel(kind: ChannelKind, mode: "all" | "r18"): Promise<BrowseChannel> {
   await mockDelay();
   const workKind = channelKindToWork(kind);
-  const rand = mulberry32(seedFrom(`channel:${kind}`));
+  const rand = mulberry32(seedFrom(`channel:${kind}:${mode}`));
+  const restrictItems = (items: BrowseWorkItem[]) => items.map((item) => ({ ...item, x_restrict: mode === "r18" ? 1 : item.x_restrict }));
   const section = (name: string, withRank = false): BrowseList => ({
-    items: mockItems(`channel:${kind}:${name}`, 1, {
+    items: restrictItems(mockItems(`channel:${kind}:${mode}:${name}`, 1, {
       kinds: [workKind],
       count: 10 + Math.floor(rand() * 9), // 10-18 条
       rankFrom: withRank ? 1 : undefined,
-    }),
+    })),
     total: null,
     next_page: null,
   });
@@ -904,10 +905,10 @@ async function mockChannel(kind: ChannelKind): Promise<BrowseChannel> {
     kind === "illustration"
       ? pick(rand, MOCK_TRENDING_TAGS, 3).map((tag, i) => ({
           tag: tag.name,
-          items: mockItems(`channel:${kind}:tag:${i}`, 1, {
+          items: restrictItems(mockItems(`channel:${kind}:${mode}:tag:${i}`, 1, {
             kinds: [workKind],
             count: 14,
-          }),
+          })),
         }))
       : [];
   return {

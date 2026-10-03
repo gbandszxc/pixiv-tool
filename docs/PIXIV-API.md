@@ -144,8 +144,9 @@
 - 消费字段：`contents[].kind`（illust / manga / novel；collection 等跳过）、`contents[].thumbnails[]` 逐项走缩略解析（见 4.8 字段清单）。
 - 分页：无；前端「换一批」重复调用并按 id 去重。
 
-**GET `/ajax/top/illust / manga / novel?lang=zh`** · 实现 `browse_api.rs:1762`（`get_channel`）· 在线 `live_read.rs::live_channel_illust_manga_novel` · 离线 `parse_channel_assembles_sections`、`parse_channel_missing_sections_is_empty_not_error`
-- 参数：kind 白名单 `illust | illustration | manga | novel`（`illustration` 归一到 `illust`）；无翻页，一次性快照。
+**GET `/ajax/top/illust / manga / novel?lang=zh[&mode=r18]`** · 实现 `browse_api.rs:1993`（`get_channel`）/ `:852`（`channel_path`）· 在线 `live_read.rs::live_channel_illust_manga_novel` · 离线 `parse_channel_assembles_sections`、`parse_channel_missing_sections_is_empty_not_error`
+- 参数：kind 白名单 `illust | illustration | manga | novel`（`illustration` 归一到 `illust`）；可选 mode 白名单 `all | r18`。省略/all 不附 mode 查询参数；r18 附 `mode=r18`，等价官方 `/cate_r18.php` 的频道请求。`safe` 在 Pixiv 侧报业务错误，因此一般向使用普通快照并本地过滤。无翻页，一次性快照。
+- **2026-10-03 实测**：同一 Chrome 会话普通插画快照推荐 18 条/排行 100 条均无 R-18，r18 快照分别含 18/100 条受限作品，并返回独立 `recommendByTag` 分区；标签名与候选会随请求变化，不硬编码特定标签。漫画与小说亦支持 r18。不能仅从普通快照过滤取得 R-18 推荐/排行/标签。候选偶有一般向或未知条目（小说推荐在线测试亦观察到混入），前端仍按 `x_restrict` 过滤；在线回归断言每分区含可显示的受限作品，不假定候选全为 R-18。
 - 消费字段：`page.follow[]`、`page.recommend.ids[]`、`page.ranking.items[]`（**对象数组 `{id,rank}`**，非标量——2026-10-01 实测；`items_from_ids` 兼容两种形态并带回 rank）、`page.ranking.date`（见下方归一说明）、`page.newPost[]`、`page.recommendByTag[].{tag,ids[]}`（实测仅 illust 频道）、`page.trendingTags[]`（实测条目键 `{tag,ids,trendingRate}`，**无** `translatedName`/`illustCount`；译名由同响应 `tagTranslation[tag].zh`（回退 `zh_tw`）映射，`count` 无源字段恒缺席；且实测仅 illust 频道有该板块）；索引表 `thumbnails.illust / novel`（`parse_index` browse_api.rs:608）、`users{}`（`name` / `imageBig` / `image`，`users_index` browse_api.rs:624）。
 - 日期归一：`page.ranking.date` 三频道两种形态（illust/manga `20260930`、novel `2026-09-30`，2026-10-01 实测）统一经 `normalize_ymd` 归一为 `yyyymmdd`——前端 `formatYmd` 只认 8 位数字，否则整段日期不显示（novel 频道曾因此丢日期）。
 - 分页：无。
@@ -377,7 +378,7 @@
 | 端点 | 代码函数（文件:行） | 在线用例 | 离线单测 | 前端消费点 / 其它消费 |
 |---|---|---|---|---|
 | `/ajax/street/v2/main` | `get_home_street` browse_api.rs:1742；`web_csrf_token` browse_api.rs:389 | `live_read.rs::live_home_street` | `parse_street_flattens_kinds` | browse.ts:354 |
-| `/ajax/top/*` | `get_channel` browse_api.rs:1762；`parse_channel` :759 | `live_read.rs::live_channel_illust_manga_novel` | `parse_channel_assembles_sections` / `parse_channel_normalizes_novel_ranking_date` / `items_from_ids_maps_order_and_skips_missing` | browse.ts:360 |
+| `/ajax/top/*`（含 mode=r18） | `get_channel` / `channel_path` / `parse_channel`（browse_api.rs） | `live_read.rs::live_channel_illust_manga_novel` / `live_channel_r18_recommend_ranking_and_tags` | `channel_path_selects_server_r18_mode` / `parse_channel_assembles_sections` / `parse_channel_normalizes_novel_ranking_date` / `offline_guard::invalid_params_rejected_before_login_guard` | `browseChannel`（browse.ts）/ `BrowseChannelView`；前端回归 `/tests/channel.html` |
 | `/ajax/watch_list/*` | `get_watchlist` browse_api.rs:1780；`parse_watchlist` :842 | `live_read.rs::live_watchlist_manga_novel` | `parse_watchlist_manga_maps_thumbs_and_order` | browse.ts:524 |
 | `/ajax/discovery/artworks` | `get_discover` browse_api.rs:1816；`parse_discover` :943 | `live_read.rs::live_discover` | `parse_discover_maps_ids_in_order` | browse.ts:366 |
 | `/ajax/follow_latest/*` | `get_follow_latest` browse_api.rs:1826；`parse_follow_latest` :961 | `live_read.rs::live_follow_latest_illust_novel` | `parse_follow_latest_pagination_semantics` | browse.ts:372 |
@@ -422,3 +423,4 @@
 | 2026-10-01 晚 | 在线套件（`tests/pixiv_api/`，17 只读用例）实机复核后勘误 + 修复 4 处：①搜索词 percent-encode（非 ASCII 原为 400）②频道 `ranking.items` 对象形态（原整块为空）③热门标签译名改取 `tagTranslation`（`translatedName`/`illustCount` 不存在）④排行榜日期归一 `normalize_ymd`（novel 原为日文串/`2026-09-30`）；`/ajax/user/{id}` 无 `account` 记为契约事实（前端隐藏空 @handle）；全部行号按修复后工作树重校 | `./dev.ps1 test-live` 全绿（20 用例：17 只读 + 2 写跳过 + 探针已删）；离线 `parse_channel_*` / `search_path_*` / `normalize_ymd_*` 用例 |
 | 2026-10-02 | 关闭评论区语义：关闭评论的作品 roots 恒 400（body 仅泛化「不正确的请求。」、无专属标志；详情亦无关闭标志字段）；`get_work_comments` 捕获 400（新增 `PixivError::is_bad_request`）映射为 `{"comments":[],"disabled":true}` 空信封而非报错，前端 `CommentsSection` 显示「作者已关闭评论区」终态；评论端点两行行号按当前工作树重校 | 在线探针实测（illust 150326647）；离线 `comments_closed_envelope_and_bad_request_gate` + 在线 `live_read.rs::live_comments_closed_work` |
 | 2026-10-02 | 搜索列表契约补充：**列表项不含点赞/收藏/浏览计数**（artworks 全无、novels 仅 `bookmarkCount`）、**每页固定 60 条**（`limit` 等参数无效）、`last_page` 原样回传；新增 `browse_work_counts`（详情端点逐项补取三项计数，ids ≤ 60、单项失败跳过、全局限速排队）供搜索页「本页排序」；搜索相关行号按当前工作树重校 | 浏览器实测（pixiv 登录态：搜索响应字段、`limit`/`per_page` 无效、官方搜索页卡片收藏数逐项请求详情证实）+ 离线 `parse_work_counts_reads_three_fields`、`offline_guard` 计数批量用例 |
+| 2026-10-03 | 频道 R-18 使用独立服务端 mode=r18；修复普通快照本地过滤导致推荐/排行/标签为空，频道网格覆盖全局档并拒收迟到响应；榜单与标签导航继承内容档 | Chrome 同账号接口对照；在线 live_channel_r18_recommend_ranking_and_tags；离线路径/参数守卫；前端 /tests/channel.html |

@@ -5,7 +5,7 @@
  * - 频道档默认跟随全局，手动切换后以模块级状态为准，且只有频道页读写——
  *   避免「频道页点一次 R-18」把共用列表的过滤口径一起放开；手动档按频道 kind
  *   分别记录，插画 / 漫画 / 小说三条路由互不串档。
- * 过滤全程为渲染期 computed：切换不触发任何请求，也不改分页 / 去重状态。
+ * 过滤本身为渲染期 computed；频道页切入/切出 R-18 时另行加载对应服务端快照。
  */
 import { computed, ref, type ComputedRef } from "vue";
 import { useSettingsStore } from "../../stores/settings";

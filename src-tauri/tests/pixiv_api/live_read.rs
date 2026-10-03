@@ -138,7 +138,7 @@ async fn live_home_street() {
 async fn live_channel_illust_manga_novel() {
     for kind in ["illust", "manga", "novel"] {
         let channel = common::live_api()
-            .get_channel(kind)
+            .get_channel(kind, None)
             .await
             .unwrap_or_else(|e| panic!("/ajax/top/{kind} 失败: {e}"));
         let mut section_items = 0usize;
@@ -201,6 +201,52 @@ async fn live_channel_illust_manga_novel() {
         if channel["ranking_date"].is_string() {
             common::assert_yyyymmdd(&channel["ranking_date"], &format!("{kind}.ranking_date"));
         }
+    }
+}
+
+/// R-18 频道必须从 mode=r18 获取推荐、排行和标签，不能过滤普通快照冒充。
+#[tokio::test]
+#[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
+async fn live_channel_r18_recommend_ranking_and_tags() {
+    for kind in ["illust", "manga", "novel"] {
+        let channel = common::live_api()
+            .get_channel(kind, Some("r18"))
+            .await
+            .unwrap_or_else(|e| panic!("{kind} R-18 频道失败: {e}"));
+        for section in ["recommend", "ranking"] {
+            let items =
+                common::assert_list_envelope(&channel[section], &format!("{kind}.r18.{section}"));
+            assert!(!items.is_empty(), "{kind} R-18 {section} 不应为空");
+            assert!(
+                items
+                    .iter()
+                    .any(|item| common::as_i64_loose(&item["x_restrict"]).is_some_and(|x| x >= 1)),
+                "{kind} R-18 {section} 必须含可展示的受限作品（普通快照本地过滤会为空）"
+            );
+        }
+        let tags = channel["tag_sections"]
+            .as_array()
+            .expect("tag_sections 应为数组");
+        if kind == "illust" {
+            assert!(!tags.is_empty(), "R-18 插画频道标签推荐不应为空");
+            for section in tags {
+                assert!(
+                    section["tag"].as_str().is_some_and(|tag| !tag.is_empty()),
+                    "标签名非空"
+                );
+                assert!(
+                    section["items"].as_array().is_some_and(|items| items
+                        .iter()
+                        .any(|item| common::as_i64_loose(&item["x_restrict"])
+                            .is_some_and(|x| x >= 1))),
+                    "标签分区应含可展示的 R-18 作品"
+                );
+            }
+        }
+        common::assert_yyyymmdd(
+            &channel["ranking_date"],
+            &format!("{kind}.r18.ranking_date"),
+        );
     }
 }
 

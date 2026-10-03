@@ -462,7 +462,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   全屏浮层右侧的胶卷缩略图消费 `thumb_quality_grid` 档（§6.4）。
   手改 settings.json 写入非法档位时，加载期回落到该键默认值（不强制回写文件）。
 - `show_r18`：全局 R-18 展示开关（默认 `true`）。关闭后所有作品列表（首页/发现/动态/
-  搜索/排行榜/收藏/作者页/频道页各板块/相关推荐/小说相关/系列目录行）在渲染期隐藏
+  搜索/排行榜/收藏/作者页/频道页各板块/相关推荐/小说相关/系列目录行）在渲染期隐藏（频道手动筛选可在该频道覆盖全局档）
   `x_restrict >= 1` 的作品；详情页仍可访问；**关闭开关时**详情页对
   `x_restrict >= 1` 的作品保留模糊遮罩 + 「显示」确认（确认后本会话记忆、不持久化），
   **开启开关（默认）时不显示遮罩、直接展示**。
@@ -730,7 +730,13 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   （默认）时详情页直接展示、不再出现确认遮罩。频道页顶部另有 R-18 快捷筛选
   （全部 / 一般向 / R18）：默认跟随全局设置，手动选择只覆盖当前频道页
   （插画 / 漫画 / 小说三档各自独立、不串档）、
-  不改写设置。排行榜的插画/漫画/动图条目在接口里
+  不改写设置。R-18 档请求 `/ajax/top/*?mode=r18`；全部与一般向复用普通频道
+  快照，一般向继续本地过滤。切入/切出 R-18 或切换频道时清除旧快照并重载，只
+  接收最新请求结果；频道网格显式使用频道档位，避免被全局开关再次过滤。
+  服务端 R-18 候选可能混入一般向/未知条目，仍按 `x_restrict` 过滤。
+  插画频道展示响应中的 `recommendByTag` 标签推荐分区（每区最多 12 条，空区
+  隐藏），完整榜单入口随 R-18 档预选 `daily_r18`，标签搜索继承内容档位。
+  排行榜的插画/漫画/动图条目在接口里
   **没有顶层 `x_restrict`**，由 `illust_content_type.sexual`（0 一般 / 1 R-18 /
   2 R-18G）补入 `x_restrict`（实测见 `docs/research/pixiv-browse-api.md` §9，
   部分 ugoira 条目的 `illust_content_type` 为空数组、无从判定，同样按 fail-closed
@@ -781,7 +787,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
 | `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位 |
 | `browse_home_feed` | 首页推荐流（street POST + csrf token，进程内 30min 缓存） |
-| `browse_channel(kind)` | 频道仪表盘：关注新作/推荐/排行/最新投稿/热门标签（/ajax/top/*） |
+| `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
 | `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |
 | `browse_follow_latest(kind, mode, page)` | 关注的新作品（p + isLastPage） |
 | `browse_search(kind, word, order, mode, s_mode, type, page)` | 插画/漫画/小说搜索（total + lastPage；列表项不含点赞/收藏/浏览计数） |

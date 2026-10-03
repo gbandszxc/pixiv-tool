@@ -65,7 +65,7 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_channel_impl(&state, "illust").await.unwrap_err(),
+        browse_channel_impl(&state, "illust", None).await.unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
@@ -213,7 +213,13 @@ async fn invalid_params_rejected_before_login_guard() {
 
     // 非法 kind
     assert_eq!(
-        browse_channel_impl(&state, "video").await.unwrap_err(),
+        browse_channel_impl(&state, "illust", Some("safe"))
+            .await
+            .unwrap_err(),
+        "不支持的频道模式: safe"
+    );
+    assert_eq!(
+        browse_channel_impl(&state, "video", None).await.unwrap_err(),
         "不支持的频道类型: video"
     );
     assert_eq!(

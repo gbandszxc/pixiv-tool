@@ -244,14 +244,25 @@ pub async fn browse_home_feed_impl(state: &AppState) -> Result<Value, String> {
 
 /// 频道页快照（插画/漫画/小说：四板块 + 热门标签）。
 #[tauri::command]
-pub async fn browse_channel(state: State<'_, AppState>, kind: String) -> Result<Value, String> {
-    browse_channel_impl(&state, &kind).await
+pub async fn browse_channel(
+    state: State<'_, AppState>,
+    kind: String,
+    mode: Option<String>,
+) -> Result<Value, String> {
+    browse_channel_impl(&state, &kind, mode.as_deref()).await
 }
 
-pub async fn browse_channel_impl(state: &AppState, kind: &str) -> Result<Value, String> {
+pub async fn browse_channel_impl(
+    state: &AppState,
+    kind: &str,
+    mode: Option<&str>,
+) -> Result<Value, String> {
     validate_channel_kind(kind)?;
+    if !matches!(mode, None | Some("all" | "r18")) {
+        return Err(format!("不支持的频道模式: {}", mode.unwrap_or_default()));
+    }
     build_browse_api(state)?
-        .get_channel(kind)
+        .get_channel(kind, mode)
         .await
         .map_err(|err| err.to_string())
 }

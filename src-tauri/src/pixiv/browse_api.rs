@@ -848,6 +848,22 @@ fn parse_street(body: &Value) -> BrowseList {
     list_from_items(items)
 }
 
+/// 普通频道与 R-18 频道为不同服务端快照，不能只在普通快照上过滤。
+fn channel_path(kind: &str, mode: Option<&str>) -> Result<String, PixivError> {
+    let seg = match kind {
+        "illust" | "illustration" => "illust",
+        "manga" => "manga",
+        "novel" => "novel",
+        other => return Err(PixivError::Client(format!("不支持的频道类型: {other}"))),
+    };
+    let suffix = match mode {
+        None | Some("all") => "",
+        Some("r18") => "&mode=r18",
+        Some(other) => return Err(PixivError::Client(format!("不支持的频道模式: {other}"))),
+    };
+    Ok(format!("/ajax/top/{seg}?lang=zh{suffix}"))
+}
+
 /// GET /ajax/top/illust|manga|novel body → BrowseChannel。
 /// page.* 板块 id → thumbnails 索引表映射（novel 频道查 thumbnails.novel）；
 /// 缺板块输出空列表不报错。
@@ -1974,18 +1990,14 @@ impl PixivApi {
 
     /// GET /ajax/top/illust|manga|novel → BrowseChannel（一次性快照）。
     /// kind 兼容前端命名的 "illustration"。
-    pub async fn get_channel(&self, kind: &str) -> Result<Value, PixivError> {
-        let seg = match kind {
-            "illust" | "illustration" => "illust",
-            "manga" => "manga",
-            "novel" => "novel",
-            other => return Err(PixivError::Client(format!("不支持的频道类型: {other}"))),
+    pub async fn get_channel(&self, kind: &str, mode: Option<&str>) -> Result<Value, PixivError> {
+        let path = channel_path(kind, mode)?;
+        let canonical = if kind == "illustration" {
+            "illust"
+        } else {
+            kind
         };
-        let canonical = if seg == "illust" { "illust" } else { kind };
-        let body = self
-            .client()
-            .get_json(&format!("/ajax/top/{seg}?lang=zh"))
-            .await?;
+        let body = self.client().get_json(&path).await?;
         Ok(to_value(&parse_channel(&body, canonical)))
     }
 
@@ -2852,6 +2864,31 @@ mod tests {
         assert!(ch.tag_sections.is_empty(), "无 recommendByTag 输出空数组不报错");
         assert!(ch.trending_tags.is_empty());
         assert!(ch.ranking_date.is_none());
+    }
+
+    #[test]
+    fn channel_path_selects_server_r18_mode() {
+        for (kind, seg) in [
+            ("illustration", "illust"),
+            ("illust", "illust"),
+            ("manga", "manga"),
+            ("novel", "novel"),
+        ] {
+            assert_eq!(
+                channel_path(kind, None).unwrap(),
+                format!("/ajax/top/{seg}?lang=zh")
+            );
+            assert_eq!(
+                channel_path(kind, Some("all")).unwrap(),
+                channel_path(kind, None).unwrap()
+            );
+            assert_eq!(
+                channel_path(kind, Some("r18")).unwrap(),
+                format!("/ajax/top/{seg}?lang=zh&mode=r18")
+            );
+        }
+        assert!(channel_path("video", None).is_err());
+        assert!(channel_path("illust", Some("safe")).is_err());
     }
 
     // ---- watchlist（§12 追更列表）----

@@ -14,6 +14,8 @@
 > | §6 `/ajax/ranking/novel` 的 `date` 为 yyyymmdd | 实为日文展示串（`2026年9月30日`），`prev_date`/`next_date` 恒 null | 后端归一为 yyyymmdd |
 > | §8 `/ajax/user/{id}?full=1` 含 `account` | 响应无 `account` 键（四种组合实测） | `pixiv_id` 恒空串，前端隐藏 @handle 行 |
 
+> **2026-10-03 频道模式勘误**：Chrome `/cate_r18.php` 发起 `/ajax/top/illust?mode=r18&lang=zh`。同会话普通快照推荐 18/排行 100 均为一般向，r18 快照推荐 18/排行 100 均为受限；两种模式各有独立标签推荐。`mode=all` 等同普通快照，`mode=safe` 返回业务错误。漫画与小说 r18 请求亦成功。当前契约与测试映射见 `docs/PIXIV-API.md` §4.1 / §8.1。
+
 > 调研方式：2026-10-01 对已登录 pixiv 的真实 Chrome 会话（中文界面，pixiv-web-next 前端）做只读抓包，逐页面用浏览器内 `fetch()` 复调确认响应结构。
 > 基础域名：`https://www.pixiv.net`（接口同源）；图片 `https://i.pximg.net`；静态资源 `https://s.pximg.net`；嵌入图 `https://embed.pixiv.net`。
 > 本文只记录浏览（读）类接口；点赞/收藏/关注等写操作接口未调研。
@@ -565,6 +567,8 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 ---
 
 ## 11. 收藏（Bookmark）接口（v1 实测）
+
+> **2026-10-03 频道模式勘误**：Chrome `/cate_r18.php` 发起 `/ajax/top/illust?mode=r18&lang=zh`。同会话普通快照推荐 18/排行 100 均为一般向，r18 快照推荐 18/排行 100 均为受限；两种模式各有独立标签推荐。`mode=all` 等同普通快照，`mode=safe` 返回业务错误。漫画与小说 r18 请求亦成功。当前契约与测试映射见 `docs/PIXIV-API.md` §4.1 / §8.1。
 
 > 调研方式：2026-10-01 晚对已登录会话（uid <uid>，非 Premium）先在官方收藏页/作品页**真实点击抓包**，再用页内 `fetch()` 复现验证参数边界。
 > 写操作严格按「add→delete 配对」执行：插画、小说各一次私密收藏（restrict=1）+ 立即删除，实测后已确认还原（详情 `bookmarkData` 回到 null、计数复原）。

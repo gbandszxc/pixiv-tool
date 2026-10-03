@@ -6,7 +6,7 @@
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import WorkCard from "./WorkCard.vue";
-import { filterByR18, useGlobalR18Filter } from "./r18Filter";
+import { filterByR18, useGlobalR18Filter, type R18Filter } from "./r18Filter";
 import type { BrowseWorkItem } from "../../api/browse";
 
 const props = withDefaults(
@@ -28,6 +28,8 @@ const props = withDefaults(
     removable?: boolean;
     /** 隐藏网格内的 R-18 计数提示（频道页自带的筛选条已在页级显示同一口径计数） */
     hideR18Hint?: boolean;
+    /** 频道页显式覆盖；其他列表默认遵守全局开关。 */
+    r18Filter?: R18Filter;
     /**
      * 页码分页模式：关闭无限滚动（不注册 IntersectionObserver / 不 emit load-more /
      * 不显示「没有更多」），翻页完全由父级 AppPagination 驱动。
@@ -56,9 +58,9 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-/** R-18 过滤只读全局开关；频道页的手动档位在传入前已生效，不会因此泄漏到其它列表。 */
+/** 频道页覆盖只影响本实例，避免全局开关再次隐藏手动选中的作品。 */
 const r18Filter = useGlobalR18Filter();
-const visibleItems = computed(() => filterByR18(props.items, r18Filter.value));
+const visibleItems = computed(() => filterByR18(props.items, props.r18Filter ?? r18Filter.value));
 const hiddenCount = computed(() => props.items.length - visibleItems.value.length);
 
 const sentinel = ref<HTMLElement | null>(null);
