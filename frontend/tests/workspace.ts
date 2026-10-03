@@ -20,6 +20,7 @@ async function run() {
   await router.isReady(); await waitFor(() => !!document.querySelector('.work-card'));
   const panel = useDownloadPanelStore(); const tasks = useTaskStore();
   assert(document.querySelectorAll('.sidebar .nav-item').length === 4, '只有四个核心入口');
+  assert(document.querySelector('.browse-home .browse-navigation a[aria-current="page"]')?.getAttribute('href') === '#/browse/home', '分区导航属于列表页并标明当前页面');
   assert(document.querySelector('.download-status')?.getBoundingClientRect().height === 32, '底部状态栏为32px独立行');
   const main = document.querySelector<HTMLElement>('.app-content')!;
   main.scrollTop = 300; await settle();
@@ -57,6 +58,7 @@ async function run() {
   goBack(); await waitFor(() => router.currentRoute.value.path==='/browse/home');
   await router.push('/illustration?sourceType=user&sourceId=12&keep=yes#anchor'); await waitFor(() => router.currentRoute.value.path==='/tools/tasks' && !router.currentRoute.value.query.downloadForm); await settle();
   assert(panel.visible && panel.kind==='illustration' && panel.drafts.illustration.sourceId==='12','旧路径打开正确的表单');
+  assert(document.querySelectorAll('.tools-view h1').length===1,'下载页只有一个主标题，页签不重复生成标题');
   assert(router.currentRoute.value.query.keep==='yes' && router.currentRoute.value.hash==='#anchor','旧路径保留其他query与hash');
   assert(fallbackPage('/browse/watchlist')==='/browse/feed' && fallbackPage('/browse/history')==='/browse/bookmark' && fallbackPage('/tools/history')==='/tools/tasks','无历史回所属核心入口');
   panel.close(); goBack(); await waitFor(() => router.currentRoute.value.path==='/browse/home'); await settle();

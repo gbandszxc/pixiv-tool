@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -144,6 +145,7 @@ function openTag(name: string): void {
       <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ title }}</h1></div>
       <ListRefreshButton :busy="loading" @refresh="load" />
     </div>
+    <BrowseNavigation />
 
     <!-- R-18 切换服务端频道；计数提示统一在筛选条右侧 -->
     <R18FilterBar :model-value="filter" :hidden-count="hiddenCount" @update:model-value="setFilter" />

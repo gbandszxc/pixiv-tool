@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -196,6 +197,7 @@ function openWork(item: BrowseWorkItem): void {
       <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseRanking") }}</h1></div>
       <ListRefreshButton :busy="loading" @refresh="load" />
     </div>
+    <BrowseNavigation />
 
     <div class="ranking-toolbar">
       <SectionTabs class="kind-tabs" :tabs="kindTabs" :value="kind" @change="changeKind" />

@@ -2,9 +2,10 @@
   <div class="page-view tools-view">
     <div class="page-heading tools-header">
       <PageBackButton />
-      <SectionTabs class="tools-tabs" :tabs="tabs" :value="route.path" @change="onTabChange" />
+      <h1 class="page-title">{{ t('workspace.downloads') }}</h1>
       <md-filled-button @click="panel.open()">{{ t('workspace.newDownload') }}</md-filled-button>
     </div>
+    <div class="tools-navigation"><SectionTabs class="tools-tabs" :tabs="tabs" :value="route.path" @change="onTabChange" /></div>
     <div class="tools-body"><router-view /></div>
   </div>
 </template>
@@ -28,6 +29,8 @@ function onTabChange(value: string) { if (value !== route.path) void router.push
 </script>
 
 <style scoped>
-.tools-header { margin-bottom: var(--space-lg); flex-wrap:wrap; }
-.tools-tabs { flex: 1; min-width: 0; }
+.tools-header { margin-bottom: var(--space-md); flex-wrap:wrap; }
+.tools-header .page-title { flex:1; }
+.tools-navigation { border-bottom:1px solid color-mix(in srgb,var(--md-sys-color-outline) 30%,transparent); margin-bottom:var(--space-xl); padding-bottom:var(--space-sm); }
+.tools-tabs { width:max-content; max-width:100%; }
 </style>

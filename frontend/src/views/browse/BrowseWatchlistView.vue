@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -80,9 +81,10 @@ function openSeries(item: BrowseWatchlistItem): void {
 <template>
   <div class="page-view browse-watchlist">
     <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseWatchlist") }}</h1></div>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.following") }}</h1></div>
       <ListRefreshButton :busy="loading" @refresh="load" />
     </div>
+    <BrowseNavigation />
 
     <div class="control-row" role="group" :aria-label="t('browse.watchlist.tabLabel')">
       <span class="control-label">{{ t("browse.watchlist.tabLabel") }}</span>

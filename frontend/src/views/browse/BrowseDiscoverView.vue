@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -121,9 +122,10 @@ function goWork(item: BrowseWorkItem): void {
 <template>
   <div class="page-view">
     <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.forYou") }}</h1></div>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.discover") }}</h1></div>
       <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
     </div>
+    <BrowseNavigation />
 
     <!-- 过滤 chips：自绘胶囊，选中态 secondary-container（DESIGN.md M3 角色） -->
     <div class="chips-row" role="group" :aria-label="t('nav.browseDiscover')">

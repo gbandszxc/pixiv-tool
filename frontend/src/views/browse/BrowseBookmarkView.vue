@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -6,9 +7,9 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *
  * - 顶部 SectionTabs：插画·漫画 / 小说（kind illust|novel，每页 48/30 与官方一致）；
  * - 公开/私密切换（rest show|hide，胶囊分段按钮；切换重置分页与列表）；
- * - 左侧标签栏：全部 + browse_bookmark_tags 当前组标签（名称+计数；空名 = 未分类，i18n）；
+ * - 横向标签筛选：全部 + browse_bookmark_tags 当前组标签（名称+计数；空名 = 未分类，i18n）；
  *   公开筛选展示 public 组、私密筛选展示 private 组（端点无 rest 参数，一次返回两组）；
- * - 右侧 WorkGrid + useInfiniteList 无限滚动 + 总数行 + 骨架屏/空态/错误态；
+ * - 全宽 WorkGrid + useInfiniteList 无限滚动 + 总数行 + 骨架屏/空态/错误态；
  * - 卡片 hover「取消收藏」：用列表项 bookmarkId 直接删除（乐观移除 + 失败恢复 + 通知）；
  * - 契约：tag=null 全部、"" 未分类；offset 游标经适配转为 useInfiniteList 的 page 语义。
  */
@@ -180,9 +181,10 @@ function goWork(item: BrowseWorkItem): void {
 <template>
   <div class="page-view bookmark-view">
     <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseBookmark") }}</h1></div>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.library") }}</h1></div>
       <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
     </div>
+    <BrowseNavigation />
 
     <!-- 控制行：类型 tabs（左） + 公开/私密（右） -->
     <div class="bm-controls">
@@ -210,12 +212,13 @@ function goWork(item: BrowseWorkItem): void {
     </div>
 
     <div class="bm-body">
-      <!-- 左：标签筛选栏 -->
+      <!-- 标签按内容占位，不为少量标签保留空侧栏。 -->
       <nav class="tag-rail" :aria-label="t('browse.bookmark.tagFilter')">
         <button
           type="button"
           class="tag-item"
           :class="{ active: tag === null }"
+          :aria-pressed="tag === null"
           @click="setTag(null)"
         >
           <span class="tag-name">{{ t("browse.bookmark.tagAll") }}</span>
@@ -228,6 +231,7 @@ function goWork(item: BrowseWorkItem): void {
           type="button"
           class="tag-item"
           :class="{ active: tag === tg.name }"
+          :aria-pressed="tag === tg.name"
           :title="tagName(tg.name)"
           @click="setTag(tg.name)"
         >
@@ -236,7 +240,7 @@ function goWork(item: BrowseWorkItem): void {
         </button>
       </nav>
 
-      <!-- 右：总数 + 网格 -->
+      <!-- 全宽作品网格 -->
       <div class="bm-main">
         <p v-if="total !== null" class="total-line" role="status">
           {{ t("browse.bookmark.total", { count: total.toLocaleString() }) }}
@@ -270,17 +274,19 @@ function goWork(item: BrowseWorkItem): void {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-md) var(--space-xl);
   margin-bottom: var(--space-lg);
 }
 
 .bm-kind-tabs {
-  flex: 1;
-  min-width: 0;
+  flex: none;
+  width: max-content;
+  max-width: 100%;
 }
 
 /* 公开/私密切换：胶囊分段按钮，选中态用 primary-container（与导航 active 同角色） */
 .rest-group {
+  margin-left: auto;
   display: inline-flex;
   flex-shrink: 0;
   padding: 2px;
@@ -316,24 +322,26 @@ function goWork(item: BrowseWorkItem): void {
   color: var(--md-sys-color-on-primary-container);
 }
 
-/* ===== 双栏主体 ===== */
+/* ===== 标签工具带与全宽作品区 ===== */
 .bm-body {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
   gap: var(--space-lg);
 }
 
 .tag-rail {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 180px;
-  flex-shrink: 0;
-  position: sticky;
-  top: var(--space-xl);
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  width: 100%;
+  max-height: calc(3 * 36px + 2 * var(--space-sm) + 2 * var(--space-xxs));
+  overflow-y: auto;
+  padding: var(--space-xxs);
+  box-sizing: border-box;
 }
 
 .tag-item {
+  max-width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -342,7 +350,7 @@ function goWork(item: BrowseWorkItem): void {
   padding: 0 var(--space-md);
   border: none;
   border-radius: 999px;
-  background: none;
+  background: var(--md-sys-color-surface-container);
   color: var(--ink);
   font: inherit;
   font-size: 14px;
@@ -367,6 +375,8 @@ function goWork(item: BrowseWorkItem): void {
 }
 
 .tag-name {
+  min-width: 0;
+  max-width: calc(8 * var(--space-xl));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -392,9 +402,9 @@ function goWork(item: BrowseWorkItem): void {
   overflow-wrap: anywhere;
 }
 
-/* ===== 右侧网格列 ===== */
+/* ===== 作品网格 ===== */
 .bm-main {
-  flex: 1;
+  width: 100%;
   min-width: 0;
 }
 
@@ -422,23 +432,4 @@ function goWork(item: BrowseWorkItem): void {
   overflow-wrap: anywhere;
 }
 
-/* ===== 640px：标签栏转为横向换行 chips，随文档流 ===== */
-@media (max-width: 640px) {
-  .bm-body {
-    flex-direction: column;
-  }
-
-  .tag-rail {
-    position: static;
-    width: 100%;
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: var(--space-xs);
-  }
-
-  .tag-item {
-    min-height: 32px;
-    padding: 0 var(--space-sm);
-  }
-}
 </style>

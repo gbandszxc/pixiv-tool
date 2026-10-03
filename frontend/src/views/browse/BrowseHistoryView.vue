@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
 /**
  * 浏览·访问历史页（browse-history-ui-v1）—— 宫格回显浏览过的插画 / 漫画 / 小说。
  *
@@ -151,7 +152,7 @@ onActivated(load);
     <div class="browse-list-header">
       <div class="page-heading">
         <PageBackButton />
-        <h1 class="page-title">{{ t("browseHistory.title") }}</h1>
+        <h1 class="page-title">{{ t("workspace.library") }}</h1>
       </div>
       <div class="header-actions">
         <ListRefreshButton :busy="loading" @refresh="load" />
@@ -164,6 +165,7 @@ onActivated(load);
         </md-text-button>
       </div>
     </div>
+    <BrowseNavigation />
 
     <!-- 类别筛选：全部 / 插画 / 漫画 / 小说（默认全部），切换回第 1 页重新加载 -->
     <div class="kind-filter" role="group" :aria-label="t('browseHistory.filterLabel')">

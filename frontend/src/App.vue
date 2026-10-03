@@ -16,7 +16,6 @@
     <div class="workspace-body">
     <div class="main-pane">
     <main ref="contentEl" class="app-content" :class="{ 'detail-page': route.path.startsWith('/browse/work/') }" tabindex="-1">
-      <BrowseNavigation />
       <router-view v-slot="{ Component, route: pageRoute }">
         <KeepAlive :key="browseSession" :include="cachedBrowseViews" :max="20">
           <component :is="Component" :key="pageRoute.path.startsWith('/browse/') ? pageRoute.path : undefined" />
@@ -50,7 +49,6 @@ import { useSettingsStore } from "./stores/settings";
 import { invoke, isTauri, setWindowTheme } from "./api/tauri";
 import { OPEN_LOGIN_EVENT } from "./api/browse";
 import { OPEN_SETTINGS_EVENT } from "./api/saucenao";
-import BrowseNavigation from "./components/navigation/BrowseNavigation.vue";
 import DownloadPanel from "./components/download/DownloadPanel.vue";
 import DownloadStatusBar from "./components/download/DownloadStatusBar.vue";
 import { useDownloadPanelStore } from "./stores/downloadPanel";

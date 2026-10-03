@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -83,7 +84,7 @@ onMounted(initialLoad);
 <template>
   <div class="page-view browse-home">
     <div class="home-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.recommended") }}</h1></div>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.discover") }}</h1></div>
       <ListRefreshButton :busy="loading || refreshing" @refresh="refresh" />
       <!-- 换一批降为文字按钮 + 线性刷新图标，弱化头部主次层级（图标风格对齐 HistoryView .row-actions） -->
       <md-text-button :disabled="loading || refreshing || exhausted" @click="shuffle">
@@ -97,6 +98,7 @@ onMounted(initialLoad);
         {{ refreshing ? t("browse.home.refreshing") : t("browse.home.refresh") }}
       </md-text-button>
     </div>
+    <BrowseNavigation />
     <p v-if="error && items.length" role="alert">{{ error }}</p>
 
     <WorkGrid

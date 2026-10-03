@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -75,9 +76,10 @@ function goWork(item: BrowseWorkItem): void {
 <template>
   <div class="page-view">
     <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.newWorks") }}</h1></div>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.following") }}</h1></div>
       <ListRefreshButton :busy="loading || loadingMore" @refresh="list.reload" />
     </div>
+    <BrowseNavigation />
 
     <div class="feed-controls">
       <div
@@ -120,8 +122,9 @@ function goWork(item: BrowseWorkItem): void {
 <style scoped>
 .feed-controls {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md) var(--space-xl);
   margin-bottom: var(--space-lg);
 }
 
@@ -129,11 +132,13 @@ function goWork(item: BrowseWorkItem): void {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-sm);
 }
 
+.control-row :deep(.section-tabs) { width: max-content; }
+
 .control-label {
-  min-width: 56px;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-muted);
@@ -150,14 +155,4 @@ function goWork(item: BrowseWorkItem): void {
   font-size: 13px;
 }
 
-@media (max-width: 640px) {
-  .control-row {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .control-label {
-    min-width: 0;
-  }
-}
 </style>
