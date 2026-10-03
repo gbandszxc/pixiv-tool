@@ -592,6 +592,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 路由返回保留真实来路，无历史 replace 回所属核心入口；面板开关不入历史。原有浏览 KeepAlive 20 页 LRU、账号失效与首页快照不变；面板不重挂路由视图，布局切换恢复可见卡锚点 / 滚动。刷新按钮及 Ctrl+R / Command+R 保留，面板字段聚焦不刷新底层列表。无 Rust IPC / SQLite / settings.json / Pixiv API 变更；UI 规则见 DESIGN 与结构化伴随文件。
 
+返回操作和历史可用性判定统一放在 `router/navigation.ts`，显式传入页面 `useRouter()` 的实际实例；禁止返回控件引用路由模块单例。避免热更新后单例与应用注入实例分离，造成地址变化而视图不返回。公共返回按钮、图片详情正常/错误态与 Escape、小说顶栏均使用同一逻辑；可用历史须指向已注册应用路由。按钮可见性及 tooltip 随完整路由变化重新判定，不缓存非响应式 HistoryState 的旧值。离线 `/tests/navigation-context.html#/browse/home` 使用与模块不同的应用路由实例复现该回归，配合 navigation 与 workspace 验收覆盖逐层来路、query、分支、旧链接及缓存位置。
+
 ### 6.2 i18n
 
 - 框架：**vue-i18n**

@@ -1,6 +1,5 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 import type { RouteLocation, RouteRecordRaw } from "vue-router";
-import { fallbackPage } from "./navigation";
 
 /** /browse/channel 系（插画/漫画/小说）三路由复用 BrowseChannelView，props 区分 kind。 */
 const browseChannelRoutes: RouteRecordRaw[] = (
@@ -131,15 +130,5 @@ const router = createRouter({
     },
   ],
 });
-
-/** 使用原生路由历史保留完整来路；深链首开用 replace 回首页，避免返回循环。 */
-export function goBack(): void {
-  const back = router.options.history.state.back;
-  if (typeof back === "string" && back.startsWith("/") && router.resolve(back).matched.length) {
-    router.back();
-  } else {
-    void router.replace(fallbackPage(router.currentRoute.value.path));
-  }
-}
 
 export default router;

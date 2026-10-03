@@ -1,6 +1,7 @@
 /** 新标签打开 /tests/workspace.html#/browse/home；只使用离线数据，不创建真实任务。 */
 import { nextTick } from "vue";
-import router, { goBack } from "../src/router";
+import router from "../src/router";
+import { goBack } from "../src/router/navigation";
 import { useDownloadPanelStore } from "../src/stores/downloadPanel";
 import { taskFailedCount, taskProgress, useTaskStore, type Task } from "../src/stores/tasks";
 import { fillDownloadForm } from "../src/utils/pixivHooks";
@@ -49,25 +50,25 @@ async function run() {
   panel.open(); await router.push('/browse/feed'); await settle(); assert(!panel.visible && panel.drafts.novel.sourceId==='77','页面导航关闭但保留草稿');
   await router.push('/browse/work/illust/9000005'); await settle();
   assert(document.querySelector('.nav-item.active')?.getAttribute('aria-label')==='关注','详情继承关注来路');
-  goBack(); await waitFor(() => router.currentRoute.value.path==='/browse/feed');
-  goBack(); await waitFor(() => router.currentRoute.value.path==='/browse/home'); await settle();
+  goBack(router); await waitFor(() => router.currentRoute.value.path==='/browse/feed');
+  goBack(router); await waitFor(() => router.currentRoute.value.path==='/browse/home'); await settle();
   assert(document.querySelector('.work-card')===first && Math.abs(main.scrollTop-top)<2,'详情与跨分区返回恢复缓存和位置');
   window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true})); await waitFor(() => router.currentRoute.value.path==='/browse/search'); await settle();
   assert(!document.querySelector('.search-fab') && document.activeElement?.classList.contains('search-field'),'Ctrl+K进入搜索并聚焦，搜索页无重复胶囊');
   assert(document.body.innerText.includes('以图识图'),'搜索页提供以图识图');
-  goBack(); await waitFor(() => router.currentRoute.value.path==='/browse/home');
+  goBack(router); await waitFor(() => router.currentRoute.value.path==='/browse/home');
   await router.push('/illustration?sourceType=user&sourceId=12&keep=yes#anchor'); await waitFor(() => router.currentRoute.value.path==='/tools/tasks' && !router.currentRoute.value.query.downloadForm); await settle();
   assert(panel.visible && panel.kind==='illustration' && panel.drafts.illustration.sourceId==='12','旧路径打开正确的表单');
   assert(document.querySelectorAll('.tools-view h1').length===1,'下载页只有一个主标题，页签不重复生成标题');
   assert(router.currentRoute.value.query.keep==='yes' && router.currentRoute.value.hash==='#anchor','旧路径保留其他query与hash');
   assert(fallbackPage('/browse/watchlist')==='/browse/feed' && fallbackPage('/browse/history')==='/browse/bookmark' && fallbackPage('/tools/history')==='/tools/tasks','无历史回所属核心入口');
-  panel.close(); goBack(); await waitFor(() => router.currentRoute.value.path==='/browse/home'); await settle();
+  panel.close(); goBack(router); await waitFor(() => router.currentRoute.value.path==='/browse/home'); await settle();
   await router.push('/browse/work/novel/9000005'); await waitFor(() => !!document.querySelector('.novel-view'));
   panel.open({form:'novel',sourceType:'single',sourceId:42}); await settle();
   const readerRect=document.querySelector('.novel-view')!.getBoundingClientRect();
   const paneRect=document.querySelector('.main-pane')!.getBoundingClientRect();
   assert(Math.abs(readerRect.height-paneRect.height)<2 && readerRect.bottom<=paneRect.bottom+1,'阅读器按可用工作区布局，底部控件不被面板遮挡');
-  panel.close(); goBack(); await waitFor(() => router.currentRoute.value.path==='/browse/home'); await settle();
+  panel.close(); goBack(router); await waitFor(() => router.currentRoute.value.path==='/browse/home'); await settle();
 
   // 在应用已以浏览器mock挂载后，短暂模拟任务IPC与事件；不触碰真实后端。
   let snapshot = [task('2','pending'),task('3','running'),task('1','running'),task('4','paused')];

@@ -70,10 +70,13 @@ async function run(): Promise<void> {
     "/browse/search?word=landscape&kind=novel",
     "/browse/work/novel/9000005",
     "/browse/series/novel/700012",
+    "/browse/series/illust/700012",
     "/browse/user/100004",
     "/browse/work/manga/9000002",
     "/illustration?sourceType=single&sourceId=9000002",
     "/saucenao",
+    "/tools/history",
+    "/browse/history",
     "/browse/ranking?kind=novel&mode=daily",
   ];
   const visited = [router.currentRoute.value.fullPath];

@@ -17,7 +17,7 @@ const revealedWorkIds = new Set<number>();
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
-import { goBack } from "../../router";
+import { goBack } from "../../router/navigation";
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../../stores/settings";
 import {
@@ -226,7 +226,7 @@ function onKeydown(e: KeyboardEvent): void {
   // 模态 dialog（设置 / 登录 / 退出确认）打开时 Esc 归 dialog 自己处理
   if (document.querySelector("dialog[open]")) return;
   e.preventDefault();
-  goBack();
+  goBack(router);
 }
 
 onMounted(() => window.addEventListener("keydown", onKeydown));
@@ -237,7 +237,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   <div class="work-view">
     <!-- 顶部条：返回 + 标题/作者 + 收藏 / 评论（面板切换）/ 返填表单 / 在浏览器中打开 -->
     <header class="work-topbar">
-      <md-icon-button :aria-label="t('browse.work.back')" :title="t('browse.work.back')" @click="goBack">
+      <md-icon-button :aria-label="t('browse.work.back')" :title="t('browse.work.back')" @click="goBack(router)">
         <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
       </md-icon-button>
       <div class="topbar-main">
@@ -314,7 +314,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
     <div v-if="error" class="work-error" role="alert">
       <p class="error-title">{{ t("browse.work.errorTitle") }}</p>
       <p class="error-text">{{ error }}</p>
-      <md-outlined-button @click="goBack">{{ t("browse.work.back") }}</md-outlined-button>
+      <md-outlined-button @click="goBack(router)">{{ t("browse.work.back") }}</md-outlined-button>
     </div>
 
     <div v-else class="work-body">

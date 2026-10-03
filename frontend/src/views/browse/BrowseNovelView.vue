@@ -10,7 +10,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
-import { goBack } from "../../router";
+import { goBack } from "../../router/navigation";
 import AppPagination from "../../components/common/AppPagination.vue";
 import NovelContent from "../../components/browse/NovelContent.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
@@ -321,7 +321,7 @@ function openInPixiv(): void {
   <div class="novel-view" :class="readBg ? `read-bg-${readBg}` : ''" :style="{ '--novel-scale': fontScale }">
     <!-- 顶栏：返回 / 标题 / 作者 / 返填表单 / 在浏览器中打开；flex 首行，恒贴窗口上边 -->
     <header class="topbar">
-      <md-icon-button :aria-label="t('browse.novel.back')" :title="t('browse.novel.back')" @click="goBack">
+      <md-icon-button :aria-label="t('browse.novel.back')" :title="t('browse.novel.back')" @click="goBack(router)">
         <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
       </md-icon-button>
       <md-icon-button :aria-label="t('common.search')" :title="t('workspace.searchShortcut')" @click="router.push('/browse/search')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg></md-icon-button>
