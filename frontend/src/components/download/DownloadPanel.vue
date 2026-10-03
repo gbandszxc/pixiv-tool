@@ -69,6 +69,7 @@ header { display:flex; align-items:center; justify-content:space-between; paddin
 h2 { font-size:18px; margin:0; }
 svg { width:20px; height:20px; }
 .panel-body { min-height:0; overflow:auto; padding:0 var(--space-xl) var(--space-xl); }
+.panel-body :deep(.section-tabs) { --md-secondary-tab-container-color:var(--md-sys-color-surface-container); }
 form { display:flex; flex-direction:column; gap:var(--space-lg); margin-top:var(--space-lg); }
 fieldset { display:flex; flex-direction:column; gap:var(--space-lg); margin:0; padding:0; border:0; min-width:0; }
 legend { padding:0; margin-bottom:var(--space-sm); }

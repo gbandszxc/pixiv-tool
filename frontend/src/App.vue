@@ -22,7 +22,7 @@
         </KeepAlive>
       </router-view>
     </main>
-    <md-filled-tonal-button v-if="route.path !== '/browse/search' && !route.path.startsWith('/browse/work/novel/')" class="search-fab" aria-keyshortcuts="Control+K Meta+K" :title="t('workspace.searchShortcut')" @click="openSearch"><SidebarIcon slot="icon" name="search" />{{ t('common.search') }}</md-filled-tonal-button>
+    <md-filled-tonal-icon-button v-if="route.path !== '/browse/search' && !route.path.startsWith('/browse/work/novel/')" class="search-fab" aria-keyshortcuts="Control+K Meta+K" :aria-label="t('common.search')" :title="t('workspace.searchShortcut')" @click="openSearch"><SidebarIcon name="search" /></md-filled-tonal-icon-button>
     </div>
     <DownloadPanel />
     </div>
@@ -193,8 +193,10 @@ onBeforeUnmount(() => { stopTasks?.(); resizeObserver?.disconnect(); window.remo
 .app-content.detail-page { padding-bottom:var(--space-xl); }
 @media (max-width:640px) { .app-content.detail-page { padding-bottom:var(--space-lg); } }
 .download-panel { border-top:1px solid color-mix(in srgb,var(--md-sys-color-outline) 35%,transparent); }
-.search-fab { position:absolute; right:var(--space-xl); bottom:calc(var(--space-xl) * 3); }
-.search-fab :deep(svg) { width:20px; height:20px; fill:none; stroke:currentColor; }
+.search-fab { position:absolute; right:var(--space-xl); bottom:calc(var(--space-xl) * 3); width:calc(2 * var(--space-xl) + var(--space-sm)); height:calc(2 * var(--space-xl) + var(--space-sm)); --md-filled-tonal-icon-button-container-width:calc(2 * var(--space-xl) + var(--space-sm)); --md-filled-tonal-icon-button-container-height:calc(2 * var(--space-xl) + var(--space-sm)); --md-filled-tonal-icon-button-container-shape:50%; }
+.search-fab :deep(svg) { width:var(--space-xl); height:var(--space-xl); fill:none; stroke:currentColor; }
+/* 预留 56px 按钮 + 16px 间距，分页在任意滚动位置都不进入悬浮按钮区域。 */
+.main-pane:has(> .search-fab) :deep(.app-pagination) { margin-inline-end:calc(3 * var(--space-xl)); }
 .task-count { font-size:12px; margin-left:auto; }
 .nav-item:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-offset:2px; }
 .app-shell.collapsed .task-count { margin-left:0; }
