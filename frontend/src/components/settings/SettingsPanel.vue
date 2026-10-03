@@ -2,6 +2,11 @@
   <section class="settings-panel" :aria-label="t('settings.title')">
     <template v-if="section === 'general'">
       <div class="m3-field">
+        <label for="startup-page">{{ t("settings.startupPage") }}</label>
+        <md-outlined-select id="startup-page" :value="form.startup_page" @change="form.startup_page = ($event.target as HTMLSelectElement).value"><md-select-option v-for="option in startupPageOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
+        <span class="field-hint">{{ t("settings.startupPageHint") }}</span>
+      </div>
+      <div class="m3-field">
         <label for="output-dir">{{ t("settings.outputDir") }}</label>
         <div class="settings-path-row">
           <md-outlined-text-field id="output-dir" class="settings-path-input" :value="form.output_dir" :placeholder="t('settings.outputDirPlaceholder')" @input="form.output_dir = ($event.target as HTMLInputElement).value" />
@@ -98,6 +103,7 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../../stores/settings";
+import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
 import { errorMessage, setWindowTheme } from "../../api/tauri";
 import { notify } from "../../ui/notify";
@@ -111,7 +117,8 @@ const authStore = useAuthStore();
 const formats = ["txt", "markdown"];
 const confirmDialog = ref<HTMLDialogElement | null>(null);
 const confirmAction = ref<"logs" | "auth" | null>(null);
-const form = ref({ output_dir: "downloads", output_formats: ["txt", "markdown"], language: locale.value, theme: "auto", theme_color: "pixiv", max_wait_seconds: 180, show_r18: true, thumb_quality_grid: "medium", thumb_quality_detail: "medium", thumb_quality_fullscreen: "large", saucenao_api_key: "" });
+const form = ref({ output_dir: "downloads", output_formats: ["txt", "markdown"], language: locale.value, theme: "auto", theme_color: "pixiv", startup_page: groupRoots.discover, max_wait_seconds: 180, show_r18: true, thumb_quality_grid: "medium", thumb_quality_detail: "medium", thumb_quality_fullscreen: "large", saucenao_api_key: "" });
+const startupPageOptions = computed(() => Object.entries(groupRoots).map(([group, value]) => ({ value, label: t(`workspace.${group}`) })));
 const savedSnapshot = ref("");
 const langOptions = computed(() => [{ label: t("settings.languages.zh-CN"), value: "zh-CN" }, { label: t("settings.languages.en-US"), value: "en-US" }]);
 const themeOptions = computed(() => [{ label: t("settings.themes.light"), value: "light" }, { label: t("settings.themes.dark"), value: "dark" }, { label: t("settings.themes.auto"), value: "auto" }]);

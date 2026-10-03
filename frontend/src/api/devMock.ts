@@ -52,6 +52,7 @@ function ensureSettings(): Settings {
       language: localStorage.getItem("pixiv-tool-lang") || "zh-CN",
       theme: "auto",
       theme_color: "pixiv",
+      startup_page: "/browse/home",
       backend_port: null,
       max_wait_seconds: 180,
       // 与 stores/settings.ts 初值、后端 Settings::default 保持一致

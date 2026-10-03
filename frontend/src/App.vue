@@ -177,7 +177,7 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(entries => { const width = entries[0]?.contentRect.width ?? 0; if (lastWidth && width !== lastWidth) restoreLayout(); lastWidth = width; captureLayout(); });
   if (workspaceEl.value) resizeObserver.observe(workspaceEl.value);
   contentEl.value?.addEventListener('scroll', captureLayout, { passive: true });
-  media.addEventListener("change", onMediaChange); settingsStore.fetchSettings().catch(() => {}); authStore.fetchAccounts(); if (isTauri()) listen("app://confirm-exit", () => showExitConfirm.value = true).then(fn => unlistenExit = fn); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
+  media.addEventListener("change", onMediaChange); authStore.fetchAccounts(); if (isTauri()) listen("app://confirm-exit", () => showExitConfirm.value = true).then(fn => unlistenExit = fn); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
 onBeforeUnmount(() => { stopTasks?.(); resizeObserver?.disconnect(); window.removeEventListener('keydown', onWorkspaceKey); window.removeEventListener('pixiv-tool:image-fullscreen', onImageFullscreen); contentEl.value?.removeEventListener('scroll', captureLayout); media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
 </script>
 

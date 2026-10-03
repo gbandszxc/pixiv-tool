@@ -24,6 +24,8 @@ pub struct Settings {
     pub theme: String,
     /// Material 3 色板（"pixiv" / "indigo" / "jade" / "violet" / "amber"）。
     pub theme_color: String,
+    /// 应用启动页（发现 / 关注 / 我的 / 下载，见 STARTUP_PAGES）。
+    pub startup_page: String,
     /// 旧 Python 后端端口配置，Tauri 版无后端进程，仅保留字段兼容旧配置文件。
     pub backend_port: Option<i64>,
     /// 任务最大等待时间（秒）：运行超过该时长自动标记失败，不含暂停时间。
@@ -55,6 +57,7 @@ impl Default for Settings {
             language: "zh-CN".into(),
             theme: "auto".into(),
             theme_color: "pixiv".into(),
+            startup_page: "/browse/home".into(),
             backend_port: None,
             max_wait_seconds: 180,
             show_r18: true,
@@ -76,6 +79,13 @@ pub const THUMB_DETAIL_TIERS: [&str; 3] = ["medium", "large", "original"];
 pub const THUMB_FULLSCREEN_TIERS: [&str; 2] = ["large", "original"];
 /// 小说阅读背景色可选语义键（空串 = 跟随主题，不在此表内）。
 pub const NOVEL_BG_COLORS: [&str; 5] = ["green", "kraft", "warm", "mist", "blush"];
+/// 四个核心导航入口；发现默认展示推荐首页。
+pub const STARTUP_PAGES: [&str; 4] = [
+    "/browse/home",
+    "/browse/feed",
+    "/browse/bookmark",
+    "/tools/tasks",
+];
 
 /// 缩略图档位校验：非字符串或不在 `allowed` 集合内 → Err(message)。
 pub fn validate_thumb_tier(value: &Value, allowed: &[&str], message: &str) -> Result<(), String> {
@@ -94,7 +104,7 @@ impl Settings {
     /// - 文件不存在 → 写入默认值并返回
     /// - JSON 损坏 / 读失败 → 备份为 `settings.json.corrupt-{mtime_ns}` 后重建默认
     /// - 旧值迁移：`output_dir == "downloads"`（早期默认相对路径）→ 系统下载目录/pixiv-tool
-    /// - 加载期归一：非法缩略图档位、非法小说字号缩放、非法阅读背景色重置为默认（不强制回写文件）
+    /// - 加载期归一：非法启动页、缩略图档位、小说字号缩放、阅读背景色重置为默认（不强制回写文件）
     /// - 缺键填默认（serde default）；未知键忽略（serde 默认行为）
     pub fn load_or_init(config_dir: &Path) -> Settings {
         let path = settings_path(config_dir);
@@ -109,6 +119,9 @@ impl Settings {
         let raw = std::fs::read_to_string(&path).unwrap_or_default();
         match serde_json::from_str::<Settings>(&raw) {
             Ok(mut settings) => {
+                if !STARTUP_PAGES.contains(&settings.startup_page.as_str()) {
+                    settings.startup_page = "/browse/home".into();
+                }
                 // 旧默认值迁移：存了字面量 "downloads" 的配置直接迁移；
                 // 用户显式改过的路径不动。
                 if settings.output_dir == "downloads" {
@@ -344,6 +357,29 @@ mod tests {
         assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
+        assert_eq!(s.startup_page, "/browse/home");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn startup_page_roundtrip_and_invalid_fallback() {
+        let dir = temp_config_dir("startup");
+        for page in STARTUP_PAGES {
+            let settings = Settings {
+                startup_page: page.into(),
+                ..Settings::default()
+            };
+            settings.save(&dir).unwrap();
+            assert_eq!(Settings::load_or_init(&dir).startup_page, page);
+        }
+        std::fs::write(
+            settings_path(&dir),
+            r#"{"startup_page":"/unknown","theme":"dark"}"#,
+        )
+        .unwrap();
+        let settings = Settings::load_or_init(&dir);
+        assert_eq!(settings.startup_page, "/browse/home");
+        assert_eq!(settings.theme, "dark");
         cleanup(&dir);
     }
 

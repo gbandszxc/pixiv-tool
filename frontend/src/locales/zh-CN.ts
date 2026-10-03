@@ -247,6 +247,8 @@ export default {
     filterNovel: "小说",
   },
   settings: {
+    startupPage: "应用打开默认进入",
+    startupPageHint: "保存后下次打开应用生效",
     title: "设置",
     // 左栏分组名（分组顺序见 components/settings/sections.ts）
     groupsLabel: "设置分组",

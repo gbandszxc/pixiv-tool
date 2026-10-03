@@ -246,6 +246,8 @@ export default {
     filterNovel: "Novels",
   },
   settings: {
+    startupPage: "Default startup page",
+    startupPageHint: "Takes effect the next time you open the app",
     title: "Settings",
     // Left-rail group names (order lives in components/settings/sections.ts)
     groupsLabel: "Settings groups",

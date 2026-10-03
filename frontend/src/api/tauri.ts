@@ -101,6 +101,8 @@ export interface Settings {
   language: string;
   theme: string;
   theme_color: string;
+  /** 应用启动入口：发现 / 关注 / 我的 / 下载。 */
+  startup_page: string;
   backend_port: number | null;
   max_wait_seconds: number;
   /** 全局 R-18 展示开关；关闭后列表隐藏 x_restrict >= 1 的作品（详情页仍可访问） */

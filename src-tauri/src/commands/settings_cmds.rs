@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use tauri::State;
 
 use crate::settings::{
-    Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
+    STARTUP_PAGES, Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
     validate_max_wait_value, validate_novel_bg_color_value, validate_novel_font_scale_value,
     validate_output_dir_value, validate_thumb_tier,
 };
@@ -22,7 +22,8 @@ use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 14] = [
+const WRITABLE_KEYS: [&str; 15] = [
+    "startup_page",
     "output_dir",
     "output_formats",
     "language",
@@ -77,6 +78,9 @@ pub fn apply_settings_patch(
     };
     if let Some(value) = patch_obj.get("output_dir") {
         validate_output_dir_value(value, data_dir)?;
+    }
+    if let Some(value) = patch_obj.get("startup_page") {
+        validate_thumb_tier(value, &STARTUP_PAGES, "应用启动页无效")?;
     }
     if let Some(value) = patch_obj.get("max_wait_seconds") {
         validate_max_wait_value(value)?;
@@ -197,6 +201,38 @@ mod tests {
         let updated = apply_settings_patch(&current, &json!({}), &data_dir).unwrap();
         assert_eq!(updated.max_wait_seconds, current.max_wait_seconds);
         assert_eq!(updated.language, current.language);
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_validates_startup_page() {
+        let data_dir = temp_data_dir("startup");
+        for page in STARTUP_PAGES {
+            let updated = apply_settings_patch(
+                &Settings::default(),
+                &json!({"startup_page": page}),
+                &data_dir,
+            )
+            .unwrap();
+            assert_eq!(updated.startup_page, page);
+            assert_eq!(
+                apply_settings_patch(&updated, &json!({}), &data_dir)
+                    .unwrap()
+                    .startup_page,
+                page
+            );
+        }
+        for bad in [json!("/unknown"), json!(42), json!(null)] {
+            assert_eq!(
+                apply_settings_patch(
+                    &Settings::default(),
+                    &json!({"startup_page": bad}),
+                    &data_dir
+                )
+                .unwrap_err(),
+                "应用启动页无效"
+            );
+        }
         cleanup(&data_dir);
     }
 
@@ -408,7 +444,13 @@ mod tests {
         let data_dir = temp_data_dir("novelfont-bad");
         let message = "小说字号缩放必须是 0.75~2.0 之间的数字";
         // 越界 / 非数字 / bool / null 全部拒绝，文案精确匹配
-        for bad in [json!(0.5), json!(2.5), json!("abc"), json!(true), json!(null)] {
+        for bad in [
+            json!(0.5),
+            json!(2.5),
+            json!("abc"),
+            json!(true),
+            json!(null),
+        ] {
             assert_eq!(
                 apply_settings_patch(
                     &Settings::default(),

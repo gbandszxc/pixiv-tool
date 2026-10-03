@@ -17,6 +17,7 @@ const viewerPrefs = { spread: false, rtl: true };
  * - 档位：主图 thumb_quality_detail（默认 medium = 接口 regular 原样，URL 与改造前逐字一致），
  *   先铺 medium 档（540px）占位层再换高清；全屏浮层走 thumb_quality_fullscreen，
  *   胶卷缩略图走 thumb_quality_grid；
+ * - 全屏滚轮 / PgUp / PgDn 按页或跨页组前后切换，胶卷仍原生滚动；
  * - 键盘：本组件在 capture 阶段监听并 stopImmediatePropagation，避免与父视图的同名
  *   按键（Esc 返回）二次处理；浮层内 Esc 只关浮层；
  * - 加载中纯色占位、失败显示重试；
@@ -384,6 +385,18 @@ function stepPage(delta: number): void {
   stepTo(fsPage.value + delta * pageStep.value);
 }
 
+/** 一次滚轮手势限速，防止触控板惯性或密集滚轮事件连续跳过多页。胶卷仍原生滚动。 */
+let lastWheelPageAt = -Infinity;
+function onFullscreenWheel(e: WheelEvent): void {
+  if (!multi.value || e.ctrlKey || e.metaKey || !e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  if (e.composedPath().some(node => node instanceof HTMLElement && node.classList.contains("fs-filmstrip"))) return;
+  e.preventDefault();
+  const now = performance.now();
+  if (now - lastWheelPageAt < 250) return;
+  lastWheelPageAt = now;
+  stepPage(e.deltaY > 0 ? 1 : -1);
+}
+
 function toggleSpread(): void {
   spread.value = !spread.value;
   if (spreadOn.value) stepTo(fsPage.value);
@@ -413,7 +426,7 @@ function isTypingEvent(e: KeyboardEvent): boolean {
 }
 
 /**
- * 浮层键盘：Esc 关闭、←/→ 翻页（从右往左时 ← 为前进）。capture 阶段监听并
+ * 浮层键盘：Esc 关闭、PgUp/PgDn 前后翻页、←/→ 翻页（从右往左时 ← 为前进）。capture 阶段监听并
  * stopImmediatePropagation，阻止 BrowseWorkView 的 bubble 监听把同一次 Esc 变成路由返回。
  * 纵向模式下 ←/→ 为「跳上一页/下一页」（滚动对齐页顶），同样在此拦截。
  */
@@ -424,6 +437,10 @@ function onKeydown(e: KeyboardEvent): void {
       e.preventDefault();
       e.stopImmediatePropagation();
       closeFullscreen();
+    } else if ((e.key === "PageUp" || e.key === "PageDown") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      stepPage(e.key === "PageUp" ? -1 : 1);
     } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -444,6 +461,7 @@ function onKeydown(e: KeyboardEvent): void {
 watch(fullscreen, async (open) => {
   window.dispatchEvent(new CustomEvent('pixiv-tool:image-fullscreen', { detail: open }));
   if (open) {
+    lastWheelPageAt = -Infinity;
     await nextTick();
     overlayEl.value?.focus();
   }
@@ -595,6 +613,7 @@ watch(
       :aria-label="t('browse.work.fullscreen')"
       tabindex="-1"
       @click.self="closeFullscreen"
+      @wheel="onFullscreenWheel"
     >
       <div class="fs-stage" :class="{ 'is-spread': spreadOn }" @click.self="closeFullscreen">
         <!-- 一屏一页或并排两页：页框按可用高度与页面纵横比定尺寸，图片撑满该框 -->

@@ -7,6 +7,7 @@ import "./styles/main.css";
 import "./material";
 import zhCN from "./locales/zh-CN";
 import enUS from "./locales/en-US";
+import { useSettingsStore } from "./stores/settings";
 
 // 从 localStorage 读取上次选择（前端独立持久化，不依赖后端 settings）
 const savedLang = localStorage.getItem("pixiv-tool-lang") || "zh-CN";
@@ -23,6 +24,13 @@ const i18n = createI18n({
 
 const app = createApp(App);
 app.use(createPinia());
-app.use(router);
 app.use(i18n);
-app.mount("#app");
+
+// 先读已保存设置再开始初次路由，避免默认页闪现或覆盖明确的深链入口。
+async function mountApp(): Promise<void> {
+  await useSettingsStore().fetchSettings().catch(() => {});
+  app.use(router);
+  await router.isReady();
+  app.mount("#app");
+}
+void mountApp();

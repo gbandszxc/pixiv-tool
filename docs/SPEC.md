@@ -425,6 +425,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "language": "zh-CN",
   "theme": "auto",
   "theme_color": "pixiv",
+  "startup_page": "/browse/home",
   "backend_port": null,
   "max_wait_seconds": 180,
   "show_r18": true,
@@ -444,6 +445,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   `settings.json.corrupt-{mtime_ns}` 后重建默认。
 
 - 数据/配置目录策略写死（见 §3.3），不暴露"系统配置目录"切换开关。
+- `startup_page`：应用打开默认进入的核心入口，可选发现 `/browse/home`（推荐首页，默认）、关注 `/browse/feed`、我的 `/browse/bookmark`、下载 `/tools/tasks`。设置弹窗「通用」分组选择，保存后下次启动生效；旧配置缺键与手改非法路径回落发现。保存时非字符串 / 白名单外路径拒绝（"应用启动页无效"）。启动先加载设置，再初始化路由：仅无 query 的 `/` 使用该项，明确深链原样打开，旧 `/` 下载预填链接保留 query / hash 并进入下载表单。
 - `backend_port`：旧 Python 后端端口配置；Tauri 版无后端进程，仅保留字段
   兼容旧配置文件（仍在 `settings_save` 白名单内），无实际作用。
 - `max_wait_seconds`：任务最大运行时长（秒），默认 180，合法区间 30~86400，
@@ -515,6 +517,9 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 ## 6. 前端
 
 ### 6.1 页面（四个核心导航入口）
+
+应用无参数启动默认进入「发现」推荐首页（`/browse/home`）；可在设置中更换启动入口（§5.2 `startup_page`）。
+离线 `/tests/startup-viewer.html` 验证四个启动入口、旧下载预填与深链，以及全屏滚轮 / PgUp / PgDn 的单页与双页步进、胶卷滚动、首尾边界和退出焦点；不写真实配置、不访问 Pixiv。
 
 | 页面 | 路由 | 必需 |
 |---|---|---|
@@ -604,6 +609,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ### 6.3 主题
 
+设置「通用」新增启动页 md-outlined-select（发现 / 关注 / 我的 / 下载，默认发现），沿用 40px 控件密度和整表保存 / 取消语义，附下次启动生效提示；样式与交互细则同步见 DESIGN.md / .impeccable/design.json。
+
 - 选项：浅色 / 深色 / 跟随系统（设置弹窗下拉，持久化到 `settings.json` 的 `theme`）
 - 实现：`frontend/src/styles/main.css` 定义 M3 颜色角色（`--md-sys-color-*`）与
   `--surface` / `--ink` / `--space-*` / `--radius-*` 别名；`dark`，或 `auto` 且
@@ -675,7 +682,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   纯色占位块，缺省 2:3，避免加载完成后布局跳动），每页先铺 540 低清占位层再换
   `thumb_quality_detail`；单页作品与 R-18 遮罩态整幅在舞台内垂直居中。点击任意页进入
   全屏浮层（`thumb_quality_fullscreen`）并定位到该页，浮层内 ‹ › 按钮与键盘 ←/→ 翻页、
-  Esc 关闭；浮层页框按「可用高度 × 该页纵横比」定尺寸（纵向页撑满高度、横向页撑满
+  Esc 关闭；全屏鼠标滚轮向下 / PgDn 前进，向上 / PgUp 后退，单页步进 1、双页步进 2，不受左右阅读方向影响，首尾页不循环。滚轮翻页间隔至少 250ms；右侧胶卷保持原生滚动，水平滚动与 Ctrl/Meta 滚轮不翻页，输入框焦点及带 Ctrl/Meta/Alt 的 PgUp/PgDn 不触发翻页。浮层页框按「可用高度 × 该页纵横比」定尺寸（纵向页撑满高度、横向页撑满
   宽度，小图同样放大到该尺寸，不受原始像素限制）。底部控制条与右上角 ✕ 默认隐藏，
   指针进入对应热区或键盘聚焦才显现（触摸设备常驻）；右侧胶卷缩略图列常驻
   （`thumb_quality_grid` 档、64px 方形，列内出现滚动条时按剩余宽度收窄，滚动条为 6px
@@ -794,7 +801,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 14 键 + 校验，含 `theme_color` 与缩略图三档 / `show_r18` / `novel_font_scale` / `novel_bg_color` / `saucenao_api_key`） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 15 键 + 校验，含 `startup_page` / `theme_color` 与缩略图三档 / `show_r18` / `novel_font_scale` / `novel_bg_color` / `saucenao_api_key`） |
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |

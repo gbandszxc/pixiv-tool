@@ -14,6 +14,7 @@ export const useSettingsStore = defineStore("settings", () => {
     language: "zh-CN",
     theme: "auto",
     theme_color: "pixiv",
+    startup_page: "/browse/home",
     backend_port: null,
     max_wait_seconds: 180,
     // 以下四项的取值约束见 useThumbTier；默认值与后端 Settings::default 一致

@@ -1,5 +1,7 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 import type { RouteLocation, RouteRecordRaw } from "vue-router";
+import { useSettingsStore } from "../stores/settings";
+import { groupRoots } from "./navigation";
 
 /** /browse/channel 系（插画/漫画/小说）三路由复用 BrowseChannelView，props 区分 kind。 */
 const browseChannelRoutes: RouteRecordRaw[] = (
@@ -49,7 +51,15 @@ const router = createRouter({
       ],
     },
     // 旧抓取页路径保留为重定向；/settings 已移除（设置在账号菜单的「设置」入口 → 模态设置弹窗）。
-    { path: "/", redirect: legacyFormRedirect("novel") },
+    {
+      path: "/",
+      redirect: (to) => {
+        // 旧下载链接仍透传预填参数；无参数的应用入口按已保存的启动页导航。
+        if (Object.keys(to.query).length) return legacyFormRedirect("novel")(to);
+        const page = useSettingsStore().settings.startup_page;
+        return Object.values(groupRoots).includes(page) ? page : groupRoots.discover;
+      },
+    },
     { path: "/illustration", redirect: legacyFormRedirect("illustration") },
     { path: "/tasks", redirect: legacyToolRedirect("/tools/tasks") },
     { path: "/history", redirect: legacyToolRedirect("/tools/history") },
