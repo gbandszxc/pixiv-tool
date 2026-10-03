@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head><meta charset="UTF-8" /><title>多滚动区域按屏滚动回归检查</title></head>
+  <body>
+    <output id="result">RUNNING</output>
+    <div id="app"></div>
+    <main id="main" style="height: 280px; overflow-y: auto; display: flex; gap: 24px">
+      <div id="left" style="width: 240px; height: 240px; overflow-y: auto; flex: none">
+        <div style="height: 1200px">图片区域</div>
+      </div>
+      <div id="right" style="width: 240px; height: 240px; overflow-y: auto; flex: none">
+        <button id="focus">详情信息</button><textarea id="input"></textarea><span id="shadow"></span>
+        <div style="height: 1200px">详情 / 评论 / 下载内容</div>
+      </div>
+      <div style="height: 2000px; width: 1px; flex: none"></div>
+    </main>
+    <dialog id="modal"><div id="modal-scroll" style="height: 240px; width: 400px; overflow-y: auto"><div style="height: 1200px">设置内容</div></div></dialog>
+    <script type="module" src="./page-scroll.ts"></script>
+  </body>
+</html>

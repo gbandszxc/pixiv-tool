@@ -1,5 +1,5 @@
 /** dev.ps1 frontend 后打开 /tests/startup-viewer.html；固定五页样例，无网络与真实设置写入。 */
-import { createApp, nextTick } from "vue";
+import { createApp, h, nextTick, ref } from "vue";
 import { createPinia } from "pinia";
 import { createI18n } from "vue-i18n";
 import ImageViewer from "../src/components/browse/ImageViewer.vue";
@@ -9,6 +9,7 @@ import { useSettingsStore } from "../src/stores/settings";
 import zhCN from "../src/locales/zh-CN";
 import "../src/styles/main.css";
 import "../src/material";
+import { usePageScroll } from "../src/composables/usePageScroll";
 
 function assert(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
@@ -17,7 +18,12 @@ const pages = Array.from({ length: 5 }, (_, i) => ({
   original: `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="150"><rect width="100" height="150" fill="lightblue"/><text x="40" y="75">${i + 1}</text></svg>`)}`,
   width: 100, height: 150,
 }));
-const app = createApp(ImageViewer, { pages }).use(createPinia()).use(createI18n({
+const app = createApp({
+  setup() {
+    usePageScroll(ref(document.querySelector<HTMLElement>("#viewer")));
+    return () => h(ImageViewer, { pages });
+  },
+}).use(createPinia()).use(createI18n({
   legacy: false, locale: "zh-CN", messages: { "zh-CN": zhCN },
 }));
 const settings = useSettingsStore();
@@ -60,6 +66,13 @@ async function run() {
     assert(Date.now() < deadline, "样例图片加载超时");
     await new Promise(resolve => setTimeout(resolve, 20));
   }
+  const scroll = host.querySelector<HTMLElement>(".stage-scroll")!;
+  const rect = scroll.getBoundingClientRect();
+  window.dispatchEvent(new PointerEvent("pointermove", { clientX: rect.x + rect.width / 2, clientY: rect.y + rect.height / 2 }));
+  await key("PageDown");
+  assert(scroll.scrollTop > 0, "非全屏鼠标在图片内 PgDn 滚动图片舞台");
+  await key("PageUp");
+  assert(scroll.scrollTop === 0, "非全屏 PgUp 向上滚屏");
   host.querySelector<HTMLElement>('[role="button"][title]')!.click();
   await nextTick();
   assert(host.querySelector(".fs-overlay"), "打开全屏");
@@ -89,6 +102,13 @@ async function run() {
   assert(label() === "第 3-4 / 5 页", "双页 PgUp 后退一组");
   await key("PageDown", { ctrlKey: true });
   assert(label() === "第 3-4 / 5 页", "修饰键不抢占系统快捷键");
+  const modal = document.createElement("dialog");
+  modal.textContent = "模态窗口";
+  document.body.append(modal);
+  modal.showModal();
+  await key("PageDown");
+  assert(label() === "第 3-4 / 5 页", "模态窗口打开时全屏预览不抢按键");
+  modal.close(); modal.remove();
   await new Promise(resolve => setTimeout(resolve, 270));
   await wheel(stage, 100);
   assert(label() === "第 5 / 5 页", "双页滚轮前进一组");
@@ -101,6 +121,19 @@ async function run() {
   await nextTick();
   assert(label() === "第 3-4 / 5 页", "输入框按键不触发翻页");
   input.remove();
+  const filmstrip = host.querySelector<HTMLElement>(".fs-filmstrip")!;
+  filmstrip.style.maxHeight = "160px";
+  filmstrip.scrollTop = 0;
+  const filmRect = filmstrip.getBoundingClientRect();
+  window.dispatchEvent(new PointerEvent("pointermove", { clientX: filmRect.x + filmRect.width / 2, clientY: filmRect.y + 20 }));
+  await key("PageDown");
+  assert(filmstrip.scrollTop > 0 && label() === "第 3-4 / 5 页", "鼠标在胶卷上 PgDn 只滚胶卷，不切作品页");
+  const fsStageRect = stage.getBoundingClientRect();
+  window.dispatchEvent(new PointerEvent("pointermove", { clientX: fsStageRect.x + fsStageRect.width / 2, clientY: fsStageRect.y + fsStageRect.height / 2 }));
+  filmstrip.querySelector("button")!.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true, cancelable: true }));
+  await nextTick();
+  assert(label() === "第 1-2 / 5 页", "鼠标回到图片后翻作品页，不受胶卷残留焦点影响");
+  window.dispatchEvent(new Event("blur"));
   await key("Escape");
   assert(!host.querySelector(".fs-overlay") && document.activeElement === host.querySelector(".stage-scroll"), "退出恢复舞台焦点");
 }

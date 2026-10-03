@@ -54,11 +54,13 @@ import DownloadStatusBar from "./components/download/DownloadStatusBar.vue";
 import { useDownloadPanelStore } from "./stores/downloadPanel";
 import { useTaskStore } from "./stores/tasks";
 import { groupRoots, navigationGroup, type NavigationGroup } from "./router/navigation";
+import { usePageScroll } from "./composables/usePageScroll";
 
 const router = useRouter(); const route = useRoute(); const { t } = useI18n();
 const authStore = useAuthStore(); const settingsStore = useSettingsStore();
 const authReady = authStore.checkStatus();
 const contentEl = ref<HTMLElement>(); const workspaceEl = ref<HTMLElement>();
+usePageScroll(contentEl);
 const panel = useDownloadPanelStore(); const taskStore = useTaskStore();
 const imageFullscreen = ref(false);
 const activeGroup = ref<NavigationGroup>(navigationGroup(route.path) ?? "discover");

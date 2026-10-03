@@ -29,6 +29,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import { pxSrc, thumbSrc, type ThumbTier } from "../../api/browse";
 import { useThumbTier } from "../../composables/useThumbTier";
+import { pageScrollTarget } from "../../composables/usePageScroll";
 
 /** 页加载态；未进入加载窗口的页不渲染 <img>，保持占位块。 */
 type PageState = "loading" | "ok" | "error";
@@ -431,13 +432,15 @@ function isTypingEvent(e: KeyboardEvent): boolean {
  * 纵向模式下 ←/→ 为「跳上一页/下一页」（滚动对齐页顶），同样在此拦截。
  */
 function onKeydown(e: KeyboardEvent): void {
-  if (isTypingEvent(e)) return;
+  if (isTypingEvent(e) || document.querySelector("dialog[open]")) return;
   if (fullscreen.value) {
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopImmediatePropagation();
       closeFullscreen();
-    } else if ((e.key === "PageUp" || e.key === "PageDown") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    } else if ((e.key === "PageUp" || e.key === "PageDown") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      // 鼠标或焦点落在胶卷滚动区时，交给公共一屏滚动，避免切换作品页。
+      if (pageScrollTarget(e)?.classList.contains("fs-filmstrip")) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       stepPage(e.key === "PageUp" ? -1 : 1);
