@@ -1,4 +1,15 @@
 export default {
+  update: {
+    titles: { available: "Update available", downloading: "Downloading update", opening: "Download complete, opening installer", error: "Update download failed", cancelled: "Download cancelled", guide: "Install update" },
+    version: "Update to v{version}", preparing: "Finding a matching installer…", progress: "Update download progress",
+    download: "Download and install", retry: "Download again", cancelDownload: "Cancel download", cancelling: "Cancelling…",
+    cancelled: "Download cancelled. Temporary files have been removed.", openRelease: "Open release page", openDirectory: "Open download folder", done: "Done",
+    installerOpened: "Update downloaded. The system has been asked to open the installer.",
+    directoryOpened: "Could not open the installer. The download folder is open; install the package manually.",
+    manualOpen: "Update downloaded, but neither the installer nor the file manager could be opened. Use the path below to access it manually.",
+    install: { windows: "Follow the installer instructions to replace the current version.", macos: "Open the DMG, drag Pixiv Tool into Applications and replace the old version. For unsigned packages, try right-clicking and choosing Open.", linux: "AppImage: replace the old file and grant execute permission. deb/rpm: use your system package installer." },
+    closeApp: "If asked to close this app, finish your downloads and then quit.", restart: "Restart the app after installation.",
+  },
   workspace: {
   "discover": "Discover",
   "following": "Following",
@@ -109,7 +120,7 @@ export default {
     githubOpenFailed: "Failed to open GitHub home",
     checkUpdate: "Check for updates",
     updateAvailableTitle: "Update available",
-    updateAvailableText: "Version v{latest} is available (current v{current}). Open the release page to download?",
+    updateAvailableText: "Version v{latest} is available (current v{current}). Download a package matching your platform, architecture and installation format.",
     gotoUpdate: "Get update",
     updateUpToDate: "You're on the latest version",
     updateCheckFailed: "Failed to check for updates. Please try again later.",

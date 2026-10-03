@@ -225,3 +225,23 @@ GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`�
 
 注意：自签名包只是让 Keychain ACL 可持久，不具备对外分发所需的
 Developer ID 公证能力（对外分发另议）。
+
+## 8. 应用内更新包契约
+
+应用内更新见 ADR 0016 / SPEC §7.2。检查仍用 Release 页面，下载元数据取 GitHub REST
+Release assets 的实际 name / browser_download_url / size / digest。Windows MSI、Linux
+deb/rpm/AppImage 从 Tauri bundler 写入可执行文件的 bundle_type 识别，不以宿主系统架构替代编译架构。
+debug/未打包便携可执行文件没有类型标记，须通过发布页手动选择。
+
+支持的精确文件名：`Pixiv.Tool_<version>_x64_en-US.msi` / `arm64_en-US.msi`；
+NSIS（若发布）为 `x64-setup.exe` / `arm64-setup.exe`；DMG 为 `x64.dmg` / `aarch64.dmg` /
+`universal.dmg`；Linux 为 `amd64.AppImage` / `aarch64.AppImage`（兼容 `arm64.AppImage`）、
+`amd64.deb` / `arm64.deb`；RPM 为 `Pixiv.Tool-<version>-1.x86_64.rpm` / `aarch64.rpm`。
+上述后缀接 `Pixiv.Tool_<version>_`（RPM 例外）；同样接受上传前 `Pixiv Tool` 和 crate 名 `pixiv-tool` 前缀。
+macOS 通用可执行文件保持 universal DMG，原生包优先同架构、无原生时接受 universal。
+CI 命名或产物扩展发生变化必须同时更新 `update_download_cmds.rs` 与其离线匹配测试。
+
+下载在系统临时目录写 .part，大小与可用 GitHub SHA256 digest 校验后才正式保存和打开；
+不属于 Tauri updater 签名包，不要求 createUpdaterArtifacts，不提供静默替换或签名验证。
+macOS 未签名限制仍见 §7；Linux 无安装器/文件关联时回退文件管理器。Windows/macOS/Linux
+安装器交接应在对应平台实机验收；离线测试仅验证下载与引导状态，不执行真实安装。

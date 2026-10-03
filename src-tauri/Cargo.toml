@@ -48,7 +48,8 @@ keyring = { version = "3.6", features = [
 # 与用户浏览器同链路；只加 feature，不改锁定的版本与 TLS 指纹语义。
 # 该感知对进程内所有 wreq client（含 pixiv 抓取）生效——期望行为：
 # 与用户浏览器同链路，弱网环境抓取成功率同浏览器。
-wreq = { version = "=6.0.0-rc.31", features = ["system-proxy"] }
+wreq = { version = "=6.0.0-rc.31", features = ["system-proxy", "stream"] }
+sha2 = "0.10"
 wreq-util = "=3.0.0-rc.14"
 # CDP WebSocket（ws://127.0.0.1 本机调试端口，无需 TLS feature）
 tokio-tungstenite = "0.28"

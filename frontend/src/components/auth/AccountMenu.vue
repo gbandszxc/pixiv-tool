@@ -59,14 +59,7 @@
         <md-filled-button @click="confirmLogout">{{ t('auth.logout') }}</md-filled-button>
       </div>
     </dialog>
-    <dialog ref="updateDialog" class="m3-dialog update-dialog" @close="updateConfirmOpen = false">
-      <h2>{{ t('auth.updateAvailableTitle') }}</h2>
-      <p>{{ t('auth.updateAvailableText', { latest: updateInfo.latest_version, current: updateInfo.current_version }) }}</p>
-      <div class="m3-row dialog-actions">
-        <md-text-button @click="cancelUpdate">{{ t('common.cancel') }}</md-text-button>
-        <md-filled-button @click="gotoUpdate">{{ t('auth.gotoUpdate') }}</md-filled-button>
-      </div>
-    </dialog>
+    <UpdateDialog ref="updateDialog" />
   </div>
 </template>
 
@@ -87,16 +80,15 @@ import { useAuthStore } from "../../stores/auth";
 import { errorMessage, isTauri, type AccountEntry } from "../../api/tauri";
 import { checkAppUpdate, type UpdateCheckInfo } from "../../api/appUpdate";
 import { notify } from "../../ui/notify";
+import UpdateDialog from "./UpdateDialog.vue";
 
 defineProps<{ collapsed: boolean }>();
 const emit = defineEmits<{ (e: "add-account"): void; (e: "open-settings"): void }>();
 const { t } = useI18n(); const authStore = useAuthStore();
 const show = ref(false); const popover = ref<HTMLElement | null>(null);
 const logoutDialog = ref<HTMLDialogElement | null>(null); const logoutConfirmOpen = ref(false);
-const updateDialog = ref<HTMLDialogElement | null>(null); const updateConfirmOpen = ref(false);
+const updateDialog = ref<InstanceType<typeof UpdateDialog> | null>(null);
 const updateChecking = ref(false);
-/** 弹窗正文始终要渲染版本插值，因此给一个安全的占位初始值而非 null。 */
-const updateInfo = ref<UpdateCheckInfo>({ has_update: false, current_version: "--", latest_version: "--", release_url: "" });
 const avatarFailed = ref(false); const avatarSrc = computed(() => avatarFailed.value ? "" : authStore.avatarUrl);
 
 const accountLabel = computed(() => authStore.isLoggedIn ? authStore.pixivId || authStore.name : t("auth.accounts"));
@@ -118,7 +110,7 @@ onBeforeUnmount(() => window.clearTimeout(startupUpdateTimer));
 async function openGitHub() { close(); try { await openUrl(GITHUB_HOME); } catch (error) { notify(errorMessage(error) || t("auth.githubOpenFailed")); } }
 
 /** 有新版本时记录信息并弹确认弹窗（手动检查与启动静默检查共用）。 */
-function showUpdateDialog(info: UpdateCheckInfo) { updateInfo.value = info; updateDialog.value?.showModal(); }
+function showUpdateDialog(info: UpdateCheckInfo) { close(); updateDialog.value?.open(info); }
 /** 手动检查更新：期间菜单项 disabled 防重复点击；结果分支弹窗或提示。 */
 async function checkUpdate() {
   if (updateChecking.value) return;
@@ -133,14 +125,6 @@ async function checkUpdate() {
     updateChecking.value = false;
   }
 }
-function cancelUpdate() { updateDialog.value?.close(); }
-/** 前往更新：关弹窗并打开发布页；打开失败给出可读提示。 */
-async function gotoUpdate() {
-  updateDialog.value?.close();
-  try { await openUrl(updateInfo.value.release_url); }
-  catch (error) { notify(errorMessage(error) || t("auth.updateOpenFailed")); }
-}
-
 function toggle() { show.value = !show.value; }
 function close() { show.value = false; }
 /** Esc 关菜单；设置确认等原生 dialog 打开时让位（Esc 优先关闭最上层 dialog）。 */

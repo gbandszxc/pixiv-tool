@@ -31,7 +31,7 @@
 - 自适应限速（V1 用固定并发 + 429 暂停）
 - 任务断点启动弹窗恢复
 - Linux 登录功能（Windows / macOS 支持登录；Linux 走 keyring Secret Service 后端，未实机验证）
-- 自动更新（V1 不做；三平台分发与 CI 见 docs/PACKAGING.md）
+- 无人值守静默安装（不做）；应用内下载更新并引导安装见 §7.2、ADR 0016
 - 错误上报（Sentry 等）
 
 ---
@@ -94,6 +94,7 @@
   HTTP 响应形状，snake_case；业务错误走返回值 `{error}`，校验错误走 reject
   string）。
 - **进度推送**：Tauri 事件 `task://progress`、`task://done`。
+- **更新下载进度**：`download_app_update` 的 IPC Channel（独立于抓取任务事件，见 §7.2）。
 - **安全边界**：无网络监听面；IPC 仅限本 webview。
 
 ### 3.3 数据与配置目录
@@ -120,7 +121,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 54 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 1）
+│     ├─ commands/              # 57 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 4）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
@@ -837,7 +838,10 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_bookmark_add(kind, id, restrict, tags)` | 添加收藏（全局 JSON 端点 + x-csrf-token；restrict 0 公开 / 1 非公开） |
 | `browse_bookmark_remove(kind, id, bookmarkId)` | 取消收藏：插画走 ajax form，小说走旧式 `/novel/bookmark_setting.php` 表单 |
 | `app_exit` | 退出应用（前端确认框确认后调用，与 Cmd+Q 路径一致） |
-| `check_app_update` | 检查应用更新：解析 GitHub releases 页面（非 API）取最新稳定版并与当前版本比较；请求跟随系统代理、失败回退直连；发现新版本由前端弹窗询问，无更新/失败静默 |
+| `check_app_update` | 检查更新：解析 GitHub releases 页面取最新稳定版，返回 has_update/current_version/latest_version/release_url/platform/package_type；系统代理失败回退直连；启动检查无更新/失败静默，手动检查给提示 |
+| `download_app_update(version, progress)` | 下载并校验对应版本、当前平台/架构/包类型的 Release 包；progress 为 IPC Channel，返回 path/installer_opened/directory_opened/package_type；仅一个更新下载可在途 |
+| `cancel_app_update` | 取消当前更新下载（含元数据请求），清理临时目录；无在途下载时幂等 |
+| `open_update_directory` | 打开最近一次已完成更新包目录，仅后端保留的路径，不接受前端任意文件路径 |
 
 **应用菜单栏**：Windows 上默认隐藏（`SetMenu(hwnd, NULL)`），按 Alt 唤起并
 进入菜单循环、退出循环（选中 / Esc / 窗口失活）后自动收回。实现见
@@ -883,6 +887,32 @@ task://done       {task_id, status, done, total, failed, skipped}
 一次尾随查询；所有等待者等到刷新链结束，失败后释放状态以允许下次重试。
 离开任务页立即清除轮询与已登记监听；迟到的查询不能重新创建轮询，迟到的
 监听登记立即解绑，避免路由往返后保留旧页面与重复刷新。
+
+---
+
+### 7.2 应用内更新
+
+启动 3s 后静默检查一次，仅新版弹确认；手动检查沿用账号菜单。用户确认后进入
+`UpdateDialog`：available → downloading → opening → guide；失败进入 error（重新下载 / 打开发布页），取消进入 cancelled（可重新下载）。
+更新不复用携带 Pixiv Cookie 的客户端，不引入本地 HTTP 服务。元数据用 GitHub REST
+`/repos/gbandszxc/pixiv-tool/releases/tags/{tag}`，优先 v 前缀再裸 tag，仅接受精确版本稳定 Release。
+按 Tauri bundler 内嵌包类型与编译架构匹配 CI 文件名（见 PACKAGING §8），不模糊匹配、不跨类型降级；
+debug/便携未知包类型提示发布页兜底。macOS 原生包优先同架构 DMG，通用 Mach-O 保持 universal DMG。
+
+每次下载写系统临时目录 `pixiv-tool-update/<version>/<uuid>/<asset>.part`，成功才 rename；
+失败/取消清理该次目录，完成包保留供安装。校验发布资产 size、HTTP Content-Length（存在时）、
+实际接收长度，以及 GitHub asset digest（存在时必须为合法 SHA256）；缺摘要时仍检查大小，
+摘要不是签名验证。URL 只接受本仓库固定 releases/download 前缀和该版本文件名。
+元数据请求每通道 15s；安装包响应头等待 30s、每通道请求总超时 1h、分块 30s 无数据超时；先系统代理、请求失败再直连，
+传输中断由用户重试，不断点续传。单次更新独立于 Pixiv 任务队列、不占抓取并发。
+
+`progress: Channel<UpdateProgress>` 载荷为 `{phase:downloading|opening,file_name,downloaded,total,bytes_per_second}`，
+下载中最多约每 200ms 发一次、速度取近 2s 窗口，开始和完成各发一次；前端展示百分比、已下载/总大小、
+KB/MB/GB 与速度。Esc 在下载中取消，在 opening 状态等待；下载中关闭背景交互。
+Windows 由系统文件关联启动 MSI/NSIS；macOS `open`、Linux `xdg-open` 检查退出状态（15s 上限），
+自动打开失败尝试文件管理器定位，失败再打开目录。两种系统打开均失败仍是下载成功，界面提供目录操作与完整路径。
+安装引导按 Windows/macOS/Linux 显示覆盖安装、关闭当前应用和重启步骤，不自动退出、不宣称安装已完成。
+离线回归：Rust 包匹配/来源验证/流式大小摘要测试 + `/tests/update.html` 真实组件 IPC mock（不会启动安装包）。
 
 ---
 
@@ -1030,6 +1060,7 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 | 0013 | 移除内嵌 Pixiv 浏览器（/pixiv），自有浏览 UI 为唯一入口 | [adr/0013-remove-embedded-browser.md](adr/0013-remove-embedded-browser.md) |
 | 0014 | 浏览访问历史持久化（SQLite 表 + 3 个 IPC 命令） | [adr/0014-browse-history-persistence.md](adr/0014-browse-history-persistence.md) |
 | 0015 | 核心导航与非模态下载工作区 | [adr/0015-navigation-download-workspace.md](adr/0015-navigation-download-workspace.md) |
+| 0016 | 应用内更新下载与安装引导 | [adr/0016-in-app-update-installation.md](adr/0016-in-app-update-installation.md) |
 | 0016 | 作者关注与浏览写操作边界 | [adr/0016-author-follow.md](adr/0016-author-follow.md) |
 
 ADR 按需追加，不强制一次性写完。
@@ -1043,6 +1074,6 @@ ADR 按需追加，不强制一次性写完。
 - 自适应限速（基于响应延迟与 429 频率）
 - 任务启动弹窗恢复（"上次任务进行到 80/200，是否继续"）
 - 安装器（NSIS / Inno Setup）
-- 自动更新
+- 带签名的无人值守静默安装（应用内下载与安装引导已落地，见 §7.2）
 - 搜索 / ~~收藏 / 用户主页浏览~~（搜索与用户主页已于 v1.2 随浏览模式落地，ADR 0012；收藏夹浏览与浏览态写操作仍待定）
 - 小说内嵌图片下载

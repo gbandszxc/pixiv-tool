@@ -57,6 +57,8 @@ pub struct UpdateCheckInfo {
     pub latest_version: String,
     /// 有更新 → 该 tag 发布页；无更新 → 发布列表页。
     pub release_url: String,
+    pub platform: String,
+    pub package_type: Option<String>,
 }
 
 /// 检查应用更新（前端 IPC 入口）。
@@ -122,12 +124,14 @@ fn update_info(tag: &str, current_version: &str) -> UpdateCheckInfo {
         } else {
             RELEASES_URL.to_string()
         },
+        platform: std::env::consts::OS.to_string(),
+        package_type: tauri::utils::platform::bundle_type().map(|kind| kind.to_string()),
     }
 }
 
 /// 双通道无 cookie 客户端（Chrome147 指纹，与 saucenao 同款 builder），
 /// 进程内缓存：(系统代理感知, 强制直连)。
-fn shared_clients() -> Result<&'static (wreq::Client, wreq::Client), String> {
+pub(super) fn shared_clients() -> Result<&'static (wreq::Client, wreq::Client), String> {
     static CLIENTS: OnceLock<Option<(wreq::Client, wreq::Client)>> = OnceLock::new();
     CLIENTS
         .get_or_init(build_clients)
@@ -143,10 +147,7 @@ fn shared_clients() -> Result<&'static (wreq::Client, wreq::Client), String> {
 fn build_clients() -> Option<(wreq::Client, wreq::Client)> {
     let mut default_headers = HeaderMap::new();
     default_headers.insert("user-agent", HeaderValue::from_static(USER_AGENT));
-    default_headers.insert(
-        "accept-language",
-        HeaderValue::from_static(ACCEPT_LANGUAGE),
-    );
+    default_headers.insert("accept-language", HeaderValue::from_static(ACCEPT_LANGUAGE));
     let builder = || {
         wreq::Client::builder()
             .emulation(Emulation::Chrome147)
@@ -180,15 +181,13 @@ fn strip_v_prefix(s: &str) -> &str {
 }
 
 /// 稳定版 tag 判定：`^v?\d+\.\d+\.\d+$`（恰好三段非空纯数字）。
-fn is_stable_tag(tag: &str) -> bool {
+pub(super) fn is_stable_tag(tag: &str) -> bool {
     let core = tag.strip_prefix('v').unwrap_or(tag);
     let mut parts = core.split('.');
     match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some(a), Some(b), Some(c), None) => {
-            [a, b, c].iter().all(|seg| {
-                !seg.is_empty() && seg.bytes().all(|byte| byte.is_ascii_digit())
-            })
-        }
+        (Some(a), Some(b), Some(c), None) => [a, b, c]
+            .iter()
+            .all(|seg| !seg.is_empty() && seg.bytes().all(|byte| byte.is_ascii_digit())),
         _ => false,
     }
 }

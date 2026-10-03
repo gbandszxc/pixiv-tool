@@ -182,6 +182,9 @@ pub fn run() {
             commands::app_cmds::app_exit,
             // update
             commands::update_cmds::check_app_update,
+            commands::update_download_cmds::download_app_update,
+            commands::update_download_cmds::cancel_app_update,
+            commands::update_download_cmds::open_update_directory,
         ])
         .build(tauri::generate_context!())
         .expect("Pixiv Tool 构建失败")
