@@ -14,6 +14,7 @@ const props = defineProps<{
   tabs: SectionTab[];
   /** 当前选中的 tab value */
   value?: string;
+  disabled?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -37,7 +38,7 @@ function onChange(event: Event): void {
 
 <template>
   <md-tabs class="section-tabs" :active-tab-index="activeIndex" @change="onChange">
-    <md-secondary-tab v-for="tab in tabs" :key="tab.value">{{ tab.label }}</md-secondary-tab>
+    <md-secondary-tab v-for="tab in tabs" :key="tab.value" :disabled="disabled">{{ tab.label }}</md-secondary-tab>
   </md-tabs>
 </template>
 

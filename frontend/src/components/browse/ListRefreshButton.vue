@@ -16,7 +16,7 @@ function onKeydown(event: KeyboardEvent): void {
   if (event.defaultPrevented || event.altKey || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "r") return;
   // 在列表内拦截 WebView 整页重载；模态窗口打开时不刷新背后的列表。
   event.preventDefault();
-  if (event.repeat || document.querySelector("dialog[open]")) return;
+  if (event.repeat || document.querySelector("dialog[open]") || (event.target instanceof Element && event.target.closest(".download-panel"))) return;
   refresh();
 }
 

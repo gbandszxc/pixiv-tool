@@ -75,7 +75,7 @@ function goWork(item: BrowseWorkItem): void {
 <template>
   <div class="page-view">
     <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseFeed") }}</h1></div>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.newWorks") }}</h1></div>
       <ListRefreshButton :busy="loading || loadingMore" @refresh="list.reload" />
     </div>
 

@@ -19,7 +19,7 @@
           <label class="task-select"><md-checkbox :checked='selectedTaskIds.includes(task.task_id)' :aria-label='t("tasks.selectTask", { id: task.task_id })' @change='toggleTask(task.task_id, ($event.target as HTMLInputElement).checked)' /></label>
           <div>
             <div class="task-heading"><div><span class="m3-label">{{ categoryLabel(task) }}</span><span class="task-source">{{ sourceLabel(task) }} — {{ task.source_id }}</span></div><span class="m3-status" :class='`status-${task.status}`'>{{ statusLabel(task.status) }}</span></div>
-            <md-linear-progress :value='task.total ? task.done / task.total : 0' :aria-label="progressDetail(task)" />
+            <md-linear-progress :value='taskProgress(task)' :aria-label="progressDetail(task)" />
             <div class="task-progress-meta">{{ progressDetail(task) }}</div>
             <div class="task-actions">
               <md-text-button v-if='task.status === "running"' @click='taskStore.pauseTask(task.task_id)'>{{ t("tasks.pause") }}</md-text-button>
@@ -38,18 +38,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import AppPagination from "../components/common/AppPagination.vue";
-import { isTauri, listen } from "../api/tauri";
-import type { TaskDoneEvent, TaskProgressEvent, UnlistenFn } from "../api/tauri";
-import { useTaskStore } from "../stores/tasks";
+import { isTauri } from "../api/tauri";
+
+
+import { taskProgress, useTaskStore } from "../stores/tasks";
 import type { Task } from "../stores/tasks";
 import { notify } from "../ui/notify";
 
 const ACTIVE = new Set(["pending", "running", "paused"]);
-let timer: ReturnType<typeof setInterval> | null = null;
-const unlistenFns: UnlistenFn[] = [];
+
 let disposed = false;
 const { t } = useI18n(); const taskStore = useTaskStore();
 const loading = ref(false), batchDeleting = ref(false), clearingCompleted = ref(false);
@@ -72,12 +72,6 @@ function changeCategory(value: "all" | "novel" | "illustration") { categoryFilte
 /** 分页回调：页码经 v-model:currentPage 已回写；容量切换由父级回第 1 页（纯前端切片，无需重查）。 */
 function onPagerChange({ pageSize: nextSize }: { page: number; pageSize: number | undefined }) { if (nextSize !== undefined && nextSize !== pageSize.value) { pageSize.value = nextSize; page.value = 1; } }
 function toggleAll(checked: boolean) { selectedTaskIds.value = checked ? filteredTasks.value.map((task) => task.task_id) : []; }
-function ensurePolling() {
-  if (disposed) return;
-  const active = taskStore.tasks.some((task) => ACTIVE.has(task.status));
-  if (active && !timer) timer = setInterval(() => refreshTasks().catch(() => {}), 2000);
-  else if (!active && timer) { clearInterval(timer); timer = null; }
-}
 async function refreshTasks() {
   if (disposed) return;
   await taskStore.fetchTasks();
@@ -85,30 +79,25 @@ async function refreshTasks() {
   const ids = new Set(filteredTasks.value.map((task) => task.task_id));
   selectedTaskIds.value = selectedTaskIds.value.filter((id) => ids.has(id));
   page.value = Math.min(page.value, pageCount.value);
-  ensurePolling();
+
 }
 function openConfirm(action: string) { pendingAction.value = action; confirmDialog.value?.showModal(); }
 async function deleteOne(id: string) { deletingTaskIds.value = new Set(deletingTaskIds.value).add(id); try { const { deleted } = await taskStore.deleteTask(id); notify(t("tasks.deleted", { count: deleted })); await refreshTasks(); } catch { notify(t("common.deleteFailed")); } finally { const next = new Set(deletingTaskIds.value); next.delete(id); deletingTaskIds.value = next; } }
 async function deleteBatch() { batchDeleting.value = true; try { const { deleted } = await taskStore.deleteTasks(selectedTaskIds.value); notify(t("tasks.batchDeleted", { count: deleted })); selectedTaskIds.value = []; await refreshTasks(); } catch { notify(t("common.deleteFailed")); } finally { batchDeleting.value = false; } }
 async function clearCompleted() { clearingCompleted.value = true; try { const { deleted } = await taskStore.deleteCompletedTasks(); notify(t("tasks.completedCleared", { count: deleted })); await refreshTasks(); } catch { notify(t("common.deleteFailed")); } finally { clearingCompleted.value = false; } }
 async function runPendingAction() { const action = pendingAction.value; confirmDialog.value?.close(); if (action === "clear") await clearCompleted(); else if (action === "batch") await deleteBatch(); else if (action) await deleteOne(action); }
+watch(() => taskStore.tasks, () => {
+  const ids = new Set(filteredTasks.value.map(task => task.task_id));
+  selectedTaskIds.value = selectedTaskIds.value.filter(id => ids.has(id));
+  page.value = Math.min(page.value, pageCount.value);
+});
 onMounted(async () => {
-  loading.value = true;
-  try { await refreshTasks(); } finally { if (!disposed) loading.value = false; }
-  if (disposed || !isTauri()) return;
-  const unlistenProgress = await listen<TaskProgressEvent>("task://progress", () => refreshTasks().catch(() => {}));
-  if (disposed) { unlistenProgress(); return; }
-  unlistenFns.push(unlistenProgress);
-  const unlistenDone = await listen<TaskDoneEvent>("task://done", () => refreshTasks().catch(() => {}));
-  if (disposed) unlistenDone();
-  else unlistenFns.push(unlistenDone);
+  if (!isTauri()) return;
+  loading.value = !taskStore.tasks.length;
+  try { await refreshTasks(); } catch { notify(t("workspace.syncFailed")); }
+  finally { if (!disposed) loading.value = false; }
 });
-onUnmounted(() => {
-  disposed = true;
-  if (timer) { clearInterval(timer); timer = null; }
-  unlistenFns.forEach((unlisten) => unlisten());
-  unlistenFns.length = 0;
-});
+onUnmounted(() => { disposed = true; });
 </script>
 
 <style scoped>

@@ -1,4 +1,24 @@
 export default {
+  workspace: {
+  "discover": "Discover",
+  "following": "Following",
+  "library": "Library",
+  "downloads": "Downloads",
+  "recommended": "Recommended",
+  "forYou": "For you",
+  "newWorks": "New works",
+  "browseHistory": "Browsing history",
+  "downloadHistory": "Download history",
+  "newDownload": "New download",
+  "replaceSource": "Replace download source?",
+  "replaceSourceHint": "You edited the current source. Replace it with the selected work? Output formats will be kept.",
+  "idle": "No active downloads",
+  "activeCount": "{count} active",
+  "syncFailed": "Task status update failed; retrying",
+  "sectionNavigation": "Content sections",
+  "searchShortcut": "Search (Ctrl+K / Command+K)",
+  "backSection": "Back to section"
+},
   common: {
     save: "Save",
     cancel: "Cancel",

@@ -83,7 +83,7 @@ onMounted(initialLoad);
 <template>
   <div class="page-view browse-home">
     <div class="home-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseHome") }}</h1></div>
+      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.recommended") }}</h1></div>
       <ListRefreshButton :busy="loading || refreshing" @refresh="refresh" />
       <!-- 换一批降为文字按钮 + 线性刷新图标，弱化头部主次层级（图标风格对齐 HistoryView .row-actions） -->
       <md-text-button :disabled="loading || refreshing || exhausted" @click="shuffle">

@@ -442,6 +442,7 @@ function onKeydown(e: KeyboardEvent): void {
 }
 
 watch(fullscreen, async (open) => {
+  window.dispatchEvent(new CustomEvent('pixiv-tool:image-fullscreen', { detail: open }));
   if (open) {
     await nextTick();
     overlayEl.value?.focus();
@@ -461,6 +462,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  window.dispatchEvent(new CustomEvent('pixiv-tool:image-fullscreen', { detail: false }));
   window.removeEventListener("keydown", onKeydown, { capture: true });
   window.removeEventListener("resize", onScroll);
   if (rafId) cancelAnimationFrame(rafId);

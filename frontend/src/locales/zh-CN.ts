@@ -1,4 +1,24 @@
 export default {
+  workspace: {
+  "discover": "发现",
+  "following": "关注",
+  "library": "我的",
+  "downloads": "下载",
+  "recommended": "推荐",
+  "forYou": "为你发现",
+  "newWorks": "新作品",
+  "browseHistory": "浏览历史",
+  "downloadHistory": "下载历史",
+  "newDownload": "新建下载",
+  "replaceSource": "替换下载来源？",
+  "replaceSourceHint": "当前来源已手动修改。是否替换为刚刚选择的作品？输出格式会保留。",
+  "idle": "无进行中任务",
+  "activeCount": "{count} 项进行中",
+  "syncFailed": "任务状态更新失败，正在重试",
+  "sectionNavigation": "内容分区",
+  "searchShortcut": "搜索（Ctrl+K / Command+K）",
+  "backSection": "返回所属分区"
+},
   common: {
     save: "保存",
     cancel: "取消",

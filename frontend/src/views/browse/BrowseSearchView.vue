@@ -447,6 +447,7 @@ const typeTabs = computed(() => [
   <div class="page-view">
     <div class="browse-list-header">
       <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseSearch") }}</h1></div>
+      <md-text-button @click="router.push('/saucenao')">{{ t('nav.saucenao') }}</md-text-button>
       <ListRefreshButton :busy="loading" :disabled="!word.trim()" @refresh="runSearch(sigOf(currentParams()))" />
     </div>
 

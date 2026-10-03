@@ -3,12 +3,13 @@ import { computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { goBack } from "../../router";
+import { fallbackPage } from "../../router/navigation";
 
 const route = useRoute();
 const router = useRouter();
 const { t } = useI18n();
 const visible = computed(() => route.path !== "/browse/home" || !!router.options.history.state.back);
-const label = computed(() => t(route.path !== "/browse/home" && !router.options.history.state.back ? "nav.backHome" : "nav.back"));
+const label = computed(() => t(!router.options.history.state.back ? (fallbackPage(route.path) === "/browse/home" ? "nav.backHome" : "workspace.backSection") : "nav.back"));
 </script>
 
 <template>

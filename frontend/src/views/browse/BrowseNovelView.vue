@@ -324,6 +324,7 @@ function openInPixiv(): void {
       <md-icon-button :aria-label="t('browse.novel.back')" :title="t('browse.novel.back')" @click="goBack">
         <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
       </md-icon-button>
+      <md-icon-button :aria-label="t('common.search')" :title="t('workspace.searchShortcut')" @click="router.push('/browse/search')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg></md-icon-button>
       <div class="topbar-title" :title="item?.title">
         {{ item?.title || t("common.browseReaderTitle") }}
       </div>
@@ -527,11 +528,11 @@ function openInPixiv(): void {
 <style scoped>
 /* 满血宽度：抵消 .app-content 的 24px 内边距（640px 下为 16px），让顶栏/翻页器整行贴边。
    固定高度 flex 列：顶栏 / 滚动层 / 翻页器三行铺满视口，负 margin 抵消后顶栏贴窗口上边、
-   翻页器贴窗口下边，.app-content 高度恰为 100vh 不再滚动，成为纯壳。 */
+   翻页器贴窗口下边，.app-content 高度取自主工作区（排除状态栏 / 底部面板） 不再滚动，成为纯壳。 */
 .novel-view {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100cqh;
   margin: calc(-1 * var(--space-xl)) calc(-1 * var(--space-xl)) calc(-1 * var(--space-xl));
 }
 

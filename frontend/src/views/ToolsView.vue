@@ -2,37 +2,32 @@
   <div class="page-view tools-view">
     <div class="page-heading tools-header">
       <PageBackButton />
-      <SectionTabs class="tools-tabs" :tabs="tabs" :value="activeTab" @change="onTabChange" />
+      <SectionTabs class="tools-tabs" :tabs="tabs" :value="route.path" @change="onTabChange" />
+      <md-filled-button @click="panel.open()">{{ t('workspace.newDownload') }}</md-filled-button>
     </div>
     <div class="tools-body"><router-view /></div>
   </div>
 </template>
 
 <script setup lang="ts">
-/**
- * 工具页：页签壳。顶部 md-secondary-tab（复用 SectionTabs 封装）即子路由导航，
- * 与 /tools/* 子路由双向同步；四个页签分别复用既有 CrawlView / IllustrationView /
- * TasksView / HistoryView，子视图内部逻辑不变。
- */
+/** 下载页：任务 / 下载历史沿子路由导航，新建下载打开非模态表单。 */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import SectionTabs, { type SectionTab } from "../components/browse/SectionTabs.vue";
 import PageBackButton from "../components/navigation/PageBackButton.vue";
+import { useDownloadPanelStore } from "../stores/downloadPanel";
 
 const { t } = useI18n(); const route = useRoute(); const router = useRouter();
+const panel = useDownloadPanelStore();
 const tabs = computed<SectionTab[]>(() => [
-  { value: "novel", label: t("nav.crawlNovel") },
-  { value: "illustration", label: t("nav.crawlIllustration") },
-  { value: "tasks", label: t("nav.tasks") },
-  { value: "history", label: t("nav.history") },
+  { value: "/tools/tasks", label: t("nav.tasks") },
+  { value: "/tools/history", label: t("workspace.downloadHistory") },
 ]);
-/** 当前页签取自路径第二段；未知段回退 novel（与 /tools → /tools/novel 重定向一致）。 */
-const activeTab = computed(() => { const seg = route.path.split("/")[2] ?? ""; return tabs.value.some(tab => tab.value === seg) ? seg : "novel"; });
-function onTabChange(value: string) { if (value !== activeTab.value) router.push(`/tools/${value}`); }
+function onTabChange(value: string) { if (value !== route.path) void router.push(value); }
 </script>
 
 <style scoped>
-.tools-header { margin-bottom: var(--space-lg); }
+.tools-header { margin-bottom: var(--space-lg); flex-wrap:wrap; }
 .tools-tabs { flex: 1; min-width: 0; }
 </style>

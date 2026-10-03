@@ -401,8 +401,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
-  height: calc(100vh - 2 * var(--space-xl));
-  min-height: 480px;
+  height: calc(100cqh - 2 * var(--space-xl));
+  min-height: 0;
 }
 
 /* ===== 顶部条 ===== */

@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from "vue-router";
 import type { RouteLocation, RouteRecordRaw } from "vue-router";
+import { fallbackPage } from "./navigation";
 
 /** /browse/channel 系（插画/漫画/小说）三路由复用 BrowseChannelView，props 区分 kind。 */
 const browseChannelRoutes: RouteRecordRaw[] = (
@@ -29,6 +30,7 @@ const browseWorkRoutes: RouteRecordRaw[] = [
 }));
 
 /** 旧路径 → /tools/* 的函数式 redirect：保留 query 与 hash（浏览页「返填表单」跳 / 或 /illustration 并带 query 预填，依赖此处透传）。 */
+const legacyFormRedirect = (form: "novel" | "illustration") => (to: RouteLocation) => ({ path: "/tools/tasks", query: { ...to.query, downloadForm: form }, hash: to.hash });
 const legacyToolRedirect = (path: string) => (to: RouteLocation) => ({ path, query: to.query, hash: to.hash });
 
 const router = createRouter({
@@ -40,16 +42,16 @@ const router = createRouter({
       path: "/tools",
       component: () => import("../views/ToolsView.vue"),
       children: [
-        { path: "", redirect: "/tools/novel" },
-        { path: "novel", name: "tools-novel", component: () => import("../views/CrawlView.vue") },
-        { path: "illustration", name: "tools-illustration", component: () => import("../views/IllustrationView.vue") },
+        { path: "", redirect: "/tools/tasks" },
+        { path: "novel", redirect: legacyFormRedirect("novel") },
+        { path: "illustration", redirect: legacyFormRedirect("illustration") },
         { path: "tasks", name: "tools-tasks", component: () => import("../views/TasksView.vue") },
         { path: "history", name: "tools-history", component: () => import("../views/HistoryView.vue") },
       ],
     },
     // 旧抓取页路径保留为重定向；/settings 已移除（设置在账号菜单的「设置」入口 → 模态设置弹窗）。
-    { path: "/", redirect: legacyToolRedirect("/tools/novel") },
-    { path: "/illustration", redirect: legacyToolRedirect("/tools/illustration") },
+    { path: "/", redirect: legacyFormRedirect("novel") },
+    { path: "/illustration", redirect: legacyFormRedirect("illustration") },
     { path: "/tasks", redirect: legacyToolRedirect("/tools/tasks") },
     { path: "/history", redirect: legacyToolRedirect("/tools/history") },
     // ===== 浏览模式（browse-ui-v1，F1-F5 替换占位实现）=====
@@ -136,7 +138,7 @@ export function goBack(): void {
   if (typeof back === "string" && back.startsWith("/") && router.resolve(back).matched.length) {
     router.back();
   } else {
-    void router.replace("/browse/home");
+    void router.replace(fallbackPage(router.currentRoute.value.path));
   }
 }
 

@@ -131,9 +131,9 @@ pixiv-tool/
 │     └─ paths.rs / platform.rs / logging.rs
 ├─ frontend/                    # Vue3 + TS + Vite + Material Web（M3）
 │  ├─ src/
-│  │  ├─ views/                 # ToolsView（工具页签壳）/ CrawlView / IllustrationView / TasksView / HistoryView / SaucenaoView（以图识图）
+│  │  ├─ views/                 # ToolsView（下载页签壳）/ TasksView / HistoryView / SaucenaoView（以图识图）
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark/History + Work/Series/Author/Novel
-│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/ settings/（SettingsPanel / SettingsDialog / sections.ts 分组定义）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
+│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/（核心导航 / PageBackButton）download/（共用下载表单 / 状态栏）settings/（SettingsPanel / SettingsDialog / sections.ts 分组定义）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
@@ -514,12 +514,12 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 
 ## 6. 前端
 
-### 6.1 页面（侧边栏导航布局）
+### 6.1 页面（四个核心导航入口）
 
 | 页面 | 路由 | 必需 |
 |---|---|---|
-| 工具-小说抓取 | `/tools/novel`（页签「小说」） | ✅ |
-| 工具-插画抓取 | `/tools/illustration`（页签「插画」） | ✅ |
+| 小说下载表单 | 全局非模态面板（旧 `/tools/novel` 兼容返填到任务页面板） | ✅ |
+| 插画下载表单 | 全局非模态面板（旧 `/tools/illustration` 兼容返填到任务页面板） | ✅ |
 | 工具-任务 | `/tools/tasks`（页签「任务」） | ✅ |
 | 工具-历史 | `/tools/history`（页签「历史」） | ✅ |
 | 浏览-首页 | `/browse/home`（推荐流，换一批去重追加） | ✅ |
@@ -536,16 +536,9 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 | 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab） | ✅ |
 | 以图识图 | `/saucenao`（SauceNAO 反搜：本地文件/拖拽/URL，pixiv 结果跳作品详情；需在设置中配置 API Key） | ✅ |
 
-**工具页**：页签壳 `ToolsView`（`/tools`），顶部 md-secondary-tab（复用 SectionTabs 封装）
-即子路由导航、与路由双向同步；`/tools` 重定向到 `/tools/novel`。旧路径 `/`、
-`/illustration`、`/tasks`、`/history` 保留为函数式 redirect，透传 query 与 hash
-（浏览页「返填表单」跳旧路径并带 `sourceType`/`sourceId` 预填，依赖此处）。
-`/settings` 路由已移除：账号菜单只留「设置」入口，设置表单承载于模态设置弹窗（见下）。
+**下载页**：页签壳 ToolsView（/tools），默认 /tools/tasks，页签为任务 / 下载历史，右侧新建下载打开面板。旧表单路径重定向到任务页并带 downloadForm/sourceType/sourceId，面板消费后清理这三个 query 键，其余 query/hash 保留。
 
-**侧边栏**：扁平菜单、无分组标题——浏览区（首页/插画/漫画/小说/发现/动态/搜索/
-排行榜/收藏/历史）在上，其后一条分隔线，然后是「工具」单项（`/tools*` 前缀高亮）
-与「以图识图」单项（`/saucenao`，与工具项之间无分隔线）；浏览项按路径精确匹配。头部行 = logo + 标题 + 收起侧栏按钮（折叠态仅留展开按钮）；
-折叠态 72px 只显示图标，窗口高度不足时导航区自身滚动。侧栏底部为**头像 chip**
+**侧边栏**：发现 / 关注 / 我的 / 下载四个核心项，二级入口在各页面内逐步展开；所属分组高亮，详情继承实际来路，直达归发现。展开宽 256px、折叠宽 72px，头部为 logo / 标题 / 收起按钮，窗口高度不足时导航自身滚动。侧栏底部为**头像 chip**
 （头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击在 chip 上方弹出**账号
 菜单**（`AccountMenu`：轻量 popover，宽 264px、surface-container 底、12px 圆角、
 既有轻阴影；透明遮罩点击外部或 Esc 关闭，无深色 scrim）；内容 = 账号列表（当前
@@ -562,26 +555,36 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 维护），含主题、配色与语言的实时预览；Esc / 点 backdrop / 标题栏 ✕ 关闭前先做脏检查，
 有未保存改动则弹确认弹窗（继续编辑 / 放弃修改），放弃即回滚到已保存值并提示，
 无改动直接关闭。设置项继续增多时在 `sections.ts` 与 SettingsPanel 内新增分组。
-应用外壳恒为视口高，右侧内容区是唯一滚动容器，长内容不再拉长侧栏。内容列
-（`.page-view`）在窗口宽高比 ≤16:9 时铺满内容区、不设宽度上限（列表/网格列数随
+应用外壳恒为视口高，右侧内容区是主要滚动容器，长内容不再拉长侧栏；下载面板独立滚动，底部状态栏独立占位。内容列（`.page-view`）在窗口宽高比 ≤16:9 时铺满内容区、不设宽度上限（列表/网格列数随
 宽度自适应补满），只有更宽的超宽窗口才按「视口高 × 16/9」封顶并居中
 （视觉规格见 `DESIGN.md` §Layout）。
 
 浏览模式详见 §6.4 与 ADR 0012。
 
-**返回堆栈**：跨页面跳转（包含相关推荐、作者、系列、标签搜索、频道排行、下载表单、
+**返回堆栈**：跨页面跳转（包含相关推荐、作者、系列、标签搜索、频道排行、下载页、
 工具页签与侧栏）使用 Vue Router 的原生 hash history `push`，按实际来路逐层返回，
 保留上游 URL 的 query/hash；仅当前页面筛选同步、表单消费预填参数和旧路径重定向
 使用 `replace`。非作品页面复用 `PageBackButton` 图标按钮：普通列表和以图识图并入
 标题行，作者页放在头像资料区左侧，系列页并入系列标题行，工具页并入页签行；插画/漫画
 与小说详情沿用各自顶栏返回按钮，全部调用路由层的 `goBack()`。没有有效应用内
-上游历史的深链页面以 `replace` 回 `/browse/home`，避免兜底形成来回循环；首页无
+上游历史的深链页面以 `replace` 回所属核心入口，核心入口再回 `/browse/home`，避免兜底形成来回循环；首页无
 历史时隐藏返回入口。加载、空态和错误态均保留返回入口，骨架的 `aria-hidden` 不覆盖
 返回控件。缓存恢复规则见 §6.4。
 浏览器 mock 回归入口：先运行 `.\dev.ps1 frontend start`，在新标签打开
 `http://localhost:9961/tests/navigation.html#/browse/home`，检查底部 `PASS`；覆盖实际
 首页卡片→详情→作者、相关推荐、跨页面多层返回、query、旧路径重定向、深链兜底与新分支。
+新增工作区离线验收入口 `/tests/workspace.html#/browse/home`，覆盖四入口、草稿确认、返填不跳页、缓存返回、搜索聚焦、旧链接、单一任务监控与轮询、失败及重复提交防护。
 同一检查验证返回控件并入标题/资料行、可访问名称及 640px 窄窗长标题布局。
+
+### 6.1.1 核心导航与下载工作区
+
+现行决策见 ADR 0015。侧栏四入口发现（/browse/home）、关注（/browse/feed）、我的（/browse/bookmark）、下载（/tools/tasks）；二级导航组织现有路由，作者 / 系列 / 详情继承实际来源分组，直达归发现。搜索胶囊 + Ctrl+K / Command+K 跳搜索并聚焦，以图识图入口在搜索页；阅读器改用顶栏搜索，全屏看图隐藏全局搜索与状态栏。
+
+下载改为应用级非模态布局面板，宽工作区 ≥1120px 右栏 480px，否则底栏 min(45%,320px)，只放新建表单。公共 fillDownloadForm(DownloadTarget) 不再导航，所有返填沿用 form/sourceType/sourceId 类型。关闭 / 跳页留草稿，账号变更清空；覆盖手动来源需确认、格式保留；失败留输入，成功更新任务并关闭面板、不跳页。旧 /、/illustration、/tools/novel、/tools/illustration 进入 /tools/tasks 并打开相应面板，保留其它 query/hash，消费 downloadForm/sourceType/sourceId；旧 /tasks、/history 继续兼容。
+
+底部 32px 状态栏常驻且独立占位，空闲、新建入口、活跃任务数及代表任务进度回显；点击进度进入完整任务页。代表优先 running/pending/paused、同状态创建时间升序；done/total，未知总量不定进度，暂停无动画。应用级共享 task://progress、task://done 订阅与 2s 轮询兜底（有活跃任务或同步失败时）；同步失败保留快照并显示重试提示，任务页不重复订阅。
+
+路由返回保留真实来路，无历史 replace 回所属核心入口；面板开关不入历史。原有浏览 KeepAlive 20 页 LRU、账号失效与首页快照不变；面板不重挂路由视图，布局切换恢复可见卡锚点 / 滚动。刷新按钮及 Ctrl+R / Command+R 保留，面板字段聚焦不刷新底层列表。无 Rust IPC / SQLite / settings.json / Pixiv API 变更；UI 规则见 DESIGN 与结构化伴随文件。
 
 ### 6.2 i18n
 
@@ -607,7 +610,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   Ctrl+R / Command+R 与按钮执行同一数据刷新，不重载 WebView；配方见 `DESIGN.md`。
 - 返回统一为 40×40 `md-icon-button`、20px lucide `chevron-left` 官方路径（stroke 2）与
   `on-surface-variant` 颜色，沿用 8px 标题行间距，无独立文字返回行、无新增 token；
-  悬停提示及可访问名称为「返回上一页」，无历史时为「返回首页」。
+  悬停提示及可访问名称为「返回上一页」，无历史时为「返回所属分区」或「返回首页」，replace 返回所属核心入口，核心入口再回推荐首页。
 
 ### 6.4 浏览模式（browse，ADR 0012）
 
@@ -760,7 +763,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   正常出图；评论只在详情页面板内按需加载（只读，无评论/回复发布）。
 - **打开原页 / 返填**：浏览页的「在浏览器中打开」走系统默认浏览器
   （官方 `tauri-plugin-opener`，capability `opener:default`）；
-  频道页卡片与作品级页面另有「返填表单」→ 跳对应抓取页并预填 `sourceType` / `sourceId`。
+  频道页卡片与作品级页面另有「返填表单」→ 就地打开下载面板并预填来源，不改变当前 URL 或路由历史。
 
 ---
 
