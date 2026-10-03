@@ -396,6 +396,7 @@ function onSModeChange(event: Event): void {
 
 // ===== ID 直达与卡片跳转 =====
 
+/** 链接识别结果 → 应用自绘页面；支持类型与扩展步骤见 utils/parseInput.ts 文件头。 */
 function pushTarget(target: ParsedBrowseInput): void {
   switch (target.type) {
     case "illust-work":
@@ -416,6 +417,11 @@ function pushTarget(target: ParsedBrowseInput): void {
     case "illust-series":
       void router.push(`/browse/series/illust/${target.id}`);
       break;
+    default: {
+      // 新增 ParsedBrowseInput 类型后必须接入目标页面，遗漏分支会导致类型检查失败。
+      const unhandled: never = target;
+      throw new Error(`未处理的浏览跳转类型：${unhandled}`);
+    }
   }
 }
 

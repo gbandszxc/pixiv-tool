@@ -17,6 +17,16 @@
  * illust → /browse/work/illust/{id}，manga → /browse/work/manga/{id}，
  * novel → /browse/work/novel/{id}；缺省 illust（保持 V1 约定）。
  *
+ * 扩展方式（随应用自绘页面增加）：
+ * 1. 先在 router/index.ts 注册可访问的自绘页面，再给 ParsedBrowseInput 增加对应 type；
+ *    字段按目标页面所需定义，不限于单个 id（例如标签页可携带 tag）。
+ * 2. 在本文件添加链接规则与解析分支；具体子路径优先于宽泛父路径，避免误命中。
+ *    数字 ID 继续通过 toId 校验；未支持的链接保持返回 null，不提前声明支持。
+ * 3. 在 BrowseSearchView.vue 的 pushTarget 增加对应跳转分支；其穷尽检查会在漏接时
+ *    使 TypeScript 检查失败。链接自身决定目标类型，勿依赖搜索页当前类型 tab。
+ * 4. 同步本注释支持表与 docs/SPEC.md，并验证新增链接、已有链接及关键词回退。
+ *    同一页面的链接别名只需增加解析规则，复用已有 type 与跳转分支。
+ *
  * 边界处理：
  * - 尾随斜杠：`/artworks/123/` 仍命中（正则不锚定结尾）；
  * - 语言前缀：`en`、`ja`、`zh-cn` 等前缀（`/en/artworks/123`）可命中；
