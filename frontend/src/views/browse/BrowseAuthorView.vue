@@ -24,6 +24,7 @@ import SectionTabs from "../../components/browse/SectionTabs.vue";
 import {
   browseBookmarkList,
   browseUserProfile,
+  browseUserFollow,
   browseUserWorks,
   errorMessage,
   pxSrc,
@@ -35,20 +36,41 @@ import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivUserUrl } from "../../utils/pixivUrl";
 import { useInfiniteList } from "../../composables/useInfiniteList";
+import { useAuthStore } from "../../stores/auth";
 
 const props = defineProps<{ id: number }>();
 
 const { t } = useI18n();
 const router = useRouter();
+const authStore = useAuthStore();
 
 // ===== 头部：作者信息 =====
 
 const profile = shallowRef<BrowseUserProfile | null>(null);
 const profileLoading = ref(false);
 const profileError = ref("");
+const followBusy = ref(false);
+
+async function toggleFollow(): Promise<void> {
+  const current = profile.value;
+  if (followBusy.value || profileLoading.value || typeof current?.is_followed !== "boolean" || String(current.id) === authStore.userId) return;
+  const account = authStore.userId;
+  const followed = !current.is_followed;
+  followBusy.value = true;
+  try {
+    const result = await browseUserFollow(current.id, followed);
+    if (profile.value !== current || authStore.userId !== account) return;
+    profile.value = { ...current, is_followed: result.is_followed };
+    notify(t(result.is_followed ? "browse.author.followSuccess" : "browse.author.unfollowSuccess"));
+  } catch (err) {
+    if (profile.value === current && authStore.userId === account) notify(errorMessage(err) || t("browse.author.followFailed"));
+  } finally {
+    followBusy.value = false;
+  }
+}
 
 async function loadProfile(): Promise<void> {
-  if (profileLoading.value) return;
+  if (profileLoading.value || followBusy.value) return;
   profileLoading.value = true;
   profileError.value = "";
   try {
@@ -167,6 +189,7 @@ function resetAll(): void {
 }
 
 function refresh(): void {
+  if (followBusy.value) return;
   void loadProfile();
   if (activeTab.value === "bookmark") bookmarkOffset = 0;
   lists[activeTab.value].reload();
@@ -238,7 +261,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="page-view author-view">
     <div class="browse-list-header">
-      <ListRefreshButton :busy="profileLoading || lists[activeTab].loading.value || lists[activeTab].loadingMore.value" @refresh="refresh" />
+      <ListRefreshButton :busy="followBusy || profileLoading || lists[activeTab].loading.value || lists[activeTab].loadingMore.value" @refresh="refresh" />
     </div>
     <!-- ===== 头部信息卡（surface-container 区块，无阴影）===== -->
     <section class="author-card">
@@ -288,19 +311,32 @@ onBeforeUnmount(() => {
                   {{ t("browse.author.myPixivCount", { n: profile.mypixiv_count ?? 0 }) }}
                 </p>
               </div>
-              <md-outlined-icon-button
-                class="open-browse"
-                :aria-label="t('browse.hooks.openInBrowser')"
-                :title="t('browse.hooks.openInBrowser')"
-                @click="openInPixiv"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <!-- lucide square-arrow-out-up-right -->
-                  <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" />
-                  <path d="m21 3-9 9" />
-                  <path d="M15 3h6v6" />
-                </svg>
-              </md-outlined-icon-button>
+              <div class="author-actions">
+                <component
+                  :is="profile.is_followed ? 'md-outlined-button' : 'md-filled-button'"
+                  v-if="String(profile.id) !== authStore.userId"
+                  class="follow-button"
+                  :disabled="followBusy || profileLoading || typeof profile.is_followed !== 'boolean'"
+                  :aria-busy="followBusy"
+                  :aria-pressed="profile.is_followed === true"
+                  :aria-label="t(profile.is_followed ? 'browse.author.unfollow' : 'browse.author.follow')"
+                  :title="t(typeof profile.is_followed !== 'boolean' ? 'browse.author.followUnknown' : profile.is_followed ? 'browse.author.unfollow' : 'browse.author.follow')"
+                  @click="toggleFollow"
+                >{{ t(followBusy ? 'common.loading' : profile.is_followed ? 'browse.author.followed' : 'browse.author.follow') }}</component>
+                <md-outlined-icon-button
+                  class="open-browse"
+                  :aria-label="t('browse.hooks.openInBrowser')"
+                  :title="t('browse.hooks.openInBrowser')"
+                  @click="openInPixiv"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <!-- lucide square-arrow-out-up-right -->
+                    <path d="M21 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h6" />
+                    <path d="m21 3-9 9" />
+                    <path d="M15 3h6v6" />
+                  </svg>
+                </md-outlined-icon-button>
+              </div>
             </div>
 
             <!-- 简介：剥标签纯文本，3 行截断 + 展开/收起 -->
@@ -440,6 +476,14 @@ onBeforeUnmount(() => {
 }
 
 .open-browse {
+  flex-shrink: 0;
+}
+
+.author-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
   flex-shrink: 0;
 }
 

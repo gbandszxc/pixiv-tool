@@ -136,6 +136,7 @@ pub fn run() {
             commands::browse_api_cmds::browse_work_detail,
             commands::browse_api_cmds::browse_related,
             commands::browse_api_cmds::browse_user_profile,
+            commands::browse_api_cmds::browse_user_follow,
             commands::browse_api_cmds::browse_user_works,
             commands::browse_api_cmds::browse_novel_series,
             commands::browse_api_cmds::browse_illust_series,

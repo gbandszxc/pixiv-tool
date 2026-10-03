@@ -299,6 +299,8 @@ pub struct BrowseUserProfile {
     pub following_count: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mypixiv_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_followed: Option<bool>,
 }
 
 /// 小说系列内容条目。
@@ -1442,6 +1444,7 @@ fn parse_user_profile(id: i64, body: &Value) -> BrowseUserProfile {
         background: str_field(body, "background"),
         following_count: body.get("following").and_then(as_i64_loose),
         mypixiv_count: body.get("mypixivCount").and_then(as_i64_loose),
+        is_followed: body.get("isFollowed").and_then(Value::as_bool),
     }
 }
 
@@ -1973,7 +1976,65 @@ fn novel_delete_form(csrf_token: &str, bookmark_id: &str) -> String {
 // PixivApi 方法（browse 命令层逐个对应，全部返回 Value）
 // ----------------------------------------------------------------------
 
+fn user_follow_request(id: i64, followed: bool, restrict: i64) -> (&'static str, String) {
+    if followed {
+        (
+            "/bookmark_add.php",
+            format!("mode=add&type=user&user_id={id}&tag=&restrict={restrict}&format=json"),
+        )
+    } else {
+        (
+            "/rpc_group_setting.php",
+            format!("mode=del&type=bookuser&id={id}"),
+        )
+    }
+}
+
+fn validate_user_follow_response(value: Value, followed: bool) -> Result<(), PixivError> {
+    if value.get("error").is_some() {
+        super::client::extract_ajax_body(value.clone())?;
+    }
+    let success = if followed {
+        value.as_array().is_some_and(Vec::is_empty)
+    } else {
+        value.get("type").and_then(Value::as_str) == Some("bookuser")
+    };
+    if success {
+        Ok(())
+    } else {
+        Err(PixivError::Client(
+            "关注操作未成功，请刷新作者资料后重试".into(),
+        ))
+    }
+}
+
 impl PixivApi {
+    /// 旧式关注表单：公开 / 私密关注；取消关注。非成功信标不得回显成功。
+    pub async fn set_user_follow(
+        &self,
+        id: i64,
+        followed: bool,
+        restrict: i64,
+    ) -> Result<Value, PixivError> {
+        if id <= 0 || !matches!(restrict, 0 | 1) {
+            return Err(PixivError::Client("关注参数无效".into()));
+        }
+        let client = self.client();
+        let token = web_csrf_token(client).await?;
+        let (path, form) = user_follow_request(id, followed, restrict);
+        let result = async {
+            let text = client.post_form(path, Some(&token), &form).await?;
+            let value = serde_json::from_str(&text)
+                .map_err(|_| PixivError::Client("关注操作响应异常，请刷新后重试".into()))?;
+            validate_user_follow_response(value, followed)?;
+            Ok(json!({"is_followed": followed}))
+        }
+        .await;
+        if matches!(&result, Err(PixivError::Auth)) {
+            invalidate_web_csrf();
+        }
+        result
+    }
     /// POST /ajax/street/v2/main（首页混合推荐流；需 x-csrf-token，进程内 TTL 缓存）。
     /// 无翻页：前端「换一批」重复调用并去重。token 失效（Auth/Client 错误）
     /// 自动清缓存自愈。
@@ -2584,6 +2645,44 @@ impl PixivApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_follow_form_and_success_signals() {
+        let (path, form) = user_follow_request(42, true, 0);
+        assert_eq!(path, "/bookmark_add.php");
+        assert_eq!(
+            form,
+            "mode=add&type=user&user_id=42&tag=&restrict=0&format=json"
+        );
+        assert!(user_follow_request(42, true, 1).1.contains("restrict=1"));
+        assert_eq!(
+            user_follow_request(42, false, 0),
+            (
+                "/rpc_group_setting.php",
+                "mode=del&type=bookuser&id=42".into()
+            )
+        );
+        assert!(validate_user_follow_response(json!([]), true).is_ok());
+        assert!(validate_user_follow_response(json!({"type":"bookuser"}), false).is_ok());
+        for value in [
+            json!(null),
+            json!({}),
+            json!({"error":true,"message":"rejected"}),
+            json!(["rejected"]),
+        ] {
+            assert!(validate_user_follow_response(value.clone(), true).is_err());
+            assert!(validate_user_follow_response(value, false).is_err());
+        }
+        assert_eq!(
+            parse_user_profile(42, &json!({"isFollowed":true})).is_followed,
+            Some(true)
+        );
+        assert_eq!(
+            parse_user_profile(42, &json!({"isFollowed":false})).is_followed,
+            Some(false)
+        );
+        assert_eq!(parse_user_profile(42, &json!({})).is_followed, None);
+    }
 
     // ---- parse_work_thumb ----
 

@@ -154,6 +154,7 @@ export interface BrowseUserProfile {
   background?: string | null;
   following_count?: number;
   mypixiv_count?: number;
+  is_followed?: boolean;
 }
 
 /** browse_work_detail（illust/manga）返回体；detail_kind 用于运行时区分联合类型。 */
@@ -506,6 +507,18 @@ export async function browseRelated(
 ): Promise<BrowseList> {
   if (!isTauri()) return mockOneShot(`related:${kind}:${id}`, [kind], { count: limit });
   return invokeBrowse<BrowseList>("browse_related", { kind, id, limit });
+}
+
+const mockUserFollows = new Map<number, boolean>();
+
+/** 公开关注或取消关注；生产环境由后端验证 Pixiv 成功响应。 */
+export async function browseUserFollow(id: number, followed: boolean): Promise<{ is_followed: boolean }> {
+  if (!isTauri()) {
+    await mockDelay();
+    mockUserFollows.set(id, followed);
+    return { is_followed: followed };
+  }
+  return invokeBrowse("browse_user_follow", { id, followed });
 }
 
 /** browse_user_profile：作者信息。 */
@@ -1050,6 +1063,7 @@ async function mockUserProfile(id: number): Promise<BrowseUserProfile> {
     background: null,
     following_count: 40 + Math.floor(rand() * 800),
     mypixiv_count: 5 + Math.floor(rand() * 60),
+    is_followed: mockUserFollows.get(id) ?? false,
   };
 }
 

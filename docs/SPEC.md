@@ -120,7 +120,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 52 个 #[tauri::command]（auth 6 / browse_api 19 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 1）
+│     ├─ commands/              # 54 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 1）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
@@ -578,6 +578,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ### 6.1.1 核心导航与下载工作区
 
+作者资料行在昵称/统计与网页按钮之间提供关注按钮：未关注为 md-filled-button「关注」，已关注为 md-outlined-button「已关注」（tooltip/aria-label 为取消关注），40px 既有控件密度。公开关注，点击已关注直接取消；成功后回写 is_followed 并 Snackbar 提示，失败保持原状态。提交中禁用、防重并 aria-busy；未知状态禁用并提示刷新，本人资料不显示关注自己。按钮与网页入口为 8px 间距动作组，窄窗随资料区落行。账号切换或作者对象变化后忽略旧请求回显，刷新不与关注操作并发，不重载作品列表。 作者资料响应新增可选 is_followed，映射 Pixiv isFollowed；缺失不推断为未关注。
+
 列表页按「返回与分区标题 + 右侧操作 → 分区导航 → 本页筛选 → 内容」组织。首页/发现、关注、我的分别以核心分区为标题，避免重复当前导航名称；频道保留具体标题。二级导航位于各列表页内，沿内容左边缘对齐，用原生路由链接胶囊标明当前页，发现的频道入口以细分隔线分组；详情不额外堆叠分区导航，侧栏仍继承来路。导航组间 16px，导航到下一区域 24px；页内筛选采用按内容定宽的 Material tabs，禁止均分整页宽度。关注类型与范围并排、窄窗自然换行。下载由父页面提供唯一标题和新建入口，下方为按内容定宽的任务/历史页签；任务类型筛选与批量管理左右分组，窄窗换行，清理完成任务并入管理组。
 
 收藏标签从左侧固定栏改为横向换行工具带，按内容占位、最多三行后内部滚动；全部/未分类/标签计数、筛选契约、刷新与取消收藏行为保持不变，作品网格使用全宽。
@@ -625,7 +627,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   端点与响应结构的契约事实源为 `docs/PIXIV-API.md`（`docs/research/pixiv-browse-api.md`
   为 2026-10-01 调研证据档案，保留当日字段细节与失效端点勘误）。
   唯一例外是首页 street 流（POST，需 csrf token，见 ADR 0012 §3）。
-- **IPC 契约**：浏览相关 23 个命令（浏览端点 20 + 浏览访问历史 3，§7）。浏览端点返回体统一
+- **IPC 契约**：浏览相关 24 个命令（浏览端点 21 + 浏览访问历史 3，§7）。浏览端点返回体统一
   `BrowseWorkItem` 卡片结构（id/kind/title/author/cover/page_count/x_restrict/tags/series…），
   浏览访问历史返回 `browse_history_list` 的分页行（§7）；前端契约类型与
   mock 层在 `frontend/src/api/browse.ts`（非 Tauri 环境返回确定性样例数据，供浏览器
@@ -761,7 +763,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   浏览历史 / 排行榜 / 系列分集 / 小说阅读器）统一收敛到 `components/common/AppPagination`
   （历史、任务、浏览历史为 default 变体，排行榜走未知总页数模式，系列与阅读器为
   `variant="reader"`）；游标 / 无限滚动调用点不使用该组件。
-- **V1 限制**：只读（无点赞/收藏/关注）；ugoira 显示封面帧；小说内嵌图中
+- **V1 限制**：浏览支持作品收藏与作者关注（ADR 0016）；无点赞/发评论；ugoira 显示封面帧；小说内嵌图中
   `[pixivimage:illustId]` 插图引用（现行 pixiv 编辑器已不产出，实测见
   `docs/research/pixiv-browse-api.md` §7.2）与未收录 id 显示占位块，`[uploadedimage:]`
   正常出图；评论只在详情页面板内按需加载（只读，无评论/回复发布）。
@@ -809,6 +811,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_ranking(kind, mode, page, date)` | 排行榜：illust/manga/ugoira 走 ranking.php?format=json，novel 走 /ajax/ranking/novel（每页 50，含 prev/next_date） |
 | `browse_work_detail(kind, id)` | 作品详情：illust+pages+ugoira_meta / novel 全文（含 series 导航 + 正文内嵌图索引 `embedded_images`） |
 | `browse_related(kind, id, limit)` | 相关推荐一次性池（recommend/init，page 参数无效） |
+| `browse_user_follow(id, followed)` | 公开关注/取消关注，返回 `{ is_followed: boolean }`；正整数 ID 校验后走登录守卫、CSRF 和既有限速 |
 | `browse_user_profile(id)` | 作者资料（/ajax/user/{id}?full=1） |
 | `browse_user_works(id, kind, page)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量 |
 | `browse_novel_series(id, last_order)` | 系列元数据 + 目录（last_order 游标） |
@@ -1012,6 +1015,8 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 | 0012 | 浏览模式：自有 UI 代理 pixiv 只读接口（内嵌浏览器保留） | [adr/0012-browse-mode-own-ui.md](adr/0012-browse-mode-own-ui.md) |
 | 0013 | 移除内嵌 Pixiv 浏览器（/pixiv），自有浏览 UI 为唯一入口 | [adr/0013-remove-embedded-browser.md](adr/0013-remove-embedded-browser.md) |
 | 0014 | 浏览访问历史持久化（SQLite 表 + 3 个 IPC 命令） | [adr/0014-browse-history-persistence.md](adr/0014-browse-history-persistence.md) |
+| 0015 | 核心导航与非模态下载工作区 | [adr/0015-navigation-download-workspace.md](adr/0015-navigation-download-workspace.md) |
+| 0016 | 作者关注与浏览写操作边界 | [adr/0016-author-follow.md](adr/0016-author-follow.md) |
 
 ADR 按需追加，不强制一次性写完。
 

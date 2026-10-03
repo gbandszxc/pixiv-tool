@@ -20,11 +20,12 @@
 //! 绝不读写真实 `default` 凭据条目（Windows 无授权弹窗）。
 
 use pixiv_tool_lib::commands::browse_api_cmds::{
-    NOT_LOGGED_IN, browse_bookmark_add_impl, browse_bookmark_list_impl, browse_bookmark_remove_impl,
-    browse_bookmark_tags_impl, browse_channel_impl, browse_comment_replies_impl,
-    browse_discover_impl, browse_follow_latest_impl, browse_home_feed_impl,
-    browse_illust_series_impl, browse_novel_series_impl, browse_ranking_impl, browse_related_impl,
-    browse_search_impl, browse_user_profile_impl, browse_user_works_impl, browse_watchlist_impl,
+    NOT_LOGGED_IN, browse_bookmark_add_impl, browse_bookmark_list_impl,
+    browse_bookmark_remove_impl, browse_bookmark_tags_impl, browse_channel_impl,
+    browse_comment_replies_impl, browse_discover_impl, browse_follow_latest_impl,
+    browse_home_feed_impl, browse_illust_series_impl, browse_novel_series_impl,
+    browse_ranking_impl, browse_related_impl, browse_search_impl, browse_user_follow_impl,
+    browse_user_profile_impl, browse_user_works_impl, browse_watchlist_impl,
     browse_work_comments_impl, browse_work_counts_impl, browse_work_detail_impl, build_browse_api,
 };
 use pixiv_tool_lib::cookies::CookieStore;
@@ -54,6 +55,27 @@ fn temp_state(tag: &str) -> (AppState, std::path::PathBuf) {
 
 fn cleanup(dir: &std::path::Path) {
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn user_follow_validates_before_login_and_requires_login() {
+    let (state, dir) = temp_state("follow");
+    for followed in [true, false] {
+        assert_eq!(
+            browse_user_follow_impl(&state, 42, followed)
+                .await
+                .unwrap_err(),
+            NOT_LOGGED_IN
+        );
+        for id in [0, -1] {
+            let error = browse_user_follow_impl(&state, id, followed)
+                .await
+                .unwrap_err();
+            assert_ne!(error, NOT_LOGGED_IN);
+            assert!(error.contains("用户"));
+        }
+    }
+    cleanup(&dir);
 }
 
 /// ①+③：未登录下全部 13 个命令（合法参数）统一被登录守卫拦截，文案逐字一致。

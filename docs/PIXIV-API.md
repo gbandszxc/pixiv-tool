@@ -297,6 +297,16 @@
 - `image_proxy.rs`：`sha256_matches_official_vectors`、`percent_decode_rules`、`whitelist_accepts_pximg_subdomains`、`whitelist_rejects_everything_else`、`path_to_pximg_url_handles_encoded_and_raw`、`url_extension_rules`、`cache_key_is_hex_plus_extension`、`mime_table_covers_common_types`、`trim_cache_deletes_oldest_first_and_skips_keep`、`trim_cache_noop_under_limit`、`handle_rejects_non_whitelist_with_403`、`handle_serves_from_cache_without_network`、`image_response_sets_immutable_long_cache`、`should_retry_skips_terminal_errors`、`failure_mapping_splits_not_found_from_other`、`coalesce_shares_one_fetch_among_concurrent_callers`、`coalesce_propagates_failure_to_waiters`、`coalesce_different_urls_are_independent`、`coalesce_refetches_after_completion`、`coalesce_cleans_up_when_caller_cancelled`、`coalesce_keeps_entry_when_initializer_cancelled_with_waiters`
 - 命令层离线冒烟：`tests/pixiv_api/offline_guard.rs`（登录守卫、参数白名单，不发网络）。
 
+
+### 4.10 作者关注 / 取消关注（2026-10-03 接入）
+
+作者资料 `/ajax/user/{id}?full=1` 消费布尔 `isFollowed` → 可选 `is_followed`；缺失保留未知，前端禁用写操作。新增 IPC `browse_user_follow(id, followed)`，正整数 ID 和登录守卫前置；公开关注，返回 `{is_followed}`。复用 `web_csrf_token` 与 `PixivClient::post_form` 的 Cookie、并发、限速与重试，不增凭据落点。
+
+- 关注：POST `/bookmark_add.php`，form `mode=add&type=user&user_id={id}&tag=&restrict=0&format=json`，`x-csrf-token`；成功原始 JSON 为 `[]`。内部 API 的 restrict=1 仅供获准在线往返用例私密关注取样。
+- 取消：POST `/rpc_group_setting.php`，form `mode=del&type=bookuser&id={id}`，同 CSRF 头；成功响应 `type=bookuser`。
+- `error` 信标复用既有解析；非 JSON、意外对象、非空错误数组均失败，不因 HTTP 200 就回显成功。Auth 错误失效 CSRF 缓存。
+- 来源：[Pixiv Previewer 原始客户端实现](https://greasyfork.org/en/scripts/30766-pixiv-previewer/code) 的作者关注回调（bookmark_add.php / rpc_group_setting.php）。本次未执行真实账号写操作；在线契约复核用例为 live_user_follow_roundtrip（ignore + PIXIV_LIVE_WRITE=1，取未关注非本人作者，私密关注后先尝试取消恢复再断言）。离线 user_follow_form_and_success_signals、user_follow_validates_before_login_and_requires_login；前端 /tests/author-follow.html。
+
 ## 5. 图片 CDN 与 Referer
 
 ### 5.1 URL 模式（只读接口给出的形态，**绝不自行构造** `{datePath}` 与文件名）
@@ -406,6 +416,7 @@
 | `/ajax/user/self` | `fetch_session_probe` csrf.rs:169；`self_user_id` browse_api.rs:427；`get_user_self` api.rs:312 | `live_read.rs::live_self_and_csrf` | `parse_self_success` / `self_uid_cache_roundtrip` | 登录流程；browse_api.rs:2155,2175 |
 | `https://www.pixiv.net/`（`__NEXT_DATA__`） | `fetch_web_csrf_token` csrf.rs:224；`parse_next_data_token` :200 | `live_read.rs::live_home_street`（+ `live_write.rs` 两用例） | `parse_next_data_token_string_wrapped_state` | street / bookmark 写操作前置 |
 | `i.pximg.net` 图片 | `handle_image_request` image_proxy.rs:539；`download_bytes` client.rs:422 | `live_read.rs::live_image_download_with_referer` | `whitelist_accepts_pximg_subdomains` / `handle_serves_from_cache_without_network` | `pixiv-img` 协议（全前端 `<img>`） |
+| `/bookmark_add.php` / `/rpc_group_setting.php` | `set_user_follow` / `user_follow_request` / `validate_user_follow_response` | `live_write.rs::live_user_follow_roundtrip`（双重开关） | `user_follow_form_and_success_signals` / `offline_guard::user_follow_validates_before_login_and_requires_login` | `BrowseAuthorView.vue` / `browseUserFollow` |
 
 ### 8.2 pixiv 侧变了怎么定位（5 步）
 

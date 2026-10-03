@@ -927,3 +927,7 @@ query 参数语义（均实测）：
 3. R-18 过滤沿用条目级 `x_restrict`（系列头无 xRestrict；与 §12 watchlist 口径一致）。
 4. 入口跳转映射：watchlist `kind="manga"` 卡 → 本页 `kind="illust"`；作品详情 `seriesNavData`（seriesType "manga"）→ 本页。官方分集直达链接 = `/artworks/{workId}`，应用内映射 `browse_work_detail(workId)`。
 5. 未验证项（如实记录）：匿名访问（本会话全程登录）；`isSetCover=true` 时封面字段形状；纯插画（illustType=0）系列样本（三组关键词搜索均未命中系列导航条目；结构上与 §2/§11 的 thumbnails.illust 索引表同构，无独立端点）。
+
+## 作者关注接入补充（2026-10-03）
+
+资料响应 isFollowed 为布尔状态，现映射至作者页 is_followed。关注/取消为旧式表单 POST，参数与响应成功信标见 PIXIV-API §4.10；证据为 [Pixiv Previewer 的原始实现](https://greasyfork.org/en/scripts/30766-pixiv-previewer/code)，本轮未进行真实账号写实测，保留带显式开关的在线往返用例用于契约复核。作者关注为 ADR 0016 授权的浏览写操作。

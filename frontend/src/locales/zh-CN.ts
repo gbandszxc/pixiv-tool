@@ -430,6 +430,13 @@ export default {
       exitFullscreen: "退出全屏",
     },
     author: {
+      follow: "关注",
+      followed: "已关注",
+      unfollow: "取消关注",
+      followUnknown: "无法读取关注状态，请刷新作者资料",
+      followSuccess: "已关注该作者",
+      unfollowSuccess: "已取消关注",
+      followFailed: "关注操作失败，请重试",
       followingCount: "关注 {n}",
       myPixivCount: "好P友 {n}",
       expandBio: "展开",

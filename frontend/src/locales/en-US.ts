@@ -430,6 +430,13 @@ export default {
       exitFullscreen: "Exit fullscreen",
     },
     author: {
+      follow: "Follow",
+      followed: "Following",
+      unfollow: "Unfollow",
+      followUnknown: "Follow status unavailable. Refresh the profile.",
+      followSuccess: "Author followed",
+      unfollowSuccess: "Author unfollowed",
+      followFailed: "Unable to update follow status. Try again.",
       followingCount: "Following {n}",
       myPixivCount: "My pixiv {n}",
       expandBio: "Show more",

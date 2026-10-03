@@ -18,6 +18,55 @@ fn write_enabled() -> bool {
     matches!(std::env::var("PIXIV_LIVE_WRITE").as_deref(), Ok("1"))
 }
 
+/// 仅在双重开关授权后私密关注未关注作者，并无条件尝试恢复。
+#[tokio::test]
+#[ignore = "需要真实登录态与 PIXIV_LIVE_WRITE=1"]
+async fn live_user_follow_roundtrip() {
+    if !write_enabled() {
+        skip_note("live_user_follow_roundtrip");
+        return;
+    }
+    let api = common::live_api();
+    let uid = common::live_uid().await;
+    let ranking = api
+        .get_ranking("illust", "daily", 1, None)
+        .await
+        .expect("日榜取样");
+    let mut target = None;
+    for item in ranking["items"]
+        .as_array()
+        .expect("榜单条目")
+        .iter()
+        .take(20)
+    {
+        let id = item["author_id"].as_i64().unwrap_or(0);
+        if id <= 0 || id == uid {
+            continue;
+        }
+        let profile = api.get_user_profile(id).await.expect("作者状态");
+        if profile["is_followed"].as_bool() == Some(false) {
+            target = Some(id);
+            break;
+        }
+    }
+    let id = target.expect("需要未关注且非本人的候选作者");
+    let added = api.set_user_follow(id, true, 1).await;
+    let after_add = api.get_user_profile(id).await;
+    // 断言前清理，避免中途失败留下关注关系。
+    let removed = api.set_user_follow(id, false, 0).await;
+    let after_remove = api.get_user_profile(id).await;
+    assert!(added.is_ok(), "私密关注请求失败");
+    assert_eq!(
+        after_add.expect("关注后资料")["is_followed"].as_bool(),
+        Some(true)
+    );
+    assert!(removed.is_ok(), "取消关注请求失败，请人工检查关注关系");
+    assert_eq!(
+        after_remove.expect("取消后资料")["is_followed"].as_bool(),
+        Some(false)
+    );
+}
+
 fn skip_note(name: &str) {
     eprintln!(
         "跳过 {name}：写操作会改动真实收藏；设置 PIXIV_LIVE_WRITE=1 后重跑 ./dev.ps1 test-live"

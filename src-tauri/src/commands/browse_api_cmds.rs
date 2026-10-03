@@ -473,6 +473,27 @@ pub async fn browse_user_profile(state: State<'_, AppState>, id: i64) -> Result<
     browse_user_profile_impl(&state, id).await
 }
 
+#[tauri::command]
+pub async fn browse_user_follow(
+    state: State<'_, AppState>,
+    id: i64,
+    followed: bool,
+) -> Result<Value, String> {
+    browse_user_follow_impl(&state, id, followed).await
+}
+
+pub async fn browse_user_follow_impl(
+    state: &AppState,
+    id: i64,
+    followed: bool,
+) -> Result<Value, String> {
+    validate_id(id, "用户")?;
+    build_browse_api(state)?
+        .set_user_follow(id, followed, 0)
+        .await
+        .map_err(|err| err.to_string())
+}
+
 pub async fn browse_user_profile_impl(state: &AppState, id: i64) -> Result<Value, String> {
     validate_id(id, "用户")?;
     build_browse_api(state)?

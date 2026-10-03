@@ -961,6 +961,11 @@ async fn live_user_profile() {
         .get_json(&format!("/ajax/user/{author_id}?full=1&lang=zh"))
         .await
         .expect("原始用户响应应成功");
+    assert_eq!(
+        profile["is_followed"].as_bool(),
+        raw["isFollowed"].as_bool(),
+        "关注状态映射"
+    );
     assert!(
         !common::keys(&raw).iter().any(|k| *k == "account"),
         "pixiv 已新增 account 键 → 应回到契约里补 pixiv_id 映射，实测键: {:?}",
