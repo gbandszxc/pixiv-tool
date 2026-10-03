@@ -183,6 +183,8 @@ export interface BrowseNovelDetail {
   detail_kind: "novel";
   item: BrowseWorkItem & {
     description?: string;
+    like_count?: number;
+    view_count?: number;
     bookmark_count?: number;
     reading_time?: number;
   };
@@ -1009,6 +1011,8 @@ async function mockNovelDetail(id: number): Promise<BrowseNovelDetail> {
       ...item,
       description: "这是 mock 详情描述，用于视觉验收。",
       bookmark_count: 20 + Math.floor(rand() * 2000),
+      like_count: 10 + Math.floor(rand() * 1000),
+      view_count: 1000 + Math.floor(rand() * 90000),
       reading_time: 3 + Math.floor(rand() * 25),
     },
     content:

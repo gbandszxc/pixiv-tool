@@ -585,7 +585,9 @@ fn timestamp_field(v: &Value, key: &str) -> Option<String> {
 /// 对象形字段名兼容 `name`（street 缩略图 `{name, translatedName}`）与
 /// `tag`（/ajax/illust/{id} 的 `{tag, locked, ...}`）。
 fn parse_tags(value: Option<&Value>) -> Option<Vec<String>> {
-    let arr = value?.as_array()?;
+    let value = value?;
+    // 详情为 {tags: [{tag, ...}]}，列表/street 仍是直接数组。
+    let arr = value.as_array().or_else(|| value.get("tags")?.as_array())?;
     let tags: Vec<String> = arr
         .iter()
         .filter_map(|t| match t {
@@ -1382,6 +1384,8 @@ fn parse_novel_detail(body: &Value) -> (BrowseWorkItem, Option<BrowseSeriesRef>)
         create_date: str_field(body, "createDate"),
         description: str_field(body, "description"),
         text_length: body.get("characterCount").and_then(as_i64_loose),
+        like_count: body.get("likeCount").and_then(as_i64_loose),
+        view_count: body.get("viewCount").and_then(as_i64_loose),
         bookmark_count: body.get("bookmarkCount").and_then(as_i64_loose),
         reading_time: body.get("readingTime").and_then(as_i64_loose),
         series_id: body
@@ -3297,6 +3301,37 @@ mod tests {
     }
 
     // ---- 详情 ----
+
+    #[test]
+    fn parse_detail_metadata_nested_tags_and_counts() {
+        for kind in ["illust", "manga", "novel"] {
+            let body = json!({
+                "id": "42", "illustId": "42", "illustType": if kind == "manga" { 1 } else { 0 },
+                "tags": {"authorId": "9", "tags": [{"tag": "BanG Dream!"}, {"tag": "中文"}]},
+                "illustComment": "第一行<br>第二行", "description": "第一行<br>第二行",
+                "likeCount": 0, "bookmarkCount": 1234, "viewCount": 56789
+            });
+            let (item, _) = if kind == "novel" {
+                parse_novel_detail(&body)
+            } else {
+                parse_illust_detail(&body)
+            };
+            assert_eq!(
+                item.tags,
+                Some(vec!["BanG Dream!".into(), "中文".into()]),
+                "{kind} 详情标签嵌套结构"
+            );
+            assert_eq!(item.like_count, Some(0), "{kind} 点赞零值必须保留");
+            assert_eq!(item.bookmark_count, Some(1234));
+            assert_eq!(item.view_count, Some(56789));
+            assert_eq!(item.description.as_deref(), Some("第一行<br>第二行"));
+        }
+        assert_eq!(
+            parse_tags(Some(&json!(["旧数组标签", {"name": "street"}]))),
+            Some(vec!["旧数组标签".into(), "street".into()])
+        );
+        assert!(parse_tags(Some(&json!({"tags": []}))).is_none());
+    }
 
     #[test]
     fn parse_illust_detail_fields() {

@@ -183,9 +183,9 @@
 
 ### 4.3 作品详情（插画 / 漫画 / 动图 / 小说）
 
-**GET `/ajax/illust/{id}`** · 实现 `browse_api.rs:1904`（`get_work_detail_illust`）；抓取 `api.rs:282`（`get_illust`）· 在线 `live_read.rs::live_illust_detail_pages_ugoira` · 离线 `parse_illust_detail_fields`、`parse_illust_full_shape`、`parse_illust_anonymous_masked_meta`
+**GET `/ajax/illust/{id}`** · 实现 `browse_api.rs:1904`（`get_work_detail_illust`）；抓取 `api.rs:282`（`get_illust`）· 在线 `live_read.rs::live_illust_detail_pages_ugoira` · 离线 `parse_detail_metadata_nested_tags_and_counts`、`parse_illust_detail_fields`、`parse_illust_full_shape`、`parse_illust_anonymous_masked_meta`
 - 参数：路径 id（正整数，命令层 `validate_id` browse_api_cmds.rs:59）。pixiv 匿名可读，`bookmarkData` 匿名恒 null。
-- 浏览消费字段：`illustId, illustType, title, userId, userName, urls.regular, pageCount, xRestrict, tags[].tag, createDate, illustComment, width, height, viewCount, likeCount, bookmarkCount, bookmarkData, seriesNavData.{seriesId,title,orderNumber}`。
+- 浏览消费字段：`illustId, illustType, title, userId, userName, urls.regular, pageCount, xRestrict, tags.tags[].tag（详情为嵌套对象，列表仍兼容直接数组）, createDate, illustComment, width, height, viewCount, likeCount, bookmarkCount, bookmarkData, seriesNavData.{seriesId,title,orderNumber}`。
 - 抓取消费字段：`urls.original`（p0 原图）、`meta.pages[].image_urls.original`（回退条目 `original`；匿名掩码时为空，由 `core/illust_crawler.rs:22` 的 `collect_page_urls` 从 p0 直链推导 `_p0 → _pN`）、`illustType, pageCount, userId, userName, title`。
 - 分页：无。
 
@@ -197,8 +197,8 @@
 - 浏览消费字段：`src`、`frames[].{file,delay}`；抓取消费字段：`originalSrc`（优先）、`zip_urls.original`（兜底），两者皆空 → Client 错误。
 - 分页：无。注意路径是 `ugoira_meta`，不是 `/ugoira`（见 §6）。
 
-**GET `/ajax/novel/{id}`** · 实现 `browse_api.rs:1936`（`get_work_detail_novel`）；抓取 `api.rs:248` · 在线 `live_read.rs::live_novel_detail`、`live_read.rs::live_novel_embedded_images` · 离线 `parse_novel_detail_fields`、`parse_novel_full_shape`、`parse_novel_missing_series_and_defaults`、`parse_novel_embedded_images_prefers_display_tier`
-- 浏览消费字段：`id, title, userId, userName, coverUrl, pageCount, xRestrict, tags, createDate, description, characterCount, bookmarkCount, readingTime, content, bookmarkData, seriesNavData.{seriesId,title,orderNumber,next.id}`。
+**GET `/ajax/novel/{id}`** · 实现 `browse_api.rs:1936`（`get_work_detail_novel`）；抓取 `api.rs:248` · 在线 `live_read.rs::live_novel_detail`、`live_read.rs::live_novel_embedded_images` · 离线 `parse_detail_metadata_nested_tags_and_counts`、`parse_novel_detail_fields`、`parse_novel_full_shape`、`parse_novel_missing_series_and_defaults`、`parse_novel_embedded_images_prefers_display_tier`
+- 浏览消费字段：`id, title, userId, userName, coverUrl, pageCount, xRestrict, tags.tags[].tag（原文）, createDate, description, characterCount, likeCount, bookmarkCount, viewCount, readingTime, content, bookmarkData, seriesNavData.{seriesId,title,orderNumber,next.id}`。
 - 抓取消费字段：`title, userId, userName, pageCount, updateDate, content, seriesNavData.{seriesId,title}`。
 - 分页：无；全文一次返回，多页由 `content` 内 `[newpage]` 标记，前端切分。
 - **正文内嵌图**：`textEmbeddedImages` 为 `图片 id → {novelImageId, sl, urls}` 索引表（键即正文 `[uploadedimage:id]` 的 id）；`urls` 有 `1200x1200 / 128x128 / 240mw / 480mw / original` 五档，浏览取 `1200x1200`（缺失按 `original → 480mw → 240mw → 128x128` 回退），组装为契约 `embedded_images`（`id → URL`），前端经 `pixiv-img` 代理显示。实测形状与样本见 research §7.2。现行编辑器只产出 `[uploadedimage:]`；`[pixivimage:illustId]`（含 `-N` 页号）需另查 `/ajax/illust/{id}` 或 `/pages`，V1 不解析、前端走占位块。
@@ -386,10 +386,10 @@
 | `/ajax/illust/{id}` · `/ajax/novel/{id}`（计数批量） | `get_work_counts` browse_api.rs:2086；`parse_work_counts` :693；命令 `browse_work_counts_impl` browse_api_cmds.rs:368 | —（沿用详情在线用例 `live_illust_detail_pages_ugoira` / `live_novel_detail`） | `parse_work_counts_reads_three_fields` / `offline_guard::not_logged_in_blocks_all_commands_with_login_error` / `invalid_params_rejected_before_login_guard` | browse.ts:471（`browseWorkCounts`） |
 | `/ranking.php?format=json` | `get_ranking` browse_api.rs:1870；`parse_ranking_illust` :1027 | `live_read.rs::live_ranking_illust_and_novel` | `parse_ranking_illust_next_semantics` / `parse_ranking_dates_normalized_to_yyyymmdd` | browse.ts:401 |
 | `/ajax/ranking/novel` | `get_ranking` browse_api.rs:1870；`parse_ranking_novel` :1088 | `live_read.rs::live_ranking_illust_and_novel` | `parse_ranking_novel_shape_and_last_page` / `parse_ranking_dates_normalized_to_yyyymmdd` | browse.ts:401 |
-| `/ajax/illust/{id}` | `get_work_detail_illust` browse_api.rs:1904；`get_illust` api.rs:282 | `live_read.rs::live_illust_detail_pages_ugoira` | `parse_illust_detail_fields` / `parse_illust_full_shape` | browse.ts:412；core/sources.rs:106、core/crawler.rs:475,615 |
+| `/ajax/illust/{id}` | `get_work_detail_illust` browse_api.rs:1904；`get_illust` api.rs:282 | `live_read.rs::live_illust_detail_pages_ugoira` / `live_detail_metadata_illust_manga_novel` | `parse_detail_metadata_nested_tags_and_counts` / `parse_illust_detail_fields` / `parse_illust_full_shape` | browse.ts:412；core/sources.rs:106、core/crawler.rs:475,615 |
 | `/ajax/illust/{id}/pages` | browse_api.rs:1908；`parse_illust_pages` :1186 | `live_read.rs::live_illust_detail_pages_ugoira` | `parse_illust_pages_urls_and_fallback` | browse.ts:412 |
 | `/ajax/illust/{id}/ugoira_meta` | browse_api.rs:1912；`parse_ugoira` :1215；`get_ugoira_meta` api.rs:301 | `live_read.rs::live_illust_detail_pages_ugoira` | `parse_ugoira_frames_and_missing_src` / `parse_ugoira_meta_priority_and_error` | core/crawler.rs:633 |
-| `/ajax/novel/{id}` | `get_work_detail_novel` browse_api.rs:1936；`get_novel` api.rs:248 | `live_read.rs::live_novel_detail` | `parse_novel_detail_fields` / `parse_novel_full_shape` | browse.ts:412；core/crawler.rs:370 |
+| `/ajax/novel/{id}` | `get_work_detail_novel` browse_api.rs:1936；`get_novel` api.rs:248 | `live_read.rs::live_novel_detail` / `live_detail_metadata_illust_manga_novel` | `parse_detail_metadata_nested_tags_and_counts` / `parse_novel_detail_fields` / `parse_novel_full_shape` | browse.ts:412；core/crawler.rs:370 |
 | `/ajax/illust / novel/{id}/recommend/init` | `get_related` browse_api.rs:1955；`parse_related` :1275 | `live_read.rs::live_related_illust_novel` | `parse_related_accepts_illusts_and_novels_keys` | browse.ts:421 |
 | `/ajax/user/{id}?full=1` | `get_user_profile` browse_api.rs:1977；`parse_user_profile` :1291 | `live_read.rs::live_user_profile` | `parse_user_profile_fields` | browse.ts:431 |
 | `/ajax/user/{id}/profile/all` | browse_api.rs:2004；`get_user_profile_all` api.rs:271 | `live_read.rs::live_user_works_illust_novel` | `parse_profile_all_mixed_shapes` | browse.ts:437；core/sources.rs:55,86,99 |
@@ -424,3 +424,4 @@
 | 2026-10-02 | 关闭评论区语义：关闭评论的作品 roots 恒 400（body 仅泛化「不正确的请求。」、无专属标志；详情亦无关闭标志字段）；`get_work_comments` 捕获 400（新增 `PixivError::is_bad_request`）映射为 `{"comments":[],"disabled":true}` 空信封而非报错，前端 `CommentsSection` 显示「作者已关闭评论区」终态；评论端点两行行号按当前工作树重校 | 在线探针实测（illust 150326647）；离线 `comments_closed_envelope_and_bad_request_gate` + 在线 `live_read.rs::live_comments_closed_work` |
 | 2026-10-02 | 搜索列表契约补充：**列表项不含点赞/收藏/浏览计数**（artworks 全无、novels 仅 `bookmarkCount`）、**每页固定 60 条**（`limit` 等参数无效）、`last_page` 原样回传；新增 `browse_work_counts`（详情端点逐项补取三项计数，ids ≤ 60、单项失败跳过、全局限速排队）供搜索页「本页排序」；搜索相关行号按当前工作树重校 | 浏览器实测（pixiv 登录态：搜索响应字段、`limit`/`per_page` 无效、官方搜索页卡片收藏数逐项请求详情证实）+ 离线 `parse_work_counts_reads_three_fields`、`offline_guard` 计数批量用例 |
 | 2026-10-03 | 频道 R-18 使用独立服务端 mode=r18；修复普通快照本地过滤导致推荐/排行/标签为空，频道网格覆盖全局档并拒收迟到响应；榜单与标签导航继承内容档 | Chrome 同账号接口对照；在线 live_channel_r18_recommend_ranking_and_tags；离线路径/参数守卫；前端 /tests/channel.html |
+| 2026-10-03 | 三类详情标签修正为 tags.tags[].tag（兼容列表数组）；小说补 likeCount/viewCount、简介与三项计数展示；描述转纯文本保留换行，标签原生链接按类型精确搜索 | Chrome 三类详情实测；离线 parse_detail_metadata_nested_tags_and_counts；在线 live_detail_metadata_illust_manga_novel；前端 /tests/detail.html |

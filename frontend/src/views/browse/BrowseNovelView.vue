@@ -31,6 +31,7 @@ import { notify } from "../../ui/notify";
 import { useSettingsStore } from "../../stores/settings";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
+import { descriptionText } from "../../utils/descriptionText";
 
 const props = defineProps<{ kind: "illust" | "manga" | "novel"; id: number }>();
 
@@ -91,6 +92,7 @@ const bookmarkState = ref<WorkBookmarkState | null>(null);
 const readerScrollEl = ref<HTMLElement | null>(null);
 
 const item = computed(() => detail.value?.item ?? null);
+const plainDescription = computed(() => descriptionText(item.value?.description));
 const content = computed(() => detail.value?.content ?? "");
 const hasContent = computed(() => content.value.trim().length > 0);
 /** 内嵌图 id → URL（详情响应 embedded_images）；正文渲染时按 id 取图 */
@@ -103,15 +105,17 @@ const restrictedLabel = computed(() =>
   item.value?.x_restrict === 2 ? t("common.browseR18G") : t("common.browseR18")
 );
 
-/** 元信息：字数 / 阅读时长 / 收藏数（reading_time 契约无单位，按分钟展示）。 */
+/** 元信息：字数 / 阅读时长 / 点赞、收藏、浏览数（缺失计数不冒充零）。 */
 const metaText = computed(() => {
   const it = item.value;
   if (!it) return "";
   const parts: string[] = [];
   if (it.text_length != null) parts.push(t("browse.novel.words", { count: it.text_length.toLocaleString() }));
   if (it.reading_time != null) parts.push(t("browse.novel.readingTime", { count: it.reading_time }));
-  if (it.bookmark_count != null)
-    parts.push(t("browse.novel.bookmarks", { count: it.bookmark_count.toLocaleString() }));
+  for (const [field, label] of [["like_count", "likes"], ["bookmark_count", "bookmarks"], ["view_count", "views"]] as const) {
+    const count = it[field];
+    if (count != null) parts.push(`${t(`browse.work.${label}`)} ${count.toLocaleString()}`);
+  }
   return parts.join(" · ");
 });
 
@@ -305,10 +309,6 @@ function goRelated(target: BrowseWorkItem): void {
   router.push(`/browse/work/novel/${target.id}`);
 }
 
-function searchTag(tag: string): void {
-  router.push({ path: "/browse/search", query: { word: tag } });
-}
-
 /** 用系统默认浏览器打开 pixiv 原页。 */
 function openInPixiv(): void {
   void openInBrowser(pixivWorkUrl("novel", props.id)).catch(() =>
@@ -414,18 +414,18 @@ function openInPixiv(): void {
             {{ t("browse.novel.seriesLabel", { title: series.title, order: series.order }) }}
           </router-link>
           <div v-if="item.tags?.length" class="tag-row">
-            <button
+            <router-link
               v-for="tag in item.tags"
               :key="tag"
-              type="button"
+              :to="{ path: '/browse/search', query: { word: tag, kind: 'novel', s_mode: 's_tag_full' } }"
               class="tag-chip"
               :title="t('common.search')"
-              @click="searchTag(tag)"
             >
               {{ tag }}
-            </button>
+            </router-link>
           </div>
           <p v-if="metaText" class="work-meta">{{ metaText }}</p>
+          <p v-if="plainDescription" class="description">{{ plainDescription }}</p>
         </div>
 
         <!-- 正文（NovelContent 分页渲染，内嵌图经 images 取 URL）；空内容容错 -->
@@ -860,6 +860,8 @@ function openInPixiv(): void {
 }
 
 .tag-chip {
+  text-decoration: none;
+  overflow-wrap: anywhere;
   padding: 2px var(--space-sm);
   border: 0;
   border-radius: 999px;
@@ -874,6 +876,19 @@ function openInPixiv(): void {
 .tag-chip:hover {
   background: var(--md-sys-color-primary-container);
   color: var(--md-sys-color-on-primary-container);
+}
+
+.tag-chip:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.description {
+  margin: var(--space-md) 0 0;
+  text-align: start;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .work-meta {

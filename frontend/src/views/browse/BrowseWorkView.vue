@@ -37,6 +37,7 @@ import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
+import { descriptionText } from "../../utils/descriptionText";
 import type { WorkBookmarkState } from "../../api/browse";
 
 const props = defineProps<{
@@ -89,13 +90,8 @@ const restrictLabel = computed(() =>
   item.value?.x_restrict === 2 ? t("common.browseR18G") : t("common.browseR18")
 );
 
-/** 描述 HTML 剥标签后纯文本展示（DOMParser 惰性文档：不执行脚本、不加载图片，绝不 v-html） */
-const plainDescription = computed(() => {
-  const html = item.value?.description;
-  if (!html) return "";
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  return (doc.body.textContent ?? "").trim();
-});
+/** 描述按纯文本展示并保留换行，绝不 v-html。 */
+const plainDescription = computed(() => descriptionText(item.value?.description));
 
 const dateText = computed(() => item.value?.create_date?.slice(0, 10) ?? "");
 
@@ -194,10 +190,6 @@ function openRelated(target: BrowseWorkItem): void {
 function openAuthor(): void {
   const authorId = item.value?.author_id;
   if (authorId) void router.push(`/browse/user/${authorId}`);
-}
-
-function openTag(tag: string): void {
-  void router.push({ path: "/browse/search", query: { word: tag } });
 }
 
 function openSeries(): void {
@@ -353,7 +345,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
           <!-- 标签 chips -->
           <div v-if="item.tags?.length" class="tag-row">
-            <button v-for="tag in item.tags" :key="tag" class="tag-chip" type="button" @click="openTag(tag)">{{ tag }}</button>
+            <router-link v-for="tag in item.tags" :key="tag" class="tag-chip" :to="{ path: '/browse/search', query: { word: tag, kind: props.kind, s_mode: 's_tag_full' } }" :title="t('common.search')">{{ tag }}</router-link>
           </div>
 
           <!-- 计数行 -->
@@ -574,6 +566,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 }
 
 .tag-chip {
+  text-decoration: none;
+  overflow-wrap: anywhere;
   padding: 3px 12px;
   border: none;
   border-radius: 999px;
@@ -597,6 +591,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 
 .count-row {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-lg);
 }
 

@@ -576,6 +576,34 @@ async fn live_ranking_illust_and_novel() {
 // 9. 详情（插画 / 漫画 / 动图）
 // ----------------------------------------------------------------------
 
+/// 三类详情标签的真实 tags.tags 结构，以及三项计数回显契约。
+#[tokio::test]
+#[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
+async fn live_detail_metadata_illust_manga_novel() {
+    let api = common::live_api();
+    for kind in ["illust", "manga", "novel"] {
+        let (id, _) = ranking_first(kind).await;
+        let detail = if kind == "novel" {
+            api.get_work_detail_novel(id).await
+        } else {
+            api.get_work_detail_illust(id).await
+        }
+        .unwrap_or_else(|err| panic!("{kind} 详情失败: {err}"));
+        let item = &detail["item"];
+        for field in ["like_count", "bookmark_count", "view_count"] {
+            assert!(
+                item[field].as_i64().is_some_and(|count| count >= 0),
+                "{kind} 缺少 {field}"
+            );
+        }
+        assert!(
+            item["tags"].as_array().is_some_and(|tags| !tags.is_empty()
+                && tags.iter().all(|tag| tag.as_str().is_some_and(|text| !text.is_empty()))),
+            "{kind} 详情应解析 tags.tags 标签原文"
+        );
+    }
+}
+
 /// /ajax/illust/{id} + /pages + ugoira 的 /ugoira_meta：三种作品类型逐一验证。
 #[tokio::test]
 #[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
