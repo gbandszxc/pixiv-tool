@@ -436,10 +436,9 @@ fn merge_bible(locked: &StoryBible, mut incoming: StoryBible) -> Result<StoryBib
             .position(|old| old.source == term.source || old.aliases.contains(&term.source));
         if let Some(index) = index {
             let old = &mut merged.terms[index];
-            // 后页不得覆盖先前锁定译名。显式冲突失败，不能让译文悄悄漂移。
-            if old.translation != term.translation {
-                return Err("模型改写了锁定译名，请重试本页翻译".into());
-            }
+            // 既有译名只增不改：模型提出不同译名时保留既有译名（与文风冲突一致处理），
+            // 其余字段仍按同一条目合并。不在这里中断整页——锁定设定会一直留在本机，
+            // 中断后重试仍然是同一份设定，页永远译不出来。
             if !term.notes.is_empty() && !old.notes.contains(&term.notes) {
                 let notes = if term.notes.starts_with(&old.notes) {
                     term.notes
@@ -463,13 +462,11 @@ fn merge_bible(locked: &StoryBible, mut incoming: StoryBible) -> Result<StoryBib
             merged.terms.push(term);
         }
     }
+    // 同一名字被两个词条认领时保留先到者，丢掉后到词条的重复别名，同样不中断整页。
     let mut names = HashSet::new();
-    for term in &merged.terms {
-        for name in std::iter::once(&term.source).chain(term.aliases.iter()) {
-            if !names.insert(name) {
-                return Err("模型设定集的别名指代冲突，请重试".into());
-            }
-        }
+    for term in &mut merged.terms {
+        names.insert(term.source.clone());
+        term.aliases.retain(|alias| names.insert(alias.clone()));
     }
     if serde_json::to_vec(&merged).unwrap().len() > 160_000 {
         return Err("小说设定集已超过 160KB".into());
@@ -2025,7 +2022,7 @@ mod tests {
     }
 
     #[test]
-    fn locks_names_and_rejects_alias_conflicts() {
+    fn locks_existing_names_against_model_rewrites() {
         let old = StoryBible {
             style: "克制".into(),
             terms: vec![Term {
@@ -2036,6 +2033,7 @@ mod tests {
                 notes: "".into(),
             }],
         };
+        // 文风与既有译名一样只增不改：模型提出不同值保留既有值，别名与说明仍合并。
         let mut update = old.clone();
         update.style = "热烈".into();
         update.terms[0].aliases.push("少女".into());
@@ -2043,13 +2041,41 @@ mod tests {
         assert_eq!(merged.style, "克制");
         assert_eq!(merged.terms[0].aliases, vec!["少女"]);
         update.terms[0].translation = "艾莉丝".into();
-        assert!(merge_bible(&old, update).is_err());
+        let merged = merge_bible(&old, update).unwrap();
+        assert_eq!(merged.terms[0].translation, "爱丽丝", "锁定译名不被改写");
+        // 页 1 无锁定设定时模型自己对同一 source 给出两种译名：取先到者，不整页失败。
+        let self_conflict = StoryBible {
+            style: "克制".into(),
+            terms: vec![
+                Term {
+                    source: "マスター".into(),
+                    translation: "店主".into(),
+                    kind: "character".into(),
+                    aliases: vec![],
+                    notes: "".into(),
+                },
+                Term {
+                    source: "マスター".into(),
+                    translation: "老板".into(),
+                    kind: "character".into(),
+                    aliases: vec![],
+                    notes: "".into(),
+                },
+            ],
+        };
+        let merged = merge_bible(&StoryBible::default(), self_conflict).unwrap();
+        assert_eq!(merged.terms.len(), 1);
+        assert_eq!(merged.terms[0].translation, "店主");
+        // 同一名字被两个词条认领：先到者保留，后到者丢掉该别名，不整页失败。
         let mut conflict = old.clone();
         let mut term = old.terms[0].clone();
         term.source = "別人".into();
         term.aliases = vec!["アリス".into()];
         conflict.terms.push(term);
-        assert!(merge_bible(&old, conflict).is_err());
+        let merged = merge_bible(&old, conflict).unwrap();
+        assert_eq!(merged.terms.len(), 2);
+        assert_eq!(merged.terms[0].aliases, Vec::<String>::new());
+        assert!(merged.terms[1].aliases.is_empty(), "重复别名归先到者");
     }
     #[test]
     fn enforces_complete_aligned_output_and_does_not_translate_images() {
@@ -2138,7 +2164,8 @@ mod tests {
         let responses = vec![
             json!({"style":"克制、保留人物敬语距离", "terms":[{"source":"アリス","translation":"爱丽丝","kind":"character","aliases":[],"notes":"主角"}]}),
             json!({"lines":[{"line":0,"text":"爱丽丝。"}]}),
-            json!({"style":"克制、保留人物敬语距离", "terms":[{"source":"アリス","translation":"爱丽丝","kind":"character","aliases":["アリスちゃん"],"notes":"新称呼"}]}),
+            // 第 2 页模型自作主张改写锁定译名：整页仍须译完，既有译名不被覆盖。
+            json!({"style":"克制、保留人物敬语距离", "terms":[{"source":"アリス","translation":"艾丽丝","kind":"character","aliases":["アリスちゃん"],"notes":"新称呼"}]}),
             json!({"lines":[{"line":0,"text":"她微笑了。"}]}),
             json!({"style":"克制、保留人物敬语距离", "terms":[{"source":"アリス","translation":"爱丽丝","kind":"character","aliases":["アリス様"],"notes":"尊称"}]}),
             json!({"lines":[]}),
@@ -2259,6 +2286,10 @@ mod tests {
             later["source_lines"],
             json!([{"line":0,"text":"彼女は微笑んだ。"}])
         );
+        // 冲突页的 Pass 2 仍带着第 1 页锁定的译名，页译文照常产出。
+        let conflict_render: Value =
+            serde_json::from_str(requests[3]["messages"][1]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(conflict_render["locked_bible"]["terms"][0]["translation"], "爱丽丝");
         let saved = read_book(&path).unwrap();
         assert_eq!(
             saved.bible.terms[0].aliases,
@@ -2266,6 +2297,7 @@ mod tests {
         );
         assert_eq!(saved.pages.len(), 2);
         assert_eq!(saved.pages[&2][0].text, "她微笑了。");
+        assert_eq!(saved.bible.terms[0].translation, "爱丽丝");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

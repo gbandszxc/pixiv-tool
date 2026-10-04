@@ -59,7 +59,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 | `docs/SPEC.md` | 项目规格：范围 / 技术栈 / 架构 / 数据模型 / IPC 命令 / 风险登记 | 任何行为、契约、参数、目录职责变化（对照「硬约束 1」） |
 | `DESIGN.md` | 前端视觉与交互规范真相源：色彩 / 字号 / 间距 / 圆角 / 层级 / 动效 / 组件 | 改 token、组件规则或视觉方向时，与 `.impeccable/design.json` 同批更新 |
 | `.impeccable/design.json` | `DESIGN.md` 的结构化伴随视图（impeccable 工具消费） | 与 `DESIGN.md` 一一对应，同上 |
-| `docs/adr/` | 架构决策记录，当前 `0001` ~ `0023` | 满足「新开 ADR 触发条件」时追加；编号连续，旧档不删 |
+| `docs/adr/` | 架构决策记录，当前 `0001` ~ `0024` | 满足「新开 ADR 触发条件」时追加；编号连续，旧档不删 |
 | `docs/PACKAGING.md` | 打包 / 分发 / 构建环境 / 三平台图标 / macOS 签名 | 改构建命令、工具链、Tauri 权限声明、图标流程、发布或签名策略 |
 | `docs/PIXIV-API.md` | pixiv 接口契约事实源（端点 / 参数 / 分页 / 实现与测试映射 / 维护矩阵） | 任何 pixiv 端点、参数、响应解析、分页语义变化时，与代码、`src-tauri/tests/pixiv_api/` 同批更新 |
 | `docs/research/` | 外部接口调研证据档案（pixiv 只读浏览 API 等） | 补充新的抓包 / 实测证据；契约或分页语义变化改 `docs/PIXIV-API.md` 并回填勘误 |
@@ -68,7 +68,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 | `PRODUCT.md` | 产品定位、目标用户、范围边界 | 产品定位或用户可见范围变化 |
 | `.scratch/` · `.archive/pywebview-era/` | **非项目文档**：本机 issue tracker / 旧栈归档，被 `.gitignore` 忽略 | 不维护、不索引，换台机器 clone 不到 |
 
-**ADR 速查**：`0008` 是现行架构基座（Tauri 2 全量重构），`0009` / `0010` / `0011` / `0012` / `0013` / `0014` / `0015` / `0016` / `0017` / `0018` / `0020` / `0021` / `0022` / `0023` 是最新决策（webview 登录回退 / 多账号 / 登录窗未登录态 / 浏览模式 / 移除内嵌浏览器 / 浏览访问历史持久化 / 核心导航与非模态下载工作区 / 应用内更新下载与安装引导 / 小说单页两轮翻译与共享设定集 / 翻译目标语言与语言一致快速返回 / 翻译三协议支持 / opencode 网关会话标识头 / 浏览模式发表评论与回复 / 翻译单请求超时可配置）。`0001` / `0004` / `0005` 描述的是已废弃的 pywebview 旧栈，读其结论、不读其实现。
+**ADR 速查**：`0008` 是现行架构基座（Tauri 2 全量重构），`0009` / `0010` / `0011` / `0012` / `0013` / `0014` / `0015` / `0016` / `0017` / `0018` / `0020` / `0021` / `0022` / `0023` / `0024` 是最新决策（webview 登录回退 / 多账号 / 登录窗未登录态 / 浏览模式 / 移除内嵌浏览器 / 浏览访问历史持久化 / 核心导航与非模态下载工作区 / 应用内更新下载与安装引导 / 小说单页两轮翻译与共享设定集 / 翻译目标语言与语言一致快速返回 / 翻译三协议支持 / opencode 网关会话标识头 / 浏览模式发表评论与回复 / 翻译单请求超时可配置 / 翻译设定集冲突保留既有值）。`0001` / `0004` / `0005` 描述的是已废弃的 pywebview 旧栈，读其结论、不读其实现。
 
 **开工顺序**：任何改动先读 `docs/SPEC.md`；改前端加读 `DESIGN.md`；改打包加读 `docs/PACKAGING.md`；改浏览 / 接口层加读 `docs/PIXIV-API.md`；改浏览模式加读 `docs/research/pixiv-browse-api.md` + ADR 0012；本次 ticket 在 `.scratch/pixiv-tool-v1/issues/<NN>-<slug>.md`。
 
@@ -80,7 +80,8 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 （`docs/adr/0021-translation-session-header.md`）；浏览模式发表评论 / 回复（推翻 ADR 0016
 「不扩展评论发布」）见 ADR `0022`（`docs/adr/0022-browse-comment-posting.md`）；
 小说翻译单请求超时（默认 10 分钟，取代写死的 180s）见 ADR `0023`
-（`docs/adr/0023-translation-timeout-setting.md`）。
+（`docs/adr/0023-translation-timeout-setting.md`）；模型改写锁定译名 / 重复别名时
+保留既有值、不再中断整页见 ADR `0024`（`docs/adr/0024-translation-bible-conflict.md`）。
 安全补丁要求的 Vite 6.4.3+ 与 Rust 1.88 最低版本见 ADR `0019`
 （`docs/adr/0019-security-patched-toolchain.md`）。
 
