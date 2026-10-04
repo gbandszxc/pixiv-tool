@@ -288,7 +288,7 @@ export default {
     testFailed: "检测失败，请检查配置后重试",
     probeHint: "使用当前未保存配置；Key 留空时沿用已保存凭据，清除 Key 后需先重新输入。获取模型通过 /models 请求，部分服务不支持，可继续手动填写。检测会用当前模型与高级 JSON 发起一次简短生成请求，可能产生少量费用；不会发送小说，也不会保存配置。模型列表不保证支持文本生成，请选定后检测。",
     advanced: "高级 JSON 配置",
-    jsonHint: '例如 {"reasoning_effort":"high","max_completion_tokens":8192}；也可填写供应商的 thinking 等扩展字段。不能覆盖 model、messages、stream、工具或凭据字段。参数支持取决于模型与服务。',
+    jsonHint: `例如 {'{'}"reasoning_effort":"high","max_completion_tokens":8192{'}'}；也可填写供应商的 thinking 等扩展字段。不能覆盖 model、messages、stream、工具或凭据字段。参数支持取决于模型与服务。`,
     jsonInvalid: "高级 JSON 必须是合法的 JSON 对象",
     keySaved: "已保存；留空保留现有 Key",
     keyPlaceholder: "输入 API Key",

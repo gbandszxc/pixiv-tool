@@ -10,12 +10,13 @@ import type { PageTranslation } from "../src/api/translation";
 import zhCN from "../src/locales/zh-CN";
 import "../src/styles/main.css";
 import "../src/material";
+import enUS from "../src/locales/en-US";
 
 function assert(value: unknown, message: string): asserts value { if (!value) throw new Error(message); }
 const settle = async () => { await nextTick(); await new Promise(resolve => setTimeout(resolve, 30)); };
 const pinia = createPinia();
 const settings = useSettingsStore(pinia);
-const i18n = createI18n({ legacy: false, locale: "zh-CN", messages: { "zh-CN": zhCN } });
+const i18n = createI18n({ legacy: false, locale: "zh-CN", messages: { "zh-CN": zhCN, "en-US": enUS } });
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/", component: { template: "<div/>" } }, { path: "/browse/search", component: { template: "<div/>" } }] });
 let resolvePage: (result: PageTranslation) => void = () => {};
 let rejectPage: (error: string) => void = () => {};
@@ -111,8 +112,19 @@ async function run() {
 
   const panelHost = document.createElement("div"); panelHost.style.cssText = "display:none;padding:24px;max-width:640px"; document.body.append(panelHost);
   const panelApp = createApp(Panel, { section: "translation" }).use(pinia).use(i18n);
+  const renderErrors: unknown[] = [];
+  panelApp.config.errorHandler = error => { renderErrors.push(error); };
   const panel = panelApp.mount(panelHost) as unknown as { save(): Promise<boolean>; reset(): void; hasUnsaved(): boolean };
   await settle();
+  for (const locale of ["zh-CN", "en-US"] as const) {
+    i18n.global.locale.value = locale; await settle();
+    assert(!renderErrors.length, `小说翻译设置渲染异常（${locale}）：${renderErrors.map(String).join("；")}`);
+    for (const id of ["translation-url", "translation-key", "translation-model", "translation-target-language", "translation-json"]) {
+      assert(panelHost.querySelector(`#${id}`), `小说翻译设置字段 ${id} 在 ${locale} 下可见`);
+    }
+    assert(panelHost.querySelector('[for="translation-json"]')?.parentElement?.textContent?.includes('{"reasoning_effort":"high","max_completion_tokens":8192}'), `JSON 示例在 ${locale} 下完整显示`);
+  }
+  i18n.global.locale.value = "zh-CN"; await settle();
   const input = async (id: string, value: string) => { const element = panelHost.querySelector<HTMLElement & { value: string }>(`#${id}`); assert(element, `字段 ${id}`); element.value = value; element.dispatchEvent(new Event("input", { bubbles: true })); await settle(); };
   assert(panelHost.querySelector("#translation-key")?.getAttribute("type") === "password", "Key 为密码字段");
   await input("translation-json", "[]"); assert(!await panel.save(), "拒绝非对象 JSON");

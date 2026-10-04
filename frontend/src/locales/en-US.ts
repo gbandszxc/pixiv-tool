@@ -287,7 +287,7 @@ export default {
     testFailed: "Test failed; check your configuration and retry",
     probeHint: "Uses the current unsaved configuration. A blank key keeps the saved credential; re-enter a key after clearing it. Models are fetched from /models, which some providers do not support; manual entry remains available. Testing sends one short generation request with your model and advanced JSON and may incur a small charge. No novel is sent and no configuration is saved. Listed models may not support text generation; test your selection.",
     advanced: "Advanced JSON",
-    jsonHint: 'Example: {"reasoning_effort":"high","max_completion_tokens":8192}. Provider extensions such as thinking are supported. Model, messages, stream, tools and credential fields are reserved. Parameter support depends on your model and provider.',
+    jsonHint: `Example: {'{'}"reasoning_effort":"high","max_completion_tokens":8192{'}'}. Provider extensions such as thinking are supported. Model, messages, stream, tools and credential fields are reserved. Parameter support depends on your model and provider.`,
     jsonInvalid: "Advanced JSON must be a valid JSON object",
     keySaved: "Saved; leave blank to keep the current key",
     keyPlaceholder: "Enter API key",
