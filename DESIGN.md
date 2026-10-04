@@ -13,8 +13,11 @@ colors:
   on-surface: "#191C20"
   on-surface-variant: "#42474E"
   outline: "#72777F"
+  error: "#BA1A1A"
   error-container: "#FFDAD6"
   on-error-container: "#410002"
+  success-container: "#C8F7D0"
+  success-ink: "#0D3B18"
   warning-container: "#FFDDB2"
   on-warning-container: "#2A1700"
 typography:
@@ -83,7 +86,7 @@ Pixiv Tool 是一款以任务完成为中心的本地桌面工具。当前界面
 - Secondary container / on-secondary-container：Material Web select 选项的当前选择态；深色主题下使用低亮度容器与浅色文字，不能回退到组件默认紫色。
 - Surface / surface container：应用底色与低强调层级；侧栏、表单卡、列表、表格及对话框使用 container。
 - On-surface / on-surface-variant / outline：正文、辅助文本和分隔线。分隔线以 outline 的半透明 `color-mix()` 呈现。
-- Error 与 warning container：当前自定义 alert、任务状态使用已定义的浅色危险和警告组合；文字和颜色必须一起表达状态。完成状态目前为独立的绿色字面值，属于已有实现而非通用 primary 角色。
+- Error 与 warning container：当前自定义 alert、任务状态使用已定义的浅色危险和警告组合；文字和颜色必须一起表达状态。完成/成功状态共用一组绿色（`--state-success-container` / `--state-success-ink`，任务完成徽标与翻译状态一致，深色主题换深底浅字）；错误文字与状态指示点用 M3 标准 error 角色（`--md-sys-color-error`，浅色 #BA1A1A / 深色 #FFB4AB）。颜色只作补充，状态本身始终有可读文字。
 
 **The Semantic State Rule.** primary 不代表成功、失败或警告；错误、警告、进度与任务状态始终要有可读文字。
 
@@ -116,8 +119,8 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 ## Components
 
 - **帮助说明 HelpTooltip**：字段标签、分组名或相关操作旁使用 32px 原生帮助按钮 + 16px Lucide circle-question-mark SVG，颜色 ink-muted，hover 为 8% on-surface，focus-visible 为 primary 2px 外环；`.field-label` 用既有 4px 间距与居中对齐，保持标签字号/字重。冗长的静态帮助默认收起，悬停、键盘聚焦或点击后显示 `role=tooltip`，按钮通过 `aria-describedby` 关联完整说明，焦点留在按钮。原生 popover top layer 防止被 dialog/滚动容器裁切，优先向下、空间不足向上，视口内保留 16px 余量；浮层为 surface-container / ink、13px/1.6、12px 内边距、control 圆角与唯一合法轻阴影，宽度至多 360px（15 × space-xl），长文本按段落换行，不新增颜色或动效。指针可移入说明继续阅读（跨间隙 150ms 关闭宽限），点击可固定/再次关闭，Esc 先关说明、外部点击/失焦/页面滚动/resize 关闭。设置六组、登录指引、搜索链接/ID 帮助、以图识图介绍统一使用此入口；错误、校验、进度、空态、未配置引导、确认操作后果与维护操作立即生效的短提示仍直接显示。
-- 小说翻译：翻译入口为原分页底栏中、阅读背景按钮右侧的 20px Lucide languages SVG + md-icon-button；点击在按钮上方弹出 256px（16 × space-lg）面板，右边缘对齐按钮，surface-container 底、既有 control 圆角与唯一合法轻阴影。面板依次显示标题、当前页阶段/错误、三种模式、md-outlined-button 翻译/重译；透明遮罩点击外部或 Esc 关闭，打开焦点进入面板，关闭回到图标；翻译期间仍可打开查看状态。三种模式沿用原生文本切换按钮 + aria-pressed，当前项 secondary-container/on-secondary-container、既有 control 圆角。默认双语，译文紧随对应原文段落或章节，沿用字号/行距、primary 色（纸色模式为 primary 20% + ink 80% 混色以保持深浅主题对比度）、lang=zh-CN、纯文本；原文用 ink，图片不重复。无译文明确提示，仅译文不冒充原文；12px ink-muted 回显阶段，错误用 error 与可重试文字，旧译文保留。既有 4/8/16px spacing；≤800px 按实际剩余空间收缩阅读进度滑杆，≤600px 同一底栏内控件分两行以免重叠，无新增动效，翻译按钮沿用 Material 默认 hover/focus/disabled；模式按钮沿用既有 8% hover 和 2px primary focus-visible 外环。
-- 设置「小说翻译」组沿用直排 Material 字段：API URL、password Key（已保存只显示状态、空白保持、清除后保存）、模型 ID、五行高级 JSON 文本框。JSON 格式错误字段内提示；简体中文目标/两轮调用/发送范围与 URL 规则合入 API URL 帮助，凭据保存规则与高级 JSON 示例分别合入对应字段帮助；沿用常驻保存/取消与脏检查。
+- 小说翻译：翻译入口为原分页底栏中、阅读背景按钮右侧的 20px Lucide languages SVG + md-icon-button；点击在按钮上方弹出 256px（16 × space-lg）面板，右边缘对齐按钮，surface-container 底、既有 control 圆角与唯一合法轻阴影。入口与面板共用 8px 状态指示点：翻译中 primary、本页已译 `--state-success-ink`、失败 error（入口点带 2px surface 描边与图标按钮区隔）；面板内指示点与 12px ink-muted 状态文字同排，失败原因经指示点/入口 title 悬停可读，状态文字本身也可读。设定集整理与两轮精翻属内部实现，界面只回显统一的「翻译中…」与最终成败，不展示阶段进度。面板依次显示标题、当前页状态、三种模式、md-outlined-button 翻译/重译；透明遮罩点击外部或 Esc 关闭，打开焦点进入面板，关闭回到图标；翻译期间仍可打开查看状态。三种模式沿用原生文本切换按钮 + aria-pressed，当前项 secondary-container/on-secondary-container、既有 control 圆角。默认双语，译文紧随对应原文段落或章节，沿用字号/行距、primary 色（纸色模式为 primary 20% + ink 80% 混色以保持深浅主题对比度）、lang=zh-CN、纯文本；原文用 ink，图片不重复。无译文明确提示，仅译文不冒充原文；错误用 error 与可重试文字，旧译文保留。既有 4/8/16px spacing；≤800px 按实际剩余空间收缩阅读进度滑杆，≤600px 同一底栏内控件分两行以免重叠，无新增动效，翻译按钮沿用 Material 默认 hover/focus/disabled；模式按钮沿用既有 8% hover 和 2px primary focus-visible 外环。
+- 设置「小说翻译」组沿用直排 Material 字段：API URL、password Key（已保存只显示状态、空白保持、清除后保存）、模型 ID、五行高级 JSON 文本框。模型 ID 默认是文本框，「获取模型」成功后原位变为 md-outlined-select（选项含获取结果与当前值，另有「手动输入模型 ID」切回文本）；「检测可用」结果以 `--state-success-ink` 绿或 `--md-sys-color-error` 红回显，探测期间显示进行中文案。JSON 格式错误字段内提示；简体中文目标/两轮调用/发送范围与 URL 规则合入 API URL 帮助，凭据保存规则与高级 JSON 示例分别合入对应字段帮助；沿用常驻保存/取消与脏检查。
 
 - `md-filled-button`：主提交、恢复和确认操作；`md-outlined-button`：浏览、同步、批量删除等次要操作；`md-text-button`：取消、删除等低强调操作；`md-icon-button`：工具栏和行级图标动作。
 - `md-outlined-text-field`、`md-outlined-select`、`md-radio` 与 `md-checkbox`：所有可编辑字段和选择；字段以标签、12px–16px 间距和至少 40px 的 choice 行组织。

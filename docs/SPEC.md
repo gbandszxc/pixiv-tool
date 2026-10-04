@@ -624,7 +624,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 全局静态帮助采用公共 `components/common/HelpTooltip.vue`：设置六组的字段/分组说明、登录方式与 Session 获取步骤、搜索链接/ID 规则、以图识图介绍/使用说明默认收进相邻帮助图标。悬停、聚焦或点击展开，role=tooltip 与 aria-describedby 保留可访问关联，原生 popover top layer 不受对话框滚动区裁切，按视口空间定位/换行；焦点留在触发器，指针可移入阅读，Esc 优先关闭说明，外部点击/失焦/滚动/resize 收起。校验错误、凭据库错误、进度、空态引导、未配置状态和确认后果保留直显，维护组保留立即生效的短提示。视觉与交互细节同步 DESIGN.md / .impeccable/design.json。
 
-小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式混入 80% ink 保持对比度），原分页底栏的 SVG 翻译图标点击弹出状态、翻译/重译和三种显示选项，默认不额外占用正文高度；模式切换 secondary-container/on-secondary-container，状态 ink-muted、错误 error。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠；弹层外部点击/Esc 关闭与焦点返回，详见 DESIGN.md 与结构化伴随视图。
+小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式混入 80% ink 保持对比度），原分页底栏的 SVG 翻译图标点击弹出状态、翻译/重译和三种显示选项，默认不额外占用正文高度；模式切换 secondary-container/on-secondary-container，入口与弹层共用 8px 状态指示点（翻译中 primary、本页已译绿、失败 error），失败原因经指示点/入口 title 悬停可读，状态文字始终可读。设定集整理与两轮精翻属内部实现，界面只回显统一的「翻译中…」与最终成败，不展示阶段进度。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；设置页模型 ID 在「获取模型」成功后原位变为下拉（选项含获取结果与当前值，可切回手动输入），「检测可用」以绿色/红色文字区分成败；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠；弹层外部点击/Esc 关闭与焦点返回，详见 DESIGN.md 与结构化伴随视图。
 
 所有纵向数据滚动区共用 PgUp/PgDn 输入规则（§6.1.1），优先鼠标区域、回退键盘焦点，保留控件原生按键与模态隔离；全屏胶卷与图片区分别滚屏 / 切作品页。样式及交互规则与 DESIGN.md / .impeccable/design.json 保持一致。
 
@@ -803,11 +803,11 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ## 7. IPC 命令设计（invoke）
 
-小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/高级参数校验、锁定译名与别名冲突、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用、第二页共享设定和 Pass 2 失败保留 Pass 1/旧译文；探测命令单测覆盖 `/models` 路径推导与列表解析（去重排序、空列表/缺 id/超量报错）与 probe 空 Key/坏 URL/空模型的发请求前拒绝。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖 SVG 入口默认收起、弹层焦点/Esc/外部关闭、三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、JSON 校验、Key 保存/清除/取消后的草稿清理，以及获取模型下拉选定回填、检测可用成功/失败提示与 URL 为空禁用探测，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
+小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/高级参数校验、锁定译名与别名冲突、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用、第二页共享设定和 Pass 2 失败保留 Pass 1/旧译文；模型输出容错覆盖省略可选字段与多余字段仍通过、缺 terms/缺 source 仍拒绝；探测命令单测覆盖 `/models` 路径推导与列表解析（去重排序、空列表/缺 id/超量报错）与 probe 空 Key/坏 URL/空模型的发请求前拒绝。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖 SVG 入口默认收起、弹层焦点/Esc/外部关闭、三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、统一「翻译中」不暴露内部阶段、入口/弹层状态点与 hover 报错、JSON 校验、Key 保存/清除/取消后的草稿清理，以及获取模型后原位变下拉（保留当前值、可切回手动输入）、检测可用绿/红状态与 URL 为空禁用探测，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
 
 全局帮助离线验收：`/tests/help-tooltips.html` 使用真实 SettingsDialog、SettingsPanel、LoginDialog、搜索/以图识图页面，覆盖六组设置、两种登录、默认收起、悬停/焦点/点击、可悬停阅读、Esc 不误关设置与外部关闭，提供宽窄/深浅主题/中英文预览；浏览器 mock，不读取真实凭据。
 
-显式模型在线验收：忽略测试 `translation::tests::live_two_page_translation` 仅在用户授权后运行；进程环境提供 `PIXIV_TRANSLATION_TEST_KEY`、`PIXIV_TRANSLATION_TEST_URL`、`PIXIV_TRANSLATION_TEST_MODEL`，固定 `reasoning_effort=low`。调用生产两轮管线翻译两个短页（四次请求），检查人物锁定译名、文风、译文对齐与从文件恢复的共享设定，结束清理临时记录；不改应用配置或系统凭据。最近实测见 [在线验收记录](research/novel-translation-live.md)。
+显式模型在线验收：忽略测试 `translation::tests::live_two_page_translation` 与 `live_real_novel_page_translation` 仅在用户授权后运行；进程环境提供 `PIXIV_TRANSLATION_TEST_KEY`、`PIXIV_TRANSLATION_TEST_URL`、`PIXIV_TRANSLATION_TEST_MODEL`，固定 `reasoning_effort=low`。前者调用生产两轮管线翻译两个短页（四次请求），检查人物锁定译名、文风、译文对齐与从文件恢复的共享设定；后者只读本机登录态从小说日榜取一篇真实日文小说翻译第 1 页，先确认 `/models` 列表包含配置模型，再用不存在的模型验证报错以可读文案（HTTP 状态 + 排查方向）暴露且不含凭据。两者结束都清理临时记录；不改应用配置或系统凭据。最近实测见 [在线验收记录](research/novel-translation-live.md)。
 
 命令实现于 `src-tauri/src/commands/`，返回体沿用旧 HTTP 响应形状（snake_case）。
 业务错误（旧 200+`{error}` 风格）在返回值内；校验类错误（旧 4xx/5xx detail）
@@ -828,7 +828,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
 | `settings_get` / `settings_save(settings)` | 配置读写（白名单 18 键 + 校验，新增翻译 URL / 模型 / 高级 JSON；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_get(novel)` | 读取本机小说设定集和已译页；novel=`{novel_id,title,tags,description,content}`；返回 `{bible:{style,terms},pages:{页码:[{line,text}]}}`，原文和元信息 SHA256 区分版本 |
-| `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel；返回 `[{line,text}]`，line 为该页原始文本的零起行号 |
+| `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel（供后端与测试使用，界面只回显统一「翻译中」）；返回 `[{line,text}]`，line 为该页原始文本的零起行号 |
 | `translation_models(probe)` | 用未保存草稿探测 OpenAI 兼容 `/models` 端点（chat/completions 路径同源推导），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
 | `translation_test(probe)` | 用未保存草稿发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则 |
 | `clear_logs` | 清空 app.log |

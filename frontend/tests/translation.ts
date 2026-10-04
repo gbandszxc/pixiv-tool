@@ -43,7 +43,9 @@ window.__TAURI_INTERNALS__ = {
     if (command === "novel_translate_page") {
       calls++; requestedPage = args.page; requestedForce = args.force;
       assert(args.novel.tags.includes("同人") && args.novel.description === "星空下的重逢。", "请求包含标签和纯文本简介");
+      // 后端仍会推进内部阶段；界面应忽略它，只显示统一的「翻译中」。
       args.progress.onmessage("prepare");
+      args.progress.onmessage("translate");
       return new Promise<TranslatedLine[]>((resolve, reject) => { resolvePage = resolve; rejectPage = reject; });
     }
     return {};
@@ -73,15 +75,20 @@ async function run() {
   trigger.click(); await settle();
   assert(host.querySelector('[aria-pressed="true"]')?.textContent?.trim() === "双语", "默认双语");
   assert(host.querySelectorAll(".translated-text").length === 2, "恢复已存译文，包括标题");
+  assert(host.querySelector(".translation-trigger-wrap > .translation-indicator.is-done"), "已译页入口显示成功状态点");
   assert(!host.querySelector(".novel-content script") && host.querySelector(".translated-text")?.getAttribute("lang") === "zh-CN", "译文纯文本且语言明确");
   await click("仅译文");
   assert(!host.querySelector("ruby") && host.querySelectorAll(".novel-image").length === 1, "仅译文隐藏原文但图片不重复");
   await click("仅原文"); assert(!host.querySelector(".translated-text") && host.querySelector("ruby"), "仅原文恢复注音");
   await click("双语");
   await selectPage(2); assert(host.querySelector(".translation-status")?.textContent?.includes("尚未翻译"), "未译页不显示旧译文");
+  assert(!host.querySelector(".translation-trigger-wrap > .translation-indicator"), "未译页入口无状态点");
   await click("翻译本页");
   assert(requestedPage === 2 && !requestedForce && calls === 1, "只请求当前页且非重译");
   assert(host.querySelector(".translation-popover md-outlined-button")?.hasAttribute("disabled"), "翻译时禁用按钮");
+  const busyStatus = host.querySelector(".translation-status")?.textContent ?? "";
+  assert(busyStatus.includes("翻译中") && !busyStatus.includes("设定集"), "只回显统一翻译中，不暴露内部阶段");
+  assert(host.querySelector(".translation-trigger-wrap > .translation-indicator.is-busy"), "翻译中入口显示进行中状态点");
   await selectPage(1);
   resolvePage([{ line: 0, text: "她微笑了。" }]); await settle();
   assert(!host.querySelector(".novel-content")?.textContent?.includes("她微笑了。"), "异步结果不串到另一页");
@@ -89,8 +96,10 @@ async function run() {
   await click("重新翻译本页"); assert(requestedForce, "重译显式 force");
   rejectPage("模拟服务失败，请重试"); await settle();
   assert(host.querySelector(".translation-status.is-error") && host.querySelector(".translated-text")?.textContent === "她微笑了。", "失败可见且保留旧译文");
+  const failedBadge = host.querySelector<HTMLElement>(".translation-trigger-wrap > .translation-indicator.is-error");
+  assert(failedBadge?.title.includes("模拟服务失败"), "失败状态点 hover 可见模型侧报错");
   await click("重新翻译本页"); resolvePage([{ line: 0, text: "她露出微笑。" }]); await settle();
-  assert(!host.querySelector(".translation-status.is-error"), "重试恢复");
+  assert(!host.querySelector(".translation-status.is-error") && host.querySelector(".translation-trigger-wrap > .translation-indicator.is-done"), "重试恢复");
 
   const panelHost = document.createElement("div"); panelHost.style.cssText = "display:none;padding:24px;max-width:640px"; document.body.append(panelHost);
   const panelApp = createApp(Panel, { section: "translation" }).use(pinia).use(i18n);
@@ -111,29 +120,41 @@ async function run() {
   await input("translation-key", "discard-only"); panel.reset(); await settle(); assert(!panel.hasUnsaved(), "取消清空敏感草稿");
 
   // 获取模型 / 检测可用：用当前未保存草稿发探测请求，结果只进组件状态、不落 store。
-  const findButton = (label: string) => [...panelHost.querySelectorAll<HTMLElement>("md-outlined-button")].find(el => el.textContent?.trim() === label);
+  const findButton = (label: string) => [...panelHost.querySelectorAll<HTMLElement>("md-outlined-button,md-text-button")].find(el => el.textContent?.trim() === label);
   await input("translation-url", "https://api.example.com/v1"); await input("translation-key", "probe-key");
   probeModels = ["glm-model-b", "glm-model-a"];
   findButton("获取模型")!.click(); await settle();
   assert(lastProbeUrl === "https://api.example.com/v1", "模型请求使用未保存的 URL");
-  const modelSelect = panelHost.querySelector<HTMLElement & { value: string }>("#translation-model-select");
-  assert(modelSelect?.textContent?.includes("glm-model-a"), "下拉列出获取到的模型");
-  modelSelect!.value = "glm-model-a"; modelSelect!.dispatchEvent(new Event("change")); await settle();
-  assert((panelHost.querySelector("#translation-model") as HTMLElement & { value: string }).value === "glm-model-a", "选定模型回填输入框");
+  const modelControl = panelHost.querySelector<HTMLElement & { value: string }>("#translation-model");
+  assert(modelControl?.tagName === "MD-OUTLINED-SELECT" && panelHost.querySelectorAll("#translation-model").length === 1, "获取成功后文本框原位变下拉，不额外新增控件");
+  assert(modelControl.textContent?.includes("glm-model-a") && modelControl.textContent?.includes("test-model"), "下拉列出获取到的模型并保留当前值");
+  modelControl.value = "glm-model-a"; modelControl.dispatchEvent(new Event("change")); await settle();
+  assert(modelControl.value === "glm-model-a", "选定模型即当前模型");
   findButton("检测可用")!.click(); await settle();
-  assert(panelHost.querySelector('[role="status"]')?.textContent?.includes("模型可用"), "检测成功提示");
+  const okStatus = panelHost.querySelector('[role="status"]');
+  assert(okStatus?.textContent?.includes("模型可用") && okStatus.classList.contains("state-success"), "检测成功为绿色状态");
   probeTestOk = false; findButton("检测可用")!.click(); await settle();
-  assert(panelHost.querySelector(".credential-error")?.textContent?.includes("模拟检测失败"), "检测失败错误可见");
+  const failStatus = panelHost.querySelector('[role="alert"]');
+  assert(failStatus?.textContent?.includes("模拟检测失败") && failStatus.classList.contains("state-error"), "检测失败为红色状态");
+  findButton("手动输入模型 ID")!.click(); await settle();
+  const manualModel = panelHost.querySelector<HTMLElement & { value: string }>("#translation-model");
+  assert(manualModel?.tagName === "MD-OUTLINED-TEXT-FIELD" && manualModel.value === "glm-model-a", "手动输入回到文本框且保留模型");
   await input("translation-url", "");
   assert(findButton("检测可用")?.hasAttribute("disabled") && findButton("获取模型")?.hasAttribute("disabled"), "URL 为空禁用探测");
 
-  // 留真实组件供宽窄窗口、深浅主题与 hover/focus 验收。
+  // 留真实组件供宽窄窗口、深浅主题与 hover/focus 验收；设置页停在「已获取模型 + 检测可用」态。
+  probeTestOk = true;
+  await input("translation-url", "https://api.example.com/v1");
+  findButton("获取模型")!.click(); await settle();
+  findButton("检测可用")!.click(); await settle();
+  // 预览钩子：视觉验收时切换探测成败，观察绿/红状态与 hover 报错。
+  Object.assign(window, { __probePreview: (ok: boolean) => { probeTestOk = ok; findButton("检测可用")?.click(); } });
   await selectPage(1);
   document.querySelector<HTMLButtonElement>("#preview-reader")!.onclick = () => { host.style.display = ""; panelHost.style.display = "none"; };
   document.querySelector<HTMLButtonElement>("#preview-settings")!.onclick = () => { host.style.display = "none"; panelHost.style.display = ""; };
   document.querySelector<HTMLButtonElement>("#preview-dark")!.onclick = () => document.documentElement.classList.add("dark");
   document.querySelector<HTMLButtonElement>("#preview-light")!.onclick = () => document.documentElement.classList.remove("dark");
   document.querySelector<HTMLElement>("#preview-controls")!.hidden = false;
-  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、缓存、设置 JSON 与凭据草稿、获取模型下拉与可用性检测";
+  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、状态点与 hover 报错、统一翻译中状态、设置 JSON 与凭据草稿、获取模型原位下拉与绿红检测状态";
 }
 run().catch(error => { document.querySelector("#translation-result")!.textContent = `FAIL: ${error.message}`; console.error(error); });

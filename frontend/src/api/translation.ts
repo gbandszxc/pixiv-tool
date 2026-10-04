@@ -37,8 +37,10 @@ export function getNovelTranslation(novel: NovelTranslationInput): Promise<Trans
   return invoke("novel_translation_get", { novel });
 }
 
-export function translateNovelPage(novel: NovelTranslationInput, page: number, force: boolean, onProgress: (stage: string) => void): Promise<TranslatedLine[]> {
-  const progress = new Channel<string>();
-  progress.onmessage = onProgress;
-  return invoke("novel_translate_page", { novel, page, force, progress });
+/**
+ * 单页翻译。后端仍经 progress 上报内部阶段（queued/prepare/translate），
+ * 但设定集整理属于实现细节，界面只呈现统一的「翻译中」。
+ */
+export function translateNovelPage(novel: NovelTranslationInput, page: number, force: boolean): Promise<TranslatedLine[]> {
+  return invoke("novel_translate_page", { novel, page, force, progress: new Channel<string>() });
 }

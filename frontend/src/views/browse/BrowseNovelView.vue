@@ -106,7 +106,6 @@ const translationMode = ref<TranslationMode>("bilingual");
 const translations = ref<Record<string, TranslatedLine[]>>({});
 const translating = ref(false);
 const translatingPage = ref(0);
-const translationStage = ref("queued");
 const translationError = ref("");
 const translationErrorPage = ref(0);
 let translationGeneration = 0;
@@ -115,8 +114,9 @@ const translationInput = computed<NovelTranslationInput>(() => ({
   description: plainDescription.value, content: content.value,
 }));
 const currentTranslation = computed(() => translations.value[page.value] ?? []);
+// 设定集整理/精翻等内部阶段不面向用户，只回显统一的进行中状态与最终成败。
 const translationStatus = computed(() => translating.value
-  ? t(`translation.${translationStage.value}`, { page: translatingPage.value })
+  ? t("translation.translating", { page: translatingPage.value })
   : translationErrorPage.value === page.value && translationError.value ? translationError.value
   : currentTranslation.value.length ? t("translation.completed") : t("translation.noTranslation"));
 
@@ -126,12 +126,9 @@ async function translatePage(): Promise<void> {
   const targetPage = page.value;
   translating.value = true;
   translatingPage.value = targetPage;
-  translationStage.value = "queued";
   translationError.value = "";
   try {
-    const lines = await translateNovelPage(translationInput.value, targetPage, Boolean(translations.value[targetPage]), stage => {
-      if (generation === translationGeneration && ["queued", "prepare", "translate"].includes(stage)) translationStage.value = stage;
-    });
+    const lines = await translateNovelPage(translationInput.value, targetPage, Boolean(translations.value[targetPage]));
     if (generation === translationGeneration) translations.value[targetPage] = lines;
   } catch (err) {
     if (generation === translationGeneration) {

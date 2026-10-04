@@ -392,12 +392,24 @@ impl TranslationClient<'_> {
     }
 }
 
+/// HTTP 状态码 → 可执行提示。只给排查方向，不回显服务正文、请求或凭据（ADR 0017）。
+fn http_status_hint(status: u16) -> &'static str {
+    match status {
+        401 | 403 => "请检查 API Key 是否有效",
+        404 => "请检查 API URL 与模型 ID",
+        429 => "请求过于频繁或额度不足，请稍后重试",
+        400..=499 => "请检查模型 ID、高级 JSON 与请求参数",
+        _ => "服务端暂时不可用，请稍后重试",
+    }
+}
+
 async fn read_service_response(response: wreq::Response) -> Result<Value, String> {
     let status = response.status();
     if !status.is_success() {
         return Err(format!(
-            "翻译服务返回 HTTP {}，请检查 Key、模型 ID 和高级 JSON",
-            status.as_u16()
+            "翻译服务返回 HTTP {}：{}",
+            status.as_u16(),
+            http_status_hint(status.as_u16())
         ));
     }
     if response
@@ -480,7 +492,14 @@ pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, 
     let (_, _, key, http) = probe_client(&probe, 30)?;
     let response = http.get(models_url(&probe.api_url)?.as_str()).bearer_auth(key)
         .send().await.map_err(|_| "无法获取模型列表，请检查 URL 和网络，或手动填写模型 ID")?;
-    parse_models(read_service_response(response).await?)
+    let body = read_service_response(response).await.map_err(|error| {
+        if error.starts_with("翻译服务返回 HTTP") {
+            format!("{error}；部分服务不提供 /models 列表，可手动填写模型 ID")
+        } else {
+            error
+        }
+    })?;
+    parse_models(body)
 }
 
 #[tauri::command]
@@ -562,6 +581,45 @@ pub async fn novel_translate_page(
     .await
 }
 
+/// 模型返回的候选设定集：忽略多余字段，可选字段缺失取默认值。
+/// 语义校验（空值、长度、别名冲突）仍由 `merge_bible` 负责；落盘与读缓存保持严格 `StoryBible`。
+#[derive(Deserialize)]
+struct CandidateBible {
+    style: String,
+    terms: Vec<CandidateTerm>,
+}
+
+#[derive(Deserialize)]
+struct CandidateTerm {
+    source: String,
+    translation: String,
+    #[serde(default)]
+    kind: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    notes: String,
+}
+
+impl From<CandidateBible> for StoryBible {
+    fn from(candidate: CandidateBible) -> Self {
+        Self {
+            style: candidate.style,
+            terms: candidate
+                .terms
+                .into_iter()
+                .map(|term| Term {
+                    source: term.source,
+                    translation: term.translation,
+                    kind: term.kind,
+                    aliases: term.aliases,
+                    notes: term.notes,
+                })
+                .collect(),
+        }
+    }
+}
+
 async fn translate_book(
     client: &TranslationClient<'_>,
     novel: &NovelInput,
@@ -592,22 +650,34 @@ async fn translate_book(
         "page":page, "page_count":all_pages.len(), "previous_context":prev, "next_context":next,
         "locked_bible":book.bible, "source_lines":source });
     let _ = progress.send("prepare".into());
-    let candidate: StoryBible =
+    let candidate: CandidateBible =
         serde_json::from_value(client.complete(PREPARE_PROMPT, input.clone()).await?)
             .map_err(|_| "模型设定集结构无效")?;
-    book.bible = merge_bible(&book.bible, candidate)?;
+    book.bible = merge_bible(&book.bible, candidate.into())?;
     // Pass 1 先落盘；Pass 2 失败仍能沿用术语，不写半页译文。
     save_book(path, book)?;
     input["locked_bible"] = json!(book.bible);
     let _ = progress.send("translate".into());
+    // 模型译文同样容忍多余字段；缺 line/text 仍报错。
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
     struct Output {
-        lines: Vec<TranslatedLine>,
+        lines: Vec<OutputLine>,
+    }
+    #[derive(Deserialize)]
+    struct OutputLine {
+        line: usize,
+        text: String,
     }
     let output: Output = serde_json::from_value(client.complete(TRANSLATE_PROMPT, input).await?)
         .map_err(|_| "模型译文结构无效")?;
-    let lines = validate_translation(output.lines, &source)?;
+    let lines = validate_translation(
+        output
+            .lines
+            .into_iter()
+            .map(|line| TranslatedLine { line: line.line, text: line.text })
+            .collect(),
+        &source,
+    )?;
     book.pages.insert(page, lines.clone());
     save_book(path, book)?;
     Ok(lines)
@@ -711,6 +781,199 @@ mod tests {
             std::fs::remove_dir_all(dir).unwrap();
         }
         result.expect("真实模型翻译验收失败");
+    }
+
+    /// 真实小说在线验收：只读本机 pixiv 登录态，从小说日榜取一篇真实日文小说，
+    /// 走生产两轮管线翻译第 1 页；再故意用不存在的模型确认报错以可读文案暴露且不含凭据。
+    /// 只读登录态（绝不 save/clear），不改应用设置，结束清理临时记录。
+    #[tokio::test]
+    #[ignore = "需要显式授权：读取本机登录态抓取真实小说并访问付费模型服务"]
+    async fn live_real_novel_page_translation() {
+        use crate::cookies::CookieStore;
+        use crate::pixiv::{api::PixivApi, client::PixivClient};
+        use std::sync::Arc;
+
+        let key = std::env::var("PIXIV_TRANSLATION_TEST_KEY").expect("缺少测试 Key 环境变量");
+        let settings = Settings {
+            translation_api_url: std::env::var("PIXIV_TRANSLATION_TEST_URL")
+                .expect("缺少测试 URL 环境变量"),
+            translation_model: std::env::var("PIXIV_TRANSLATION_TEST_MODEL")
+                .expect("缺少测试模型环境变量"),
+            translation_extra: json!({"reasoning_effort":"low"}),
+            ..Settings::default()
+        };
+        validate_settings(&settings).unwrap();
+        let http = wreq::Client::builder()
+            .timeout(Duration::from_secs(180))
+            .redirect(wreq::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let client = TranslationClient {
+            http: http.clone(),
+            url: completion_url(&settings.translation_api_url).unwrap(),
+            key: key.clone(),
+            settings: &settings,
+        };
+
+        // 模型列表：验收服务应支持 /models，且列表包含配置的模型（对应设置页「获取模型」）。
+        let listed = translation_models(TranslationProbe {
+            api_url: settings.translation_api_url.clone(),
+            api_key: Some(key.clone()),
+            model: String::new(),
+            extra: json!({}),
+        })
+        .await
+        .expect("获取模型列表失败（不提供 /models 的服务请手动填写模型 ID）");
+        assert!(
+            listed.iter().any(|model| model == &settings.translation_model),
+            "模型列表应包含配置的模型 {}，实际 {} 项",
+            settings.translation_model,
+            listed.len()
+        );
+
+        // 真实小说取样：日榜前 20 条里取第一篇非 R18、首页 400~4000 字且含日文假名的作品。
+        let cookies = CookieStore::new()
+            .load()
+            .expect("读取登录态失败")
+            .filter(|map| map.get("PHPSESSID").is_some_and(|value| !value.is_empty()))
+            .expect("本机没有可用 pixiv 登录态，请先用应用登录一次");
+        let api = PixivApi::new(Arc::new(
+            PixivClient::new(&cookies).expect("创建 pixiv 客户端失败"),
+        ));
+        let ranking = api
+            .get_ranking("novel", "daily", 1, None)
+            .await
+            .expect("小说日榜请求失败");
+        let items = ranking
+            .get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!items.is_empty(), "小说日榜 items 不应为空");
+        // pixiv 的 id/计数在字符串与数字间漂移，宽松解析。
+        fn loose_i64(value: &Value) -> Option<i64> {
+            match value {
+                Value::Number(number) => number.as_i64(),
+                Value::String(text) => text.trim().parse().ok(),
+                _ => None,
+            }
+        }
+        let mut sample = None;
+        for item in items.iter().take(20) {
+            let id = item.get("id").and_then(loose_i64).unwrap_or(0);
+            if id <= 0 {
+                println!("跳过样本：id 无法解析");
+                continue;
+            }
+            if item.get("x_restrict").and_then(loose_i64).unwrap_or(0) != 0 {
+                println!("跳过样本 {id}：限制级作品");
+                continue;
+            }
+            let Ok(novel) = api.get_novel(id).await else {
+                println!("跳过样本 {id}：详情请求失败");
+                continue;
+            };
+            let kana = novel
+                .content
+                .chars()
+                .filter(|c| matches!(c, '\u{3040}'..='\u{30ff}'))
+                .count();
+            let first_page = novel.content.split("[newpage]").next().unwrap_or("").trim();
+            let first_len = first_page.chars().count();
+            if kana < 50 || !(200..=4000).contains(&first_len) {
+                println!("跳过样本 {id}：首页 {first_len} 字、假名 {kana} 个");
+                continue;
+            }
+            sample = Some((item.clone(), novel));
+            break;
+        }
+        let (item, novel) = sample.expect("日榜前 20 条里没有取到可用的日文小说样本");
+        let input = NovelInput {
+            novel_id: novel.novel_id,
+            title: novel.title.clone(),
+            tags: item
+                .get("tags")
+                .and_then(Value::as_array)
+                .map(|tags| {
+                    tags.iter()
+                        .filter_map(|tag| tag.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            description: String::new(),
+            content: novel.content.clone(),
+        };
+        let all_pages = pages(&input).unwrap();
+        let progress = Channel::<String>::new(|_| Ok(()));
+
+        let dir = std::env::temp_dir().join(format!("pixiv-translation-live-real-{}", uuid::Uuid::new_v4()));
+        let path = book_path(&dir, &input);
+        let started = std::time::Instant::now();
+        let result: Result<(), String> = async {
+            let mut book = TranslationBook::default();
+            let lines =
+                translate_book(&client, &input, &all_pages, 1, &path, &mut book, &progress).await?;
+            let source = source_lines(&all_pages[0]);
+            assert_eq!(lines.len(), source.len(), "译文行数应与原文一致");
+            for line in &lines {
+                assert!(
+                    source.iter().any(|item| item.line == line.line),
+                    "行号必须在原文范围内"
+                );
+                assert!(!line.text.trim().is_empty(), "译文不应为空");
+            }
+            assert!(
+                lines.iter().any(|line| line.text.chars().any(|c| matches!(c, '\u{4e00}'..='\u{9fff}'))),
+                "译文应含中文"
+            );
+            println!(
+                "真实小说《{}》共 {} 页；第 1 页 {} 行原文 → {} 行译文，设定集 {} 个词条，耗时 {} 秒",
+                input.title,
+                all_pages.len(),
+                source.len(),
+                lines.len(),
+                book.bible.terms.len(),
+                started.elapsed().as_secs()
+            );
+            println!(
+                "译文首行示例（{} 字）：{}",
+                lines[0].text.chars().count(),
+                lines[0].text.chars().take(40).collect::<String>()
+            );
+            Ok(())
+        }
+        .await;
+        if dir.exists() {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+        result.expect("真实小说翻译验收失败");
+
+        // 模型侧报错暴露：不存在的模型必须给出可读文案，且绝不包含凭据原文。
+        let bad_settings = Settings {
+            translation_model: "pixiv-tool-missing-model".into(),
+            ..settings.clone()
+        };
+        let bad_client = TranslationClient {
+            http,
+            url: completion_url(&bad_settings.translation_api_url).unwrap(),
+            key: key.clone(),
+            settings: &bad_settings,
+        };
+        let bad_dir = std::env::temp_dir().join(format!("pixiv-translation-live-bad-{}", uuid::Uuid::new_v4()));
+        let bad_path = book_path(&bad_dir, &input);
+        let mut bad_book = TranslationBook::default();
+        let error = translate_book(&bad_client, &input, &all_pages, 1, &bad_path, &mut bad_book, &progress)
+            .await
+            .expect_err("不存在的模型应报错");
+        if bad_dir.exists() {
+            std::fs::remove_dir_all(bad_dir).unwrap();
+        }
+        assert!(
+            error.starts_with("翻译服务返回") || error.contains("结构无效"),
+            "模型侧报错须暴露为可读文案，实际：{error}"
+        );
+        assert!(!error.contains(&key), "错误文案不得包含凭据");
+        println!("模型侧报错暴露（凭据已排除）：{error}");
     }
 
     #[test]
@@ -821,6 +1084,35 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn tolerates_model_omitting_optional_bible_fields() {
+        // 实测模型偶尔省略 aliases 等可选字段（2026-10-04 在线验收），多余字段同样忽略。
+        let candidate: CandidateBible = serde_json::from_value(json!({
+            "style": "简洁",
+            "summary": "多余字段应忽略",
+            "terms": [
+                {"source": "エリ", "translation": "绘里", "notes": "只给部分字段"},
+                {"source": "バー", "translation": "酒吧", "kind": "place", "aliases": ["酒馆"], "extra": 1}
+            ]
+        }))
+        .unwrap();
+        let merged = merge_bible(&StoryBible::default(), candidate.into()).unwrap();
+        assert_eq!(merged.style, "简洁");
+        assert_eq!(merged.terms[0].aliases, Vec::<String>::new());
+        assert_eq!(merged.terms[1].aliases, vec!["酒馆"]);
+        // 缺 terms、缺 source/translation 或类型不符仍拒绝。
+        for body in [
+            json!({"style":"x"}),
+            json!({"style":"x","terms":[{"translation":"译"}]}),
+            json!({"style":"x","terms":"nope"}),
+        ] {
+            assert!(
+                serde_json::from_value::<CandidateBible>(body.clone()).is_err(),
+                "结构不符须报错：{body}"
+            );
+        }
+    }
+
     #[test]
     fn locks_names_and_rejects_alias_conflicts() {
         let old = StoryBible {

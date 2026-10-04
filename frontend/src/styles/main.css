@@ -10,6 +10,14 @@
   --md-sys-color-on-surface: #191c20;
   --md-sys-color-on-surface-variant: #42474e;
   --md-sys-color-outline: #72777f;
+  /* 语义状态色（DESIGN.md Semantic State Rule）：成功/错误必须与可读文字同时出现。
+   * error 采用 M3 标准角色，供 .credential-error、翻译状态等文本与指示点使用；
+   * 成功沿用任务完成徽标既有的绿色对（container/ink），深浅主题各一组。 */
+  --md-sys-color-error: #ba1a1a;
+  --md-sys-color-error-container: #ffdad6;
+  --md-sys-color-on-error-container: #410002;
+  --state-success-container: #c8f7d0;
+  --state-success-ink: #0d3b18;
   --surface: var(--md-sys-color-surface);
   --ink: var(--md-sys-color-on-surface);
   --ink-muted: var(--md-sys-color-on-surface-variant);
@@ -44,6 +52,11 @@ html.dark {
   --md-sys-color-on-surface: #e1e2e8;
   --md-sys-color-on-surface-variant: #c2c7cf;
   --md-sys-color-outline: #8c9199;
+  --md-sys-color-error: #ffb4ab;
+  --md-sys-color-error-container: #93000a;
+  --md-sys-color-on-error-container: #ffdad6;
+  --state-success-container: #1c4b2c;
+  --state-success-ink: #a9f0bb;
 }
 
 :root[data-palette="indigo"] { --md-sys-color-primary:#445e91; --md-sys-color-on-primary:#fff; --md-sys-color-primary-container:#d9e2ff; --md-sys-color-on-primary-container:#001a41; --md-sys-color-secondary:#575e71; --md-sys-color-on-secondary:#fff; --md-sys-color-secondary-container:#dbe2f9; --md-sys-color-on-secondary-container:#141b2c; }

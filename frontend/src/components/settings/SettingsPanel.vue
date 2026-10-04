@@ -69,14 +69,14 @@
       <div class="m3-field">
         <div class="field-label"><label for="translation-model">{{ t('translation.model') }}</label><HelpTooltip :label="t('translation.model')" :text="t('translation.probeHint')" /></div>
         <div class="m3-row translation-model-row">
-          <md-outlined-text-field id="translation-model" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
+          <md-outlined-select v-if="availableModels.length" id="translation-model" class="translation-model-control" :aria-label="t('translation.model')" :value="form.translation_model" @change="form.translation_model = ($event.target as HTMLSelectElement).value">
+            <md-select-option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</md-select-option>
+          </md-outlined-select>
+          <md-outlined-text-field v-else id="translation-model" class="translation-model-control" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
           <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe" @click="runProbe('models')">{{ t(probeBusy === 'models' ? 'translation.fetchingModels' : 'translation.fetchModels') }}</md-outlined-button>
         </div>
-        <md-outlined-select v-if="availableModels.length" id="translation-model-select" :aria-label="t('translation.selectModel')" :value="availableModels.includes(form.translation_model) ? form.translation_model : ''" @change="form.translation_model = ($event.target as HTMLSelectElement).value">
-          <md-select-option value="">{{ t('translation.selectModel') }}</md-select-option>
-          <md-select-option v-for="model in availableModels" :key="model" :value="model">{{ model }}</md-select-option>
-        </md-outlined-select>
-        <span v-if="modelsError" class="field-hint credential-error" role="alert">{{ modelsError }}</span>
+        <md-text-button v-if="availableModels.length" @click="useManualModel">{{ t('translation.manualModel') }}</md-text-button>
+        <span v-if="modelsError" class="field-hint state-error" role="alert">{{ modelsError }}</span>
       </div>
       <div class="m3-field">
         <div class="field-label"><label for="translation-json">{{ t('translation.advanced') }}</label><HelpTooltip :label="t('translation.advanced')" :text="t('translation.jsonHint')" /></div>
@@ -86,7 +86,7 @@
         <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe || !form.translation_model.trim()" @click="runProbe('test')">{{ t(probeBusy === 'test' ? 'translation.testing' : 'translation.testService') }}</md-outlined-button>
         <span v-if="probeBusy === 'models'" class="field-hint" role="status">{{ t('translation.fetchingModels') }}</span>
         <span v-else-if="probeBusy === 'test'" class="field-hint" role="status">{{ t('translation.testing') }}</span>
-        <span v-else-if="testResult" class="field-hint" :class="{ 'credential-error': testFailed }" :role="testFailed ? 'alert' : 'status'">{{ testResult }}</span>
+        <span v-else-if="testResult" class="field-hint" :class="testFailed ? 'state-error' : 'state-success'" :role="testFailed ? 'alert' : 'status'">{{ testResult }}</span>
       </div>
     </template>
 
@@ -163,6 +163,10 @@ const testFailed = ref(false);
 let probeVersion = 0;
 let probeRequest = 0;
 const canProbe = computed(() => Boolean(form.value.translation_api_url.trim() && !clearTranslationKey.value && (translationKey.value.trim() || form.value.translation_key_configured)));
+/** 下拉选项始终包含当前值：手动输入的模型可能不在获取到的列表里，切换控件时不丢配置。 */
+const modelOptions = computed(() => availableModels.value.includes(form.value.translation_model) || !form.value.translation_model.trim()
+  ? availableModels.value
+  : [form.value.translation_model, ...availableModels.value]);
 watch(() => [form.value.translation_api_url, translationKey.value, clearTranslationKey.value], () => {
   availableModels.value = []; modelsError.value = "";
 }, { flush: "sync" });
@@ -206,6 +210,8 @@ async function runProbe(action: "test" | "models") {
     else { testFailed.value = true; testResult.value = errorMessage(error) || t("translation.testFailed"); }
   } finally { if (request === probeRequest) probeBusy.value = null; }
 }
+/** 收起下拉回到自由文本输入：列表可能不含目标模型，或用户想直接粘贴模型 ID。 */
+function useManualModel() { availableModels.value = []; modelsError.value = ""; }
 function resetTranslationDraft() {
   probeRequest++; probeVersion++; probeBusy.value = null;
   availableModels.value = []; modelsError.value = ""; testResult.value = "";
@@ -265,8 +271,10 @@ async function handleConfirm() { const action = confirmAction.value; closeConfir
 .settings-number-input { width: 140px; }
 .settings-api-key-input { flex: 1; min-width: 0; }
 .field-hint { color: var(--ink-muted); font-size: 12px; }
-.credential-error { color: var(--md-sys-color-error); }
-.translation-model-row > md-outlined-text-field { flex: 1; min-width: 0; }
+/* 状态色只做补充，状态本身始终有可读文字（DESIGN.md Semantic State Rule）。 */
+.credential-error, .state-error { color: var(--md-sys-color-error); }
+.state-success { color: var(--state-success-ink); }
+.translation-model-control { flex: 1; min-width: 0; }
 .translation-model-row > md-outlined-button { flex: none; }
 .danger-button { --md-text-button-label-text-color: #ba1a1a; }
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
