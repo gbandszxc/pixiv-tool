@@ -629,14 +629,25 @@ function openInPixiv(): void {
 </template>
 
 <style scoped>
+/* 纸色模式译文色（--translation-ink）：纸面恒为浅纸，而深色主题的 primary 是浅色调、
+ * 直接落上去就没了对比，故与纸面墨色混成「同色相、纸面可读」的一档。
+ * 比例按主题分档，两档在五档纸色 × 五个色板下正文对比度均 ≥4.5:1（比例越高，与原文 ink 的色差越大）：
+ * 浅色主题的 primary 本身够深，取 75% 仍达标且色差明显；深色主题的 primary 是浅色调，只能取 25%
+ * 才守得住纸面对比度。原先两档都取 20%，浅色主题下与原文 ink 的色差只有 ΔE≈6，肉眼几乎同色。 */
+.novel-view[class*="read-bg-"] {
+  --translation-ink: color-mix(in srgb, var(--md-sys-color-primary) 75%, var(--ink));
+}
+html.dark .novel-view[class*="read-bg-"] {
+  --translation-ink: color-mix(in srgb, var(--md-sys-color-primary) 25%, var(--ink));
+}
 .novel-view[class*="read-bg-"] :deep(.translated-text) {
-  color: color-mix(in srgb, var(--md-sys-color-primary) 20%, var(--ink));
+  color: var(--translation-ink);
 }
 .novel-view[class*="read-bg-"] :deep(.translation-popover md-outlined-button) {
-  --md-outlined-button-label-text-color: color-mix(in srgb, var(--md-sys-color-primary) 20%, var(--ink));
+  --md-outlined-button-label-text-color: var(--translation-ink);
 }
 .novel-view[class*="read-bg-"] :deep(.translation-trigger.active) {
-  --md-icon-button-icon-color: color-mix(in srgb, var(--md-sys-color-primary) 20%, var(--ink));
+  --md-icon-button-icon-color: var(--translation-ink);
 }
 /* 满血宽度：抵消 .app-content 的 24px 内边距（640px 下为 16px），让顶栏/翻页器整行贴边。
    固定高度 flex 列：顶栏 / 滚动层 / 翻页器三行铺满视口，负 margin 抵消后顶栏贴窗口上边、

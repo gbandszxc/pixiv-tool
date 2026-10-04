@@ -1,6 +1,6 @@
 <template>
   <div class="bg-picker">
-    <!-- 触发器：圆形色块回显当前选中纸色（默认 = surface 底 + outline 描边） -->
+    <!-- 触发器：圆形色块回显当前选中纸色（恒带 outline 描边——纸色与底栏同色时靠它成形） -->
     <md-icon-button
       ref="trigger"
       :aria-label="t('browse.novel.bgLabel')"
@@ -11,7 +11,6 @@
     >
       <span
         class="bg-dot"
-        :class="{ plain: !currentBg }"
         :style="currentBg ? { background: currentBg } : undefined"
         aria-hidden="true"
       ></span>
@@ -136,15 +135,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onWindowKeydown));
   display: inline-flex;
 }
 
-/* 触发器内 18px 圆形色块；默认态（跟随主题）用 surface 底 + outline 描边保证在底栏上可见 */
+/* 触发器内 18px 圆形色块（border-box，含描边共 18px）。
+ * 描边恒在：纸色模式下色块回显的正是底栏底色，没有描边就与背景同化而隐身；
+ * 默认态（跟随主题）无底色，同样只有这圈描边能把它从底栏上划出来。 */
 .bg-dot {
   width: 18px;
   height: 18px;
-  border-radius: 50%;
-}
-
-.bg-dot.plain {
   border: 1px solid var(--md-sys-color-outline);
+  border-radius: 50%;
 }
 
 /* 透明遮罩：fixed 铺满、无 scrim，仅承接「点击外部关闭」；层级在底栏（z 10）之上 */
@@ -176,20 +174,21 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onWindowKeydown));
   transform-origin: bottom center;
 }
 
-/* 色块：28px 圆形、纸面色即底色；默认态 surface 底 + outline 描边；选中 primary 2px 外环 */
+/* 色块：28px 圆形、纸面色即底色、恒 outline 1px 描边（弹出层底为纸色 6% 墨混色，
+ * 与纸色块过近，描边是色块彼此与面板之间的分界）；默认态另铺 surface 底；
+ * 选中态 primary 2px 外环 */
 .bg-swatch {
   flex: none;
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 0;
+  border: 1px solid var(--md-sys-color-outline);
   border-radius: 50%;
   cursor: pointer;
 }
 
 .bg-swatch.plain {
   background: var(--md-sys-color-surface);
-  border: 1px solid var(--md-sys-color-outline);
 }
 
 .bg-swatch.selected {
