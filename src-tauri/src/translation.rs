@@ -500,7 +500,9 @@ fn request_body(settings: &Settings, format: ApiFormat, prompt: &str, input: Val
         .cloned()
         .unwrap_or_default();
     body.insert("model".into(), json!(settings.translation_model.trim()));
-    body.insert("stream".into(), json!(false));
+    // 流式固定开启（ADR 0025）：非流式在网关整段生成期间零字节回传，实测长请求会被
+    // 链路按空闲切断（BrokenPipe），流式让字节从头流到尾。
+    body.insert("stream".into(), json!(true));
     match format {
         ApiFormat::ChatCompletions => {
             body.insert(
@@ -551,77 +553,143 @@ fn parse_model_json(text: &str) -> Result<Value, String> {
     serde_json::from_str(text).map_err(|_| "模型未返回合法 JSON，请重试或更换模型".into())
 }
 
-/// 各协议的完成状态与文本位置不同，先取出模型文本，再统一解析 JSON。
-fn parse_completion(body: Value, format: ApiFormat) -> Result<Value, String> {
-    let text = match format {
-        ApiFormat::ChatCompletions => {
-            let choice = body
-                .get("choices")
-                .and_then(Value::as_array)
-                .and_then(|choices| choices.first())
-                .ok_or("翻译服务未返回 choices")?;
-            if choice
-                .get("finish_reason")
-                .and_then(Value::as_str)
-                .is_some_and(|reason| reason != "stop")
-            {
-                return Err(incomplete_output_error());
-            }
-            choice
-                .pointer("/message/content")
-                .and_then(Value::as_str)
-                .ok_or("模型未返回文本译文")?
-                .to_string()
-        }
+/// 译文文本上限（与原非流式响应上限一致）。
+const MAX_TRANSLATION_TEXT_BYTES: usize = 4_000_000;
+/// 原始 SSE 上限：上游可能把推理增量也发下来，留足余量后再掐。
+const MAX_TRANSLATION_STREAM_BYTES: usize = 16_000_000;
+
+/// 各协议文本增量的落点不同（Chat Completions / Responses / Anthropic）。
+fn stream_event_text(format: ApiFormat, event: &Value) -> Option<&str> {
+    match format {
+        ApiFormat::ChatCompletions => event
+            .pointer("/choices/0/delta/content")
+            .and_then(Value::as_str),
         ApiFormat::Responses => {
-            match body.get("status").and_then(Value::as_str) {
-                Some("completed") | None => {}
-                Some("incomplete") => return Err(incomplete_output_error()),
-                Some("failed") | Some("cancelled") => {
-                    return Err("模型请求失败，请检查模型 ID 与高级 JSON 后重试".into())
-                }
-                Some(_) => return Err("模型请求未完成，请稍后重试".into()),
-            }
-            body.get("output")
-                .and_then(Value::as_array)
-                .map(|output| {
-                    output
-                        .iter()
-                        .filter_map(|item| item.get("content").and_then(Value::as_array))
-                        .flatten()
-                        .filter(|part| {
-                            part.get("type").and_then(Value::as_str) == Some("output_text")
-                        })
-                        .filter_map(|part| part.get("text").and_then(Value::as_str))
-                        .collect::<Vec<_>>()
-                        .join("")
-                })
-                .filter(|text| !text.trim().is_empty())
-                .ok_or("模型未返回文本译文")?
+            (event.get("type").and_then(Value::as_str) == Some("response.output_text.delta"))
+                .then(|| event.get("delta").and_then(Value::as_str))
+                .flatten()
         }
-        ApiFormat::Anthropic => {
-            if body
-                .get("stop_reason")
-                .and_then(Value::as_str)
-                .is_some_and(|reason| !matches!(reason, "end_turn" | "stop_sequence"))
-            {
-                return Err(incomplete_output_error());
+        ApiFormat::Anthropic => (event.get("type").and_then(Value::as_str)
+            == Some("content_block_delta")
+            // thinking_delta 等推理增量不属于译文，只收 text_delta。
+            && event.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta"))
+        .then(|| event.pointer("/delta/text").and_then(Value::as_str))
+        .flatten(),
+    }
+}
+
+/// 流内事件里的截断/失败信号，语义与旧的非流式 `finish_reason`/`status` 判断一致。
+fn stream_event_error(format: ApiFormat, event: &Value) -> Option<String> {
+    match format {
+        ApiFormat::ChatCompletions => event
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| reason != "stop")
+            .then(incomplete_output_error),
+        ApiFormat::Responses => match event.get("type").and_then(Value::as_str) {
+            Some("response.incomplete") => Some(incomplete_output_error()),
+            Some("response.failed") | Some("response.cancelled") => {
+                Some("模型请求失败，请检查模型 ID 与高级 JSON 后重试".into())
             }
-            body.get("content")
-                .and_then(Value::as_array)
-                .map(|content| {
-                    content
-                        .iter()
-                        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-                        .filter_map(|block| block.get("text").and_then(Value::as_str))
-                        .collect::<Vec<_>>()
-                        .join("")
-                })
-                .filter(|text| !text.trim().is_empty())
-                .ok_or("模型未返回文本译文")?
+            _ => None,
+        },
+        ApiFormat::Anthropic => event
+            .pointer("/delta/stop_reason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| !matches!(reason, "end_turn" | "stop_sequence"))
+            .then(incomplete_output_error),
+    }
+}
+
+/// 增量 SSE 解析：只取 `data:` 行，按协议累积文本增量（其余事件忽略）。
+struct StreamReader {
+    format: ApiFormat,
+    pending: Vec<u8>,
+    text: String,
+    failure: Option<String>,
+}
+
+impl StreamReader {
+    fn new(format: ApiFormat) -> Self {
+        Self {
+            format,
+            pending: Vec::new(),
+            text: String::new(),
+            failure: None,
         }
-    };
-    parse_model_json(&text)
+    }
+
+    /// 灌入一段原始字节；行可能被切块，只在收到换行后才解析。
+    fn push(&mut self, chunk: &[u8]) -> Result<(), String> {
+        self.pending.extend_from_slice(chunk);
+        while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
+            let line = String::from_utf8_lossy(&self.pending[..end]).trim().to_string();
+            self.pending.drain(..=end);
+            self.line(&line);
+        }
+        if self.text.len() > MAX_TRANSLATION_TEXT_BYTES {
+            return Err("翻译响应过大".into());
+        }
+        Ok(())
+    }
+
+    fn line(&mut self, line: &str) {
+        let Some(payload) = line.strip_prefix("data:") else {
+            return;
+        };
+        let payload = payload.trim();
+        if payload.is_empty() || payload == "[DONE]" {
+            return;
+        }
+        // 解析不了的载荷忽略（部分网关会插保活文本），最终由 JSON 解析兜底。
+        let Ok(event) = serde_json::from_str::<Value>(payload) else {
+            return;
+        };
+        if event.get("error").is_some() {
+            self.failure = Some("模型请求失败，请检查模型 ID 与高级 JSON 后重试".into());
+            return;
+        }
+        if let Some(message) = stream_event_error(self.format, &event) {
+            self.failure = Some(message);
+        }
+        if let Some(text) = stream_event_text(self.format, &event) {
+            self.text.push_str(text);
+        }
+    }
+
+    /// 收尾：最后一行可能没有换行；失败信号优先于文本。
+    fn finish(mut self) -> Result<String, String> {
+        if !self.pending.is_empty() {
+            let line = String::from_utf8_lossy(&self.pending).trim().to_string();
+            self.line(&line);
+        }
+        if let Some(failure) = self.failure {
+            return Err(failure);
+        }
+        if self.text.trim().is_empty() {
+            return Err("模型未返回文本译文".into());
+        }
+        Ok(self.text)
+    }
+}
+
+/// 读完整条流并取回模型文本；中途断流单独给文案，好让用户知道重试即可。
+async fn read_stream_text(response: wreq::Response, format: ApiFormat) -> Result<String, String> {
+    let mut reader = StreamReader::new(format);
+    let mut raw = 0usize;
+    let mut stream = std::pin::pin!(response.bytes_stream());
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| {
+            log::warn!("翻译响应流中断：{error}");
+            "翻译响应流中断（长请求可能被网络切断），请重试本页翻译".to_string()
+        })?;
+        raw += chunk.len();
+        if raw > MAX_TRANSLATION_STREAM_BYTES {
+            return Err("翻译响应过大".into());
+        }
+        reader.push(&chunk)?;
+    }
+    reader.finish()
 }
 
 /// 会话标识请求头：opencode zen 系网关（Go 档）要求每个会话一个稳定 ID（路由与 prompt
@@ -701,13 +769,23 @@ impl TranslationClient<'_> {
                     )
                 } else {
                     // 只报可排查的成因类别，不回显原始报错（含 URL）与凭据（ADR 0017）。
+                    log::warn!("翻译请求失败（{}）：{error}", transport_hint(&error));
                     format!(
                         "无法连接翻译服务（{}），请检查 URL 与网络/代理设置",
                         transport_hint(&error)
                     )
                 }
             })?;
-        parse_completion(read_service_response(response).await?, self.format)
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            log::warn!("翻译服务返回 HTTP {status}");
+            return Err(format!(
+                "翻译服务返回 HTTP {status}：{}",
+                http_status_hint(status)
+            ));
+        }
+        log::info!("POST {} → {}", self.url, response.status().as_u16());
+        parse_model_json(&read_stream_text(response, self.format).await?)
     }
 }
 
@@ -739,7 +817,8 @@ fn http_status_hint(status: u16) -> &'static str {
     }
 }
 
-async fn read_service_response(response: wreq::Response) -> Result<Value, String> {
+/// `/models` 是普通 JSON 端点（SSE 只用于生成请求），单独读取。
+async fn read_json_body(response: wreq::Response) -> Result<Value, String> {
     let status = response.status();
     if !status.is_success() {
         return Err(format!(
@@ -748,17 +827,11 @@ async fn read_service_response(response: wreq::Response) -> Result<Value, String
             http_status_hint(status.as_u16())
         ));
     }
-    if response
-        .content_length()
-        .is_some_and(|length| length > 4_000_000)
-    {
-        return Err("翻译响应过大".into());
-    }
     let mut stream = std::pin::pin!(response.bytes_stream());
     let mut raw = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| "读取翻译响应失败")?;
-        if raw.len() + chunk.len() > 4_000_000 {
+        if raw.len() + chunk.len() > MAX_TRANSLATION_TEXT_BYTES {
             return Err("翻译响应过大".into());
         }
         raw.extend_from_slice(&chunk);
@@ -864,7 +937,7 @@ pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, 
     let response = client
         .authorized(client.http.get(client.url.as_str()))
         .send().await.map_err(|_| "无法获取模型列表，请检查 URL 和网络，或手动填写模型 ID")?;
-    let body = read_service_response(response).await.map_err(|error| {
+    let body = read_json_body(response).await.map_err(|error| {
         if error.starts_with("翻译服务返回 HTTP") {
             format!("{error}；部分服务不提供 /models 列表，可手动填写模型 ID")
         } else {
@@ -1083,6 +1156,13 @@ async fn translate_book(
         "page":page, "page_count":all_pages.len(), "previous_context":prev, "next_context":next,
         "locked_bible":book.bible, "source_lines":source });
     let _ = progress.send("prepare".into());
+    log::info!(
+        "小说 {} 第 {} 页：Pass 1 准备设定集（{} 行原文，已锁定 {} 词条）",
+        novel.novel_id,
+        page,
+        source.len(),
+        book.bible.terms.len()
+    );
     let candidate: CandidateBible =
         serde_json::from_value(client.complete(&with_target_language(PREPARE_PROMPT, target_language), input.clone()).await?)
             .map_err(|_| "模型设定集结构无效")?;
@@ -1091,6 +1171,7 @@ async fn translate_book(
     save_book(path, book)?;
     input["locked_bible"] = json!(book.bible);
     let _ = progress.send("translate".into());
+    log::info!("小说 {} 第 {} 页：Pass 2 翻译 {} 行", novel.novel_id, page, source.len());
     // 模型译文同样容忍多余字段；缺 line/text 仍报错。
     #[derive(Deserialize)]
     struct Output {
@@ -1123,6 +1204,20 @@ async fn translate_book(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 模拟网关的流式响应：模型文本作为一次增量下发（三种协议各自的增量形状）。
+    fn sse_reply(format: ApiFormat, text: &str) -> String {
+        let chunk = match format {
+            ApiFormat::ChatCompletions => {
+                json!({"choices":[{"delta":{"content":text},"finish_reason":"stop"}]})
+            }
+            ApiFormat::Responses => json!({"type":"response.output_text.delta","delta":text}),
+            ApiFormat::Anthropic => {
+                json!({"type":"content_block_delta","delta":{"type":"text_delta","text":text}})
+            }
+        };
+        format!("data: {chunk}\n\ndata: [DONE]\n\n")
+    }
 
     /// 连接失败的文案要报出成因类别（此处用本机必然拒绝的端口），且不回显原始报错与凭据。
     #[tokio::test]
@@ -1972,52 +2067,75 @@ mod tests {
         assert_eq!(capped["max_tokens"], 1024);
     }
 
-    /// 三种协议的响应解析：文本位置与完成状态各自不同，统一产出模型 JSON。
+    /// 三种协议的流式增量解析：文本位置、完成信号与跨块切分。
     #[test]
-    fn parses_completion_per_api_format() {
+    fn parses_streamed_text_per_api_format() {
         use ApiFormat::*;
+        /// 逐字节灌入：同时覆盖跨块切行与跨块切多字节字符。
+        fn stream(format: ApiFormat, raw: &str) -> Result<String, String> {
+            let mut reader = StreamReader::new(format);
+            for byte in raw.as_bytes() {
+                reader.push(&[*byte])?;
+            }
+            reader.finish()
+        }
+        // Chat Completions：只取 delta.content，推理增量与事件行忽略。
+        let chat = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"想\"}}]}\n\
+                    data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"lines\\\":\"}}]}\n\
+                    \n\
+                    data: {\"choices\":[{\"delta\":{\"content\":\"[]}\"},\"finish_reason\":\"stop\"}]}\n\
+                    data: [DONE]\n";
         assert_eq!(
-            parse_completion(
-                json!({"choices":[{"finish_reason":"stop","message":{"content":"{\"lines\":[]}"}}]}),
-                ChatCompletions
-            )
-            .unwrap(),
-            json!({"lines":[]})
-        );
-        assert_eq!(
-            parse_completion(
-                json!({"status":"completed","output":[
-                    {"type":"reasoning","content":[{"type":"reasoning_text","text":"忽略"}]},
-                    {"type":"message","content":[{"type":"output_text","text":"{\"lines\":"},{"type":"output_text","text":"[]}"}]}
-                ]}),
-                Responses
-            )
-            .unwrap(),
+            parse_model_json(&stream(ChatCompletions, chat).unwrap()).unwrap(),
             json!({"lines":[]})
         );
         assert!(
-            parse_completion(json!({"status":"incomplete","output":[]}), Responses).is_err(),
-            "Responses 未完整输出须报错"
-        );
-        assert!(parse_completion(json!({"status":"failed"}), Responses).is_err());
-        assert_eq!(
-            parse_completion(
-                json!({"stop_reason":"end_turn","content":[{"type":"text","text":"```json\n{\"lines\":[]}\n```"}]}),
-                Anthropic
+            stream(
+                ChatCompletions,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"{}\"},\"finish_reason\":\"length\"}]}\n"
             )
-            .unwrap(),
+            .is_err(),
+            "达到 token 上限须报错"
+        );
+        assert!(stream(ChatCompletions, "data: {\"error\":{\"message\":\"无权限\"}}\n").is_err());
+        assert!(stream(ChatCompletions, "data: [DONE]\n").is_err(), "空文本须报错");
+        // Responses：只认 output_text.delta。
+        let responses = "event: response.output_text.delta\n\
+                         data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"忽略\"}\n\
+                         data: {\"type\":\"response.output_text.delta\",\"delta\":\"好\"}\n\
+                         data: {\"type\":\"response.completed\"}\n";
+        assert_eq!(stream(Responses, responses).unwrap(), "好");
+        assert!(stream(Responses, "data: {\"type\":\"response.incomplete\"}\n").is_err());
+        assert!(stream(Responses, "data: {\"type\":\"response.failed\"}\n").is_err());
+        // Anthropic：content_block_delta + text_delta，stop_reason 非正常结束即失败。
+        let anthropic = "event: content_block_delta\n\
+                         data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"text\":\"忽略\"}}\n\
+                         data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"```json\\n{\\\"lines\\\":[]}\\n```\"}}\n\
+                         data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n";
+        assert_eq!(
+            parse_model_json(&stream(Anthropic, anthropic).unwrap()).unwrap(),
             json!({"lines":[]})
         );
-        for body in [
-            json!({"stop_reason":"max_tokens","content":[{"type":"text","text":"{}"}]}),
-            json!({"stop_reason":"refusal","content":[{"type":"text","text":"{}"}]}),
-            json!({"stop_reason":"end_turn","content":[{"type":"tool_use","id":"x"}]}),
-            json!({"stop_reason":"end_turn","content":[]}),
-        ] {
-            assert!(parse_completion(body.clone(), Anthropic).is_err(), "body={body}");
+        for stop in ["max_tokens", "refusal"] {
+            assert!(
+                stream(
+                    Anthropic,
+                    &format!("data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"{stop}\"}}}}\n")
+                )
+                .is_err(),
+                "stop_reason={stop} 须报错"
+            );
         }
-        assert!(parse_completion(json!({"output":[]}), Responses).is_err());
-        assert!(parse_completion(json!({}), ChatCompletions).is_err());
+        // 末行没有换行也要收尾；解析不了的行忽略。
+        assert_eq!(stream(ChatCompletions, "data: 保活\n").is_err(), true);
+        assert_eq!(
+            stream(
+                ChatCompletions,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}"
+            )
+            .unwrap(),
+            "ok"
+        );
     }
 
     #[test]
@@ -2160,14 +2278,6 @@ mod tests {
             )
             .is_err()
         );
-        assert!(
-            parse_completion(
-                json!({"choices":[{"finish_reason":"length","message":{"content":"{}"}}]}),
-                ApiFormat::ChatCompletions
-            )
-            .is_err()
-        );
-        assert_eq!(parse_completion(json!({"choices":[{"finish_reason":"stop","message":{"content":"```json\n{\"lines\":[]}\n```"}}]}), ApiFormat::ChatCompletions).unwrap(),json!({"lines":[]}));
     }
     #[test]
     fn persists_bible_and_pages_and_invalidates_changed_source() {
@@ -2252,9 +2362,9 @@ mod tests {
                     serde_json::from_slice::<Value>(&raw[header_end..header_end + content_length])
                         .unwrap(),
                 );
-                let body = json!({"choices":[{"finish_reason":"stop","message":{"content":output.to_string()}}]}).to_string();
+                let body = sse_reply(ApiFormat::ChatCompletions, &output.to_string());
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
                     body.len(),
                     body
                 );
@@ -2313,7 +2423,7 @@ mod tests {
         assert_eq!(requests.len(), 6);
         for request in &requests {
             assert_eq!(request["model"], "mock-model");
-            assert_eq!(request["stream"], false);
+            assert_eq!(request["stream"], true);
             assert_eq!(request["store"], false);
             assert_eq!(request["reasoning_effort"], "high");
             assert_eq!(request["thinking"]["budget_tokens"], 2048);
@@ -2355,15 +2465,10 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            // 服务端按协议原样返回各自的响应形状（文本内仍是模型 JSON）。
+            // 服务端按协议各自的流式形状返回（文本内仍是模型 JSON）。
             let replies = [
-                json!({"status":"completed","output":[
-                    {"type":"reasoning","content":[{"type":"reasoning_text","text":"忽略"}]},
-                    {"type":"message","content":[{"type":"output_text","text":"{\"ok\":true}"}]}
-                ]})
-                .to_string(),
-                json!({"stop_reason":"end_turn","content":[{"type":"text","text":"{\"ok\":true}"}]})
-                    .to_string(),
+                sse_reply(ApiFormat::Responses, "{\"ok\":true}"),
+                sse_reply(ApiFormat::Anthropic, "{\"ok\":true}"),
             ];
             let mut captured = Vec::new();
             for reply in replies {
@@ -2455,6 +2560,7 @@ mod tests {
         assert_eq!(captured[0].1["store"], false);
         assert_eq!(captured[0].1["max_output_tokens"], 1024);
         assert!(captured[0].1.get("messages").is_none());
+        assert_eq!(captured[0].1["stream"], true);
         assert!(captured[1].0.starts_with("post /v1/messages http/1.1"), "{}", captured[1].0);
         assert!(captured[1].0.contains("x-api-key: test-key"));
         assert!(captured[1].0.contains("anthropic-version: 2023-06-01"));
@@ -2462,6 +2568,7 @@ mod tests {
         assert_eq!(captured[1].1["system"], "SYS");
         assert_eq!(captured[1].1["messages"][0]["content"], payload.to_string());
         assert_eq!(captured[1].1["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
+        assert_eq!(captured[1].1["stream"], true);
         assert!(captured[1].1.get("store").is_none());
         // 会话标识头只发给 opencode 域名：本机模拟服务（127.0.0.1）不带。
         assert!(!captured[0].0.contains("x-opencode-session"));
