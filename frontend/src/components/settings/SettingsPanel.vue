@@ -80,6 +80,10 @@
           </div>
           <span v-if="form.translation_key_error" class="field-hint credential-error" role="alert">{{ form.translation_key_error }}</span>
         </div>
+        <div class="m3-field">
+          <div class="field-label"><label for="translation-timeout">{{ t('translation.timeout') }}</label><HelpTooltip :label="t('translation.timeout')" :text="t('translation.timeoutHint')" /></div>
+          <div class="m3-row"><md-outlined-text-field id="translation-timeout" class="settings-number-input" type="number" min="30" max="3600" step="30" :value="String(form.translation_timeout_seconds)" @input="form.translation_timeout_seconds = Number(($event.target as HTMLInputElement).value)" /></div>
+        </div>
       </fieldset>
 
       <fieldset class="m3-field settings-fieldset translation-group" role="group" aria-labelledby="translation-group-model">
@@ -241,6 +245,7 @@ async function runProbe(action: "test" | "models") {
     const probe: TranslationProbe = {
       api_url: form.value.translation_api_url, model: action === "test" ? form.value.translation_model : "",
       format: apiFormat.value,
+      timeout_seconds: Number(form.value.translation_timeout_seconds) || 600,
       extra: action === "test" ? parseTranslationJson() : {},
       ...(translationKey.value.trim() ? { api_key: translationKey.value } : {}),
     };
@@ -286,7 +291,7 @@ function changeLang(lang: string) { applyLanguage(lang); form.value.language = l
 function snapshot() { return JSON.stringify([form.value, translationJson.value]); }
 function applyPreview() { const dark = form.value.theme === "dark" || (form.value.theme === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches); document.documentElement.classList.toggle("dark", dark); document.documentElement.dataset.palette = form.value.theme_color || "pixiv"; setWindowTheme(dark ? "dark" : "light").catch(() => {}); }
 watch(() => [form.value.theme, form.value.theme_color], applyPreview);
-onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180; form.value = { ...settingsStore.settings }; resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); });
+onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180; if (typeof settingsStore.settings.translation_timeout_seconds !== "number") settingsStore.settings.translation_timeout_seconds = 600; form.value = { ...settingsStore.settings }; resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); });
 /** 有未保存改动：弹窗据此决定关闭前是否提示。 */
 function hasUnsaved() { return Boolean(translationKey.value) || clearTranslationKey.value || Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
 /** 回滚到上次保存值（取消 / 确认放弃修改）。主题预览随表单回到已保存值。 */
@@ -294,6 +299,8 @@ function reset() { form.value = { ...settingsStore.settings }; resetTranslationD
 defineExpose({ save, reset, hasUnsaved });
 async function save(): Promise<boolean> {
   if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) { notify(t("settings.maxWaitInvalid")); return false; }
+  const timeout = form.value.translation_timeout_seconds;
+  if (!timeout || timeout < 30 || timeout > 3600) { notify(t("translation.timeoutInvalid")); return false; }
   let extra: Record<string, unknown>;
   try { extra = parseTranslationJson(); }
   catch { notify(translationJsonError.value); return false; }

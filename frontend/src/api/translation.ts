@@ -48,6 +48,8 @@ export interface TranslationProbe {
   model: string;
   /** 接口协议（API_FORMATS 之一），空串由后端按默认 Chat Completions 处理。 */
   format: string;
+  /** 单请求超时（秒）：「检测可用」按此值计时；获取模型列表固定 30 秒。 */
+  timeout_seconds?: number;
   extra: Record<string, unknown>;
 }
 

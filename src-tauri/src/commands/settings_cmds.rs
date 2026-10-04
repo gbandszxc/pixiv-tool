@@ -4,6 +4,7 @@
 //! - settings_get → Settings（snake_case 字段，等价旧 GET /api/settings）
 //! - settings_save → {"status":"success"}；output_dir 非法 → Err(中文校验消息)；
 //!   max_wait_seconds 非法 → Err("最大等待时间必须是 30~86400 秒之间的整数")；
+//!   translation_timeout_seconds 非法 → Err("翻译超时时间必须是 30~3600 秒之间的整数")；
 //!   novel_font_scale 非法 → Err("小说字号缩放必须是 0.75~2.0 之间的数字")；
 //!   novel_bg_color 非法 → Err("阅读背景色无效")
 //! - clear_logs → {"status":"success"}（清空 <data_dir>/logs/app.log）
@@ -16,17 +17,18 @@ use tauri::State;
 use crate::settings::{
     STARTUP_PAGES, Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
     validate_max_wait_value, validate_novel_bg_color_value, validate_novel_font_scale_value,
-    validate_output_dir_value, validate_thumb_tier,
+    validate_output_dir_value, validate_thumb_tier, validate_translation_timeout_value,
 };
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 20] = [
+const WRITABLE_KEYS: [&str; 21] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
     "translation_target_language",
+    "translation_timeout_seconds",
     "translation_extra",
     "startup_page",
     "output_dir",
@@ -98,8 +100,9 @@ pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Resul
 }
 
 /// partial JSON → 新 Settings（纯函数，离线可测）：
-/// 1. output_dir / max_wait_seconds / theme_color / 缩略图档位 / show_r18 /
-///    novel_font_scale / novel_bg_color 先做中文校验（失败即 Err，旧 400 文案）
+/// 1. output_dir / max_wait_seconds / translation_timeout_seconds / theme_color /
+///    缩略图档位 / show_r18 / novel_font_scale / novel_bg_color 先做中文校验
+///    （失败即 Err，旧 400 文案）
 /// 2. 白名单键覆盖到当前配置序列化结果上，再反解回 Settings
 ///    （类型不合法的值在反解时以中文错误拒绝）
 pub fn apply_settings_patch(
@@ -118,6 +121,9 @@ pub fn apply_settings_patch(
     }
     if let Some(value) = patch_obj.get("max_wait_seconds") {
         validate_max_wait_value(value)?;
+    }
+    if let Some(value) = patch_obj.get("translation_timeout_seconds") {
+        validate_translation_timeout_value(value)?;
     }
     if let Some(value) = patch_obj.get("theme_color") {
         let color = value.as_str().ok_or_else(|| "主题色板无效".to_string())?;
@@ -213,6 +219,7 @@ mod tests {
             "theme": "dark",
             "theme_color": "jade",
             "max_wait_seconds": 3600,
+            "translation_timeout_seconds": 900,
             "backend_port": null,
             "output_formats": ["txt"],
             // 非白名单键忽略
@@ -223,6 +230,7 @@ mod tests {
         assert_eq!(updated.theme, "dark");
         assert_eq!(updated.theme_color, "jade");
         assert_eq!(updated.max_wait_seconds, 3600);
+        assert_eq!(updated.translation_timeout_seconds, 900);
         assert_eq!(updated.backend_port, None);
         assert_eq!(updated.output_formats, vec!["txt".to_string()]);
         // 未出现的键保持原值
@@ -324,6 +332,35 @@ mod tests {
             )
             .is_ok()
         );
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_validates_translation_timeout() {
+        let data_dir = temp_data_dir("translate-timeout");
+        let message = "翻译超时时间必须是 30~3600 秒之间的整数";
+        for bad in [json!(10), json!(0), json!(3601), json!(true), json!("600"), json!(null)] {
+            assert_eq!(
+                apply_settings_patch(
+                    &Settings::default(),
+                    &json!({"translation_timeout_seconds": bad}),
+                    &data_dir
+                )
+                .unwrap_err(),
+                message,
+                "bad={bad}"
+            );
+        }
+        // 区间两端与默认值通过
+        for ok in [json!(30), json!(3600), json!(600)] {
+            let updated = apply_settings_patch(
+                &Settings::default(),
+                &json!({"translation_timeout_seconds": ok}),
+                &data_dir,
+            )
+            .unwrap();
+            assert_eq!(updated.translation_timeout_seconds, ok.as_i64().unwrap());
+        }
         cleanup(&data_dir);
     }
 

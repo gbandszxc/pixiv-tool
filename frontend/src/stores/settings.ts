@@ -34,6 +34,8 @@ export const useSettingsStore = defineStore("settings", () => {
     translation_model: "",
     // 翻译目标语言（空串=跟随界面语言），取值见 api/translation.ts 的 TARGET_LANGUAGE_CODES
     translation_target_language: "",
+    // 单请求超时（秒）：默认 600（10 分钟），合法区间 30~3600
+    translation_timeout_seconds: 600,
     translation_extra: {},
     translation_key_configured: false,
     translation_key_error: "",

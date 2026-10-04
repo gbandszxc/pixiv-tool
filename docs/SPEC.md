@@ -462,6 +462,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "translation_api_format": "chat_completions",
   "translation_model": "",
   "translation_target_language": "",
+  "translation_timeout_seconds": 600,
   "translation_extra": {}
 }
 ```
@@ -513,7 +514,12 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   settings.json——不入库、不写日志、不进报错原文。接口行为与错误形态见
   `docs/research/saucenao-api.md`。
 - `translation_api_url` / `translation_api_format` / `translation_model` / `translation_target_language` / `translation_extra`：小说翻译 API 基址或当前协议的完整端点、接口协议（`chat_completions` 默认 / `responses` / `anthropic`，白名单外加载期回落默认）、模型 ID、目标语言 code（白名单见 §7 `novel_translate_page`；空串 = 跟随界面语言 `language`）、自定义请求体 JSON 对象，默认空字符串/`chat_completions`/空字符串/空字符串/空对象。URL 按协议推导端点后缀（`/chat/completions`、`/responses`、`/messages`），`/models` 同源推导；OpenAI 系凭据走 Bearer，Anthropic 走 `x-api-key` + `anthropic-version: 2023-06-01`，请求体与响应解析随协议装配（Anthropic 的 `max_tokens` 默认 8192，可用高级 JSON 覆盖）。高级 JSON 支持 reasoning_effort、max_completion_tokens、供应商 thinking 等扩展；保留字段按协议追加（responses 禁 `input`/`instructions`，anthropic 禁 `system`），不允许覆盖。见 ADR 0017、ADR 0018、ADR 0020。JSON 上限 16KB，模型 ID 上限 256 字节。HTTP 仅允许本机模型，其他须 HTTPS；禁重定向、URL 凭据/query/fragment。
-- 以上各键在 `settings_save` 白名单内（20 个持久化键，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
+- `translation_timeout_seconds`：小说翻译**单次模型请求**超时（秒），默认 `600`（10 分钟，
+  取代旧的写死 180s），合法区间 30~3600，设置弹窗「小说翻译 · 服务连接」可配。
+  一页通常请求两次，超时按每次请求计算；超时可用的错误文案跟随该值报出实际秒数。
+  「检测可用」按草稿里的同名字段（缺省 600）计时，「获取模型列表」固定 30 秒。
+  手改 settings.json 写入区间外的值（含 0/负数）时加载期回落默认。见 ADR 0023。
+- 以上各键在 `settings_save` 白名单内（21 个持久化键，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
 
@@ -862,11 +868,11 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 20 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 高级 JSON；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 21 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_get(novel)` | 读取本机小说设定集和已译页；novel=`{novel_id,title,tags,description,content}`；返回 `{bible:{style,terms},pages:{页码:[{line,text}]}}`，原文和元信息 SHA256 区分版本 |
 | `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel（供后端与测试使用，界面只回显统一「翻译中」）；返回 `{status,lines,target_language}`，status=`translated` 时 lines 为 `[{line,text}]`（line 为该页原始文本的零起行号，可能来自本机缓存），status=`already_target_language` 时未调用模型、lines 为空；目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言，见 ADR 0018 |
 | `translation_models(probe)` | 用未保存草稿探测模型列表端点（按 `format` 协议从同一基址推导 `/models`；OpenAI 系 Bearer，Anthropic `x-api-key` + 版本头，opencode 主机附会话标识头），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
-| `translation_test(probe)` | 用未保存草稿按所选协议发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则 |
+| `translation_test(probe)` | 用未保存草稿按所选协议发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则；超时用草稿里的 `timeout_seconds`（缺省 600 秒）——「获取模型列表」固定 30 秒 |
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状）；page ≥ 1，pageSize 为 1–200，拒绝偏移溢出 |
@@ -1140,6 +1146,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0020 | 小说翻译支持三种模型接口协议 | [adr/0020-translation-api-formats.md](adr/0020-translation-api-formats.md) |
 | 0021 | 翻译请求对 opencode 网关携带会话标识头 | [adr/0021-translation-session-header.md](adr/0021-translation-session-header.md) |
 | 0022 | 浏览模式发表评论与回复（扩展 ADR 0016 写操作边界） | [adr/0022-browse-comment-posting.md](adr/0022-browse-comment-posting.md) |
+| 0023 | 小说翻译单请求超时可配置（默认 10 分钟） | [adr/0023-translation-timeout-setting.md](adr/0023-translation-timeout-setting.md) |
 
 ADR 按需追加，不强制一次性写完。
 

@@ -697,9 +697,13 @@ impl TranslationClient<'_> {
             .await
             .map_err(|error| {
                 if error.is_timeout() {
-                    "翻译请求超时（180 秒），可降低思考深度后重试"
+                    // 文案跟随实际生效的超时（设置项），不再写死秒数。
+                    format!(
+                        "翻译请求超时（{} 秒），可降低思考深度或调大设置里的翻译超时",
+                        translation_timeout_seconds(self.settings.translation_timeout_seconds)
+                    )
                 } else {
-                    "无法连接翻译服务，请检查 URL 和网络"
+                    "无法连接翻译服务，请检查 URL 和网络".to_string()
                 }
             })?;
         parse_completion(read_service_response(response).await?, self.format)
@@ -755,11 +759,29 @@ pub struct TranslationProbe {
     /// 接口协议（见 [`TRANSLATION_API_FORMATS`]），空串按默认 Chat Completions。
     #[serde(default)]
     pub format: String,
+    /// 单请求超时（秒）：对应设置页「翻译超时」草稿值；缺省用默认值，
+    /// 使用前兜底到合法区间。
+    #[serde(default = "default_translation_timeout")]
+    pub timeout_seconds: i64,
     #[serde(default = "empty_options")]
     pub extra: Value,
 }
 
 fn empty_options() -> Value { json!({}) }
+
+/// 探测请求缺省超时（秒）= 设置页默认值。
+fn default_translation_timeout() -> i64 {
+    crate::settings::DEFAULT_TRANSLATION_TIMEOUT_SECONDS
+}
+
+/// 单请求超时（秒）：兜底到合法区间——手改 settings.json 的越界值会在加载期回落，
+/// 这里再兜一次，避免 0 秒让请求立刻超时。客户端 timeout 与超时文案共用此值。
+fn translation_timeout_seconds(seconds: i64) -> u64 {
+    seconds.clamp(
+        crate::settings::TRANSLATION_TIMEOUT_MIN_SECONDS,
+        crate::settings::TRANSLATION_TIMEOUT_MAX_SECONDS,
+    ) as u64
+}
 
 fn probe_client(
     probe: &TranslationProbe,
@@ -769,6 +791,8 @@ fn probe_client(
         translation_api_url: probe.api_url.clone(),
         translation_api_format: probe.format.clone(),
         translation_model: probe.model.clone(),
+        // 与客户端实际 timeout 保持一致，超时文案才不会与实际值不符。
+        translation_timeout_seconds: timeout as i64,
         translation_extra: probe.extra.clone(),
         ..Settings::default()
     };
@@ -834,7 +858,9 @@ pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, 
 
 #[tauri::command]
 pub async fn translation_test(probe: TranslationProbe) -> Result<(), String> {
-    let (settings, format, key, http) = probe_client(&probe, 180)?;
+    // 检测可用是一次真实生成请求：用草稿里的超时（与「获取模型列表」固定 30 秒不同）。
+    let (settings, format, key, http) =
+        probe_client(&probe, translation_timeout_seconds(probe.timeout_seconds))?;
     if settings.translation_model.trim().is_empty() { return Err("请先填写或选择模型 ID".into()); }
     let url = completion_url(&settings.translation_api_url, format)?;
     let client = TranslationClient { http, url, format, key, session: session_id(PROBE_SESSION_SEED), settings: &settings };
@@ -937,7 +963,9 @@ async fn translate_page_flow(
     let format = resolve_api_format(&settings.translation_api_format)?;
     let url = completion_url(&settings.translation_api_url, format)?;
     let client = wreq::Client::builder()
-        .timeout(Duration::from_secs(180))
+        .timeout(Duration::from_secs(translation_timeout_seconds(
+            settings.translation_timeout_seconds,
+        )))
         .redirect(wreq::redirect::Policy::none())
         .build()
         .map_err(|_| "无法初始化翻译客户端")?;
@@ -1219,6 +1247,7 @@ mod tests {
             api_key: Some(key.clone()),
             model: String::new(),
             format: String::new(),
+            timeout_seconds: default_translation_timeout(),
             extra: json!({}),
         })
         .await
@@ -1688,6 +1717,7 @@ mod tests {
             api_key: api_key.map(str::to_string),
             model: model.into(),
             format: String::new(),
+            timeout_seconds: default_translation_timeout(),
             extra: json!({}),
         };
         // 空 Key 与坏 URL 在发请求前就被拒绝；空模型只拦生成检测，不拦列表获取。
@@ -1719,6 +1749,75 @@ mod tests {
             ..keyed("model-id", "https://example.com/v1", Some("probe-key"))
         };
         assert!(probe_client(&bad_format, 30).is_err());
+    }
+
+    #[test]
+    fn translation_timeout_clamps_and_probe_defaults() {
+        // 区间内原样；越界兜底到两端（手改配置的 0/负值不能变成「立刻超时」）
+        assert_eq!(translation_timeout_seconds(600), 600);
+        assert_eq!(translation_timeout_seconds(30), 30);
+        assert_eq!(translation_timeout_seconds(3600), 3600);
+        assert_eq!(translation_timeout_seconds(0), 30);
+        assert_eq!(translation_timeout_seconds(-1), 30);
+        assert_eq!(translation_timeout_seconds(90_000), 3600);
+        // 草稿缺省超时 = 设置默认值（600 秒 = 10 分钟）
+        assert_eq!(default_translation_timeout(), 600);
+        let probe: TranslationProbe = serde_json::from_value(json!({
+            "api_url": "https://example.com/v1",
+            "model": "model-id",
+        }))
+        .unwrap();
+        assert_eq!(probe.timeout_seconds, 600);
+        assert_eq!(probe.extra, json!({}), "缺省高级配置为空对象");
+        // 草稿显式传值原样保留
+        let explicit: TranslationProbe = serde_json::from_value(json!({
+            "api_url": "https://example.com/v1",
+            "model": "model-id",
+            "timeout_seconds": 1200,
+        }))
+        .unwrap();
+        assert_eq!(explicit.timeout_seconds, 1200);
+    }
+
+    /// 超时文案跟随设置值：客户端 1 秒超时仅为测试提速，设置里写 42 秒，
+    /// 断言报出的是设置值而不是写死常量。
+    #[tokio::test]
+    async fn timeout_message_reports_configured_seconds() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        // 读掉请求后故意不响应且不关闭连接，让客户端自己超时。
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0u8; 8192];
+            let _ = socket.read(&mut buffer).await;
+            std::future::pending::<()>().await;
+        });
+        let settings = Settings {
+            translation_model: "mock-model".into(),
+            translation_timeout_seconds: 42,
+            ..Settings::default()
+        };
+        let client = TranslationClient {
+            http: wreq::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(1))
+                .build()
+                .unwrap(),
+            url: completion_url(&format!("http://{address}/v1"), ApiFormat::ChatCompletions)
+                .unwrap(),
+            format: ApiFormat::ChatCompletions,
+            key: "test-key".into(),
+            session: novel_session(42),
+            settings: &settings,
+        };
+        let error = client.complete("检测", json!("x")).await.unwrap_err();
+        server.abort();
+        assert_eq!(
+            error,
+            "翻译请求超时（42 秒），可降低思考深度或调大设置里的翻译超时"
+        );
     }
 
     #[test]

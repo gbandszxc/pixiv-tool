@@ -54,6 +54,9 @@ pub struct Settings {
     pub translation_model: String,
     /// 翻译目标语言（见 [`crate::translation::TARGET_LANGUAGES`]），空串 = 跟随界面语言 `language`。
     pub translation_target_language: String,
+    /// 小说翻译单请求超时（秒），默认 [`DEFAULT_TRANSLATION_TIMEOUT_SECONDS`]（10 分钟）；
+    /// 合法区间 [`TRANSLATION_TIMEOUT_MIN_SECONDS`] ~ [`TRANSLATION_TIMEOUT_MAX_SECONDS`]。
+    pub translation_timeout_seconds: i64,
     /// 模型请求体扩展；不含凭据或应用保留字段，可用键随协议不同。
     pub translation_extra: Value,
 }
@@ -80,6 +83,7 @@ impl Default for Settings {
             translation_api_format: "chat_completions".into(),
             translation_model: String::new(),
             translation_target_language: String::new(),
+            translation_timeout_seconds: DEFAULT_TRANSLATION_TIMEOUT_SECONDS,
             translation_extra: serde_json::json!({}),
         }
     }
@@ -100,6 +104,12 @@ pub const STARTUP_PAGES: [&str; 4] = [
     "/browse/bookmark",
     "/tools/tasks",
 ];
+/// 小说翻译单请求超时默认值（秒）= 10 分钟（慢模型/长页远比旧的 180s 宽松）。
+pub const DEFAULT_TRANSLATION_TIMEOUT_SECONDS: i64 = 600;
+/// 小说翻译单请求超时合法区间下限（秒）：低于此值连正常首字延迟都等不到。
+pub const TRANSLATION_TIMEOUT_MIN_SECONDS: i64 = 30;
+/// 小说翻译单请求超时合法区间上限（秒）= 1 小时。
+pub const TRANSLATION_TIMEOUT_MAX_SECONDS: i64 = 3600;
 
 /// 缩略图档位校验：非字符串或不在 `allowed` 集合内 → Err(message)。
 pub fn validate_thumb_tier(value: &Value, allowed: &[&str], message: &str) -> Result<(), String> {
@@ -170,6 +180,13 @@ impl Settings {
                     .contains(&settings.translation_api_format.as_str())
                 {
                     settings.translation_api_format = "chat_completions".into();
+                }
+                // 翻译超时：手改 settings.json 写入区间外的值（含 0 与负数）回落默认，
+                // 否则 0 秒会让全部翻译请求立刻超时。
+                if !(TRANSLATION_TIMEOUT_MIN_SECONDS..=TRANSLATION_TIMEOUT_MAX_SECONDS)
+                    .contains(&settings.translation_timeout_seconds)
+                {
+                    settings.translation_timeout_seconds = DEFAULT_TRANSLATION_TIMEOUT_SECONDS;
                 }
                 settings
             }
@@ -283,6 +300,26 @@ pub fn validate_max_wait_value(v: &Value) -> Result<i64, String> {
     }
 }
 
+/// JSON 值形式的翻译超时校验（bool / 非整数 / 越界都拒绝），通过时返回该整数。
+pub fn validate_translation_timeout_value(v: &Value) -> Result<i64, String> {
+    if v.is_boolean() {
+        return Err(translation_timeout_message());
+    }
+    match v.as_i64() {
+        Some(n) if (TRANSLATION_TIMEOUT_MIN_SECONDS..=TRANSLATION_TIMEOUT_MAX_SECONDS).contains(&n) => {
+            Ok(n)
+        }
+        _ => Err(translation_timeout_message()),
+    }
+}
+
+/// 翻译超时校验文案：区间与常量同源，避免改常量忘改文案。
+fn translation_timeout_message() -> String {
+    format!(
+        "翻译超时时间必须是 {TRANSLATION_TIMEOUT_MIN_SECONDS}~{TRANSLATION_TIMEOUT_MAX_SECONDS} 秒之间的整数"
+    )
+}
+
 /// JSON 值形式的小说字号缩放校验：bool / 非数字 / 非有限值（NaN/inf）/ 越界都拒绝。
 pub fn validate_novel_font_scale_value(v: &Value) -> Result<(), String> {
     let Some(scale) = v.as_f64().filter(|s| s.is_finite()) else {
@@ -338,6 +375,10 @@ mod tests {
         assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
         assert_eq!(s.translation_api_format, "chat_completions");
+        assert_eq!(
+            s.translation_timeout_seconds,
+            DEFAULT_TRANSLATION_TIMEOUT_SECONDS
+        );
         assert!(
             s.output_dir
                 .replace('\\', "/")
@@ -352,6 +393,7 @@ mod tests {
         assert_eq!(s.max_wait_seconds, 180);
         let raw = std::fs::read_to_string(settings_path(&dir)).unwrap();
         assert!(raw.contains("\"max_wait_seconds\": 180"));
+        assert!(raw.contains("\"translation_timeout_seconds\": 600"));
         assert!(raw.contains("\"language\": \"zh-CN\""));
         // 非 ASCII 不转义（ensure_ascii=false 等价）
         assert!(raw.contains("\"output_dir\": \""));
@@ -379,6 +421,10 @@ mod tests {
         assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
         assert_eq!(s.translation_api_format, "chat_completions");
+        assert_eq!(
+            s.translation_timeout_seconds,
+            DEFAULT_TRANSLATION_TIMEOUT_SECONDS
+        );
         assert_eq!(s.startup_page, "/browse/home");
         cleanup(&dir);
     }
@@ -527,6 +573,40 @@ mod tests {
     }
 
     #[test]
+    fn translation_timeout_roundtrip_and_invalid_fallback_on_load() {
+        let dir = temp_config_dir("translate-timeout");
+        // 合法值（含区间两端）原样保留
+        for seconds in [
+            TRANSLATION_TIMEOUT_MIN_SECONDS,
+            900,
+            TRANSLATION_TIMEOUT_MAX_SECONDS,
+        ] {
+            std::fs::write(
+                settings_path(&dir),
+                format!(r#"{{"translation_timeout_seconds":{seconds}}}"#),
+            )
+            .unwrap();
+            assert_eq!(
+                Settings::load_or_init(&dir).translation_timeout_seconds,
+                seconds
+            );
+        }
+        // 区间外（含 0 与负数）回落默认：否则 0 秒会让全部翻译请求立刻超时
+        for seconds in [0, -1, TRANSLATION_TIMEOUT_MAX_SECONDS + 1] {
+            std::fs::write(
+                settings_path(&dir),
+                format!(r#"{{"translation_timeout_seconds":{seconds}}}"#),
+            )
+            .unwrap();
+            assert_eq!(
+                Settings::load_or_init(&dir).translation_timeout_seconds,
+                DEFAULT_TRANSLATION_TIMEOUT_SECONDS
+            );
+        }
+        cleanup(&dir);
+    }
+
+    #[test]
     fn validate_thumb_tier_rules() {
         let ok = validate_thumb_tier(
             &serde_json::json!("large"),
@@ -630,5 +710,41 @@ mod tests {
         assert!(validate_max_wait_value(&serde_json::json!(180)).is_ok());
         assert!(validate_max_wait_value(&serde_json::json!(true)).is_err());
         assert!(validate_max_wait_value(&serde_json::json!("180")).is_err());
+    }
+
+    #[test]
+    fn validate_translation_timeout_rules() {
+        let message = "翻译超时时间必须是 30~3600 秒之间的整数";
+        // 区间两端与默认值通过，并返回整数本身
+        assert_eq!(
+            validate_translation_timeout_value(&serde_json::json!(30)).unwrap(),
+            30
+        );
+        assert_eq!(
+            validate_translation_timeout_value(&serde_json::json!(3600)).unwrap(),
+            3600
+        );
+        assert_eq!(
+            validate_translation_timeout_value(&serde_json::json!(600)).unwrap(),
+            600
+        );
+        // 越界 / 非整数 / bool / null 全部拒绝，文案精确匹配
+        for bad in [29, 3601, 0, -5] {
+            assert_eq!(
+                validate_translation_timeout_value(&serde_json::json!(bad)).unwrap_err(),
+                message
+            );
+        }
+        for bad in [
+            serde_json::json!(true),
+            serde_json::json!("600"),
+            serde_json::json!(null),
+            serde_json::json!(600.5),
+        ] {
+            assert_eq!(
+                validate_translation_timeout_value(&bad).unwrap_err(),
+                message
+            );
+        }
     }
 }
