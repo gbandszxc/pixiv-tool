@@ -388,30 +388,111 @@ impl TranslationClient<'_> {
                     "无法连接翻译服务，请检查 URL 和网络"
                 }
             })?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(format!(
-                "翻译服务返回 HTTP {}，请检查 Key、模型 ID 和高级 JSON",
-                status.as_u16()
-            ));
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length > 4_000_000)
-        {
+        parse_completion(read_service_response(response).await?)
+    }
+}
+
+async fn read_service_response(response: wreq::Response) -> Result<Value, String> {
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!(
+            "翻译服务返回 HTTP {}，请检查 Key、模型 ID 和高级 JSON",
+            status.as_u16()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > 4_000_000)
+    {
+        return Err("翻译响应过大".into());
+    }
+    let mut stream = std::pin::pin!(response.bytes_stream());
+    let mut raw = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "读取翻译响应失败")?;
+        if raw.len() + chunk.len() > 4_000_000 {
             return Err("翻译响应过大".into());
         }
-        let mut stream = std::pin::pin!(response.bytes_stream());
-        let mut raw = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|_| "读取翻译响应失败")?;
-            if raw.len() + chunk.len() > 4_000_000 {
-                return Err("翻译响应过大".into());
-            }
-            raw.extend_from_slice(&chunk);
-        }
-        parse_completion(serde_json::from_slice(&raw).map_err(|_| "翻译服务返回格式无效")?)
+        raw.extend_from_slice(&chunk);
     }
+    serde_json::from_slice(&raw).map_err(|_| "翻译服务返回格式无效".into())
+}
+
+/// 设置草稿只用于本次请求；Key 不写入配置或凭据库。
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranslationProbe {
+    pub api_url: String,
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default = "empty_options")]
+    pub extra: Value,
+}
+
+fn empty_options() -> Value { json!({}) }
+
+fn probe_client(probe: &TranslationProbe, timeout: u64) -> Result<(Settings, tauri::Url, String, wreq::Client), String> {
+    let settings = Settings {
+        translation_api_url: probe.api_url.clone(),
+        translation_model: probe.model.clone(),
+        translation_extra: probe.extra.clone(),
+        ..Settings::default()
+    };
+    validate_settings(&settings)?;
+    let url = completion_url(&probe.api_url)?;
+    let key = match &probe.api_key {
+        Some(key) => Some(key.trim().to_string()),
+        None => read_api_key()?,
+    }.filter(|key| !key.is_empty()).ok_or("请先配置翻译 API Key")?;
+    if key.len() > 8192 || key.chars().any(char::is_control) {
+        return Err("翻译 API Key 格式无效".into());
+    }
+    let http = wreq::Client::builder()
+        .timeout(Duration::from_secs(timeout))
+        .redirect(wreq::redirect::Policy::none())
+        .build().map_err(|_| "无法初始化翻译客户端")?;
+    Ok((settings, url, key, http))
+}
+
+fn models_url(value: &str) -> Result<tauri::Url, String> {
+    let mut url = completion_url(value)?;
+    let base = url.path().strip_suffix("/chat/completions").ok_or("翻译 API URL 无效")?;
+    let path = format!("{base}/models");
+    url.set_path(&path);
+    Ok(url)
+}
+
+fn parse_models(body: Value) -> Result<Vec<String>, String> {
+    let data = body.get("data").and_then(Value::as_array).ok_or("服务未返回兼容的模型列表，可手动填写模型 ID")?;
+    if data.len() > 2000 { return Err("模型列表超过 2000 项，请手动填写模型 ID".into()); }
+    let mut models: Vec<String> = data.iter().filter_map(|item| item.get("id").and_then(Value::as_str))
+        .filter(|id| !id.trim().is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+        .map(str::to_string).collect();
+    models.sort();
+    models.dedup();
+    if models.is_empty() { return Err("服务未返回可选模型，可手动填写模型 ID".into()); }
+    Ok(models)
+}
+
+#[tauri::command]
+pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, String> {
+    let (_, _, key, http) = probe_client(&probe, 30)?;
+    let response = http.get(models_url(&probe.api_url)?.as_str()).bearer_auth(key)
+        .send().await.map_err(|_| "无法获取模型列表，请检查 URL 和网络，或手动填写模型 ID")?;
+    parse_models(read_service_response(response).await?)
+}
+
+#[tauri::command]
+pub async fn translation_test(probe: TranslationProbe) -> Result<(), String> {
+    let (settings, url, key, http) = probe_client(&probe, 180)?;
+    if settings.translation_model.trim().is_empty() { return Err("请先填写或选择模型 ID".into()); }
+    let client = TranslationClient { http, url, key, settings: &settings };
+    let result = client.complete("这是连接检测。仅返回 JSON 对象 {\"ok\":true}，不输出其他文字。", json!("请确认服务可用。")).await?;
+    if result.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err("服务已响应，但未返回预期 JSON，请调整高级配置或更换模型".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -660,6 +741,65 @@ mod tests {
         ] {
             assert!(validate_options(&value).is_err());
         }
+    }
+
+    #[test]
+    fn builds_models_url_and_parses_listing() {
+        assert_eq!(
+            models_url("https://example.com/v1").unwrap().as_str(),
+            "https://example.com/v1/models"
+        );
+        assert_eq!(
+            models_url("https://example.com/v1/chat/completions")
+                .unwrap()
+                .as_str(),
+            "https://example.com/v1/models"
+        );
+        assert!(models_url("notaurl").is_err());
+        let listed = parse_models(json!({"data":[{"id":"model-b"},{"id":"model-a"},{"object":"model"},{"id":""}]})).unwrap();
+        assert_eq!(listed, vec!["model-a", "model-b"]);
+        let huge: Vec<Value> = (0..2001).map(|index| json!({ "id": index })).collect();
+        for body in [
+            json!({"object":"list"}),
+            json!({"data":[{"object":"model"}]}),
+            json!({"data":[]}),
+            json!({"data": huge}),
+        ] {
+            assert!(parse_models(body).is_err(), "空列表、缺 id 或超量须报错");
+        }
+    }
+
+    #[tokio::test]
+    async fn probe_requires_key_url_and_model_for_generation() {
+        let keyed = |model: &str, api_url: &str, api_key: Option<&str>| TranslationProbe {
+            api_url: api_url.into(),
+            api_key: api_key.map(str::to_string),
+            model: model.into(),
+            extra: json!({}),
+        };
+        // 空 Key 与坏 URL 在发请求前就被拒绝；空模型只拦生成检测，不拦列表获取。
+        assert!(
+            translation_test(keyed("", "https://example.com/v1", Some("probe-key")))
+                .await
+                .is_err()
+        );
+        assert!(
+            translation_models(keyed("", "ftp://example.com", Some("probe-key")))
+                .await
+                .is_err()
+        );
+        assert!(probe_client(&keyed("model-id", "https://example.com/v1", Some("")), 30).is_err());
+        assert!(probe_client(&keyed("model-id", "https://example.com/v1", Some("probe-key")), 30).is_ok());
+        assert!(
+            probe_client(&keyed("", "https://example.com/v1", Some("probe-key")), 30).is_ok(),
+            "列表请求允许空模型"
+        );
+        assert!(
+            translation_test(keyed("", "https://example.com/v1", Some("probe-key")))
+                .await
+                .is_err(),
+            "检测请求仍须模型 ID"
+        );
     }
 
     #[test]

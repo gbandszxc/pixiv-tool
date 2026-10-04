@@ -67,12 +67,26 @@
         <md-text-button v-if="form.translation_key_configured" :disabled="clearTranslationKey" @click="clearTranslationKey = true; translationKey = ''">{{ t(clearTranslationKey ? 'translation.keyWillClear' : 'translation.clearKey') }}</md-text-button>
       </div>
       <div class="m3-field">
-        <label for="translation-model">{{ t('translation.model') }}</label>
-        <md-outlined-text-field id="translation-model" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
+        <div class="field-label"><label for="translation-model">{{ t('translation.model') }}</label><HelpTooltip :label="t('translation.model')" :text="t('translation.probeHint')" /></div>
+        <div class="m3-row translation-model-row">
+          <md-outlined-text-field id="translation-model" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
+          <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe" @click="runProbe('models')">{{ t(probeBusy === 'models' ? 'translation.fetchingModels' : 'translation.fetchModels') }}</md-outlined-button>
+        </div>
+        <md-outlined-select v-if="availableModels.length" id="translation-model-select" :aria-label="t('translation.selectModel')" :value="availableModels.includes(form.translation_model) ? form.translation_model : ''" @change="form.translation_model = ($event.target as HTMLSelectElement).value">
+          <md-select-option value="">{{ t('translation.selectModel') }}</md-select-option>
+          <md-select-option v-for="model in availableModels" :key="model" :value="model">{{ model }}</md-select-option>
+        </md-outlined-select>
+        <span v-if="modelsError" class="field-hint credential-error" role="alert">{{ modelsError }}</span>
       </div>
       <div class="m3-field">
         <div class="field-label"><label for="translation-json">{{ t('translation.advanced') }}</label><HelpTooltip :label="t('translation.advanced')" :text="t('translation.jsonHint')" /></div>
         <md-outlined-text-field id="translation-json" type="textarea" rows="5" :value="translationJson" :error="Boolean(translationJsonError)" :error-text="translationJsonError" @input="translationJson = ($event.target as HTMLTextAreaElement).value; translationJsonError = ''" />
+      </div>
+      <div class="m3-row" :aria-busy="Boolean(probeBusy)">
+        <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe || !form.translation_model.trim()" @click="runProbe('test')">{{ t(probeBusy === 'test' ? 'translation.testing' : 'translation.testService') }}</md-outlined-button>
+        <span v-if="probeBusy === 'models'" class="field-hint" role="status">{{ t('translation.fetchingModels') }}</span>
+        <span v-else-if="probeBusy === 'test'" class="field-hint" role="status">{{ t('translation.testing') }}</span>
+        <span v-else-if="testResult" class="field-hint" :class="{ 'credential-error': testFailed }" :role="testFailed ? 'alert' : 'status'">{{ testResult }}</span>
       </div>
     </template>
 
@@ -117,9 +131,10 @@
  * 调用——保存是整表一次写入，取消回滚到上次保存值并恢复主题预览。
  * 主题与配色仍为即时预览（只写 DOM，不落盘），落盘时机由保存按钮决定。
  */
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import HelpTooltip from "../common/HelpTooltip.vue";
+import { fetchTranslationModels, testTranslationService, type TranslationProbe } from "../../api/translation";
 import { useSettingsStore } from "../../stores/settings";
 import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
@@ -140,7 +155,60 @@ const translationKey = ref("");
 const clearTranslationKey = ref(false);
 const translationJson = ref("{}");
 const translationJsonError = ref("");
+const availableModels = ref<string[]>([]);
+const modelsError = ref("");
+const probeBusy = ref<"test" | "models" | null>(null);
+const testResult = ref("");
+const testFailed = ref(false);
+let probeVersion = 0;
+let probeRequest = 0;
+const canProbe = computed(() => Boolean(form.value.translation_api_url.trim() && !clearTranslationKey.value && (translationKey.value.trim() || form.value.translation_key_configured)));
+watch(() => [form.value.translation_api_url, translationKey.value, clearTranslationKey.value], () => {
+  availableModels.value = []; modelsError.value = "";
+}, { flush: "sync" });
+watch(() => [form.value.translation_api_url, translationKey.value, clearTranslationKey.value, form.value.translation_model, translationJson.value], () => {
+  probeVersion++; testResult.value = ""; modelsError.value = "";
+}, { flush: "sync" });
+onBeforeUnmount(() => { probeRequest++; });
+function parseTranslationJson(): Record<string, unknown> {
+  try {
+    const extra = JSON.parse(translationJson.value);
+    if (!extra || Array.isArray(extra) || typeof extra !== "object") throw new Error();
+    translationJsonError.value = "";
+    return extra;
+  } catch {
+    translationJsonError.value = t("translation.jsonInvalid");
+    throw new Error(translationJsonError.value);
+  }
+}
+async function runProbe(action: "test" | "models") {
+  if (probeBusy.value || !canProbe.value) return;
+  const request = ++probeRequest;
+  const version = probeVersion;
+  modelsError.value = ""; testResult.value = ""; testFailed.value = false;
+  try {
+    const probe: TranslationProbe = {
+      api_url: form.value.translation_api_url, model: action === "test" ? form.value.translation_model : "",
+      extra: action === "test" ? parseTranslationJson() : {},
+      ...(translationKey.value.trim() ? { api_key: translationKey.value } : {}),
+    };
+    probeBusy.value = action;
+    if (action === "models") {
+      const models = await fetchTranslationModels(probe);
+      if (request === probeRequest && version === probeVersion) availableModels.value = models;
+    } else {
+      await testTranslationService(probe);
+      if (request === probeRequest && version === probeVersion) testResult.value = t("translation.serviceAvailable");
+    }
+  } catch (error) {
+    if (request !== probeRequest || version !== probeVersion) return;
+    if (action === "models") modelsError.value = errorMessage(error) || t("translation.modelsFailed");
+    else { testFailed.value = true; testResult.value = errorMessage(error) || t("translation.testFailed"); }
+  } finally { if (request === probeRequest) probeBusy.value = null; }
+}
 function resetTranslationDraft() {
+  probeRequest++; probeVersion++; probeBusy.value = null;
+  availableModels.value = []; modelsError.value = ""; testResult.value = "";
   translationKey.value = "";
   clearTranslationKey.value = false;
   translationJson.value = JSON.stringify(form.value.translation_extra, null, 2);
@@ -173,10 +241,8 @@ defineExpose({ save, reset, hasUnsaved });
 async function save(): Promise<boolean> {
   if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) { notify(t("settings.maxWaitInvalid")); return false; }
   let extra: Record<string, unknown>;
-  try {
-    extra = JSON.parse(translationJson.value);
-    if (!extra || Array.isArray(extra) || typeof extra !== "object") throw new Error();
-  } catch { translationJsonError.value = t("translation.jsonInvalid"); notify(translationJsonError.value); return false; }
+  try { extra = parseTranslationJson(); }
+  catch { notify(translationJsonError.value); return false; }
   try {
     await settingsStore.saveSettings({ ...form.value, translation_extra: extra,
       ...(clearTranslationKey.value ? { translation_api_key: "" } : translationKey.value.trim() ? { translation_api_key: translationKey.value } : {}) });
@@ -200,6 +266,8 @@ async function handleConfirm() { const action = confirmAction.value; closeConfir
 .settings-api-key-input { flex: 1; min-width: 0; }
 .field-hint { color: var(--ink-muted); font-size: 12px; }
 .credential-error { color: var(--md-sys-color-error); }
+.translation-model-row > md-outlined-text-field { flex: 1; min-width: 0; }
+.translation-model-row > md-outlined-button { flex: none; }
 .danger-button { --md-text-button-label-text-color: #ba1a1a; }
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
 /* 维护组：名称与帮助图标在左、动作按钮在右，行间以 divider 分隔 */
@@ -207,5 +275,5 @@ async function handleConfirm() { const action = confirmAction.value; closeConfir
 .settings-maintenance-item { display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg); padding: var(--space-md) 0; border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
 .settings-maintenance-text { display: grid; gap: var(--space-xxs); min-width: 0; }
 .settings-maintenance-text strong { color: var(--ink); font-size: 14px; font-weight: 500; }
-@media (max-width: 640px) { .settings-path-row { align-items: stretch; flex-direction: column; } }
+@media (max-width: 640px) { .settings-path-row, .translation-model-row { align-items: stretch; flex-direction: column; } }
 </style>

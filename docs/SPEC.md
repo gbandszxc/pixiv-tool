@@ -121,7 +121,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 与 translation.rs 共 59 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 4 / translation 2）
+│     ├─ commands/              # 与 translation.rs 共 61 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 4 / translation 4）
 │     ├─ translation.rs         # 小说单页两轮翻译、共享设定集、凭据与本机译文存储（ADR 0017）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
@@ -803,7 +803,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ## 7. IPC 命令设计（invoke）
 
-小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/高级参数校验、锁定译名与别名冲突、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用、第二页共享设定和 Pass 2 失败保留 Pass 1/旧译文。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖 SVG 入口默认收起、弹层焦点/Esc/外部关闭、三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、JSON 校验、Key 保存/清除/取消后的草稿清理，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
+小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/高级参数校验、锁定译名与别名冲突、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用、第二页共享设定和 Pass 2 失败保留 Pass 1/旧译文；探测命令单测覆盖 `/models` 路径推导与列表解析（去重排序、空列表/缺 id/超量报错）与 probe 空 Key/坏 URL/空模型的发请求前拒绝。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖 SVG 入口默认收起、弹层焦点/Esc/外部关闭、三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、JSON 校验、Key 保存/清除/取消后的草稿清理，以及获取模型下拉选定回填、检测可用成功/失败提示与 URL 为空禁用探测，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
 
 全局帮助离线验收：`/tests/help-tooltips.html` 使用真实 SettingsDialog、SettingsPanel、LoginDialog、搜索/以图识图页面，覆盖六组设置、两种登录、默认收起、悬停/焦点/点击、可悬停阅读、Esc 不误关设置与外部关闭，提供宽窄/深浅主题/中英文预览；浏览器 mock，不读取真实凭据。
 
@@ -829,6 +829,8 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `settings_get` / `settings_save(settings)` | 配置读写（白名单 18 键 + 校验，新增翻译 URL / 模型 / 高级 JSON；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_get(novel)` | 读取本机小说设定集和已译页；novel=`{novel_id,title,tags,description,content}`；返回 `{bible:{style,terms},pages:{页码:[{line,text}]}}`，原文和元信息 SHA256 区分版本 |
 | `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel；返回 `[{line,text}]`，line 为该页原始文本的零起行号 |
+| `translation_models(probe)` | 用未保存草稿探测 OpenAI 兼容 `/models` 端点（chat/completions 路径同源推导），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
+| `translation_test(probe)` | 用未保存草稿发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则 |
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |

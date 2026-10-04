@@ -120,6 +120,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             translation::novel_translation_get,
             translation::novel_translate_page,
+            translation::translation_models,
+            translation::translation_test,
             // auth
             commands::auth_cmds::auth_status,
             commands::auth_cmds::auth_login,

@@ -23,6 +23,9 @@ let calls = 0;
 let requestedPage = 0;
 let requestedForce = false;
 let capturedSettings: Record<string, unknown> = {};
+let probeModels: string[] | string = [];
+let probeTestOk = true;
+let lastProbeUrl = "";
 const book = { bible: { style: "克制", terms: [] }, pages: { "1": [{ line: 0, text: "序章译名" }, { line: 2, text: "爱丽丝抬头。<script>这是纯文本</script>" }] } };
 window.__TAURI_INTERNALS__ = {
   transformCallback: () => 1,
@@ -32,6 +35,11 @@ window.__TAURI_INTERNALS__ = {
     if (command === "browse_work_detail") return { detail_kind: "novel", item: { id: 42, kind: "novel", title: "星の帰り道 · 很长的小说标题用于窗口验收", author_id: 1, author_name: "作者", tags: ["同人", "冒险"], description: "<p>星空下的重逢。</p>", page_count: 2, x_restrict: 0 }, content: "[chapter:序章]\n\nアリスが顔を上げた。[rb:星>ほし]\n[uploadedimage:1]\n[newpage]彼女は微笑んだ。", embedded_images: { "1": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='60'><rect fill='gray' width='120' height='60'/></svg>" }, bookmarkState: null };
     if (command === "browse_related") return { items: [], next_page: null };
     if (command === "novel_translation_get") return book;
+    if (command === "translation_models") {
+      lastProbeUrl = args.probe?.api_url ?? "";
+      return typeof probeModels === "string" ? Promise.reject(probeModels) : [...probeModels];
+    }
+    if (command === "translation_test") return probeTestOk ? Promise.resolve() : Promise.reject("模拟检测失败");
     if (command === "novel_translate_page") {
       calls++; requestedPage = args.page; requestedForce = args.force;
       assert(args.novel.tags.includes("同人") && args.novel.description === "星空下的重逢。", "请求包含标签和纯文本简介");
@@ -102,6 +110,23 @@ async function run() {
   assert(panel.hasUnsaved() && await panel.save() && capturedSettings.translation_api_key === "", "显式清除凭据");
   await input("translation-key", "discard-only"); panel.reset(); await settle(); assert(!panel.hasUnsaved(), "取消清空敏感草稿");
 
+  // 获取模型 / 检测可用：用当前未保存草稿发探测请求，结果只进组件状态、不落 store。
+  const findButton = (label: string) => [...panelHost.querySelectorAll<HTMLElement>("md-outlined-button")].find(el => el.textContent?.trim() === label);
+  await input("translation-url", "https://api.example.com/v1"); await input("translation-key", "probe-key");
+  probeModels = ["glm-model-b", "glm-model-a"];
+  findButton("获取模型")!.click(); await settle();
+  assert(lastProbeUrl === "https://api.example.com/v1", "模型请求使用未保存的 URL");
+  const modelSelect = panelHost.querySelector<HTMLElement & { value: string }>("#translation-model-select");
+  assert(modelSelect?.textContent?.includes("glm-model-a"), "下拉列出获取到的模型");
+  modelSelect!.value = "glm-model-a"; modelSelect!.dispatchEvent(new Event("change")); await settle();
+  assert((panelHost.querySelector("#translation-model") as HTMLElement & { value: string }).value === "glm-model-a", "选定模型回填输入框");
+  findButton("检测可用")!.click(); await settle();
+  assert(panelHost.querySelector('[role="status"]')?.textContent?.includes("模型可用"), "检测成功提示");
+  probeTestOk = false; findButton("检测可用")!.click(); await settle();
+  assert(panelHost.querySelector(".credential-error")?.textContent?.includes("模拟检测失败"), "检测失败错误可见");
+  await input("translation-url", "");
+  assert(findButton("检测可用")?.hasAttribute("disabled") && findButton("获取模型")?.hasAttribute("disabled"), "URL 为空禁用探测");
+
   // 留真实组件供宽窄窗口、深浅主题与 hover/focus 验收。
   await selectPage(1);
   document.querySelector<HTMLButtonElement>("#preview-reader")!.onclick = () => { host.style.display = ""; panelHost.style.display = "none"; };
@@ -109,6 +134,6 @@ async function run() {
   document.querySelector<HTMLButtonElement>("#preview-dark")!.onclick = () => document.documentElement.classList.add("dark");
   document.querySelector<HTMLButtonElement>("#preview-light")!.onclick = () => document.documentElement.classList.remove("dark");
   document.querySelector<HTMLElement>("#preview-controls")!.hidden = false;
-  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、缓存、设置 JSON 与凭据草稿";
+  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、缓存、设置 JSON 与凭据草稿、获取模型下拉与可用性检测";
 }
 run().catch(error => { document.querySelector("#translation-result")!.textContent = `FAIL: ${error.message}`; console.error(error); });

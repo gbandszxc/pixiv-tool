@@ -15,6 +15,23 @@ export interface TranslationBook {
   pages: Record<string, TranslatedLine[]>;
 }
 
+export interface TranslationProbe {
+  api_url: string;
+  api_key?: string;
+  model: string;
+  extra: Record<string, unknown>;
+}
+
+export async function fetchTranslationModels(probe: TranslationProbe): Promise<string[]> {
+  if (!isTauri()) return ["demo-model", "demo-model-fast"];
+  return invoke("translation_models", { probe });
+}
+
+export async function testTranslationService(probe: TranslationProbe): Promise<void> {
+  if (!isTauri()) return;
+  return invoke("translation_test", { probe });
+}
+
 export function getNovelTranslation(novel: NovelTranslationInput): Promise<TranslationBook> {
   if (!isTauri()) return Promise.resolve({ bible: { style: "", terms: [] }, pages: {} });
   return invoke("novel_translation_get", { novel });
