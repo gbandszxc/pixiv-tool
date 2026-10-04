@@ -31,6 +31,7 @@ export default {
   "backSection": "Back to section"
 },
   common: {
+    helpFor: "Help: {label}",
     save: "Save",
     cancel: "Cancel",
     delete: "Delete",

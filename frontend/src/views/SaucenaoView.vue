@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HelpTooltip from "../components/common/HelpTooltip.vue";
 import PageBackButton from "../components/navigation/PageBackButton.vue";
 /**
  * 以图识图页（SauceNAO 反向图片搜索）。
@@ -223,8 +224,7 @@ function onThumbError(index: number): void {
 
 <template>
   <div class="page-view">
-    <div class="page-heading saucenao-heading"><PageBackButton /><h1 class="page-title">{{ t("saucenao.title") }}</h1></div>
-    <p class="page-subtitle">{{ t("saucenao.subtitle") }}</p>
+    <div class="page-heading saucenao-heading"><PageBackButton /><h1 class="page-title">{{ t("saucenao.title") }}</h1><HelpTooltip :label="t('saucenao.title')" :text="`${t('saucenao.subtitle')}\n\n${t('saucenao.idleHint')}`" /></div>
 
     <!-- 输入卡片：左预览 + 右操作 -->
     <div class="input-card" :class="{ dragging: dragHover }">
@@ -302,9 +302,6 @@ function onThumbError(index: number): void {
     <!-- empty 终态 -->
     <p v-if="phase === 'empty'" class="empty-state" role="status">{{ t("saucenao.noMatch") }}</p>
 
-    <!-- idle 引导文案 -->
-    <p v-if="phase === 'idle'" class="idle-hint">{{ t("saucenao.idleHint") }}</p>
-
     <!-- 结果区 -->
     <section v-if="phase === 'done'" class="result-section">
       <div class="result-head">
@@ -368,12 +365,6 @@ function onThumbError(index: number): void {
 
 <style scoped>
 .saucenao-heading { margin-bottom: var(--space-lg); }
-.page-subtitle {
-  margin: calc(-1 * var(--space-sm)) 0 var(--space-lg);
-  color: var(--ink-muted);
-  font-size: 13px;
-}
-
 /* ===== 输入卡片 ===== */
 
 .input-card {
@@ -510,15 +501,9 @@ function onThumbError(index: number): void {
   color: var(--ink-muted);
 }
 
-.empty-state,
-.idle-hint {
+.empty-state {
   margin: var(--space-lg) 0 0;
   color: var(--ink-muted);
-}
-
-.idle-hint {
-  font-size: 12px;
-  color: var(--ink-subtle);
 }
 
 /* ===== 结果区 ===== */

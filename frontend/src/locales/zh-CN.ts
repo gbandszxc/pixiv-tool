@@ -31,6 +31,7 @@ export default {
   "backSection": "返回所属分区"
 },
   common: {
+    helpFor: "{label}的说明",
     save: "保存",
     cancel: "取消",
     delete: "删除",

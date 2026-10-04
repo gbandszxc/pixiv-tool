@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import HelpTooltip from "../../components/common/HelpTooltip.vue";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -464,8 +465,8 @@ const typeTabs = computed(() => [
       <md-filled-button class="search-btn" @click="doSearch">
         {{ t("common.search") }}
       </md-filled-button>
+      <HelpTooltip :label="t('common.search')" :text="t('browse.search.help')" />
     </div>
-    <p class="field-help">{{ t("browse.search.help") }}</p>
 
     <!-- 过滤行：类型 tabs + 排序 / 对象 / 匹配下拉 -->
     <div class="filter-row">
@@ -566,12 +567,6 @@ const typeTabs = computed(() => [
 
 .search-btn {
   flex: none;
-}
-
-.field-help {
-  margin: var(--space-xs) 0 0;
-  font-size: 12px;
-  color: var(--ink-subtle);
 }
 
 /* 过滤行：tabs + 排序/对象/匹配 + 行尾本页排序，单行不换行；

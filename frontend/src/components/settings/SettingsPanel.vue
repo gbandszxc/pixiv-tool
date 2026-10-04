@@ -2,9 +2,8 @@
   <section class="settings-panel" :aria-label="t('settings.title')">
     <template v-if="section === 'general'">
       <div class="m3-field">
-        <label for="startup-page">{{ t("settings.startupPage") }}</label>
+        <div class="field-label"><label for="startup-page">{{ t('settings.startupPage') }}</label><HelpTooltip :label="t('settings.startupPage')" :text="t('settings.startupPageHint')" /></div>
         <md-outlined-select id="startup-page" :value="form.startup_page" @change="form.startup_page = ($event.target as HTMLSelectElement).value"><md-select-option v-for="option in startupPageOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
-        <span class="field-hint">{{ t("settings.startupPageHint") }}</span>
       </div>
       <div class="m3-field">
         <label for="output-dir">{{ t("settings.outputDir") }}</label>
@@ -25,19 +24,18 @@
 
     <template v-else-if="section === 'appearance'">
       <div class="m3-field">
-        <label for="theme">{{ t("settings.theme") }}</label>
+        <div class="field-label"><label for="theme">{{ t('settings.theme') }}</label><HelpTooltip :label="t('settings.theme')" :text="t('settings.appearanceHint')" /></div>
         <md-outlined-select id="theme" :value="form.theme" @change="form.theme = ($event.target as HTMLSelectElement).value"><md-select-option v-for="option in themeOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
       </div>
       <fieldset class="m3-field settings-fieldset">
         <legend>{{ t("settings.palette") }}</legend>
         <div class="palette-options"><label v-for="option in paletteOptions" :key="option.value" class="palette-option"><md-radio name="theme-color" :value="option.value" :checked="form.theme_color === option.value" @change="form.theme_color = option.value" /><span class="palette-swatch" :class="`palette-${option.value}`" aria-hidden="true"></span>{{ option.label }}</label></div>
       </fieldset>
-      <span class="field-hint">{{ t("settings.appearanceHint") }}</span>
     </template>
 
     <template v-else-if="section === 'images'">
       <fieldset class="m3-field settings-fieldset">
-        <legend>{{ t("settings.imageQuality") }}</legend>
+        <legend><span class="field-label">{{ t("settings.imageQuality") }}<HelpTooltip :label="t('settings.imageQuality')" :text="t('settings.thumbHint')" /></span></legend>
         <div class="m3-field">
           <label for="thumb-grid">{{ t("settings.thumbGrid") }}</label>
           <md-outlined-select id="thumb-grid" :value="form.thumb_quality_grid" @change="form.thumb_quality_grid = ($event.target as HTMLSelectElement).value"><md-select-option v-for="option in gridTierOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
@@ -50,26 +48,21 @@
           <label for="thumb-fullscreen">{{ t("settings.thumbFullscreen") }}</label>
           <md-outlined-select id="thumb-fullscreen" :value="form.thumb_quality_fullscreen" @change="form.thumb_quality_fullscreen = ($event.target as HTMLSelectElement).value"><md-select-option v-for="option in fullscreenTierOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
         </div>
-        <span class="field-hint">{{ t("settings.thumbHint") }}</span>
       </fieldset>
       <fieldset class="m3-field settings-fieldset">
-        <legend>{{ t("settings.contentDisplay") }}</legend>
+        <legend><span class="field-label">{{ t("settings.contentDisplay") }}<HelpTooltip :label="t('settings.contentDisplay')" :text="t('settings.showR18Hint')" /></span></legend>
         <div class="m3-row"><label class="m3-choice"><md-checkbox :checked="form.show_r18" @change="form.show_r18 = ($event.target as HTMLInputElement).checked" />{{ t("settings.showR18") }}</label></div>
-        <span class="field-hint">{{ t("settings.showR18Hint") }}</span>
       </fieldset>
     </template>
 
     <template v-else-if="section === 'translation'">
-      <span class="field-hint">{{ t('translation.settingsHint') }}</span>
       <div class="m3-field">
-        <label for="translation-url">{{ t('translation.apiUrl') }}</label>
+        <div class="field-label"><label for="translation-url">{{ t('translation.apiUrl') }}</label><HelpTooltip :label="t('translation.apiUrl')" :text="`${t('translation.settingsHint')}\n\n${t('translation.urlHint')}`" /></div>
         <md-outlined-text-field id="translation-url" :value="form.translation_api_url" placeholder="https://api.openai.com/v1" @input="form.translation_api_url = ($event.target as HTMLInputElement).value" />
-        <span class="field-hint">{{ t('translation.urlHint') }}</span>
       </div>
       <div class="m3-field">
-        <label for="translation-key">API Key</label>
+        <div class="field-label"><label for="translation-key">API Key</label><HelpTooltip label="API Key" :text="t('translation.keyHint')" /></div>
         <md-outlined-text-field id="translation-key" type="password" autocomplete="new-password" :value="translationKey" :placeholder="t(form.translation_key_configured ? 'translation.keySaved' : 'translation.keyPlaceholder')" @input="translationKey = ($event.target as HTMLInputElement).value; clearTranslationKey = false" />
-        <span class="field-hint">{{ t('translation.keyHint') }}</span>
         <span v-if="form.translation_key_error" class="field-hint credential-error" role="alert">{{ form.translation_key_error }}</span>
         <md-text-button v-if="form.translation_key_configured" :disabled="clearTranslationKey" @click="clearTranslationKey = true; translationKey = ''">{{ t(clearTranslationKey ? 'translation.keyWillClear' : 'translation.clearKey') }}</md-text-button>
       </div>
@@ -78,20 +71,19 @@
         <md-outlined-text-field id="translation-model" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
       </div>
       <div class="m3-field">
-        <label for="translation-json">{{ t('translation.advanced') }}</label>
+        <div class="field-label"><label for="translation-json">{{ t('translation.advanced') }}</label><HelpTooltip :label="t('translation.advanced')" :text="t('translation.jsonHint')" /></div>
         <md-outlined-text-field id="translation-json" type="textarea" rows="5" :value="translationJson" :error="Boolean(translationJsonError)" :error-text="translationJsonError" @input="translationJson = ($event.target as HTMLTextAreaElement).value; translationJsonError = ''" />
-        <span class="field-hint">{{ t('translation.jsonHint') }}</span>
       </div>
     </template>
 
     <template v-else-if="section === 'advanced'">
       <div class="m3-field">
-        <label for="saucenao-api-key">{{ t("settings.saucenaoApiKey") }}</label>
-        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" class="settings-api-key-input" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /><span class="field-hint">{{ t("settings.saucenaoApiKeyHint") }}</span></div>
+        <div class="field-label"><label for="saucenao-api-key">{{ t('settings.saucenaoApiKey') }}</label><HelpTooltip :label="t('settings.saucenaoApiKey')" :text="t('settings.saucenaoApiKeyHint')" /></div>
+        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" class="settings-api-key-input" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /></div>
       </div>
       <div class="m3-field">
-        <label for="max-wait">{{ t("settings.maxWait") }}</label>
-        <div class="m3-row"><md-outlined-text-field id="max-wait" class="settings-number-input" type="number" min="30" max="86400" step="30" :value="String(form.max_wait_seconds)" @input="form.max_wait_seconds = Number(($event.target as HTMLInputElement).value)" /><span class="field-hint">{{ t("settings.maxWaitHint") }}</span></div>
+        <div class="field-label"><label for="max-wait">{{ t('settings.maxWait') }}</label><HelpTooltip :label="t('settings.maxWait')" :text="t('settings.maxWaitHint')" /></div>
+        <div class="m3-row"><md-outlined-text-field id="max-wait" class="settings-number-input" type="number" min="30" max="86400" step="30" :value="String(form.max_wait_seconds)" @input="form.max_wait_seconds = Number(($event.target as HTMLInputElement).value)" /></div>
       </div>
     </template>
 
@@ -99,11 +91,11 @@
       <span class="field-hint">{{ t("settings.maintenanceHint") }}</span>
       <div class="settings-maintenance">
         <div class="settings-maintenance-item">
-          <span class="settings-maintenance-text"><strong>{{ t("settings.logsLabel") }}</strong><span class="field-hint">{{ t("settings.clearLogsHint") }}</span></span>
+          <span class="settings-maintenance-text"><span class="field-label"><strong>{{ t("settings.logsLabel") }}</strong><HelpTooltip :label="t('settings.logsLabel')" :text="t('settings.clearLogsHint')" /></span></span>
           <md-outlined-button @click="openConfirm('logs')">{{ t("common.clear") }}</md-outlined-button>
         </div>
         <div class="settings-maintenance-item">
-          <span class="settings-maintenance-text"><strong>{{ t("settings.authLabel") }}</strong><span class="field-hint">{{ t("settings.clearAuthHint") }}</span></span>
+          <span class="settings-maintenance-text"><span class="field-label"><strong>{{ t("settings.authLabel") }}</strong><HelpTooltip :label="t('settings.authLabel')" :text="t('settings.clearAuthHint')" /></span></span>
           <md-text-button class="danger-button" @click="openConfirm('auth')">{{ t("common.clear") }}</md-text-button>
         </div>
       </div>
@@ -127,6 +119,7 @@
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import HelpTooltip from "../common/HelpTooltip.vue";
 import { useSettingsStore } from "../../stores/settings";
 import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
@@ -209,7 +202,7 @@ async function handleConfirm() { const action = confirmAction.value; closeConfir
 .credential-error { color: var(--md-sys-color-error); }
 .danger-button { --md-text-button-label-text-color: #ba1a1a; }
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
-/* 维护组：说明在左（标题 + 提示两行）、动作按钮在右，行间以 divider 分隔 */
+/* 维护组：名称与帮助图标在左、动作按钮在右，行间以 divider 分隔 */
 .settings-maintenance { display: grid; margin-top: var(--space-md); border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
 .settings-maintenance-item { display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg); padding: var(--space-md) 0; border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
 .settings-maintenance-text { display: grid; gap: var(--space-xxs); min-width: 0; }
