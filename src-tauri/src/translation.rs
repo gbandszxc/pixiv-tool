@@ -700,10 +700,31 @@ impl TranslationClient<'_> {
                         translation_timeout_seconds(self.settings.translation_timeout_seconds)
                     )
                 } else {
-                    "无法连接翻译服务，请检查 URL 和网络".to_string()
+                    // 只报可排查的成因类别，不回显原始报错（含 URL）与凭据（ADR 0017）。
+                    format!(
+                        "无法连接翻译服务（{}），请检查 URL 与网络/代理设置",
+                        transport_hint(&error)
+                    )
                 }
             })?;
         parse_completion(read_service_response(response).await?, self.format)
+    }
+}
+
+/// 连接失败的成因类别：区分 DNS、代理、TLS、拒绝/重置，用户据此才知道查哪一层。
+fn transport_hint(error: &wreq::Error) -> &'static str {
+    if error.is_dns() {
+        "域名解析失败"
+    } else if error.is_proxy_connect() {
+        "代理连接失败"
+    } else if error.is_connection_reset() {
+        "连接被重置"
+    } else if error.is_tls() {
+        "TLS 握手失败"
+    } else if error.is_connect() {
+        "无法建立连接"
+    } else {
+        "连接失败"
     }
 }
 
@@ -1102,6 +1123,32 @@ async fn translate_book(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 连接失败的文案要报出成因类别（此处用本机必然拒绝的端口），且不回显原始报错与凭据。
+    #[tokio::test]
+    async fn connection_failure_reports_transport_cause() {
+        let settings = Settings {
+            translation_model: "mock-model".into(),
+            ..Settings::default()
+        };
+        let client = TranslationClient {
+            http: wreq::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(5))
+                .build()
+                .unwrap(),
+            url: completion_url("http://127.0.0.1:1/v1", ApiFormat::ChatCompletions).unwrap(),
+            format: ApiFormat::ChatCompletions,
+            key: "test-key".into(),
+            session: novel_session(42),
+            settings: &settings,
+        };
+        let error = client.complete("检测", json!("x")).await.unwrap_err();
+        assert_eq!(
+            error,
+            "无法连接翻译服务（无法建立连接），请检查 URL 与网络/代理设置"
+        );
+    }
 
     /// 显式运行的付费服务验收；凭据只从进程环境读取，不改应用设置或系统凭据。
     #[tokio::test]
