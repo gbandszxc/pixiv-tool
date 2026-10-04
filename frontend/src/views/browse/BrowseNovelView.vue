@@ -104,6 +104,8 @@ const nextEpisodeId = computed(() => series.value?.next_id ?? null);
 
 const translationMode = ref<TranslationMode>("bilingual");
 const translations = ref<Record<string, TranslatedLine[]>>({});
+/** 页 → 目标语言 code：该页原文已是目标语言，未请求模型（再次点击可强制翻译）。 */
+const skippedPages = ref<Record<number, string>>({});
 const translating = ref(false);
 const translatingPage = ref(0);
 const translationError = ref("");
@@ -114,11 +116,14 @@ const translationInput = computed<NovelTranslationInput>(() => ({
   description: plainDescription.value, content: content.value,
 }));
 const currentTranslation = computed(() => translations.value[page.value] ?? []);
+const currentSkipped = computed(() => skippedPages.value[page.value] ?? "");
 // 设定集整理/精翻等内部阶段不面向用户，只回显统一的进行中状态与最终成败。
-const translationStatus = computed(() => translating.value
-  ? t("translation.translating", { page: translatingPage.value })
-  : translationErrorPage.value === page.value && translationError.value ? translationError.value
-  : currentTranslation.value.length ? t("translation.completed") : t("translation.noTranslation"));
+const translationStatus = computed(() => {
+  if (translating.value) return t("translation.translating", { page: translatingPage.value });
+  if (translationErrorPage.value === page.value && translationError.value) return translationError.value;
+  if (currentSkipped.value) return t("translation.sameLanguage", { language: t(`translation.targetLanguages.${currentSkipped.value}`) });
+  return currentTranslation.value.length ? t("translation.completed") : t("translation.noTranslation");
+});
 
 async function translatePage(): Promise<void> {
   if (translating.value || !hasContent.value) return;
@@ -128,8 +133,19 @@ async function translatePage(): Promise<void> {
   translatingPage.value = targetPage;
   translationError.value = "";
   try {
-    const lines = await translateNovelPage(translationInput.value, targetPage, Boolean(translations.value[targetPage]));
-    if (generation === translationGeneration) translations.value[targetPage] = lines;
+    // 本页已提示「无需翻译」时再次点击即强制翻译，避免语言判定误判后无法覆盖。
+    const force = Boolean(translations.value[targetPage]) || Boolean(skippedPages.value[targetPage]);
+    const result = await translateNovelPage(translationInput.value, targetPage, force);
+    if (generation === translationGeneration) {
+      if (result.status === "already_target_language") {
+        skippedPages.value = { ...skippedPages.value, [targetPage]: result.target_language };
+      } else {
+        const skipped = { ...skippedPages.value };
+        delete skipped[targetPage];
+        skippedPages.value = skipped;
+        translations.value[targetPage] = result.lines;
+      }
+    }
   } catch (err) {
     if (generation === translationGeneration) {
       translationError.value = errorMessage(err);
@@ -174,6 +190,7 @@ const metaText = computed(() => {
 async function load(): Promise<void> {
   const generation = ++translationGeneration;
   translations.value = {};
+  skippedPages.value = {};
   translating.value = false;
   translationError.value = "";
   translationMode.value = "bilingual";
@@ -574,6 +591,7 @@ function openInPixiv(): void {
             :busy="translating"
             :disabled="loading"
             :translated="currentTranslation.length > 0"
+            :skipped="Boolean(currentSkipped)"
             @translate="translatePage"
           />
         </div>

@@ -121,6 +121,8 @@ export interface Settings {
   saucenao_api_key: string;
   translation_api_url: string;
   translation_model: string;
+  /** 翻译目标语言（取值见 api/translation.ts 的 TARGET_LANGUAGE_CODES），空串 = 跟随界面语言 */
+  translation_target_language: string;
   translation_extra: Record<string, unknown>;
   /** 只回传凭据是否存在，永不回传 API Key。 */
   translation_key_configured: boolean;

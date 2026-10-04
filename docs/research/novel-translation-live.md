@@ -37,13 +37,20 @@
 
 真实作品正文与译文只在本机测试进程内使用，不写入仓库；本节只记录方法与结论。
 
+## 目标语言与语言一致快速返回（同日追加）
+
+- 提示词注入：`translation::tests::live_english_target_translation` 把同一日文样章的目标语言设为 `en` 翻译一页（两次请求）。译文为 `Reunion` / `Eri and Reina were a couple who had met at this bar.` / `"Reina, let's go home."`，无中日文残留；离线单测同时断言 Prepare 与 Render 两个提示词都完成 `{target_language}` 替换、无残留占位符。
+- 语言一致快速返回：命令流程单测（配置指向不可达端口 + 中文原文 + 目标 zh-CN）直接返回 `already_target_language` 且 lines 为空，证明未发请求；`force` 与不同语言照常进入流程（连接失败），证明不会静默跳过。判定为本地启发式（假名/谚文占比、汉字简繁用字、拉丁/西里尔主导文字），拉丁语系之间不做跳过。
+- 回归：`live_two_page_translation` 与 `live_real_novel_page_translation` 复跑通过，默认中文目标路径不受影响。样章章节标题在两次采样中一次译为「重逢」、一次原样保留 `[章节:再会]`，属模型遵从波动，与本改造无关，未做断言。
+
 ## 运行边界
 
 默认 `./dev.ps1 test` 保持离线。在线测试需要在已初始化 MSVC 环境的终端，显式提供 `PIXIV_TRANSLATION_TEST_KEY`、`PIXIV_TRANSLATION_TEST_URL`、`PIXIV_TRANSLATION_TEST_MODEL` 三个进程环境变量后运行：
 
 ```powershell
 cargo test --locked --manifest-path src-tauri/Cargo.toml translation::tests::live_two_page_translation -- --ignored --exact --nocapture
+cargo test --locked --manifest-path src-tauri/Cargo.toml translation::tests::live_english_target_translation -- --ignored --exact --nocapture
 cargo test --locked --manifest-path src-tauri/Cargo.toml translation::tests::live_real_novel_page_translation -- --ignored --exact --nocapture
 ```
 
-仅在获授权后运行；两页用例请求四次模型服务，真实小说用例额外读取本机登录态抓取作品并请求两到三次（含一次故意的报错探测）。默认高级配置固定为 low。不把实际 Key 写进脚本、命令示例或报告，测试结束后清除临时环境变量。
+仅在获授权后运行；两页用例请求四次模型服务，英文目标用例两次，真实小说用例额外读取本机登录态抓取作品并请求两到三次（含一次故意的报错探测）。默认高级配置固定为 low。不把实际 Key 写进脚本、命令示例或报告，测试结束后清除临时环境变量。

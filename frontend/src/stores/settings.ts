@@ -30,6 +30,8 @@ export const useSettingsStore = defineStore("settings", () => {
     saucenao_api_key: "",
     translation_api_url: "",
     translation_model: "",
+    // 翻译目标语言（空串=跟随界面语言），取值见 api/translation.ts 的 TARGET_LANGUAGE_CODES
+    translation_target_language: "",
     translation_extra: {},
     translation_key_configured: false,
     translation_key_error: "",

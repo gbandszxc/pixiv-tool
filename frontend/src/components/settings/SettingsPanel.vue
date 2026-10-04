@@ -79,6 +79,13 @@
         <span v-if="modelsError" class="field-hint state-error" role="alert">{{ modelsError }}</span>
       </div>
       <div class="m3-field">
+        <div class="field-label"><label for="translation-target-language">{{ t('translation.targetLanguage') }}</label><HelpTooltip :label="t('translation.targetLanguage')" :text="t('translation.targetLanguageHint')" /></div>
+        <md-outlined-select id="translation-target-language" :value="canonicalTargetLanguage" @change="form.translation_target_language = ($event.target as HTMLSelectElement).value">
+          <md-select-option value="">{{ t('translation.followUiLanguage', { language: t(`settings.languages.${locale}`) }) }}</md-select-option>
+          <md-select-option v-for="code in TARGET_LANGUAGE_CODES" :key="code" :value="code">{{ t(`translation.targetLanguages.${code}`) }}</md-select-option>
+        </md-outlined-select>
+      </div>
+      <div class="m3-field">
         <div class="field-label"><label for="translation-json">{{ t('translation.advanced') }}</label><HelpTooltip :label="t('translation.advanced')" :text="t('translation.jsonHint')" /></div>
         <md-outlined-text-field id="translation-json" type="textarea" rows="5" :value="translationJson" :error="Boolean(translationJsonError)" :error-text="translationJsonError" @input="translationJson = ($event.target as HTMLTextAreaElement).value; translationJsonError = ''" />
       </div>
@@ -134,7 +141,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import HelpTooltip from "../common/HelpTooltip.vue";
-import { fetchTranslationModels, testTranslationService, type TranslationProbe } from "../../api/translation";
+import { fetchTranslationModels, testTranslationService, TARGET_LANGUAGE_CODES, canonicalLanguage, type TranslationProbe } from "../../api/translation";
 import { useSettingsStore } from "../../stores/settings";
 import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
@@ -167,6 +174,8 @@ const canProbe = computed(() => Boolean(form.value.translation_api_url.trim() &&
 const modelOptions = computed(() => availableModels.value.includes(form.value.translation_model) || !form.value.translation_model.trim()
   ? availableModels.value
   : [form.value.translation_model, ...availableModels.value]);
+/** 目标语言回显：手改 settings.json 写入的语言别名（如 en-US / zh_Hant）也归一化到白名单 code。 */
+const canonicalTargetLanguage = computed(() => canonicalLanguage(form.value.translation_target_language));
 watch(() => [form.value.translation_api_url, translationKey.value, clearTranslationKey.value], () => {
   availableModels.value = []; modelsError.value = "";
 }, { flush: "sync" });

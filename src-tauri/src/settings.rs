@@ -49,6 +49,8 @@ pub struct Settings {
     pub saucenao_api_key: String,
     pub translation_api_url: String,
     pub translation_model: String,
+    /// 翻译目标语言（见 [`crate::translation::TARGET_LANGUAGES`]），空串 = 跟随界面语言 `language`。
+    pub translation_target_language: String,
     /// Chat Completions 请求体扩展；不含凭据或应用保留字段。
     pub translation_extra: Value,
 }
@@ -73,6 +75,7 @@ impl Default for Settings {
             saucenao_api_key: String::new(),
             translation_api_url: String::new(),
             translation_model: String::new(),
+            translation_target_language: String::new(),
             translation_extra: serde_json::json!({}),
         }
     }

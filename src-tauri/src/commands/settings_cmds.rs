@@ -22,9 +22,10 @@ use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 18] = [
+const WRITABLE_KEYS: [&str; 19] = [
     "translation_api_url",
     "translation_model",
+    "translation_target_language",
     "translation_extra",
     "startup_page",
     "output_dir",

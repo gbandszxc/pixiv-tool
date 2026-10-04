@@ -6,7 +6,7 @@ import { createMemoryHistory, createRouter } from "vue-router";
 import Novel from "../src/views/browse/BrowseNovelView.vue";
 import Panel from "../src/components/settings/SettingsPanel.vue";
 import { useSettingsStore } from "../src/stores/settings";
-import type { TranslatedLine } from "../src/api/translation";
+import type { PageTranslation } from "../src/api/translation";
 import zhCN from "../src/locales/zh-CN";
 import "../src/styles/main.css";
 import "../src/material";
@@ -17,7 +17,7 @@ const pinia = createPinia();
 const settings = useSettingsStore(pinia);
 const i18n = createI18n({ legacy: false, locale: "zh-CN", messages: { "zh-CN": zhCN } });
 const router = createRouter({ history: createMemoryHistory(), routes: [{ path: "/", component: { template: "<div/>" } }, { path: "/browse/search", component: { template: "<div/>" } }] });
-let resolvePage: (lines: TranslatedLine[]) => void = () => {};
+let resolvePage: (result: PageTranslation) => void = () => {};
 let rejectPage: (error: string) => void = () => {};
 let calls = 0;
 let requestedPage = 0;
@@ -46,7 +46,7 @@ window.__TAURI_INTERNALS__ = {
       // 后端仍会推进内部阶段；界面应忽略它，只显示统一的「翻译中」。
       args.progress.onmessage("prepare");
       args.progress.onmessage("translate");
-      return new Promise<TranslatedLine[]>((resolve, reject) => { resolvePage = resolve; rejectPage = reject; });
+      return new Promise<PageTranslation>((resolve, reject) => { resolvePage = resolve; rejectPage = reject; });
     }
     return {};
   },
@@ -90,7 +90,7 @@ async function run() {
   assert(busyStatus.includes("翻译中") && !busyStatus.includes("设定集"), "只回显统一翻译中，不暴露内部阶段");
   assert(host.querySelector(".translation-trigger-wrap > .translation-indicator.is-busy"), "翻译中入口显示进行中状态点");
   await selectPage(1);
-  resolvePage([{ line: 0, text: "她微笑了。" }]); await settle();
+  resolvePage({ status: "translated", lines: [{ line: 0, text: "她微笑了。" }], target_language: "zh-CN" }); await settle();
   assert(!host.querySelector(".novel-content")?.textContent?.includes("她微笑了。"), "异步结果不串到另一页");
   await selectPage(2); assert(host.querySelector(".translated-text")?.textContent === "她微笑了。", "目标页获得译文");
   await click("重新翻译本页"); assert(requestedForce, "重译显式 force");
@@ -98,8 +98,16 @@ async function run() {
   assert(host.querySelector(".translation-status.is-error") && host.querySelector(".translated-text")?.textContent === "她微笑了。", "失败可见且保留旧译文");
   const failedBadge = host.querySelector<HTMLElement>(".translation-trigger-wrap > .translation-indicator.is-error");
   assert(failedBadge?.title.includes("模拟服务失败"), "失败状态点 hover 可见模型侧报错");
-  await click("重新翻译本页"); resolvePage([{ line: 0, text: "她露出微笑。" }]); await settle();
+  await click("重新翻译本页"); resolvePage({ status: "translated", lines: [{ line: 0, text: "她露出微笑。" }], target_language: "zh-CN" }); await settle();
   assert(!host.querySelector(".translation-status.is-error") && host.querySelector(".translation-trigger-wrap > .translation-indicator.is-done"), "重试恢复");
+  // 原文已是目标语言：只提示、不请求模型；按钮变为「仍然翻译」，再次点击强制走完整流程。
+  await click("重新翻译本页");
+  resolvePage({ status: "already_target_language", lines: [], target_language: "zh-CN" }); await settle();
+  assert(host.querySelector(".translation-status")?.textContent?.includes("无需翻译"), "目标语言一致时提示无需翻译");
+  assert(!host.querySelector(".translation-trigger-wrap > .translation-indicator.is-error"), "无需翻译不算失败");
+  await click("仍然翻译"); assert(requestedForce, "再次点击强制翻译");
+  resolvePage({ status: "translated", lines: [{ line: 0, text: "她再次微笑。" }], target_language: "zh-CN" }); await settle();
+  assert(host.querySelector(".translation-status")?.textContent?.includes("已保存") && !host.querySelector(".translation-status")?.textContent?.includes("无需翻译"), "强制翻译后回到已保存状态");
 
   const panelHost = document.createElement("div"); panelHost.style.cssText = "display:none;padding:24px;max-width:640px"; document.body.append(panelHost);
   const panelApp = createApp(Panel, { section: "translation" }).use(pinia).use(i18n);
@@ -141,6 +149,13 @@ async function run() {
   assert(manualModel?.tagName === "MD-OUTLINED-TEXT-FIELD" && manualModel.value === "glm-model-a", "手动输入回到文本框且保留模型");
   await input("translation-url", "");
   assert(findButton("检测可用")?.hasAttribute("disabled") && findButton("获取模型")?.hasAttribute("disabled"), "URL 为空禁用探测");
+  // 目标语言：默认跟随界面语言，可手动指定并随保存落盘。
+  const targetSelect = panelHost.querySelector<HTMLElement & { value: string }>("#translation-target-language");
+  assert(targetSelect?.tagName === "MD-OUTLINED-SELECT" && targetSelect.value === "", "目标语言默认跟随界面语言");
+  assert(targetSelect.textContent?.includes("跟随界面语言") && targetSelect.textContent?.includes("简体中文"), "跟随项回显当前界面语言");
+  targetSelect.value = "en"; targetSelect.dispatchEvent(new Event("change")); await settle();
+  assert(targetSelect.value === "en" && await panel.save(), "可手动指定目标语言并保存");
+  assert(capturedSettings.translation_target_language === "en", "目标语言随整表保存写入");
 
   // 留真实组件供宽窄窗口、深浅主题与 hover/focus 验收；设置页停在「已获取模型 + 检测可用」态。
   probeTestOk = true;
@@ -155,6 +170,6 @@ async function run() {
   document.querySelector<HTMLButtonElement>("#preview-dark")!.onclick = () => document.documentElement.classList.add("dark");
   document.querySelector<HTMLButtonElement>("#preview-light")!.onclick = () => document.documentElement.classList.remove("dark");
   document.querySelector<HTMLElement>("#preview-controls")!.hidden = false;
-  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、状态点与 hover 报错、统一翻译中状态、设置 JSON 与凭据草稿、获取模型原位下拉与绿红检测状态";
+  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、状态点与 hover 报错、统一翻译中状态、目标语言一致提示与强制翻译、设置 JSON 与凭据草稿、获取模型原位下拉与绿红检测状态、目标语言选择";
 }
 run().catch(error => { document.querySelector("#translation-result")!.textContent = `FAIL: ${error.message}`; console.error(error); });

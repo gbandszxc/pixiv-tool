@@ -144,6 +144,126 @@ pub fn validate_options(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// 目标语言白名单：code → 提示词中的语言名（附原文名便于模型对齐）。
+/// code 同时用于「原文已是目标语言」的快速判定与前端选择项。
+pub const TARGET_LANGUAGES: [(&str, &str); 9] = [
+    ("zh-CN", "简体中文"),
+    ("zh-TW", "繁體中文"),
+    ("en", "英文（English）"),
+    ("ja", "日文（日本語）"),
+    ("ko", "韩文（한국어）"),
+    ("es", "西班牙文（Español）"),
+    ("fr", "法文（Français）"),
+    ("de", "德文（Deutsch）"),
+    ("ru", "俄文（Русский）"),
+];
+
+/// 归一化语言标签：忽略大小写与地区写法，兼容界面语言的 en-US、zh-Hant。
+fn normalize_language_code(value: &str) -> String {
+    let text = value.trim().replace('_', "-").to_ascii_lowercase();
+    let base = text.split('-').next().unwrap_or_default();
+    match base {
+        "zh" if text.contains("tw") || text.contains("hk") || text.contains("hant") => {
+            "zh-TW".into()
+        }
+        "zh" => "zh-CN".into(),
+        other => other.to_string(),
+    }
+}
+
+/// 本次生效的目标语言（code, 提示词语言名）：设置留空跟随界面语言；不在白名单内即拒绝。
+fn resolve_target_language(settings: &Settings) -> Result<(&'static str, &'static str), String> {
+    let raw = if settings.translation_target_language.trim().is_empty() {
+        settings.language.trim()
+    } else {
+        settings.translation_target_language.trim()
+    };
+    let code = normalize_language_code(raw);
+    TARGET_LANGUAGES
+        .iter()
+        .find(|(candidate, _)| *candidate == code)
+        .copied()
+        .ok_or_else(|| "翻译目标语言无效，请在设置中选择".into())
+}
+
+/// 原文主导语言；只服务「是否需要翻译」的快速判定，不做精确识别。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceLanguage {
+    Japanese,
+    Korean,
+    /// 中文；用字倾向只区分简繁，用于匹配 zh-CN / zh-TW。
+    Chinese { traditional: bool },
+    Russian,
+    /// 拉丁文字：无法区分具体语种，只用于匹配 en。
+    Latin,
+    Unknown,
+}
+
+/// 仅繁体 / 仅简体用字（覆盖常用字，不追求完备）。
+const TRADITIONAL_ONLY: &str = "們這說國學對時會來為麼種樣個東車過還進開關實應讓覺聽見點萬與專業體發長門問間無舊氣親愛單獨龍馬鳥魚頭風雲電語讀寫書認誰謝請講論議記試課銀錢張陽陰歲邊達遠運連極樂習義處備變層場團園圖聲報擔擁擇掛換據檢樓歡漢決沒淚滿熱環現畫療盡眾禮";
+const SIMPLIFIED_ONLY: &str = "们这说国学对时会来为么种样个东车过还进开关实应让觉听见点万与专业体发长门问间无旧气亲爱单独龙马鸟鱼头风云电语读写书认谁谢请讲论议记试课银钱张阳阴岁边达远运连极乐习义处备变层场团园图声报担拥择挂换据检楼欢汉决没泪满热环现画疗尽众礼";
+
+/// 采样正文前 4000 字判定主导语言：假名 / 谚文占比 ≥5% 即判日 / 韩；
+/// 汉字占一半以上按简繁用字倾向区分；拉丁、西里尔按主导文字判定。
+fn detect_language(text: &str) -> SourceLanguage {
+    let (mut kana, mut hangul, mut han, mut latin, mut cyrillic) = (0, 0, 0, 0, 0);
+    let (mut traditional, mut simplified) = (0, 0);
+    for character in text.chars().take(4000) {
+        match character {
+            '\u{3040}'..='\u{30ff}' | '\u{31f0}'..='\u{31ff}' => kana += 1,
+            '\u{ac00}'..='\u{d7af}' | '\u{1100}'..='\u{11ff}' | '\u{3130}'..='\u{318f}' => hangul += 1,
+            '\u{4e00}'..='\u{9fff}' | '\u{3400}'..='\u{4dbf}' => {
+                han += 1;
+                traditional += usize::from(TRADITIONAL_ONLY.contains(character));
+                simplified += usize::from(SIMPLIFIED_ONLY.contains(character));
+            }
+            'a'..='z' | 'A'..='Z' => latin += 1,
+            '\u{0400}'..='\u{04ff}' => cyrillic += 1,
+            _ => {}
+        }
+    }
+    let letters = kana + hangul + han + latin + cyrillic;
+    if letters == 0 {
+        return SourceLanguage::Unknown;
+    }
+    if kana * 20 >= letters {
+        return SourceLanguage::Japanese;
+    }
+    if hangul * 20 >= letters {
+        return SourceLanguage::Korean;
+    }
+    if han * 2 >= letters {
+        return SourceLanguage::Chinese {
+            traditional: traditional > simplified && traditional >= 3,
+        };
+    }
+    if cyrillic * 3 >= letters {
+        return SourceLanguage::Russian;
+    }
+    if latin * 2 >= letters {
+        return SourceLanguage::Latin;
+    }
+    SourceLanguage::Unknown
+}
+
+/// 原文语言与目标语言一致。拉丁文字只匹配 en：es / fr / de 无法本地区分，始终走翻译。
+fn same_target_language(source: SourceLanguage, target: &str) -> bool {
+    match (source, target) {
+        (SourceLanguage::Japanese, "ja")
+        | (SourceLanguage::Korean, "ko")
+        | (SourceLanguage::Russian, "ru")
+        | (SourceLanguage::Latin, "en") => true,
+        (SourceLanguage::Chinese { traditional }, "zh-CN") => !traditional,
+        (SourceLanguage::Chinese { traditional }, "zh-TW") => traditional,
+        _ => false,
+    }
+}
+
+/// 提示词模板注入目标语言名（模板占位 `{target_language}`）。
+fn with_target_language(template: &str, target: &str) -> String {
+    template.replace("{target_language}", target)
+}
+
 pub fn validate_settings(settings: &Settings) -> Result<(), String> {
     if !settings.translation_api_url.trim().is_empty() {
         completion_url(&settings.translation_api_url)?;
@@ -152,6 +272,9 @@ pub fn validate_settings(settings: &Settings) -> Result<(), String> {
         || settings.translation_model.chars().any(char::is_control)
     {
         return Err("翻译模型 ID 无效".into());
+    }
+    if !settings.translation_target_language.trim().is_empty() {
+        resolve_target_language(settings)?;
     }
     validate_options(&settings.translation_extra)
 }
@@ -523,6 +646,23 @@ pub async fn novel_translation_get(
     read_book(&book_path(&state.paths.data_dir, &novel))
 }
 
+/// 单页翻译结果：状态 + 译文 + 本次生效的目标语言 code。
+#[derive(Serialize)]
+pub struct PageTranslation {
+    pub status: PageTranslationStatus,
+    pub lines: Vec<TranslatedLine>,
+    pub target_language: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageTranslationStatus {
+    /// 已产出译文（可能来自本机缓存）。
+    Translated,
+    /// 原文已是目标语言，未调用模型。
+    AlreadyTargetLanguage,
+}
+
 #[tauri::command]
 pub async fn novel_translate_page(
     state: State<'_, AppState>,
@@ -530,8 +670,19 @@ pub async fn novel_translate_page(
     page: usize,
     force: bool,
     progress: Channel<String>,
-) -> Result<Vec<TranslatedLine>, String> {
-    let all_pages = pages(&novel)?;
+) -> Result<PageTranslation, String> {
+    translate_page_flow(&state, &novel, page, force, &progress).await
+}
+
+/// 单页翻译主流程（命令与单测共用）：原文语言与目标语言一致时快速返回，不发请求。
+async fn translate_page_flow(
+    state: &AppState,
+    novel: &NovelInput,
+    page: usize,
+    force: bool,
+    progress: &Channel<String>,
+) -> Result<PageTranslation, String> {
+    let all_pages = pages(novel)?;
     let current = page
         .checked_sub(1)
         .and_then(|index| all_pages.get(index))
@@ -544,16 +695,29 @@ pub async fn novel_translate_page(
         return Err("本页没有可翻译文字".into());
     }
     let _ = progress.send("queued".into());
+    let settings = state.settings_snapshot();
+    let (target_code, target_name) = resolve_target_language(&settings)?;
+    // 原文已是目标语言：只回提示不进入两轮流程；显式重译（force）仍执行。
+    if !force && same_target_language(detect_language(&novel.content), target_code) {
+        return Ok(PageTranslation {
+            status: PageTranslationStatus::AlreadyTargetLanguage,
+            lines: Vec::new(),
+            target_language: target_code.to_string(),
+        });
+    }
     // ponytail: 全局串行，防止设定集覆盖与重复扣费；需要并行多小说时改为按小说加锁。
     let _guard = state.translation_lock.lock().await;
-    let path = book_path(&state.paths.data_dir, &novel);
+    let path = book_path(&state.paths.data_dir, novel);
     let mut book = read_book(&path)?;
     if !force {
         if let Some(cached) = book.pages.get(&page) {
-            return Ok(cached.clone());
+            return Ok(PageTranslation {
+                status: PageTranslationStatus::Translated,
+                lines: cached.clone(),
+                target_language: target_code.to_string(),
+            });
         }
     }
-    let settings = state.settings_snapshot();
     validate_settings(&settings)?;
     if settings.translation_api_url.trim().is_empty()
         || settings.translation_model.trim().is_empty()
@@ -575,10 +739,22 @@ pub async fn novel_translate_page(
         key,
         settings: &settings,
     };
-    translate_book(
-        &client, &novel, &all_pages, page, &path, &mut book, &progress,
+    let lines = translate_book(
+        &client,
+        novel,
+        &all_pages,
+        page,
+        &path,
+        &mut book,
+        progress,
+        target_name,
     )
-    .await
+    .await?;
+    Ok(PageTranslation {
+        status: PageTranslationStatus::Translated,
+        lines,
+        target_language: target_code.to_string(),
+    })
 }
 
 /// 模型返回的候选设定集：忽略多余字段，可选字段缺失取默认值。
@@ -628,6 +804,7 @@ async fn translate_book(
     path: &Path,
     book: &mut TranslationBook,
     progress: &Channel<String>,
+    target_language: &str,
 ) -> Result<Vec<TranslatedLine>, String> {
     let source = source_lines(&all_pages[page - 1]);
     let prev = if page > 1 {
@@ -651,7 +828,7 @@ async fn translate_book(
         "locked_bible":book.bible, "source_lines":source });
     let _ = progress.send("prepare".into());
     let candidate: CandidateBible =
-        serde_json::from_value(client.complete(PREPARE_PROMPT, input.clone()).await?)
+        serde_json::from_value(client.complete(&with_target_language(PREPARE_PROMPT, target_language), input.clone()).await?)
             .map_err(|_| "模型设定集结构无效")?;
     book.bible = merge_bible(&book.bible, candidate.into())?;
     // Pass 1 先落盘；Pass 2 失败仍能沿用术语，不写半页译文。
@@ -668,8 +845,12 @@ async fn translate_book(
         line: usize,
         text: String,
     }
-    let output: Output = serde_json::from_value(client.complete(TRANSLATE_PROMPT, input).await?)
-        .map_err(|_| "模型译文结构无效")?;
+    let output: Output = serde_json::from_value(
+        client
+            .complete(&with_target_language(TRANSLATE_PROMPT, target_language), input)
+            .await?,
+    )
+    .map_err(|_| "模型译文结构无效")?;
     let lines = validate_translation(
         output
             .lines
@@ -727,13 +908,16 @@ mod tests {
             Ok(())
         });
         let started = std::time::Instant::now();
+        let target = resolve_target_language(&settings).unwrap().1;
         let result: Result<(), String> = async {
             let mut book = TranslationBook::default();
-            translate_book(&client, &novel, &all_pages, 1, &path, &mut book, &progress).await?;
+            translate_book(&client, &novel, &all_pages, 1, &path, &mut book, &progress, target)
+                .await?;
             let first_bible = book.bible.clone();
             // 第二页从落盘记录恢复，验证跨页以及重新打开小说后的设定沿用。
             book = read_book(&path)?;
-            translate_book(&client, &novel, &all_pages, 2, &path, &mut book, &progress).await?;
+            translate_book(&client, &novel, &all_pages, 2, &path, &mut book, &progress, target)
+                .await?;
             assert_eq!(book.bible.style, first_bible.style);
             for term in &first_bible.terms {
                 let saved = book
@@ -909,10 +1093,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pixiv-translation-live-real-{}", uuid::Uuid::new_v4()));
         let path = book_path(&dir, &input);
         let started = std::time::Instant::now();
+        let target = resolve_target_language(&settings).unwrap().1;
         let result: Result<(), String> = async {
             let mut book = TranslationBook::default();
-            let lines =
-                translate_book(&client, &input, &all_pages, 1, &path, &mut book, &progress).await?;
+            let lines = translate_book(
+                &client, &input, &all_pages, 1, &path, &mut book, &progress, target,
+            )
+            .await?;
             let source = source_lines(&all_pages[0]);
             assert_eq!(lines.len(), source.len(), "译文行数应与原文一致");
             for line in &lines {
@@ -962,9 +1149,11 @@ mod tests {
         let bad_dir = std::env::temp_dir().join(format!("pixiv-translation-live-bad-{}", uuid::Uuid::new_v4()));
         let bad_path = book_path(&bad_dir, &input);
         let mut bad_book = TranslationBook::default();
-        let error = translate_book(&bad_client, &input, &all_pages, 1, &bad_path, &mut bad_book, &progress)
-            .await
-            .expect_err("不存在的模型应报错");
+        let error = translate_book(
+            &bad_client, &input, &all_pages, 1, &bad_path, &mut bad_book, &progress, target,
+        )
+        .await
+        .expect_err("不存在的模型应报错");
         if bad_dir.exists() {
             std::fs::remove_dir_all(bad_dir).unwrap();
         }
@@ -974,6 +1163,199 @@ mod tests {
         );
         assert!(!error.contains(&key), "错误文案不得包含凭据");
         println!("模型侧报错暴露（凭据已排除）：{error}");
+    }
+
+    #[test]
+    fn detects_source_language_and_matches_target() {
+        let japanese = "エリは妻のレイナを見た。「レイナ、帰ろう」彼女はうなずき、エリの手を握った。";
+        let simplified = "她们看着窗外的云，说着话，点了点头，心里很暖。";
+        let traditional = "她們看著窗外的雲，說著話，點了點頭，心裡很暖。";
+        let korean = "그녀는 미소를 지었다. 그는 천천히 걸어갔다.";
+        let english = "She looked at her wife and smiled. The bartender asked why they came.";
+        let russian = "Она посмотрела на жену и улыбнулась. Барменша спросила, зачем они пришли.";
+        assert_eq!(detect_language(japanese), SourceLanguage::Japanese);
+        assert_eq!(detect_language(simplified), SourceLanguage::Chinese { traditional: false });
+        assert_eq!(detect_language(traditional), SourceLanguage::Chinese { traditional: true });
+        assert_eq!(detect_language(korean), SourceLanguage::Korean);
+        assert_eq!(detect_language(english), SourceLanguage::Latin);
+        assert_eq!(detect_language(russian), SourceLanguage::Russian);
+        assert_eq!(detect_language("123 456 ……"), SourceLanguage::Unknown);
+        // 一致判定：日→日跳过；日→中照常翻译；中文简繁互转仍要翻译；拉丁只匹配 en。
+        assert!(same_target_language(detect_language(japanese), "ja"));
+        assert!(!same_target_language(detect_language(japanese), "zh-CN"));
+        assert!(same_target_language(detect_language(simplified), "zh-CN"));
+        assert!(!same_target_language(detect_language(simplified), "zh-TW"));
+        assert!(same_target_language(detect_language(traditional), "zh-TW"));
+        assert!(!same_target_language(detect_language(traditional), "zh-CN"));
+        assert!(same_target_language(detect_language(english), "en"));
+        assert!(!same_target_language(detect_language(english), "es"));
+        assert!(!same_target_language(SourceLanguage::Unknown, "zh-CN"));
+    }
+
+    #[test]
+    fn resolves_target_language_from_settings_or_ui_language() {
+        let follow = Settings {
+            language: "en-US".into(),
+            ..Settings::default()
+        };
+        assert_eq!(resolve_target_language(&follow).unwrap().0, "en");
+        let explicit = Settings {
+            language: "zh-CN".into(),
+            translation_target_language: "zh-TW".into(),
+            ..Settings::default()
+        };
+        assert_eq!(resolve_target_language(&explicit).unwrap().1, "繁體中文");
+        let alias = Settings {
+            translation_target_language: "zh_Hant".into(),
+            ..Settings::default()
+        };
+        assert_eq!(resolve_target_language(&alias).unwrap().0, "zh-TW");
+        let invalid = Settings {
+            translation_target_language: "klingon".into(),
+            ..Settings::default()
+        };
+        assert!(resolve_target_language(&invalid).is_err());
+        assert!(validate_settings(&invalid).is_err(), "非法目标语言在保存时即拒绝");
+        assert!(validate_settings(&Settings::default()).is_ok());
+        // 界面语言非法只在翻译时拒绝（不阻塞无关设置保存）。
+        assert!(resolve_target_language(&Settings { language: "xx".into(), ..Settings::default() }).is_err());
+    }
+
+    #[test]
+    fn injects_target_language_into_prompts() {
+        for template in [PREPARE_PROMPT, TRANSLATE_PROMPT] {
+            let prompt = with_target_language(template, "英文（English）");
+            assert!(prompt.contains("英文（English）"), "提示词须带上目标语言");
+            assert!(!prompt.contains("{target_language}"), "占位符必须被替换");
+        }
+    }
+
+    /// 原文已是目标语言：流程直接返回提示，不发任何请求（配置指向不可达端口）。
+    #[tokio::test]
+    async fn skips_translation_when_source_is_target_language() {
+        let dir = std::env::temp_dir().join(format!(
+            "pixiv-translation-skip-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = crate::db::Db::open(&dir.join("app.db")).unwrap();
+        let paths = crate::paths::AppPaths {
+            data_dir: dir.clone(),
+            config_dir: dir.join("config"),
+            logs_dir: dir.join("logs"),
+        };
+        let settings = Settings {
+            translation_api_url: "http://127.0.0.1:9/v1".into(),
+            translation_model: "mock-model".into(),
+            language: "zh-CN".into(),
+            ..Settings::default()
+        };
+        let state = AppState::new(paths, settings, db);
+        let progress = Channel::<String>::new(|_| Ok(()));
+        let chinese = NovelInput {
+            novel_id: 7,
+            title: "中文小说".into(),
+            tags: vec![],
+            description: String::new(),
+            content: "她们看着窗外的云，说着话，点了点头，心里很暖。".into(),
+        };
+        let skipped = translate_page_flow(&state, &chinese, 1, false, &progress)
+            .await
+            .unwrap();
+        assert!(matches!(
+            skipped.status,
+            PageTranslationStatus::AlreadyTargetLanguage
+        ));
+        assert!(skipped.lines.is_empty());
+        assert_eq!(skipped.target_language, "zh-CN");
+        // force 与不同语言都照常进入流程：配置不可达，必然报错（证明没有走快速返回）。
+        assert!(translate_page_flow(&state, &chinese, 1, true, &progress).await.is_err());
+        let japanese = NovelInput {
+            novel_id: 8,
+            title: "日本語".into(),
+            tags: vec![],
+            description: String::new(),
+            content: "エリは妻のレイナを見た。「レイナ、帰ろう」".into(),
+        };
+        assert!(translate_page_flow(&state, &japanese, 1, false, &progress).await.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 目标语言在线验收：同一日文样章翻译为英文，验证提示词真的按目标语言生效
+    /// （译文不得残留中日文，且必须出现拉丁字母）。只翻译第 1 页，两次请求。
+    #[tokio::test]
+    #[ignore = "需要显式授权访问模型服务和进程环境中的测试 Key"]
+    async fn live_english_target_translation() {
+        let key = std::env::var("PIXIV_TRANSLATION_TEST_KEY").expect("缺少测试 Key 环境变量");
+        let settings = Settings {
+            translation_api_url: std::env::var("PIXIV_TRANSLATION_TEST_URL")
+                .expect("缺少测试 URL 环境变量"),
+            translation_model: std::env::var("PIXIV_TRANSLATION_TEST_MODEL")
+                .expect("缺少测试模型环境变量"),
+            translation_target_language: "en".into(),
+            translation_extra: json!({"reasoning_effort":"low"}),
+            ..Settings::default()
+        };
+        let (code, target) = resolve_target_language(&settings).unwrap();
+        assert_eq!(code, "en");
+        let client = TranslationClient {
+            http: wreq::Client::builder()
+                .timeout(Duration::from_secs(180))
+                .redirect(wreq::redirect::Policy::none())
+                .build()
+                .unwrap(),
+            url: completion_url(&settings.translation_api_url).unwrap(),
+            key,
+            settings: &settings,
+        };
+        let novel = NovelInput {
+            novel_id: 43,
+            title: "バーでの再会（英語翻訳検証）".into(),
+            tags: vec!["小説".into()],
+            description: "エリとレイナはバーで出会った夫婦。".into(),
+            content: "[chapter:再会]\nエリとレイナは、このバーで出会った夫婦である。\n「レイナ、帰ろう」".into(),
+        };
+        let all_pages = pages(&novel).unwrap();
+        let dir = std::env::temp_dir().join(format!("pixiv-translation-live-en-{}", uuid::Uuid::new_v4()));
+        let path = book_path(&dir, &novel);
+        let progress = Channel::<String>::new(|_| Ok(()));
+        let started = std::time::Instant::now();
+        let result: Result<(), String> = async {
+            let mut book = TranslationBook::default();
+            let lines = translate_book(
+                &client, &novel, &all_pages, 1, &path, &mut book, &progress, target,
+            )
+            .await?;
+            let source = source_lines(&all_pages[0]);
+            assert_eq!(lines.len(), source.len());
+            for line in &lines {
+                assert!(
+                    !line.text.chars().any(|c| matches!(c, '\u{4e00}'..='\u{9fff}' | '\u{3040}'..='\u{30ff}')),
+                    "英文目标不得残留中日文：{}",
+                    line.text
+                );
+            }
+            assert!(
+                lines.iter().any(|line| line.text.chars().any(|c| c.is_ascii_alphabetic())),
+                "英文译文应含拉丁字母"
+            );
+            println!(
+                "英文目标：{} 行原文 → {} 行英文，设定集 {} 个词条，耗时 {} 秒",
+                source.len(),
+                lines.len(),
+                book.bible.terms.len(),
+                started.elapsed().as_secs()
+            );
+            for line in &lines {
+                println!("{}：{}", line.line, line.text);
+            }
+            Ok(())
+        }
+        .await;
+        if dir.exists() {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+        result.expect("英文目标语言验收失败");
     }
 
     #[test]
@@ -1305,18 +1687,21 @@ mod tests {
             settings: &settings,
         };
         let progress = Channel::<String>::new(|_| Ok(()));
+        let target = resolve_target_language(&settings).unwrap().1;
         let mut book = TranslationBook::default();
         for page in 1..=2 {
             translate_book(
-                &client, &novel, &all_pages, page, &path, &mut book, &progress,
+                &client, &novel, &all_pages, page, &path, &mut book, &progress, target,
             )
             .await
             .unwrap();
         }
         assert!(
-            translate_book(&client, &novel, &all_pages, 2, &path, &mut book, &progress)
-                .await
-                .is_err()
+            translate_book(
+                &client, &novel, &all_pages, 2, &path, &mut book, &progress, target
+            )
+            .await
+            .is_err()
         );
         let requests = server.await.unwrap();
         assert_eq!(requests.len(), 6);
@@ -1326,6 +1711,9 @@ mod tests {
             assert_eq!(request["store"], false);
             assert_eq!(request["reasoning_effort"], "high");
             assert_eq!(request["thinking"]["budget_tokens"], 2048);
+            // 两个提示词都必须注入目标语言，且不留占位符。
+            let prompt = request["messages"][0]["content"].as_str().unwrap();
+            assert!(prompt.contains("简体中文") && !prompt.contains("{target_language}"));
         }
         let pass2: Value =
             serde_json::from_str(requests[1]["messages"][1]["content"].as_str().unwrap()).unwrap();

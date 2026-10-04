@@ -67,6 +67,7 @@ function ensureSettings(): Settings {
       saucenao_api_key: "",
       translation_api_url: "",
       translation_model: "",
+      translation_target_language: "",
       translation_extra: {},
       translation_key_configured: false,
       translation_key_error: "",

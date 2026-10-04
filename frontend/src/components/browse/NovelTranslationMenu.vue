@@ -10,6 +10,8 @@ const props = defineProps<{
   busy: boolean;
   disabled: boolean;
   translated: boolean;
+  /** 原文已是目标语言、本次未请求模型：只提示，不视为成功或失败。 */
+  skipped: boolean;
 }>();
 const emit = defineEmits<{
   "update:modelValue": [mode: TranslationMode];
@@ -22,8 +24,8 @@ interface Focusable { focus(): void }
 const trigger = ref<Focusable | null>(null);
 
 /**
- * 状态指示器：错误 > 进行中 > 已完成 > 未翻译，颜色只作补充，
- * 状态文字与失败原因始终可读（DESIGN.md Semantic State Rule）。
+ * 状态指示器：错误 > 进行中 > 已完成 > 未翻译（含「无需翻译」提示，不算成功也不算失败），
+ * 颜色只作补充，状态文字与失败原因始终可读（DESIGN.md Semantic State Rule）。
  * 失败时 hover 指示点/入口按钮可看模型侧报错原文。
  */
 const state = computed(() => (props.error ? "error" : props.busy ? "busy" : props.translated ? "done" : "idle"));
@@ -74,7 +76,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       <div class="translation-modes" role="group" :aria-label="t('translation.displayMode')">
         <button v-for="mode in (['original', 'translated', 'bilingual'] as const)" :key="mode" type="button" class="translation-mode" :aria-pressed="modelValue === mode" :class="{ selected: modelValue === mode }" @click="emit('update:modelValue', mode)">{{ t(`translation.${mode}`) }}</button>
       </div>
-      <md-outlined-button :disabled="busy || disabled" :aria-busy="busy" @click="emit('translate')">{{ t(translated ? 'translation.retranslate' : 'translation.button') }}</md-outlined-button>
+      <md-outlined-button :disabled="busy || disabled" :aria-busy="busy" @click="emit('translate')">{{ t(skipped ? 'translation.translateAnyway' : translated ? 'translation.retranslate' : 'translation.button') }}</md-outlined-button>
     </div>
   </div>
 </template>
