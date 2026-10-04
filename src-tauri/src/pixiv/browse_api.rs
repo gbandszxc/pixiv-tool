@@ -368,6 +368,9 @@ pub struct PublishedComment {
     /// 被回复的评论 id（根评论省略；实测根评论响应该字段为 null）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
+    /// 贴图评论的官方 stampId（文本评论为 null → 省略）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stamp_id: Option<String>,
 }
 
 /// 小说系列详情 + 一批内容（游标分页）。
@@ -1724,11 +1727,27 @@ fn parse_comments_replies(body: &Value, page: i64) -> BrowseComments {
 /// 评论正文字符上限（官方评论框 `maxlength=140`，2026-10-04 抓包实测）。
 pub const COMMENT_MAX_CHARS: usize = 140;
 
+/// 评论写端点（`type=comment` / `type=stamp` 共用）：
+/// 插画·漫画（manga 同走 illust 端点）→ `/rpc/post_comment.php` + `illust_id`；
+/// 小说 → `/novel/rpc/post_comment.php` + `novel_id`。
+fn comment_post_endpoint(kind: &str) -> Result<(&'static str, &'static str), PixivError> {
+    match kind {
+        "illust" | "manga" => Ok(("/rpc/post_comment.php", "illust_id")),
+        "novel" => Ok(("/novel/rpc/post_comment.php", "novel_id")),
+        other => Err(PixivError::Client(format!("不支持的作品类型: {other}"))),
+    }
+}
+
+/// 回复时追加 `&parent_id={目标评论 id}`；根评论**不带**该字段（与官方一致）。
+fn push_parent(form: &mut String, parent_id: Option<&str>) {
+    if let Some(parent) = parent_id {
+        form.push_str(&format!("&parent_id={}", percent_encode(parent)));
+    }
+}
+
 /// 发评论请求（写操作，2026-10-04 Chrome 抓包实测）：
-/// - 插画 / 漫画（manga 同走 illust 端点）→ `POST /rpc/post_comment.php`，
-///   form `type=comment&illust_id={作品}&author_user_id={作品作者}&comment={正文}`；
-/// - 小说 → `POST /novel/rpc/post_comment.php`，form 同上，键为 `novel_id`；
-/// - 回复他人评论追加 `&parent_id={目标评论 id}`（根评论**不带**该字段）。
+/// form `type=comment&{illust_id|novel_id}={作品}&author_user_id={作品作者}&comment={正文}`，
+/// 回复追加 `&parent_id=`。
 /// `author_user_id` 是**作品作者**的用户 id（前端由作品详情 `user_id` 传入），
 /// 不是评论者自身 id。
 fn comment_add_request(
@@ -1738,18 +1757,34 @@ fn comment_add_request(
     comment: &str,
     parent_id: Option<&str>,
 ) -> Result<(&'static str, String), PixivError> {
-    let (path, id_key) = match kind {
-        "illust" | "manga" => ("/rpc/post_comment.php", "illust_id"),
-        "novel" => ("/novel/rpc/post_comment.php", "novel_id"),
-        other => return Err(PixivError::Client(format!("不支持的作品类型: {other}"))),
-    };
+    let (path, id_key) = comment_post_endpoint(kind)?;
     let mut form = format!(
         "type=comment&{id_key}={id}&author_user_id={author_id}&comment={}",
         percent_encode(comment)
     );
-    if let Some(parent) = parent_id {
-        form.push_str(&format!("&parent_id={}", percent_encode(parent)));
-    }
+    push_parent(&mut form, parent_id);
+    Ok((path, form))
+}
+
+/// 发官方表情贴图（stamp）评论请求（2026-10-04 由 pixiv web bundle 反查实测，
+/// 与文本评论同端点同鉴权）：form
+/// `type=stamp&{illust_id|novel_id}={作品}&author_user_id={作品作者}&stamp_id={贴图 id}`，
+/// **不带 `comment` 字段**，回复同样追加 `&parent_id=`。
+/// `stamp_id` 是官方生成的数字 id（网页面板可见 40 个，目录见前端
+/// `PIXIV_COMMENT_STAMPS`；图片 `s.pximg.net/common/images/stamp/generated-stamps/{id}_s.jpg`）。
+fn comment_stamp_request(
+    kind: &str,
+    id: i64,
+    author_id: i64,
+    stamp_id: &str,
+    parent_id: Option<&str>,
+) -> Result<(&'static str, String), PixivError> {
+    let (path, id_key) = comment_post_endpoint(kind)?;
+    let mut form = format!(
+        "type=stamp&{id_key}={id}&author_user_id={author_id}&stamp_id={}",
+        percent_encode(stamp_id)
+    );
+    push_parent(&mut form, parent_id);
     Ok((path, form))
 }
 
@@ -1790,6 +1825,7 @@ fn parse_published_comment(body: &Value) -> Result<PublishedComment, PixivError>
         user_id: body.get("user_id").and_then(as_i64_loose).unwrap_or_default(),
         user_name: str_field(body, "user_name").unwrap_or_default(),
         parent_id: str_field(body, "parent_id"),
+        stamp_id: str_field(body, "stamp_id"),
     })
 }
 
@@ -2589,9 +2625,43 @@ impl PixivApi {
             None => None,
         };
         let (path, form) = comment_add_request(kind, id, author_id, comment, parent_id)?;
+        self.post_comment_form(&path, &form).await
+    }
+
+    /// 发表官方表情贴图（stamp）评论 / 回复（写操作）。
+    /// `stamp_id` 为官方数字 id（前端目录 `PIXIV_COMMENT_STAMPS`），与文本评论同端点同鉴权。
+    pub async fn post_stamp_comment(
+        &self,
+        kind: &str,
+        id: i64,
+        author_id: i64,
+        stamp_id: &str,
+        parent_id: Option<&str>,
+    ) -> Result<Value, PixivError> {
+        if id <= 0 || author_id <= 0 {
+            return Err(PixivError::Client("作品或作者 ID 无效".into()));
+        }
+        let stamp_id = stamp_id.trim();
+        if stamp_id.is_empty() || !stamp_id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(PixivError::Client("表情贴图 ID 无效".into()));
+        }
+        let parent_id = match parent_id {
+            Some(p) if p.trim().is_empty() => {
+                return Err(PixivError::Client("回复目标评论 ID 不能为空".into()))
+            }
+            Some(p) => Some(p.trim()),
+            None => None,
+        };
+        let (path, form) = comment_stamp_request(kind, id, author_id, stamp_id, parent_id)?;
+        self.post_comment_form(&path, &form).await
+    }
+
+    /// 评论写公共尾部（文本评论 / 表情贴图共用）：发 form → 解析 `PublishedComment`；
+    /// Auth/Client 失败清主站 csrf 缓存（与收藏写一致）。
+    async fn post_comment_form(&self, path: &str, form: &str) -> Result<Value, PixivError> {
         let client = self.client();
         let token = web_csrf_token(client).await?;
-        match client.post_form(path, Some(&token), &form).await {
+        match client.post_form(path, Some(&token), form).await {
             Ok(text) => {
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
@@ -4638,6 +4708,34 @@ mod tests {
     }
 
     #[test]
+    fn comment_stamp_request_shapes_and_reply() {
+        // 插画 / 漫画 → /rpc/post_comment.php，type=stamp，不含 comment 字段
+        assert_eq!(
+            comment_stamp_request("illust", 150446397, 117482194, "301", None).unwrap(),
+            (
+                "/rpc/post_comment.php",
+                String::from("type=stamp&illust_id=150446397&author_user_id=117482194&stamp_id=301")
+            )
+        );
+        assert_eq!(
+            comment_stamp_request("manga", 1, 2, "101", None).unwrap().0,
+            "/rpc/post_comment.php"
+        );
+        // 小说走 /novel 前缀端点 + novel_id；回复追加 parent_id
+        assert_eq!(
+            comment_stamp_request("novel", 9, 8, "410", Some("235373194")).unwrap(),
+            (
+                "/novel/rpc/post_comment.php",
+                String::from(
+                    "type=stamp&novel_id=9&author_user_id=8&stamp_id=410&parent_id=235373194"
+                )
+            )
+        );
+        // 评论 kind 白名单之外的类型（ugoira）在构造阶段即拒绝
+        assert!(comment_stamp_request("ugoira", 1, 2, "301", None).is_err());
+    }
+
+    #[test]
     fn comment_delete_request_shapes() {
         assert_eq!(
             comment_delete_request("illust", 150446397, "235373194").unwrap(),
@@ -4687,6 +4785,16 @@ mod tests {
         .unwrap();
         assert_eq!(reply.comment_id, "7");
         assert_eq!(reply.parent_id.as_deref(), Some("235373194"));
+        assert_eq!(reply.stamp_id, None, "文本评论 stamp_id 为 null → 省略");
+        // 贴图评论：stamp_id 非空 → 契约带 stamp_id
+        let stamped = parse_published_comment(&json!({
+            "comment_id": "8",
+            "user_id": "117482194",
+            "user_name": "wllmsb",
+            "stamp_id": "301",
+        }))
+        .unwrap();
+        assert_eq!(stamped.stamp_id.as_deref(), Some("301"));
         // 缺 comment_id / 空串 → 失败，不因 HTTP 200 回显成功
         assert!(parse_published_comment(&json!({"user_name": "x"})).is_err());
         assert!(parse_published_comment(&json!({"comment_id": ""})).is_err());

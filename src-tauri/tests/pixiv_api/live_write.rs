@@ -287,6 +287,10 @@ async fn pick_own_illust(uid: i64) -> i64 {
         .unwrap_or_else(|| panic!("本人作品列表为空，无法执行评论写用例（uid {uid}）"))
 }
 
+/// 在线用例使用的官方表情贴图 id（网页面板可见目录中的一个，见前端
+/// `PIXIV_COMMENT_STAMPS`）。
+const STAMP_ID: &str = "301";
+
 /// 评论列表信封里的 id 集合（契约 `{comments:[{id,…}], next?}`）。
 fn comment_ids(listing: &Value) -> Vec<String> {
     listing["comments"]
@@ -300,8 +304,8 @@ fn comment_ids(listing: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 评论写路径往返：在**本人作品**上发根评论 → 回复该评论 → 校验可见 →
-/// 无论成败都删除还原（先删回复再删根评论），最后校验列表已消失。
+/// 评论写路径往返：在**本人作品**上发根评论 → 回复该评论 → 发官方表情贴图 →
+/// 校验可见 → 无论成败都删除还原（先删贴图与回复再删根评论），最后校验列表已消失。
 #[tokio::test]
 #[ignore = "需要真实登录态与网络，且需 PIXIV_LIVE_WRITE=1：./dev.ps1 test-live"]
 async fn live_comment_add_and_delete_roundtrip() {
@@ -349,13 +353,33 @@ async fn live_comment_add_and_delete_roundtrip() {
         .and_then(|v| v.get("comment_id").and_then(Value::as_str))
         .map(str::to_string);
 
+    // ②b 表情贴图（stamp 分支：type=stamp&stamp_id，不带 comment）
+    let stamped = match root_id.as_deref() {
+        Some(rid) => {
+            Some(
+                api.post_stamp_comment("illust", work_id, uid, STAMP_ID, Some(rid))
+                    .await,
+            )
+        }
+        None => None,
+    };
+    let stamped_id = stamped
+        .as_ref()
+        .and_then(|r| r.as_ref().ok())
+        .and_then(|v| v.get("comment_id").and_then(Value::as_str))
+        .map(str::to_string);
+
     // ③ 删除前可见性取样（用于证明删除确有状态变化）
     let before = match root_id.as_deref() {
         Some(_) => Some(api.get_work_comments("illust", work_id, 0).await),
         None => None,
     };
 
-    // ④ 清理：先删回复（挂根评论之下），再删根评论
+    // ④ 清理：先删回复与贴图（挂根评论之下），再删根评论
+    let del_stamp = match stamped_id.as_deref() {
+        Some(sid) => Some(api.comment_delete("illust", work_id, sid).await),
+        None => None,
+    };
     let del_reply = match reply_id.as_deref() {
         Some(rid) => Some(api.comment_delete("illust", work_id, rid).await),
         None => None,
@@ -397,6 +421,20 @@ async fn live_comment_add_and_delete_roundtrip() {
         "回复响应 parent_id 应指向被回复的根评论"
     );
 
+    let stamp_value = stamped
+        .expect("未拿到根评论 id，未能验证贴图分支")
+        .unwrap_or_else(|e| panic!("表情贴图发布失败（illust {work_id}）: {e}"));
+    assert_eq!(
+        stamp_value["stamp_id"].as_str(),
+        Some(STAMP_ID),
+        "贴图响应 stamp_id 应与请求一致"
+    );
+    assert_eq!(
+        stamp_value["parent_id"].as_str(),
+        Some(root_returned),
+        "贴图回复的 parent_id 应指向被回复的根评论"
+    );
+
     let visible = comment_ids(
         &before
             .expect("未取样删除前评论列表")
@@ -407,6 +445,9 @@ async fn live_comment_add_and_delete_roundtrip() {
         "删除前该评论应出现在列表首页（{visible:?}）"
     );
 
+    del_stamp
+        .expect("未尝试删除表情贴图")
+        .unwrap_or_else(|e| panic!("表情贴图删除失败（评论 {stamped_id:?}）: {e}"));
     del_reply
         .expect("未尝试删除回复")
         .unwrap_or_else(|e| panic!("回复删除失败（评论 {reply_id:?}）: {e}"));

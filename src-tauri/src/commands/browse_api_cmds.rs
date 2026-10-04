@@ -8,7 +8,7 @@
 //!
 //! `*_impl` 的调用顺序（离线冒烟 tests/pixiv_api/offline_guard.rs 对齐此顺序）：
 //! 1. 参数粗校验（空 word / page<1 / id 数字域 / offset<0 / 空 comment_id /
-//!    空或超长评论正文 / kind-mode-date 白名单）
+//!    评论文本与表情贴图二选一（文本空或超长 / 贴图 id 非数字）/ kind-mode-date 白名单）
 //!    → 可读中文 Err。放在登录守卫之前，未登录也能先暴露参数错误；
 //! 2. [`build_browse_api`]：读登录态 → PHPSESSID 为空即
 //!    [`NOT_LOGGED_IN`]（前端 browse IPC 层以「登录」关键字识别并弹登录窗，
@@ -179,20 +179,41 @@ fn validate_comment_kind(kind: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 评论正文粗校验（api 层同规则）：trim 后非空，且不超过 140 字
-/// （官方评论框 maxlength=140）。
-fn validate_comment_text(comment: &str) -> Result<(), String> {
-    let text = comment.trim();
-    if text.is_empty() {
-        return Err("评论内容不能为空".to_string());
+/// 评论正文（二选一）：文本 或 官方表情贴图 id。
+enum CommentBody<'a> {
+    Text(&'a str),
+    Stamp(&'a str),
+}
+
+/// 评论正文粗校验（api 层同规则）：`comment` 与 `stamp_id` 有且仅有一个——
+/// 文本 trim 后非空且不超过 140 字（官方评论框 maxlength=140）；
+/// 贴图 id 为官方数字 id（`PIXIV_COMMENT_STAMPS`）。
+fn validate_comment_body<'a>(
+    comment: Option<&'a str>,
+    stamp_id: Option<&'a str>,
+) -> Result<CommentBody<'a>, String> {
+    match (comment.map(str::trim), stamp_id.map(str::trim)) {
+        (Some(text), None) => {
+            if text.is_empty() {
+                return Err("评论内容不能为空".to_string());
+            }
+            if text.chars().count() > crate::pixiv::browse_api::COMMENT_MAX_CHARS {
+                return Err(format!(
+                    "评论内容不能超过 {} 字",
+                    crate::pixiv::browse_api::COMMENT_MAX_CHARS
+                ));
+            }
+            Ok(CommentBody::Text(text))
+        }
+        (None, Some(stamp)) => {
+            if stamp.is_empty() || !stamp.chars().all(|c| c.is_ascii_digit()) {
+                return Err("表情贴图 ID 无效".to_string());
+            }
+            Ok(CommentBody::Stamp(stamp))
+        }
+        (Some(_), Some(_)) => Err("评论内容与表情贴图只能二选一".to_string()),
+        (None, None) => Err("评论内容不能为空".to_string()),
     }
-    if text.chars().count() > crate::pixiv::browse_api::COMMENT_MAX_CHARS {
-        return Err(format!(
-            "评论内容不能超过 {} 字",
-            crate::pixiv::browse_api::COMMENT_MAX_CHARS
-        ));
-    }
-    Ok(())
 }
 
 /// 回复目标评论 ID 粗校验：给出时 trim 后必须非空（评论 ID 为 pixiv 数字串，
@@ -654,39 +675,57 @@ pub async fn browse_comment_replies_impl(
         .map_err(|err| err.to_string())
 }
 
-/// 发表评论 / 回复评论（写操作，需登录 + 主站 csrf token）。
+/// 发表评论 / 回复评论 / 发表官方表情贴图（写操作，需登录 + 主站 csrf token）。
+/// `comment`（文本 1~140 字）与 `stamp_id`（官方表情贴图 id）**二选一**；
 /// `parent_id` 给出即回复该评论，省略为根评论；`author_id` 是**作品作者**的
 /// 用户 id（前端由作品详情 `user_id` 传入）。返回
-/// `{ comment_id, user_id, user_name, parent_id? }`。
+/// `{ comment_id, user_id, user_name, parent_id?, stamp_id? }`。
 #[tauri::command]
 pub async fn browse_comment_add(
     state: State<'_, AppState>,
     kind: String,
     id: i64,
     author_id: i64,
-    comment: String,
+    comment: Option<String>,
+    stamp_id: Option<String>,
     parent_id: Option<String>,
 ) -> Result<Value, String> {
-    browse_comment_add_impl(&state, &kind, id, author_id, &comment, parent_id.as_deref()).await
+    browse_comment_add_impl(
+        &state,
+        &kind,
+        id,
+        author_id,
+        comment.as_deref(),
+        stamp_id.as_deref(),
+        parent_id.as_deref(),
+    )
+    .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn browse_comment_add_impl(
     state: &AppState,
     kind: &str,
     id: i64,
     author_id: i64,
-    comment: &str,
+    comment: Option<&str>,
+    stamp_id: Option<&str>,
     parent_id: Option<&str>,
 ) -> Result<Value, String> {
     validate_comment_kind(kind)?;
     validate_id(id, "作品")?;
     validate_id(author_id, "作者")?;
-    validate_comment_text(comment)?;
+    let body = validate_comment_body(comment, stamp_id)?;
     validate_comment_parent(parent_id)?;
-    build_browse_api(state)?
-        .post_comment(kind, id, author_id, comment, parent_id)
-        .await
-        .map_err(|err| err.to_string())
+    let api = build_browse_api(state)?;
+    let result = match body {
+        CommentBody::Text(text) => api.post_comment(kind, id, author_id, text, parent_id).await,
+        CommentBody::Stamp(stamp) => {
+            api.post_stamp_comment(kind, id, author_id, stamp, parent_id)
+                .await
+        }
+    };
+    result.map_err(|err| err.to_string())
 }
 
 // ----------------------------------------------------------------------

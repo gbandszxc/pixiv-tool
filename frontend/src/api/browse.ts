@@ -314,18 +314,66 @@ export interface BrowseComments {
 }
 
 /**
- * browse_comment_add（发评论 / 回复）返回体。
- * comment_id 为 pixiv 评论 id 字符串；parent_id 仅回复出现（根评论省略）。
+ * browse_comment_add（发评论 / 回复 / 发表情贴图）返回体。
+ * comment_id 为 pixiv 评论 id 字符串；parent_id 仅回复出现（根评论省略）；
+ * stamp_id 仅表情贴图出现（文本评论省略）。
  */
 export interface PublishedComment {
   comment_id: string;
   user_id: number;
   user_name: string;
   parent_id?: string;
+  stamp_id?: string;
 }
 
 /** 评论正文字符上限（官方评论框 maxlength=140，与后端 COMMENT_MAX_CHARS 同值）。 */
 export const COMMENT_MAX_CHARS = 140;
+
+/**
+ * 官方评论文本表情（emoji）：正文里写 `(code)` 或 `:code:`，pixiv 网页渲染为图片。
+ * 目录取自 pixiv web 前端 bundle（模块 37646 / 21816，2026-10-04 反查）；
+ * 图片与网页同源：`https://s.pximg.net/common/images/emoji/{id}.png`。
+ */
+export const PIXIV_COMMENT_EMOJI: readonly { id: number; code: string }[] = [
+  { id: 101, code: "normal" }, { id: 102, code: "surprise" }, { id: 103, code: "serious" }, { id: 104, code: "heaven" },
+  { id: 105, code: "happy" }, { id: 106, code: "excited" }, { id: 107, code: "sing" }, { id: 108, code: "cry" },
+  { id: 201, code: "normal2" }, { id: 202, code: "shame2" }, { id: 203, code: "love2" }, { id: 204, code: "interesting2" },
+  { id: 205, code: "blush2" }, { id: 206, code: "fire2" }, { id: 207, code: "angry2" }, { id: 208, code: "shine2" },
+  { id: 209, code: "panic2" },
+  { id: 301, code: "normal3" }, { id: 302, code: "satisfaction3" }, { id: 303, code: "surprise3" }, { id: 304, code: "smile3" },
+  { id: 305, code: "shock3" }, { id: 306, code: "gaze3" }, { id: 307, code: "wink3" }, { id: 308, code: "happy3" },
+  { id: 309, code: "excited3" }, { id: 310, code: "love3" },
+  { id: 401, code: "normal4" }, { id: 402, code: "surprise4" }, { id: 403, code: "serious4" }, { id: 404, code: "love4" },
+  { id: 405, code: "shine4" }, { id: 406, code: "sweat4" }, { id: 407, code: "shame4" }, { id: 408, code: "sleep4" },
+  { id: 501, code: "heart" }, { id: 502, code: "teardrop" }, { id: 503, code: "star" },
+];
+
+/**
+ * 官方表情贴图（stamp）id：与 pixiv 网页点评面板同序（第 3/4/2/1 组各 10 个，共 40）。
+ * 网页 bundle 另有第 6/7 组标记 `hidden`、面板不渲染，故不收录。
+ * 图片：`https://s.pximg.net/common/images/stamp/generated-stamps/{id}_s.jpg`。
+ */
+export const PIXIV_COMMENT_STAMPS: readonly string[] = [
+  "301", "302", "303", "304", "305", "306", "307", "308", "309", "310",
+  "401", "402", "403", "404", "405", "406", "407", "408", "409", "410",
+  "201", "202", "203", "204", "205", "206", "207", "208", "209", "210",
+  "101", "102", "103", "104", "105", "106", "107", "108", "109", "110",
+];
+
+/** 文本表情 code → 图片 id（正文渲染与面板插入共用）。 */
+export const COMMENT_EMOJI_ID_BY_CODE: Record<string, number> = Object.fromEntries(
+  PIXIV_COMMENT_EMOJI.map((emoji) => [emoji.code, emoji.id])
+);
+
+/** 文本表情图片 URL（与网页同源，展示时经 pixiv-img 代理）。 */
+export function commentEmojiUrl(id: number): string {
+  return `https://s.pximg.net/common/images/emoji/${id}.png`;
+}
+
+/** 表情贴图图片 URL（同上；`_s` 为网页面板用的那张）。 */
+export function commentStampUrl(id: string): string {
+  return `https://s.pximg.net/common/images/stamp/generated-stamps/${id}_s.jpg`;
+}
 
 // ===== 收藏契约（bookmark-ui-v1 v3.1）=====
 
@@ -590,23 +638,26 @@ export async function browseCommentReplies(params: {
 }
 
 /**
- * browse_comment_add：发表评论（parentId 给出即回复该评论；authorId 是作品作者的
- * 用户 id，来自作品详情 user_id）。未登录错误经 invokeBrowse 统一弹登录窗。
+ * browse_comment_add：发表评论 / 回复评论 / 发表官方表情贴图。
+ * `comment`（文本）与 `stampId`（官方贴图 id）**二选一**；`parentId` 给出即回复该评论；
+ * `authorId` 是作品作者的用户 id（来自作品详情 user_id）。未登录错误经 invokeBrowse 统一弹登录窗。
  */
 export async function browseCommentAdd(params: {
   kind: ListWorkKind;
   id: number;
   authorId: number;
-  comment: string;
+  comment?: string;
+  stampId?: string;
   parentId?: string;
 }): Promise<PublishedComment> {
-  const { kind, id, authorId, comment, parentId } = params;
-  if (!isTauri()) return mockCommentAdd(kind, id, authorId, comment, parentId);
+  const { kind, id, authorId, comment, stampId, parentId } = params;
+  if (!isTauri()) return mockCommentAdd(kind, id, authorId, comment, parentId, stampId);
   return invokeBrowse<PublishedComment>("browse_comment_add", {
     kind,
     id,
     authorId,
     comment,
+    stampId,
     parentId,
   });
 }
@@ -1339,8 +1390,9 @@ async function mockCommentAdd(
   kind: ListWorkKind,
   id: number,
   authorId: number,
-  comment: string,
-  parentId?: string
+  comment: string | undefined,
+  parentId?: string,
+  stampId?: string
 ): Promise<PublishedComment> {
   await mockDelay();
   mockCommentSeq += 1;
@@ -1349,12 +1401,19 @@ async function mockCommentAdd(
     id: commentId,
     user_id: authorId,
     user_name: MOCK_AUTHORS[0],
-    content: comment,
   };
+  if (stampId) posted.stamp_url = commentStampUrl(stampId);
+  else posted.content = comment ?? "";
   const store = parentId ? mockPostedReplies : mockPostedRoots;
   const key = `${kind}:${parentId ?? id}`;
   store.set(key, [posted, ...(store.get(key) ?? [])]);
-  return { comment_id: commentId, user_id: authorId, user_name: posted.user_name, parent_id: parentId };
+  return {
+    comment_id: commentId,
+    user_id: authorId,
+    user_name: posted.user_name,
+    parent_id: parentId,
+    stamp_id: stampId,
+  };
 }
 
 // ===== 收藏 mock =====

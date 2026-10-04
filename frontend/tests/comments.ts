@@ -41,6 +41,7 @@ interface Row {
   user_id: number;
   user_name: string;
   content: string;
+  stamp_url?: string;
   has_replies?: boolean;
 }
 
@@ -55,7 +56,7 @@ let pending: { resolve: (value: unknown) => void; reject: (error: unknown) => vo
 function resetState(): void {
   roots = [
     { id: "c1", user_id: 11, user_name: "评论者甲", content: "第一条评论", has_replies: true },
-    { id: "c2", user_id: 12, user_name: "评论者乙", content: "第二条评论" },
+    { id: "c2", user_id: 12, user_name: "评论者乙", content: "第二条评论 (happy) 收尾" },
   ];
   rootsOffsets = [];
   replyCalls = [];
@@ -213,6 +214,51 @@ async function run(): Promise<void> {
     commentItem(host, "第一条评论").querySelector(".replies")?.textContent?.includes("既有回复"),
     "回复区应展开并显示服务端返回的回复"
   );
+
+  // ===== ④b 官方表情：面板目录、插入文本表情、点选贴图即发、正文渲染 =====
+  assert(host.querySelectorAll(".emoji-inline").length === 1, "正文里的 (code) 应渲染为行内表情图");
+  const pickerMenu = find<HTMLElement>(host, "section.comments > .composer .emoji-menu");
+  find<HTMLElement>(pickerMenu, ".emoji-trigger").click();
+  await tick();
+  assert(pickerMenu.hasAttribute("open"), "点触发器应展开表情面板");
+  assert(
+    pickerMenu.querySelectorAll(".emoji-cell").length === 38,
+    "表情栏应渲染 38 个官方文本表情"
+  );
+  pickerMenu.querySelector<HTMLElement>(".emoji-cell")!.click();
+  await tick();
+  assert(
+    innerTextarea(rootField).value.endsWith("(normal)"),
+    "点选文本表情应把 (code) 追加到草稿"
+  );
+  const tabs = pickerMenu.querySelectorAll<HTMLElement>(".emoji-tab");
+  assert(tabs.length === 2, "面板应有表情 / 贴图两栏");
+  tabs[1].click();
+  await tick();
+  assert(pickerMenu.querySelectorAll(".stamp-cell").length === 40, "贴图栏应渲染 40 个官方贴图");
+  pickerMenu.querySelector<HTMLElement>(".stamp-cell")!.click();
+  await tick();
+  assert(addCalls.length === 5, "点选贴图应调用 browse_comment_add");
+  assert(
+    addCalls[4].stampId === "301" && addCalls[4].comment === undefined,
+    "贴图参数应只带 stampId（不带 comment）"
+  );
+  roots = [
+    {
+      id: "n2",
+      user_id: 77,
+      user_name: "我",
+      content: "",
+      stamp_url: "https://s.pximg.net/common/images/stamp/generated-stamps/301_s.jpg",
+    },
+    ...roots,
+  ];
+  pending!.resolve({ comment_id: "n2", user_id: 77, user_name: "我", stamp_id: "301" });
+  await waitFor(() => rootsOffsets.join(",") === "0,0,0", "发表情贴图后应重拉 roots 首页");
+  assert(
+    host.querySelector("li.comment .stamp") !== null,
+    "贴图评论应渲染 stamp 图"
+  );
   app.unmount();
   host.remove();
 
@@ -237,7 +283,7 @@ async function run(): Promise<void> {
   noAuthor.host.remove();
 
   document.querySelector("#comments-result")!.textContent =
-    "PASS：发表参数、防重、成功重拉、失败保留草稿、登录联动、回复 parentId 与展开、关闭/未知作者隐藏入口";
+    "PASS：发表参数、防重、成功重拉、失败保留草稿、登录联动、回复 parentId 与展开、官方表情目录/插入/贴图发表、正文表情渲染、关闭/未知作者隐藏入口";
 }
 
 run().catch((error) => {

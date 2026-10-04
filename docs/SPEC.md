@@ -902,7 +902,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_watchlist(kind)` | 追更列表：manga/novel 两个子 tab（/ajax/watch_list/*，按 maxPage 聚合 ≤20 页） |
 | `browse_work_comments(kind, id, offset)` | 作品评论根列表（illusts/novels comments/roots，limit=10，offset 游标；作者关闭评论区 → `{"comments":[],"disabled":true}`，非报错） |
 | `browse_comment_replies(kind, commentId, page)` | 评论回复列表（comments/replies，page 从 1） |
-| `browse_comment_add(kind, id, authorId, comment, parentId?)` | 发表评论 / 回复评论（插画·漫画 `/rpc/post_comment.php`、小说 `/novel/rpc/post_comment.php`，form + `x-csrf-token`；`authorId` = 作品作者 userId；给出 `parentId` 即回复该评论；正文 1–140 字） |
+| `browse_comment_add(kind, id, authorId, comment?, stampId?, parentId?)` | 发表评论 / 回复评论 / 官方表情贴图（插画·漫画 `/rpc/post_comment.php`、小说 `/novel/rpc/post_comment.php`，form + `x-csrf-token`；`authorId` = 作品作者 userId；`comment` 与 `stampId` **二选一**，正文 1–140 字，`stampId` 为官方贴图 id、不带正文；给出 `parentId` 即回复该评论；返回 `{comment_id,user_id,user_name,parent_id?,stamp_id?}`） |
 | `browse_bookmark_list(kind, rest, tag, offset, limit)` | 收藏列表（自己：illusts 48/页、novels 30/页；offset + total 翻页） |
 | `browse_bookmark_tags(kind)` | 收藏标签（一次返回 public/private 两组，含「未分類」聚合标签） |
 | `browse_bookmark_add(kind, id, restrict, tags)` | 添加收藏（全局 JSON 端点 + x-csrf-token；restrict 0 公开 / 1 非公开） |
@@ -1153,6 +1153,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0023 | 小说翻译单请求超时可配置（默认 10 分钟） | [adr/0023-translation-timeout-setting.md](adr/0023-translation-timeout-setting.md) |
 | 0024 | 翻译设定集冲突保留既有值，不中断整页 | [adr/0024-translation-bible-conflict.md](adr/0024-translation-bible-conflict.md) |
 | 0025 | 翻译生成请求改用流式，避免长请求被链路按空闲切断 | [adr/0025-translation-streaming.md](adr/0025-translation-streaming.md) |
+| 0026 | 浏览模式发表官方表情（文本表情与贴图） | [adr/0026-browse-comment-emojis.md](adr/0026-browse-comment-emojis.md) |
 
 ADR 按需追加，不强制一次性写完。
 

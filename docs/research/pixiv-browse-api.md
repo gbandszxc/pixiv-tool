@@ -967,17 +967,57 @@ Chrome 未登录态不可用（本轮账号无小说作品），改为在当前�
 {type:"comment",illust_id:`${t}`,author_user_id:`${n}`,comment:a, ...(i!==undefined?{parent_id:`${i}`}:{})}
 // 小说：POST /novel/rpc/post_comment.php
 {type:"comment",novel_id:`${t}`,author_user_id:`${n}`,comment:a, ...(i!==undefined?{parent_id:`${i}`}:{})}
-// 表情评论（同两端点，type=stamp，带 stamp_id，无 comment）
+// 表情贴图（同两端点）：type=stamp，带 stamp_id，**无 comment**
+{type:"stamp",illust_id:`${t}`,author_user_id:`${n}`,stamp_id:`${a}`,parent_id:void 0!==i?`${i}`:void 0}
+{type:"stamp",novel_id:`${t}`,author_user_id:`${n}`,stamp_id:`${a}`,parent_id:void 0!==i?`${i}`:void 0}
 // 删除：POST /rpc_delete_comment.php | /novel/rpc_delete_comment.php
 { i_id: t, del_id: n }
 // 集合（collection）评论另有 /ajax/comments/collection/post|delete，本轮不接入
 ```
 
-即：小说与插画仅**路径前缀与 id 键名**不同；回复统一用 `parent_id`（根评论不传该字段）；删除两端点参数同形。
+即：小说与插画仅**路径前缀与 id 键名**不同；文本与贴图仅 `type` / 载荷字段不同（贴图不带 `comment`）；回复统一用 `parent_id`（根评论不传该字段）；删除两端点参数同形。
 
 ### 14.5 未验证项（如实记录）
 
 - 小说评论的真实请求/响应未在线实测（账号无小说作品），仅由前端 bundle 反查确认参数形状；`PIXIV_LIVE_WRITE=1` 的在线用例覆盖插画路径的发→回复→删除往返。
 - 未实测 `parent_id` 指向「某条回复（二级）」时的服务端归位语义（本轮只按根评论 id 回复），故前端回复入口只挂在根评论上。
 - 未实测超长 / 敏感词 / 频率限制时的错误信封文案（`error:true` 走既有 `extract_ajax_body` 通道）。
-- 未接入表情贴图评论（`type=stamp`）与集合评论端点。
+- 贴图评论的真实请求/响应未单独抓包（本轮文本评论抓包 + bundle 反查；在线写用例已覆盖 `type=stamp` 发→删往返）。
+- 未接入集合评论端点（`/ajax/comments/collection/post|delete`，应用无合集页面）。
+
+### 14.6 官方表情目录与渲染（bundle 反查，2026-10-04）
+
+pixiv 的表情（emoji）与贴图（stamp）目录**不来自任何接口**，而是内置于其前端 bundle（页面内拉 chunk 逐字摘录，压缩后原文）：
+
+```js
+// chunk 97823（模块 21738）：贴图目录 + 图片地址 = images/stamp/generated-stamps/{id}_s.jpg
+let s = { hidden: !1 },
+    i = (0, o.b)("images/stamp/generated-stamps/").href,
+    l = [].concat(a(3), a(4), a(2), a(1), a(6, { hidden: !0 }), a(7, { hidden: !0 }));
+function a(e, t, n = 10) {
+  return Array.from({ length: n }, (n, o) => { let l = 100 * e + o + 1;
+    return { id: `${l}`, imageUrl: new URL(`${l}_s.jpg?20180605`, i).href, ...s, ...t } });
+}
+// chunk emoji-picker（面板渲染）：标记 hidden 的组不渲染
+b.A.map(e => e.hidden ? null : <按钮 stamp={e} />)
+
+// chunk 97823（模块 37646）：文本表情目录（渲染用；name 不带括号）+ 图片 images/emoji/{id}.png
+s = [i(101,"normal"), i(102,"surprise"), …, i(503,"star")];
+function i(e, t) { return { name: t, keywords: [t], short_names: [`(${t})`],
+  imageUrl: new URL(`${e}.png`, "images/emoji/").href }; }
+
+// chunk 97823（评论渲染）：stampId 优先；否则按 (code) / :code: 切分，已知 code 渲染 24px 图
+o.stampId ? <stamp 图> : <R id={o.id} emojiSize={24}>{o.comment}</R>
+parse(e) { let t = [], n = RegExp("\\((?<parenEmoji>[a-z0-9]+)\\)|:(?<emoji>[a-z0-9]+):", "giu"); … }
+// 未知 code：Emoji 组件回退 `(${text})` 原样显示
+
+// chunk 97823（模块 21816，面板插入）：面板两栏 emoji / stamp
+//  - emoji 点击 → onClickEmoji 把 `(name)` 插入正文（面板不关，可连点）
+//  - stamp 点击 → onClickStamp 立即发表情评论，并关闭面板
+```
+
+由此得出应用内目录（`frontend/src/api/browse.ts`）：
+
+- **可见贴图 40 个**：组 3/4/2/1 各 10 个 → `301-310, 401-410, 201-210, 101-110`（组 6/7 标 `hidden`，面板不渲染，故不收录）；图片 `https://s.pximg.net/common/images/stamp/generated-stamps/{id}_s.jpg`。
+- **文本表情 38 个**：`101-108, 201-209, 301-310, 401-408, 501-503`，code 形如 `normal` / `shame2` / `smile3` / `sleep4` / `heart`；正文写作 `(code)`（或 `:code:`），图片 `https://s.pximg.net/common/images/emoji/{id}.png`。
+- 相关图片域 `s.pximg.net` 已在 `pixiv-img` 代理白名单内，展示无需新增端点。

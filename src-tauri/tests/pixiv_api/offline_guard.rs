@@ -97,20 +97,49 @@ async fn user_follow_validates_before_login_and_requires_login() {
 }
 
 /// 评论写（comment-add）参数粗校验：非法参数在登录守卫之前被拒，
-/// 合法参数（含 140 字边界、回复 parent_id）落到登录守卫。
+/// 合法参数（含 140 字边界、回复 parent_id、表情贴图）落到登录守卫。
 #[tokio::test]
 async fn comment_add_validates_before_login_and_requires_login() {
     let (state, dir) = temp_state("comment-add");
     assert_eq!(
-        browse_comment_add_impl(&state, "illust", 150446397, 117482194, "你好", None)
+        browse_comment_add_impl(
+            &state,
+            "illust",
+            150446397,
+            117482194,
+            Some("你好"),
+            None,
+            None
+        )
+        .await
+        .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    // 表情贴图：合法 id（含回复）同样落到登录守卫
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 150446397, 117482194, None, Some("301"), None)
             .await
             .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    assert_eq!(
+        browse_comment_add_impl(
+            &state,
+            "novel",
+            9000012,
+            28640,
+            None,
+            Some("101"),
+            Some("900000001")
+        )
+        .await
+        .unwrap_err(),
         NOT_LOGGED_IN
     );
     // 空 / 全空白正文
     for text in ["", "   ", "\n\t"] {
         assert_eq!(
-            browse_comment_add_impl(&state, "illust", 1, 1, text, None)
+            browse_comment_add_impl(&state, "illust", 1, 1, Some(text), None, None)
                 .await
                 .unwrap_err(),
             "评论内容不能为空"
@@ -119,39 +148,66 @@ async fn comment_add_validates_before_login_and_requires_login() {
     // 超长（141 字）拒绝；恰好 140 字合法（落在登录守卫）
     let too_long = "字".repeat(141);
     assert_eq!(
-        browse_comment_add_impl(&state, "illust", 1, 1, &too_long, None)
+        browse_comment_add_impl(&state, "illust", 1, 1, Some(&too_long), None, None)
             .await
             .unwrap_err(),
         "评论内容不能超过 140 字"
     );
     let exact = format!("{}精准", "字".repeat(138));
     assert_eq!(
-        browse_comment_add_impl(&state, "illust", 1, 1, &exact, None)
+        browse_comment_add_impl(&state, "illust", 1, 1, Some(&exact), None, None)
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
     );
+    // 文本与贴图二选一：都给 / 都不给 / 贴图非数字或为空
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 1, 1, Some("x"), Some("301"), None)
+            .await
+            .unwrap_err(),
+        "评论内容与表情贴图只能二选一"
+    );
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 1, 1, None, None, None)
+            .await
+            .unwrap_err(),
+        "评论内容不能为空"
+    );
+    for bad in ["", "  ", "301a", "a301", "3 01"] {
+        assert_eq!(
+            browse_comment_add_impl(&state, "illust", 1, 1, None, Some(bad), None)
+                .await
+                .unwrap_err(),
+            "表情贴图 ID 无效"
+        );
+    }
     // 非法 kind / 非正 id / 空 parent_id
     assert_eq!(
-        browse_comment_add_impl(&state, "ugoira", 1, 1, "x", None)
+        browse_comment_add_impl(&state, "ugoira", 1, 1, Some("x"), None, None)
             .await
             .unwrap_err(),
         "不支持的作品类型: ugoira"
     );
     assert_eq!(
-        browse_comment_add_impl(&state, "illust", 0, 1, "x", None)
+        browse_comment_add_impl(&state, "illust", 0, 1, Some("x"), None, None)
             .await
             .unwrap_err(),
         "作品 ID 必须为正整数"
     );
     assert_eq!(
-        browse_comment_add_impl(&state, "illust", 1, 0, "x", None)
+        browse_comment_add_impl(&state, "illust", 1, 0, Some("x"), None, None)
             .await
             .unwrap_err(),
         "作者 ID 必须为正整数"
     );
     assert_eq!(
-        browse_comment_add_impl(&state, "illust", 1, 1, "x", Some("  "))
+        browse_comment_add_impl(&state, "illust", 1, 1, Some("x"), None, Some("  "))
+            .await
+            .unwrap_err(),
+        "回复目标评论 ID 不能为空"
+    );
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 1, 1, None, Some("301"), Some("  "))
             .await
             .unwrap_err(),
         "回复目标评论 ID 不能为空"
@@ -250,15 +306,29 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
             .unwrap_err(),
         NOT_LOGGED_IN
     );
-    // 评论写（comment-add）：根评论与回复（parent_id）合法参数 → 统一登录守卫
+    // 评论写（comment-add）：文本、根评论 / 回复、表情贴图合法参数 → 统一登录守卫
     assert_eq!(
-        browse_comment_add_impl(&state, "manga", 9000021, 117482194, "测试评论", None)
+        browse_comment_add_impl(&state, "manga", 9000021, 117482194, Some("测试评论"), None, None)
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_comment_add_impl(&state, "novel", 9000012, 28640, "回信", Some("900000001"))
+        browse_comment_add_impl(
+            &state,
+            "novel",
+            9000012,
+            28640,
+            Some("回信"),
+            None,
+            Some("900000001")
+        )
+        .await
+        .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 9000021, 117482194, None, Some("301"), None)
             .await
             .unwrap_err(),
         NOT_LOGGED_IN

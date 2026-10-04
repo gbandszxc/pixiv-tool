@@ -4,26 +4,31 @@
  *
  * - 分页自持：roots 用 offset 游标（browse_work_comments，接口无 total，不显示总数）；
  *   has_replies 条目展开后按 page 游标续拉回复（browse_comment_replies）。
- * - 发表：根评论与「回复某条根评论」（browse_comment_add，parent_id = 该评论 id）。
- *   成功后重拉首页 / 该评论回复首页，展示服务端权威数据（头像、时间、回复数）。
- *   回复入口只挂在根评论上（回复某条回复需嵌套 parent 语义，未验证，不做）。
+ * - 发表：根评论、回复根评论、官方表情（browse_comment_add）。
+ *   文本与表情贴图二选一：文本走输入框（≤140 字），面板「表情」栏把 `(code)` 追加进草稿、
+ *   「贴图」栏点选即发；成功后重拉首页 / 该评论回复首页，展示服务端权威数据。
+ *   回复入口只挂在根评论上（回复某条回复的 parent_id 归位语义未验证，不做）。
  * - 正文纯文本渲染（white-space: pre-wrap，绝不 v-html，URL 保持纯文本）；
- *   表情评论（content 空 + stamp_url）渲染 stamp 图。
+ *   官方文本表情 `(code)` / `:code:` 渲染为 24px 行内图（未知 code 保持原文，与网页端一致）；
+ *   表情贴图评论（stamp_url）渲染 stamp 图。
  * - 未登录错误由 api 层统一联动登录弹窗，此处只展示归一文案 + 重试。
  * - 评论区被作者关闭（roots 恒 400 → 后端 disabled 信封）为终态提示，非错误、无重试。
  */
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
+  COMMENT_EMOJI_ID_BY_CODE,
   COMMENT_MAX_CHARS,
   browseCommentAdd,
   browseCommentReplies,
   browseWorkComments,
+  commentEmojiUrl,
   errorMessage,
   pxSrc,
   type BrowseComment,
   type ListWorkKind,
 } from "../../api/browse";
+import CommentEmojiPicker from "./CommentEmojiPicker.vue";
 
 const props = defineProps<{
   kind: ListWorkKind;
@@ -185,25 +190,55 @@ const showComposer = computed(
 const canSubmitRoot = computed(() => draft.value.trim().length > 0);
 const canSubmitReply = computed(() => replyDraft.value.trim().length > 0);
 
-/** 发表根评论：成功后重拉首页（评论按时间倒序，新评论出现在顶部）。 */
-async function submitRoot(): Promise<void> {
-  if (!canSubmitRoot.value || posting.value) return;
-  posting.value = true;
-  postError.value = "";
+/**
+ * 提交评论 / 回复 / 官方表情贴图：
+ * - `comment`（文本）与 `stampId`（贴图 id）二选一（契约同后端）；
+ * - 回复框打开时（`replyTarget`）挂到该根评论下，否则为根评论；
+ * - 成功后重拉对应列表（根评论首页 / 该评论回复首页），与文本评论一致；
+ * - 失败保留草稿并走输入框 error 态（`postError` / `replyError`）。
+ */
+async function submit(options: { comment?: string; stampId?: string }): Promise<void> {
+  const parentId = replyTarget.value;
+  const busy = parentId ? replyPosting : posting;
+  if (busy.value || authorId.value <= 0) return;
+  busy.value = true;
+  if (parentId) replyError.value = "";
+  else postError.value = "";
   try {
     await browseCommentAdd({
       kind: props.kind,
       id: props.id,
       authorId: authorId.value,
-      comment: draft.value,
+      ...options,
+      parentId: parentId ?? undefined,
     });
-    draft.value = "";
-    await fetchPage(0);
+    if (!options.stampId) {
+      if (parentId) replyDraft.value = "";
+      else draft.value = "";
+    }
+    if (parentId) {
+      const comment = comments.value.find((item) => item.id === parentId);
+      cancelReply();
+      if (comment) {
+        comment.has_replies = true;
+        expandedIds.add(comment.id);
+        await loadRepliesPage(comment, 1);
+      }
+    } else {
+      await fetchPage(0);
+    }
   } catch (err) {
-    postError.value = errorMessage(err) || t("browse.comments.postFailed");
+    const message = errorMessage(err) || t("browse.comments.postFailed");
+    if (parentId) replyError.value = message;
+    else postError.value = message;
   } finally {
-    posting.value = false;
+    busy.value = false;
   }
+}
+
+function submitRoot(): void {
+  if (!canSubmitRoot.value) return;
+  void submit({ comment: draft.value });
 }
 
 function startReply(comment: BrowseComment): void {
@@ -218,28 +253,38 @@ function cancelReply(): void {
   replyError.value = "";
 }
 
-/** 回复根评论：成功后展开该评论的回复并重拉第 1 页（新回复可见）。 */
-async function submitReply(comment: BrowseComment): Promise<void> {
-  if (!canSubmitReply.value || replyPosting.value) return;
-  replyPosting.value = true;
-  replyError.value = "";
-  try {
-    await browseCommentAdd({
-      kind: props.kind,
-      id: props.id,
-      authorId: authorId.value,
-      comment: replyDraft.value,
-      parentId: comment.id,
-    });
-    cancelReply();
-    comment.has_replies = true;
-    expandedIds.add(comment.id);
-    await loadRepliesPage(comment, 1);
-  } catch (err) {
-    replyError.value = errorMessage(err) || t("browse.comments.postFailed");
-  } finally {
-    replyPosting.value = false;
+function submitReply(): void {
+  if (!canSubmitReply.value) return;
+  void submit({ comment: replyDraft.value });
+}
+
+/** 点选面板里的文本表情：把 `(code)` 追加到当前草稿（回复框打开时追加到回复草稿）。 */
+function insertEmoji(code: string): void {
+  const target = replyTarget.value ? replyDraft : draft;
+  const token = `(${code})`;
+  if (target.value.length + token.length > COMMENT_MAX_CHARS) return;
+  target.value += token;
+}
+
+/** 点选表情贴图：立即发表情评论（回复框打开时作为该评论的回复）。 */
+function submitStamp(id: string): void {
+  void submit({ stampId: id });
+}
+
+/** 评论文本分段：官方表情 code（`(code)` / `:code:`）取图片，其余保持纯文本（含换行）。 */
+function contentSegments(text: string): { text: string; emojiId?: number }[] {
+  const segments: { text: string; emojiId?: number }[] = [];
+  const pattern = /\(([a-z0-9]+)\)|:([a-z0-9]+):/gi;
+  let last = 0;
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    if (last < match.index) segments.push({ text: text.slice(last, match.index) });
+    const emojiId = COMMENT_EMOJI_ID_BY_CODE[(match[1] ?? match[2]).toLowerCase()];
+    // 未知 code 原样显示（与网页端一致）
+    segments.push(emojiId ? { text: match[0], emojiId } : { text: match[0] });
+    last = match.index + match[0].length;
   }
+  if (last < text.length) segments.push({ text: text.slice(last) });
+  return segments;
 }
 
 // ===== kind / id 变化：整体重置并重拉首屏 =====
@@ -287,6 +332,7 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
         @input="draft = ($event.target as HTMLTextAreaElement).value"
       />
       <div class="composer-bar">
+        <CommentEmojiPicker @emoji="insertEmoji" @stamp="submitStamp" />
         <md-filled-button :disabled="!canSubmitRoot || posting" @click="submitRoot">
           {{ posting ? t("browse.comments.posting") : t("browse.comments.submit") }}
         </md-filled-button>
@@ -335,9 +381,19 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
                 <span class="user-name">{{ c.user_name }}</span>
                 <span v-if="c.date" class="date">{{ c.date }}</span>
               </div>
-              <!-- 正文：纯文本（契约保证无 HTML）；表情评论渲染 stamp 图 -->
+              <!-- 正文：纯文本（契约保证无 HTML）+ 官方文本表情渲染为图片；表情贴图评论渲染 stamp 图 -->
               <img v-if="c.stamp_url" class="stamp" :src="pxSrc(c.stamp_url)" :alt="t('browse.comments.stampAlt')" />
-              <p v-else-if="c.content" class="content">{{ c.content }}</p>
+              <p v-else-if="c.content" class="content">
+                <template v-for="(segment, index) in contentSegments(c.content)" :key="index">
+                  <img
+                    v-if="segment.emojiId"
+                    class="emoji-inline"
+                    :src="pxSrc(commentEmojiUrl(segment.emojiId))"
+                    :alt="segment.text"
+                  />
+                  <template v-else>{{ segment.text }}</template>
+                </template>
+              </p>
             </div>
           </div>
 
@@ -360,8 +416,9 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
               @input="replyDraft = ($event.target as HTMLTextAreaElement).value"
             />
             <div class="composer-bar">
+              <CommentEmojiPicker @emoji="insertEmoji" @stamp="submitStamp" />
               <md-text-button :disabled="replyPosting" @click="cancelReply">{{ t("common.cancel") }}</md-text-button>
-              <md-filled-button :disabled="!canSubmitReply || replyPosting" @click="submitReply(c)">
+              <md-filled-button :disabled="!canSubmitReply || replyPosting" @click="submitReply">
                 {{ replyPosting ? t("browse.comments.posting") : t("browse.comments.replySubmit") }}
               </md-filled-button>
             </div>
@@ -411,7 +468,17 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
                           <span v-if="r.date" class="date">{{ r.date }}</span>
                         </div>
                         <img v-if="r.stamp_url" class="stamp" :src="pxSrc(r.stamp_url)" :alt="t('browse.comments.stampAlt')" />
-                        <p v-else-if="r.content" class="content">{{ r.content }}</p>
+                        <p v-else-if="r.content" class="content">
+                          <template v-for="(segment, index) in contentSegments(r.content)" :key="index">
+                            <img
+                              v-if="segment.emojiId"
+                              class="emoji-inline"
+                              :src="pxSrc(commentEmojiUrl(segment.emojiId))"
+                              :alt="segment.text"
+                            />
+                            <template v-else>{{ segment.text }}</template>
+                          </template>
+                        </p>
                       </div>
                     </div>
                   </li>
@@ -476,6 +543,20 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-sm);
+}
+
+/* 表情面板触发器贴左，提交类按钮贴右 */
+.composer-bar > .emoji-menu {
+  margin-right: auto;
+}
+
+/* 正文里的官方文本表情：24px 行内图（与网页端一致），基线对齐文本 */
+.emoji-inline {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  margin: 0 1px;
+  vertical-align: -5px;
 }
 
 .comment-actions {
