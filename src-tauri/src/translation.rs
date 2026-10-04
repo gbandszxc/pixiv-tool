@@ -550,7 +550,10 @@ fn parse_model_json(text: &str) -> Result<Value, String> {
     } else {
         text
     };
-    serde_json::from_str(text).map_err(|_| "模型未返回合法 JSON，请重试或更换模型".into())
+    serde_json::from_str(text).map_err(|error| {
+        log::warn!("模型输出 JSON 解析失败：类别 {:?}，行 {}，列 {}，{} 字节（不记录正文）", error.classify(), error.line(), error.column(), text.len());
+        "模型未返回合法 JSON，请重试或更换模型".into()
+    })
 }
 
 /// 译文文本上限（与原非流式响应上限一致）。
@@ -608,6 +611,7 @@ struct StreamReader {
     text: String,
     failure: Option<String>,
     completed: bool,
+    diagnostic_key: String,
 }
 
 impl StreamReader {
@@ -618,6 +622,7 @@ impl StreamReader {
             text: String::new(),
             failure: None,
             completed: false,
+            diagnostic_key: String::new(),
         }
     }
 
@@ -657,6 +662,7 @@ impl StreamReader {
             return;
         };
         if event.get("error").is_some() {
+            log::warn!("翻译服务流内错误：{}", crate::translation_diagnostics::service_error(&event["error"], &self.diagnostic_key));
             let code = event.pointer("/error/code");
             self.failure = Some(
                 if code.and_then(Value::as_str) == Some("1301")
@@ -682,6 +688,11 @@ impl StreamReader {
             }
         };
         if let Some(message) = stream_event_error(self.format, &event) {
+            let details = event.pointer("/response/error").map(|error| crate::translation_diagnostics::service_error(error, &self.diagnostic_key)).unwrap_or_default();
+            log::warn!("翻译流未成功完成：type={} finish_reason={} stop_reason={} {details}",
+                crate::translation_diagnostics::redact(event.get("type").and_then(Value::as_str).unwrap_or(""), &self.diagnostic_key),
+                crate::translation_diagnostics::redact(event.pointer("/choices/0/finish_reason").and_then(Value::as_str).unwrap_or(""), &self.diagnostic_key),
+                crate::translation_diagnostics::redact(event.pointer("/delta/stop_reason").and_then(Value::as_str).unwrap_or(""), &self.diagnostic_key));
             self.failure = Some(message);
         }
         if let Some(text) = stream_event_text(self.format, &event) {
@@ -699,6 +710,7 @@ impl StreamReader {
             return Err(failure);
         }
         if !self.completed {
+            log::warn!("翻译响应流提前结束：未收到完成信号，已收集 {} 字节模型文本", self.text.len());
             return Err("翻译响应流提前结束（未收到完成信号），请重试本页翻译".into());
         }
         if self.text.trim().is_empty() {
@@ -709,13 +721,14 @@ impl StreamReader {
 }
 
 /// 读完整条流并取回模型文本；中途断流单独给文案，好让用户知道重试即可。
-async fn read_stream_text(response: wreq::Response, format: ApiFormat) -> Result<String, String> {
+async fn read_stream_text(response: wreq::Response, format: ApiFormat, key: &str) -> Result<String, String> {
     let mut reader = StreamReader::new(format);
+    reader.diagnostic_key = key.to_owned();
     let mut raw = 0usize;
     let mut stream = std::pin::pin!(response.bytes_stream());
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| {
-            log::warn!("翻译响应流中断：{error}");
+            log::warn!("翻译响应流中断：{}", crate::translation_diagnostics::redact(&error.to_string(), key));
             "翻译响应流中断（长请求可能被网络切断），请重试本页翻译".to_string()
         })?;
         raw += chunk.len();
@@ -797,6 +810,7 @@ impl TranslationClient<'_> {
             .await
             .map_err(|error| {
                 if error.is_timeout() {
+                    log::warn!("翻译请求超时：{} 秒", translation_timeout_seconds(self.settings.translation_timeout_seconds));
                     // 文案跟随实际生效的超时（设置项），不再写死秒数。
                     format!(
                         "翻译请求超时（{} 秒），可降低思考深度或调大设置里的翻译超时",
@@ -804,7 +818,7 @@ impl TranslationClient<'_> {
                     )
                 } else {
                     // 只报可排查的成因类别，不回显原始报错（含 URL）与凭据（ADR 0017）。
-                    log::warn!("翻译请求失败（{}）：{error}", transport_hint(&error));
+                    log::warn!("翻译请求失败（{}）：{}", transport_hint(&error), crate::translation_diagnostics::redact(&error.to_string(), &self.key));
                     format!(
                         "无法连接翻译服务（{}），请检查 URL 与网络/代理设置",
                         transport_hint(&error)
@@ -813,14 +827,14 @@ impl TranslationClient<'_> {
             })?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            log::warn!("翻译服务返回 HTTP {status}");
+            crate::translation_diagnostics::log_http_error(response, &self.key).await;
             return Err(format!(
                 "翻译服务返回 HTTP {status}：{}",
                 http_status_hint(status)
             ));
         }
-        log::info!("POST {} → {}", self.url, response.status().as_u16());
-        parse_model_json(&read_stream_text(response, self.format).await?)
+        log::info!("翻译服务生成请求 → HTTP {}", response.status().as_u16());
+        parse_model_json(&read_stream_text(response, self.format, &self.key).await?)
     }
 }
 
@@ -853,9 +867,10 @@ fn http_status_hint(status: u16) -> &'static str {
 }
 
 /// `/models` 是普通 JSON 端点（SSE 只用于生成请求），单独读取。
-async fn read_json_body(response: wreq::Response) -> Result<Value, String> {
+async fn read_json_body(response: wreq::Response, key: &str) -> Result<Value, String> {
     let status = response.status();
     if !status.is_success() {
+        crate::translation_diagnostics::log_http_error(response, key).await;
         return Err(format!(
             "翻译服务返回 HTTP {}：{}",
             status.as_u16(),
@@ -972,7 +987,7 @@ pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, 
     let response = client
         .authorized(client.http.get(client.url.as_str()))
         .send().await.map_err(|_| "无法获取模型列表，请检查 URL 和网络，或手动填写模型 ID")?;
-    let body = read_json_body(response).await.map_err(|error| {
+    let body = read_json_body(response, &client.key).await.map_err(|error| {
         if error.starts_with("翻译服务返回 HTTP") {
             format!("{error}；部分服务不提供 /models 列表，可手动填写模型 ID")
         } else {

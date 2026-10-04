@@ -124,7 +124,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 与 translation.rs 共 61 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 4 / translation 4）
+│     ├─ commands/              # 与 translation.rs 共 64 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 4 / translation 4）
 │     ├─ translation.rs         # 小说单页两轮翻译、共享设定集、凭据与本机译文存储（ADR 0017）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
@@ -655,6 +655,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 全局静态帮助采用公共 `components/common/HelpTooltip.vue`：设置六组的字段/分组说明、登录方式与 Session 获取步骤、搜索链接/ID 规则、以图识图介绍/使用说明默认收进相邻帮助图标。悬停、聚焦或点击展开，role=tooltip 与 aria-describedby 保留可访问关联，原生 popover top layer 不受对话框滚动区裁切，按视口空间定位/换行；焦点留在触发器，指针可移入阅读，Esc 优先关闭说明，外部点击/失焦/滚动/resize 收起。校验错误、凭据库错误、进度、空态引导、未配置状态和确认后果保留直显，维护组保留立即生效的短提示。视觉与交互细节同步 DESIGN.md / .impeccable/design.json。
 
+维护组按缓存与日志直排分区，显示分类/总大小、可选中且自动换行的路径、复制/确认后清理动作和最近日志。14px 标题与 12px 辅助文字沿用既有 token；日志为可聚焦的等宽纯文本滚动区，最多 240px 高，不对轮询使用 aria-live。位于末尾时跟随新日志，手动向上阅读时保留位置；空缓存/日志禁用清理，读取失败保留快照与重试。640px 以下路径与复制按钮分行；维护页关闭即停止轮询，语义及安全边界见 §9 / ADR 0027。
+
 小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式混入 80% ink 保持对比度），原分页底栏的 SVG 翻译图标点击弹出状态、翻译/重译和三种显示选项，默认不额外占用正文高度；模式切换 secondary-container/on-secondary-container，入口与弹层共用 8px 状态指示点（翻译中 primary、本页已译绿、失败 error），失败原因经指示点/入口 title 悬停可读，状态文字始终可读。设定集整理与两轮精翻属内部实现，界面只回显统一的「翻译中…」与最终成败，不展示阶段进度。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；设置页模型 ID 在「获取模型」成功后原位变为下拉（选项含获取结果与当前值，可切回手动输入），「检测可用」以绿色/红色文字区分成败；目标语言默认「跟随界面语言」（选项回显当前界面语言名），可手动指定白名单内的语言；设置页「小说翻译」按服务连接（接口协议 / API URL / API Key）/ 模型与语言（模型 ID / 目标语言）/ 高级（JSON 与探测动作）三组分区，组标题 12px/600、组间用既有 35% outline 分隔线分段；接口协议默认 Chat Completions，切换后 URL 帮助与占位、模型列表和探测草稿同步换协议，已存凭据在 Key 标签行以中性胶囊回显「已保存」/「保存时清除」，清除动作与 Key 字段同行、窄窗换行；原文语言与目标语言一致时只回显「无需翻译」提示（灰色指示点、不算失败），按钮变为「仍然翻译」可强制走完整流程；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠；弹层外部点击/Esc 关闭与焦点返回，详见 DESIGN.md 与结构化伴随视图。
 
 所有纵向数据滚动区共用 PgUp/PgDn 输入规则（§6.1.1），优先鼠标区域、回退键盘焦点，保留控件原生按键与模态隔离；全屏胶卷与图片区分别滚屏 / 切作品页。样式及交互规则与 DESIGN.md / .impeccable/design.json 保持一致。
@@ -877,7 +879,10 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel（供后端与测试使用，界面只回显统一「翻译中」）；返回 `{status,lines,target_language}`，status=`translated` 时 lines 为 `[{line,text}]`（line 为该页原始文本的零起行号，可能来自本机缓存），status=`already_target_language` 时未调用模型、lines 为空；目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言，见 ADR 0018 |
 | `translation_models(probe)` | 用未保存草稿探测模型列表端点（按 `format` 协议从同一基址推导 `/models`；OpenAI 系 Bearer，Anthropic `x-api-key` + 版本头，opencode 主机附会话标识头），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
 | `translation_test(probe)` | 用未保存草稿按所选协议发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则；超时用草稿里的 `timeout_seconds`（缺省 600 秒）——「获取模型列表」固定 30 秒 |
-| `clear_logs` | 清空 app.log |
+| `clear_logs` | 截断 logs 下当前及遗留轮转的普通 .log 文件；保留活动 logger 句柄，后续继续记录 |
+| `maintenance_info` | 返回 translation/images/logs 的 `{path,bytes,files}`，缓存分类/总大小及日志总大小；路径只由 AppPaths 派生 |
+| `read_logs` | 返回 app.log 最近最多 200 行（末尾 64KiB），不存在返回空串 |
+| `clear_cache(kind)` | kind 仅 translation/images，清理 translations 或 cache/img 内文件；拒绝链接目录，翻译运行时拒绝清理译文，不影响数据库与下载作品 |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状）；page ≥ 1，pageSize 为 1–200，拒绝偏移溢出 |
 | `browse_history_record(kind, workId, title, authorId, authorName, cover?, pageCount, xRestrict)` | 记录一次浏览访问（同 kind+workId 覆写并按访问时间置顶；作品详情页加载成功后上报） |
@@ -1083,8 +1088,9 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 - **级别**：INFO；dev（debug 构建）同时输出 stdout + 文件，release 仅文件
 - **格式**：`%Y-%m-%d %H:%M:%S%.3f [级别] [target] 消息`（chrono 本地时间戳）
 - **编码**：UTF-8
-- **滚动**：单文件 8MB（`MAX_LOG_FILE_SIZE`），超出轮转为 `app_old.log`
-- **清除**：设置弹窗"清除日志"按钮（`clear_logs` 将 app.log 清空写回）
+- **滚动**：单文件 8MiB（`MAX_LOG_FILE_SIZE`），插件默认 KeepOne，超出重建当前日志
+- **维护**：设置维护组显示日志总大小、目录复制和确认后清理；清理截断当前及遗留轮转普通 .log 文件，后续日志继续追加。最近 200 行每 2 秒轮询，大小每 10 秒统计，仅维护页可见时执行，读取上限 64KiB。缓存显示译文/图片分类与总大小、目录复制、确认后清理；翻译运行时禁止清理译文，清理后阅读器同步去除旧回显。不删除下载作品、数据库或凭据（ADR 0027）。
+- **翻译诊断**：HTTP 错误正文读取上限 64KiB，仅记录 code/type/message/param/request_id；流内错误保留同样的原始错误诊断，截断/提前结束/超时/连接失败记录成因。Key、Cookie 等凭据与 URL 脱敏，字符串限 4096 字并压平控制字符。非 JSON 错误正文只记格式与大小，模型 JSON 解析错误只记类别/行列/字节数；不记录请求、小说原文、生成正文或完整响应，界面仍显示概括错误（ADR 0027）。
 
 ---
 
@@ -1154,6 +1160,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0024 | 翻译设定集冲突保留既有值，不中断整页 | [adr/0024-translation-bible-conflict.md](adr/0024-translation-bible-conflict.md) |
 | 0025 | 翻译生成请求改用流式，避免长请求被链路按空闲切断 | [adr/0025-translation-streaming.md](adr/0025-translation-streaming.md) |
 | 0026 | 浏览模式发表官方表情（文本表情与贴图） | [adr/0026-browse-comment-emojis.md](adr/0026-browse-comment-emojis.md) |
+| 0027 | 缓存与日志维护及模型错误诊断 | [adr/0027-storage-maintenance-diagnostics.md](adr/0027-storage-maintenance-diagnostics.md) |
 
 ADR 按需追加，不强制一次性写完。
 

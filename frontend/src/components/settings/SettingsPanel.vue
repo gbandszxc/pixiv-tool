@@ -136,22 +136,19 @@
 
     <template v-else>
       <span class="field-hint">{{ t("settings.maintenanceHint") }}</span>
+      <MaintenancePanel v-if="active" />
       <div class="settings-maintenance">
         <div class="settings-maintenance-item">
-          <span class="settings-maintenance-text"><span class="field-label"><strong>{{ t("settings.logsLabel") }}</strong><HelpTooltip :label="t('settings.logsLabel')" :text="t('settings.clearLogsHint')" /></span></span>
-          <md-outlined-button @click="openConfirm('logs')">{{ t("common.clear") }}</md-outlined-button>
-        </div>
-        <div class="settings-maintenance-item">
           <span class="settings-maintenance-text"><span class="field-label"><strong>{{ t("settings.authLabel") }}</strong><HelpTooltip :label="t('settings.authLabel')" :text="t('settings.clearAuthHint')" /></span></span>
-          <md-text-button class="danger-button" @click="openConfirm('auth')">{{ t("common.clear") }}</md-text-button>
+          <md-text-button class="danger-button" @click="openConfirm">{{ t("common.clear") }}</md-text-button>
         </div>
       </div>
     </template>
 
-    <dialog ref="confirmDialog" class="m3-dialog" @close="confirmAction = null">
-      <h2>{{ confirmAction === "logs" ? t("settings.clearLogs") : t("settings.clearAuth") }}</h2>
-      <p>{{ confirmAction === "logs" ? t("settings.clearLogsConfirm") : t("settings.clearAuthConfirm") }}</p>
-      <div class="m3-row dialog-actions"><md-text-button @click="closeConfirm">{{ t("common.cancel") }}</md-text-button><md-filled-button @click="handleConfirm">{{ confirmAction === "logs" ? t("settings.clearLogs") : t("settings.clearAuth") }}</md-filled-button></div>
+    <dialog ref="confirmDialog" class="m3-dialog">
+      <h2>{{ t("settings.clearAuth") }}</h2>
+      <p>{{ t("settings.clearAuthConfirm") }}</p>
+      <div class="m3-row dialog-actions"><md-text-button @click="closeConfirm">{{ t("common.cancel") }}</md-text-button><md-filled-button @click="handleConfirm">{{ t("settings.clearAuth") }}</md-filled-button></div>
     </dialog>
   </section>
 </template>
@@ -167,6 +164,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import HelpTooltip from "../common/HelpTooltip.vue";
+import MaintenancePanel from "./MaintenancePanel.vue";
 import { fetchTranslationModels, testTranslationService, API_FORMATS, TARGET_LANGUAGE_CODES, canonicalApiFormat, canonicalLanguage, type TranslationProbe } from "../../api/translation";
 import { useSettingsStore } from "../../stores/settings";
 import { groupRoots } from "../../router/navigation";
@@ -175,14 +173,13 @@ import { errorMessage, setWindowTheme, type Settings } from "../../api/tauri";
 import { notify } from "../../ui/notify";
 import type { SettingsSection } from "./sections";
 
-defineProps<{ section: SettingsSection }>();
+withDefaults(defineProps<{ section: SettingsSection; active?: boolean }>(), { active: true });
 
 const { t, locale } = useI18n();
 const settingsStore = useSettingsStore();
 const authStore = useAuthStore();
 const formats = ["txt", "markdown"];
 const confirmDialog = ref<HTMLDialogElement | null>(null);
-const confirmAction = ref<"logs" | "auth" | null>(null);
 const form = ref<Settings>({ ...settingsStore.settings });
 const translationKey = ref("");
 const clearTranslationKey = ref(false);
@@ -312,9 +309,9 @@ async function save(): Promise<boolean> {
   } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); return false; }
 }
 async function handleBrowse() { try { const path = await settingsStore.selectDirectory(); if (path) form.value.output_dir = path; } catch { notify(t("settings.pickFailed")); } }
-async function openConfirm(action: "logs" | "auth") { confirmAction.value = action; await nextTick(); confirmDialog.value?.showModal(); }
+async function openConfirm() { await nextTick(); confirmDialog.value?.showModal(); }
 function closeConfirm() { confirmDialog.value?.close(); }
-async function handleConfirm() { const action = confirmAction.value; closeConfirm(); try { if (action === "logs") { await settingsStore.clearLogs(); notify(t("settings.logsCleared")); } else if (action === "auth") { await authStore.logout(); notify(t("settings.authCleared")); } } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); } }
+async function handleConfirm() { closeConfirm(); try { await authStore.logout(); notify(t("settings.authCleared")); } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); } }
 </script>
 
 <style scoped>

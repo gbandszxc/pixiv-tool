@@ -111,6 +111,7 @@ const translatingPage = ref(0);
 const translationError = ref("");
 const translationErrorPage = ref(0);
 let translationGeneration = 0;
+let cacheGeneration = 0;
 const translationInput = computed<NovelTranslationInput>(() => ({
   novel_id: props.id, title: item.value?.title ?? "", tags: item.value?.tags ?? [],
   description: plainDescription.value, content: content.value,
@@ -128,6 +129,7 @@ const translationStatus = computed(() => {
 async function translatePage(): Promise<void> {
   if (translating.value || !hasContent.value) return;
   const generation = translationGeneration;
+  const cacheVersion = cacheGeneration;
   const targetPage = page.value;
   translating.value = true;
   translatingPage.value = targetPage;
@@ -136,7 +138,7 @@ async function translatePage(): Promise<void> {
     // 本页已提示「无需翻译」时再次点击即强制翻译，避免语言判定误判后无法覆盖。
     const force = Boolean(translations.value[targetPage]) || Boolean(skippedPages.value[targetPage]);
     const result = await translateNovelPage(translationInput.value, targetPage, force);
-    if (generation === translationGeneration) {
+    if (generation === translationGeneration && cacheVersion === cacheGeneration) {
       if (result.status === "already_target_language") {
         skippedPages.value = { ...skippedPages.value, [targetPage]: result.target_language };
       } else {
@@ -147,26 +149,37 @@ async function translatePage(): Promise<void> {
       }
     }
   } catch (err) {
-    if (generation === translationGeneration) {
+    if (generation === translationGeneration && cacheVersion === cacheGeneration) {
       translationError.value = errorMessage(err);
       translationErrorPage.value = targetPage;
     }
   } finally {
-    if (generation === translationGeneration) translating.value = false;
+    if (generation === translationGeneration && cacheVersion === cacheGeneration) translating.value = false;
   }
 }
 
 async function restoreTranslations(generation: number): Promise<void> {
+  const cacheVersion = cacheGeneration;
   try {
     const book = await getNovelTranslation(translationInput.value);
-    if (generation === translationGeneration) translations.value = { ...book.pages, ...translations.value };
+    if (generation === translationGeneration && cacheVersion === cacheGeneration) translations.value = { ...book.pages, ...translations.value };
   } catch (err) {
-    if (generation === translationGeneration) {
+    if (generation === translationGeneration && cacheVersion === cacheGeneration) {
       translationError.value = errorMessage(err);
       translationErrorPage.value = page.value;
     }
   }
 }
+
+function onTranslationCacheCleared(): void {
+  cacheGeneration++;
+  translations.value = {};
+  skippedPages.value = {};
+  translating.value = false;
+  translationError.value = "";
+}
+onMounted(() => window.addEventListener("pixiv-tool:translation-cache-cleared", onTranslationCacheCleared));
+onBeforeUnmount(() => window.removeEventListener("pixiv-tool:translation-cache-cleared", onTranslationCacheCleared));
 
 const restricted = computed(() => item.value?.x_restrict === 1 || item.value?.x_restrict === 2);
 const restrictedLabel = computed(() =>

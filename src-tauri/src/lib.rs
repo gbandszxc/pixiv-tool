@@ -24,6 +24,7 @@ pub mod saucenao;
 pub mod settings;
 pub mod state;
 pub mod translation;
+mod translation_diagnostics;
 
 use tauri::{Emitter, Manager};
 
@@ -167,6 +168,9 @@ pub fn run() {
             commands::settings_cmds::settings_get,
             commands::settings_cmds::settings_save,
             commands::settings_cmds::clear_logs,
+            commands::maintenance_cmds::maintenance_info,
+            commands::maintenance_cmds::read_logs,
+            commands::maintenance_cmds::clear_cache,
             // saucenao（以图识图）
             commands::saucenao_cmds::saucenao_search,
             // history

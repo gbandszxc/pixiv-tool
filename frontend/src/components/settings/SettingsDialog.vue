@@ -12,7 +12,7 @@
       <nav class="settings-nav" :aria-label="t('settings.groupsLabel')">
         <button v-for="item in navItems" :key="item.id" type="button" class="settings-nav-item" :class="{ active: activeSection === item.id }" :aria-current="activeSection === item.id ? 'true' : undefined" @click="selectSection(item.id)">{{ item.label }}</button>
       </nav>
-      <div ref="body" class="settings-dialog-body"><SettingsPanel ref="settingsPanel" :section="activeSection" /></div>
+      <div ref="body" class="settings-dialog-body"><SettingsPanel ref="settingsPanel" :section="activeSection" :active="show" /></div>
     </div>
     <footer class="settings-dialog-footer">
       <md-text-button @click="handleCancel">{{ t("common.cancel") }}</md-text-button>

@@ -7,7 +7,7 @@
 //!   translation_timeout_seconds 非法 → Err("翻译超时时间必须是 30~3600 秒之间的整数")；
 //!   novel_font_scale 非法 → Err("小说字号缩放必须是 0.75~2.0 之间的数字")；
 //!   novel_bg_color 非法 → Err("阅读背景色无效")
-//! - clear_logs → {"status":"success"}（清空 <data_dir>/logs/app.log）
+//! - clear_logs → {"status":"success"}（清空 <data_dir>/logs 下当前及轮转 .log 文件）
 
 use std::path::Path;
 
@@ -179,14 +179,12 @@ pub fn apply_settings_patch(
     Ok(updated)
 }
 
-/// 清空 app.log。
+/// 清空当前及轮转日志，保留活动 logger 的文件句柄。
 #[tauri::command]
 pub async fn clear_logs(state: State<'_, AppState>) -> Result<Value, String> {
-    let log_path = state.paths.logs_dir.join("app.log");
-    if log_path.exists() {
-        std::fs::write(&log_path, "")
-            .map_err(|err| format!("清空日志失败 {}: {err}", log_path.display()))?;
-    }
+    let paths = state.paths.clone();
+    tauri::async_runtime::spawn_blocking(move || super::maintenance_cmds::clear_log_files(&paths))
+        .await.map_err(|e| e.to_string())??;
     Ok(json!({ "status": "success" }))
 }
 

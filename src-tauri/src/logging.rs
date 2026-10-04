@@ -16,7 +16,7 @@ use crate::paths::AppPaths;
 
 /// 日志文件基名（插件自动追加 `.log`）。
 pub const LOG_FILE_NAME: &str = "app";
-/// 单文件上限 8MB，超出后轮转为 app_old.log。
+/// 单文件上限 8MB，插件默认 KeepOne 策略，超出后重建当前日志。
 pub const MAX_LOG_FILE_SIZE: u128 = 8 * 1024 * 1024;
 
 /// 构建日志插件。在 `tauri::Builder::default()` 之后立刻 `.plugin(...)` 挂载。

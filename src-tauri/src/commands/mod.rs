@@ -16,6 +16,7 @@ pub mod browse_api_cmds;
 pub mod browse_history_cmds;
 pub mod history_cmds;
 pub mod misc_cmds;
+pub mod maintenance_cmds;
 pub mod saucenao_cmds;
 pub mod settings_cmds;
 pub mod task_cmds;
