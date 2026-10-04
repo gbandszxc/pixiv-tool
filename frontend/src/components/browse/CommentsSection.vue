@@ -287,7 +287,6 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
         @input="draft = ($event.target as HTMLTextAreaElement).value"
       />
       <div class="composer-bar">
-        <span class="composer-count" aria-hidden="true">{{ draft.length }} / {{ COMMENT_MAX_CHARS }}</span>
         <md-filled-button :disabled="!canSubmitRoot || posting" @click="submitRoot">
           {{ posting ? t("browse.comments.posting") : t("browse.comments.submit") }}
         </md-filled-button>
@@ -361,7 +360,6 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
               @input="replyDraft = ($event.target as HTMLTextAreaElement).value"
             />
             <div class="composer-bar">
-              <span class="composer-count" aria-hidden="true">{{ replyDraft.length }} / {{ COMMENT_MAX_CHARS }}</span>
               <md-text-button :disabled="replyPosting" @click="cancelReply">{{ t("common.cancel") }}</md-text-button>
               <md-filled-button :disabled="!canSubmitReply || replyPosting" @click="submitReply(c)">
                 {{ replyPosting ? t("browse.comments.posting") : t("browse.comments.replySubmit") }}
@@ -478,15 +476,6 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-sm);
-}
-
-/* 字数计数贴左，按钮组贴右 */
-.composer-count {
-  margin-right: auto;
-  color: var(--ink-muted);
-  font-size: 12px;
-  line-height: 1.4;
-  font-variant-numeric: tabular-nums;
 }
 
 .comment-actions {
