@@ -121,7 +121,8 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 57 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 4）
+│     ├─ commands/              # 与 translation.rs 共 59 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 4 / translation 2）
+│     ├─ translation.rs         # 小说单页两轮翻译、共享设定集、凭据与本机译文存储（ADR 0017）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移
 │     ├─ cookies.rs             # keyring CookieStore
@@ -281,6 +282,8 @@ pending → running ⇄ paused
 
 ### 4.3 限速与容错（`pixiv/client.rs`）
 
+小说翻译直连用户模型服务，独立于 Pixiv 限速：全局串行、单请求 180s、响应上限 4MB、不自动重试（避免重复费用）。两轮处理与持久化见 ADR 0017；正文输入上限 8MB、单页 120KB、设定集 160KB，超限明确拒绝。
+
 | 参数 | 值 |
 |---|---|
 | 并发 | `tokio::sync::Semaphore(2)`（`CONCURRENCY = 2`） |
@@ -435,7 +438,10 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "thumb_quality_fullscreen": "large",
   "novel_font_scale": 1.0,
   "novel_bg_color": "",
-  "saucenao_api_key": ""
+  "saucenao_api_key": "",
+  "translation_api_url": "",
+  "translation_model": "",
+  "translation_extra": {}
 }
 ```
 
@@ -485,9 +491,12 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   saucenao.com 免费注册后于 `user.php?page=search-api` 页面获取；仅保存在本机
   settings.json——不入库、不写日志、不进报错原文。接口行为与错误形态见
   `docs/research/saucenao-api.md`。
-- 以上各键与既有键一样都在 `settings_save` 白名单内（见 §7）。
+- `translation_api_url` / `translation_model` / `translation_extra`：小说翻译 API 基址或完整 Chat Completions 端点、模型 ID、自定义请求体 JSON 对象，默认空字符串/空对象。支持 reasoning_effort、max_completion_tokens、供应商 thinking 等扩展；保留字段不允许覆盖，见 ADR 0017。JSON 上限 16KB，模型 ID 上限 256 字节。HTTP 仅允许本机模型，其他须 HTTPS；禁重定向、URL 凭据/query/fragment。
+- 以上各键在 `settings_save` 白名单内（18 个持久化键，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
+
+小说翻译凭据独立于登录态：keyring service `pixiv-tool`、account `novel-translation-api-key`，仅系统凭据存储；翻译请求不带 Pixiv Cookie，不写 config/data/日志或报错，见 ADR 0017。
 
 - 统一走 **keyring crate**（keyring 3）：service `pixiv-tool.cookies`、
   account `default`、value 为 cookies map 的紧凑 JSON（含 PHPSESSID /
@@ -537,7 +546,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 | 浏览-收藏 | `/browse/bookmark`（插画·漫画/小说 × 公开/私密 + 标签筛选） | ✅ |
 | 浏览-历史 | `/browse/history`（浏览访问历史：作品级访问记录网格回显 + 类别筛选 + 分页 + 一键清空） | ✅ |
 | 作品查看器 | `/browse/work/illust|:kind=illust|manga>/:id`（多页纵向渐进加载、点击放大进入全屏翻页 + 胶卷缩略图、R-18 遮罩（仅关闭 show_r18 时）、相关推荐 / 评论面板（顶栏评论按钮切换）） | ✅ |
-| 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航、相关推荐 / 评论面板） | ✅ |
+| 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航、相关推荐 / 评论面板；单页两轮翻译、共享设定集、原文/译文/双语切换） | ✅ |
 | 系列目录 | `/browse/series/:id`（游标加载） | ✅ |
 | 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab） | ✅ |
 | 以图识图 | `/saucenao`（SauceNAO 反搜：本地文件/拖拽/URL，pixiv 结果跳作品详情；需在设置中配置 API Key） | ✅ |
@@ -557,7 +566,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 （`SettingsDialog`：原生 dialog、宽 `min(840px, 94vw)`、高 `min(680px, 88vh)` 定高
 （超出部分在右栏内部滚动，头部与底部保存栏不动）；主区为 176px 分组栏 + 表单区两列，
 两栏各自滚动；底部为常驻「取消 / 保存」栏，保存整表一次写入）。表单为 SettingsPanel，按左栏选中的分组渲染
-（分组顺序见 `components/settings/sections.ts`：通用 / 外观 / 图片与内容 / 高级 /
+（分组顺序见 `components/settings/sections.ts`：通用 / 外观 / 图片与内容 / 小说翻译 / 高级 /
 维护），含主题、配色与语言的实时预览；Esc / 点 backdrop / 标题栏 ✕ 关闭前先做脏检查，
 有未保存改动则弹确认弹窗（继续编辑 / 放弃修改），放弃即回滚到已保存值并提示，
 无改动直接关闭。设置项继续增多时在 `sections.ts` 与 SettingsPanel 内新增分组。
@@ -612,6 +621,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   `language` 加载后回填并向 localStorage 同步（两处同写，避免首屏语言闪变）
 
 ### 6.3 主题
+
+小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式混入 80% ink 保持对比度），底部模式切换 secondary-container/on-secondary-container，状态 ink-muted、错误 error。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；窄窗口自然换行，详见 DESIGN.md 与结构化伴随视图。
 
 所有纵向数据滚动区共用 PgUp/PgDn 输入规则（§6.1.1），优先鼠标区域、回退键盘焦点，保留控件原生按键与模态隔离；全屏胶卷与图片区分别滚屏 / 切作品页。样式及交互规则与 DESIGN.md / .impeccable/design.json 保持一致。
 
@@ -790,6 +801,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ## 7. IPC 命令设计（invoke）
 
+小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/高级参数校验、锁定译名与别名冲突、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用、第二页共享设定和 Pass 2 失败保留 Pass 1/旧译文。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、JSON 校验、Key 保存/清除/取消后的草稿清理，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
+
 命令实现于 `src-tauri/src/commands/`，返回体沿用旧 HTTP 响应形状（snake_case）。
 业务错误（旧 200+`{error}` 风格）在返回值内；校验类错误（旧 4xx/5xx detail）
 reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase 键传入。
@@ -807,7 +820,9 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 15 键 + 校验，含 `startup_page` / `theme_color` 与缩略图三档 / `show_r18` / `novel_font_scale` / `novel_bg_color` / `saucenao_api_key`） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 18 键 + 校验，新增翻译 URL / 模型 / 高级 JSON；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
+| `novel_translation_get(novel)` | 读取本机小说设定集和已译页；novel=`{novel_id,title,tags,description,content}`；返回 `{bible:{style,terms},pages:{页码:[{line,text}]}}`，原文和元信息 SHA256 区分版本 |
+| `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel；返回 `[{line,text}]`，line 为该页原始文本的零起行号 |
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |

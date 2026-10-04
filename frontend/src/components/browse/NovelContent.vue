@@ -18,6 +18,7 @@
 import { computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { pxSrc } from "../../api/browse";
+import type { TranslatedLine, TranslationMode } from "../../api/translation";
 
 const props = defineProps<{
   /** 小说全文（保留原始标记） */
@@ -26,6 +27,8 @@ const props = defineProps<{
   page: number;
   /** 内嵌图 id → pximg URL（详情响应 embedded_images）；缺省视为全部无图 */
   images?: Record<string, string>;
+  translation?: TranslatedLine[];
+  mode?: TranslationMode;
 }>();
 
 const emit = defineEmits<{ (e: "pages-change", total: number): void }>();
@@ -87,15 +90,15 @@ function parseInline(line: string): Segment[] {
 }
 
 /** 单页文本 → 块列表。空行只产生段间距（CSS），不产生空段落。 */
-function parsePage(pageText: string): Block[] {
-  const blocks: Block[] = [];
-  for (const rawLine of pageText.split("\n")) {
+function parsePage(pageText: string): (Block & { line: number })[] {
+  const blocks: (Block & { line: number })[] = [];
+  for (const [lineIndex, rawLine] of pageText.split("\n").entries()) {
     const line = rawLine.trim();
     if (!line) continue;
     const chapter = line.match(CHAPTER_LINE_RE);
     if (chapter) {
       const title = chapter[1].trim();
-      if (title) blocks.push({ kind: "chapter", text: title });
+      if (title) blocks.push({ kind: "chapter", text: title, line: lineIndex });
       continue;
     }
     if (JUMP_LINE_RE.test(line)) continue;
@@ -104,14 +107,14 @@ function parsePage(pageText: string): Block[] {
     // 整行只有内嵌图 → 逐图成块（块级居中，与正文段落区隔）
     if (segments.every((seg) => seg.kind === "image")) {
       for (const seg of segments) {
-        if (seg.kind === "image") blocks.push({ kind: "image", id: seg.id, url: seg.url });
+        if (seg.kind === "image") blocks.push({ kind: "image", id: seg.id, url: seg.url, line: lineIndex });
       }
       continue;
     }
     // 混排段落：取不到 URL 的内嵌图不占位（避免打断行文）
     const kept = segments.filter((seg) => seg.kind !== "image" || seg.url);
     if (!kept.length) continue;
-    blocks.push({ kind: "para", segments: kept });
+    blocks.push({ kind: "para", segments: kept, line: lineIndex });
   }
   return blocks;
 }
@@ -130,7 +133,10 @@ watch(
   { immediate: true }
 );
 
-const blocks = computed<Block[]>(() => parsePage(pages.value[props.page - 1] ?? ""));
+const blocks = computed(() => parsePage(pages.value[props.page - 1] ?? ""));
+const translatedLines = computed(() => new Map(props.translation?.map(line => [line.line, line.text]) ?? []));
+const showOriginal = computed(() => props.mode !== "translated");
+const showTranslation = computed(() => props.mode !== "original");
 /** 非末页时，页尾显示分页线提示（当前页之后还有内容）。 */
 const hasMorePages = computed(() => props.page < pages.value.length);
 </script>
@@ -138,7 +144,10 @@ const hasMorePages = computed(() => props.page < pages.value.length);
 <template>
   <div class="novel-content">
     <template v-for="(block, i) in blocks" :key="i">
-      <h3 v-if="block.kind === 'chapter'" class="chapter">{{ block.text }}</h3>
+      <h3 v-if="block.kind === 'chapter'" class="chapter">
+        <span v-if="showOriginal">{{ block.text }}</span>
+        <span v-if="showTranslation && translatedLines.has(block.line)" class="translated-text" lang="zh-CN">{{ translatedLines.get(block.line) }}</span>
+      </h3>
       <!-- 内嵌图：有 URL 出图，无 URL（pixivimage / 未收录 id）出占位块 -->
       <figure v-else-if="block.kind === 'image' && block.url" class="image-figure">
         <img
@@ -162,20 +171,26 @@ const hasMorePages = computed(() => props.page < pages.value.length);
         </svg>
         <span>{{ t("browse.novel.imageUnsupported") }}</span>
       </div>
-      <p v-else class="para">
-        <template v-for="(seg, j) in block.segments" :key="j">
-          <ruby v-if="seg.kind === 'ruby'">{{ seg.base }}<rt>{{ seg.ruby }}</rt></ruby>
-          <img
-            v-else-if="seg.kind === 'image'"
-            class="novel-image novel-image-inline"
-            :src="pxSrc(seg.url)"
-            :alt="t('browse.novel.imageAlt')"
-            loading="lazy"
-            decoding="async"
-          />
-          <template v-else>{{ seg.text }}</template>
+      <div v-else class="paragraph-pair">
+        <p v-if="showOriginal" class="para">
+          <template v-for="(seg, j) in block.segments" :key="j">
+            <ruby v-if="seg.kind === 'ruby'">{{ seg.base }}<rt>{{ seg.ruby }}</rt></ruby>
+            <img
+              v-else-if="seg.kind === 'image'"
+              class="novel-image novel-image-inline"
+              :src="pxSrc(seg.url)"
+              :alt="t('browse.novel.imageAlt')"
+              loading="lazy"
+              decoding="async"
+            />
+            <template v-else>{{ seg.text }}</template>
+          </template>
+        </p>
+        <template v-else v-for="(seg, j) in block.segments" :key="j">
+          <img v-if="seg.kind === 'image'" class="novel-image novel-image-inline" :src="pxSrc(seg.url)" :alt="t('browse.novel.imageAlt')" loading="lazy" decoding="async" />
         </template>
-      </p>
+        <p v-if="showTranslation && translatedLines.has(block.line)" class="para translated-text" lang="zh-CN">{{ translatedLines.get(block.line) }}</p>
+      </div>
     </template>
     <div v-if="hasMorePages" class="page-divider" aria-hidden="true">· · ·</div>
   </div>
@@ -192,6 +207,12 @@ const hasMorePages = computed(() => props.page < pages.value.length);
 
 .para {
   margin: 0 0 1em;
+}
+
+.translated-text {
+  display: block;
+  color: var(--md-sys-color-primary);
+  white-space: pre-wrap;
 }
 
 .chapter {

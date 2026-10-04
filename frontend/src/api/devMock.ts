@@ -65,6 +65,11 @@ function ensureSettings(): Settings {
       // 阅读背景色语义键（空串=跟随主题），默认未设置
       novel_bg_color: "",
       saucenao_api_key: "",
+      translation_api_url: "",
+      translation_model: "",
+      translation_extra: {},
+      translation_key_configured: false,
+      translation_key_error: "",
     };
   }
   return mockSettings;

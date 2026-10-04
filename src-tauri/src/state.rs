@@ -18,6 +18,7 @@ pub struct AppState {
     /// 当前激活账号的镜像。
     pub accounts: AccountManager,
     pub tasks: Arc<TaskManager>,
+    pub translation_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -31,6 +32,7 @@ impl AppState {
             db,
             cookies: CookieStore::new(),
             tasks,
+            translation_lock: tokio::sync::Mutex::new(()),
         }
     }
 

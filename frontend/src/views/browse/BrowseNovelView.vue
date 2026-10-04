@@ -32,6 +32,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
 import { descriptionText } from "../../utils/descriptionText";
+import { getNovelTranslation, translateNovelPage, type NovelTranslationInput, type TranslatedLine, type TranslationMode } from "../../api/translation";
 
 const props = defineProps<{ kind: "illust" | "manga" | "novel"; id: number }>();
 
@@ -100,6 +101,59 @@ const embeddedImages = computed(() => detail.value?.embedded_images ?? {});
 const series = computed(() => detail.value?.series ?? null);
 const nextEpisodeId = computed(() => series.value?.next_id ?? null);
 
+const translationMode = ref<TranslationMode>("bilingual");
+const translations = ref<Record<string, TranslatedLine[]>>({});
+const translating = ref(false);
+const translatingPage = ref(0);
+const translationStage = ref("queued");
+const translationError = ref("");
+const translationErrorPage = ref(0);
+let translationGeneration = 0;
+const translationInput = computed<NovelTranslationInput>(() => ({
+  novel_id: props.id, title: item.value?.title ?? "", tags: item.value?.tags ?? [],
+  description: plainDescription.value, content: content.value,
+}));
+const currentTranslation = computed(() => translations.value[page.value] ?? []);
+const translationStatus = computed(() => translating.value
+  ? t(`translation.${translationStage.value}`, { page: translatingPage.value })
+  : translationErrorPage.value === page.value && translationError.value ? translationError.value
+  : currentTranslation.value.length ? t("translation.completed") : t("translation.noTranslation"));
+
+async function translatePage(): Promise<void> {
+  if (translating.value || !hasContent.value) return;
+  const generation = translationGeneration;
+  const targetPage = page.value;
+  translating.value = true;
+  translatingPage.value = targetPage;
+  translationStage.value = "queued";
+  translationError.value = "";
+  try {
+    const lines = await translateNovelPage(translationInput.value, targetPage, Boolean(translations.value[targetPage]), stage => {
+      if (generation === translationGeneration && ["queued", "prepare", "translate"].includes(stage)) translationStage.value = stage;
+    });
+    if (generation === translationGeneration) translations.value[targetPage] = lines;
+  } catch (err) {
+    if (generation === translationGeneration) {
+      translationError.value = errorMessage(err);
+      translationErrorPage.value = targetPage;
+    }
+  } finally {
+    if (generation === translationGeneration) translating.value = false;
+  }
+}
+
+async function restoreTranslations(generation: number): Promise<void> {
+  try {
+    const book = await getNovelTranslation(translationInput.value);
+    if (generation === translationGeneration) translations.value = { ...book.pages, ...translations.value };
+  } catch (err) {
+    if (generation === translationGeneration) {
+      translationError.value = errorMessage(err);
+      translationErrorPage.value = page.value;
+    }
+  }
+}
+
 const restricted = computed(() => item.value?.x_restrict === 1 || item.value?.x_restrict === 2);
 const restrictedLabel = computed(() =>
   item.value?.x_restrict === 2 ? t("common.browseR18G") : t("common.browseR18")
@@ -120,6 +174,11 @@ const metaText = computed(() => {
 });
 
 async function load(): Promise<void> {
+  const generation = ++translationGeneration;
+  translations.value = {};
+  translating.value = false;
+  translationError.value = "";
+  translationMode.value = "bilingual";
   loading.value = true;
   error.value = "";
   detail.value = null;
@@ -131,9 +190,11 @@ async function load(): Promise<void> {
   readerScrollEl.value?.scrollTo({ top: 0 });
   try {
     const data = await browseWorkDetail("novel", props.id);
+    if (generation !== translationGeneration) return;
     if (data.detail_kind !== "novel") throw new Error("unexpected detail kind");
     detail.value = data;
     bookmarkState.value = data.bookmarkState ?? null;
+    void restoreTranslations(generation);
     // 加载成功后上报浏览历史（失败静默）
     void browseHistoryRecord({
       workId: data.item.id,
@@ -146,9 +207,10 @@ async function load(): Promise<void> {
       xRestrict: data.item.x_restrict ?? 0,
     }).catch(() => {});
   } catch (err) {
+    if (generation !== translationGeneration) return;
     error.value = errorMessage(err) || t("common.browseLoadFailed");
   } finally {
-    loading.value = false;
+    if (generation === translationGeneration) loading.value = false;
   }
   if (detail.value) void loadRelated();
   // DOM 就绪后重挂 ResizeObserver（loading/error/正文分支会换掉滚动层首子节点）并回算进度
@@ -251,6 +313,7 @@ onMounted(() => {
   syncProgressResize();
 });
 onBeforeUnmount(() => {
+  translationGeneration += 1;
   window.removeEventListener("keydown", onKeydown);
   readerScrollEl.value?.removeEventListener("scroll", onReaderScroll);
   progressResize?.disconnect();
@@ -434,6 +497,8 @@ function openInPixiv(): void {
           v-if="hasContent"
           :content="content"
           :page="page"
+          :translation="currentTranslation"
+          :mode="translationMode"
           :images="embeddedImages"
           @pages-change="totalPages = $event"
         />
@@ -467,6 +532,13 @@ function openInPixiv(): void {
     </div>
 
     <!-- 翻页器：flex 尾行贴窗口下边（AppPagination reader 变体）；#leading = 字号缩放控件；键盘 ←/→ 翻页仍由本视图层监听 -->
+    <div v-if="hasContent" class="translation-toolbar">
+      <md-outlined-button :disabled="translating || loading" :aria-busy="translating" @click="translatePage">{{ t(currentTranslation.length ? 'translation.retranslate' : 'translation.button') }}</md-outlined-button>
+      <div class="translation-modes" role="group" :aria-label="t('translation.displayMode')">
+        <button v-for="mode in (['original', 'translated', 'bilingual'] as const)" :key="mode" type="button" class="translation-mode" :aria-pressed="translationMode === mode" :class="{ selected: translationMode === mode }" @click="translationMode = mode">{{ t(`translation.${mode}`) }}</button>
+      </div>
+      <span class="translation-status" :class="{ 'is-error': !translating && translationErrorPage === page && translationError }" role="status" aria-live="polite">{{ translationStatus }}</span>
+    </div>
     <AppPagination
       v-if="hasContent"
       variant="reader"
@@ -526,6 +598,41 @@ function openInPixiv(): void {
 </template>
 
 <style scoped>
+.translation-toolbar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-lg);
+  background: var(--md-sys-color-surface);
+  border-top: 1px solid var(--md-sys-color-outline-variant);
+}
+.translation-modes { display: flex; flex-wrap: wrap; gap: var(--space-xxs); }
+.translation-mode {
+  min-height: 40px;
+  padding: var(--space-sm) var(--space-md);
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.translation-mode:hover:not(.selected) { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+.translation-mode:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.translation-modes .selected {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+.translation-status { flex: 1; min-width: 0; color: var(--ink-muted); font-size: 12px; overflow-wrap: anywhere; }
+.translation-status.is-error { color: var(--md-sys-color-error); }
+.novel-view[class*="read-bg-"] :deep(.translated-text) {
+  color: color-mix(in srgb, var(--md-sys-color-primary) 20%, var(--ink));
+}
+.novel-view[class*="read-bg-"] .translation-toolbar md-outlined-button {
+  --md-outlined-button-label-text-color: color-mix(in srgb, var(--md-sys-color-primary) 20%, var(--ink));
+}
 /* 满血宽度：抵消 .app-content 的 24px 内边距（640px 下为 16px），让顶栏/翻页器整行贴边。
    固定高度 flex 列：顶栏 / 滚动层 / 翻页器三行铺满视口，负 margin 抵消后顶栏贴窗口上边、
    翻页器贴窗口下边，.app-content 高度取自主工作区（排除状态栏 / 底部面板） 不再滚动，成为纯壳。 */

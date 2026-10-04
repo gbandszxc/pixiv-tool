@@ -47,6 +47,10 @@ pub struct Settings {
     /// SauceNAO API Key（以图识图必需，saucenao.com 注册后获取；仅保存在本机
     /// 配置文件——不入库、不写日志、不进报错原文）。
     pub saucenao_api_key: String,
+    pub translation_api_url: String,
+    pub translation_model: String,
+    /// Chat Completions 请求体扩展；不含凭据或应用保留字段。
+    pub translation_extra: Value,
 }
 
 impl Default for Settings {
@@ -67,6 +71,9 @@ impl Default for Settings {
             novel_font_scale: 1.0,
             novel_bg_color: String::new(),
             saucenao_api_key: String::new(),
+            translation_api_url: String::new(),
+            translation_model: String::new(),
+            translation_extra: serde_json::json!({}),
         }
     }
 }

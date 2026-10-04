@@ -119,6 +119,12 @@ export interface Settings {
   novel_bg_color: string;
   /** SauceNAO API Key（以图识图必需；仅保存在本机配置文件，不写日志） */
   saucenao_api_key: string;
+  translation_api_url: string;
+  translation_model: string;
+  translation_extra: Record<string, unknown>;
+  /** 只回传凭据是否存在，永不回传 API Key。 */
+  translation_key_configured: boolean;
+  translation_key_error: string;
 }
 
 export interface HistoryItem {

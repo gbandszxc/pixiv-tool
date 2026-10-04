@@ -23,6 +23,7 @@ pub mod platform;
 pub mod saucenao;
 pub mod settings;
 pub mod state;
+pub mod translation;
 
 use tauri::{Emitter, Manager};
 
@@ -117,6 +118,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            translation::novel_translation_get,
+            translation::novel_translate_page,
             // auth
             commands::auth_cmds::auth_status,
             commands::auth_cmds::auth_login,

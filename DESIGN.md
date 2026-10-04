@@ -115,6 +115,9 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 
 ## Components
 
+- 小说翻译：阅读器底部增加可换行操作行，位于原分页行上方；次要 md-outlined-button 翻译/重译，三种模式沿用原生文本切换按钮 + aria-pressed，当前项 secondary-container/on-secondary-container、既有 control 圆角。默认双语，译文紧随对应原文段落或章节，沿用字号/行距、primary 色（纸色模式为 primary 20% + ink 80% 混色以保持深浅主题对比度）、lang=zh-CN、纯文本；原文用 ink，图片不重复。无译文明确提示，仅译文不冒充原文；12px ink-muted 回显阶段，错误用 error 与可重试文字，旧译文保留。surface 底、既有 divider、4/8/16px spacing；窄窗口自然换行，无新增动效，翻译按钮沿用 Material 默认 hover/focus/disabled；模式按钮沿用既有 8% hover 和 2px primary focus-visible 外环。
+- 设置「小说翻译」组沿用直排 Material 字段：API URL、password Key（已保存只显示状态、空白保持、清除后保存）、模型 ID、五行高级 JSON 文本框。JSON 格式错误字段内提示；告知简体中文目标、两轮调用、发送范围，沿用常驻保存/取消与脏检查。
+
 - `md-filled-button`：主提交、恢复和确认操作；`md-outlined-button`：浏览、同步、批量删除等次要操作；`md-text-button`：取消、删除等低强调操作；`md-icon-button`：工具栏和行级图标动作。
 - `md-outlined-text-field`、`md-outlined-select`、`md-radio` 与 `md-checkbox`：所有可编辑字段和选择；字段以标签、12px–16px 间距和至少 40px 的 choice 行组织。
 - `md-tabs` / `md-primary-tab`：登录方式切换；`md-secondary-tab`（SectionTabs 封装）：关注 / 我的分区与下载页顶部页签（下载页页签即子路由导航）；`md-linear-progress`：任务进度。Material Web 负责它们的默认交互状态。

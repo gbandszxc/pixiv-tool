@@ -28,6 +28,11 @@ export const useSettingsStore = defineStore("settings", () => {
     novel_bg_color: "",
     // SauceNAO API Key（以图识图必需），默认未配置
     saucenao_api_key: "",
+    translation_api_url: "",
+    translation_model: "",
+    translation_extra: {},
+    translation_key_configured: false,
+    translation_key_error: "",
   });
 
   async function fetchSettings() {
@@ -39,15 +44,21 @@ export const useSettingsStore = defineStore("settings", () => {
     settings.value = await invoke<Settings>("settings_get");
   }
 
-  async function saveSettings(newSettings: Partial<Settings>) {
+  async function saveSettings(newSettings: Partial<Settings> & { translation_api_key?: string }) {
+    const { translation_api_key: apiKey, ...publicSettings } = newSettings;
     if (!isTauri()) {
-      mockSettingsSave(newSettings);
-      Object.assign(settings.value, newSettings);
+      if (apiKey !== undefined) publicSettings.translation_key_configured = Boolean(apiKey.trim());
+      mockSettingsSave(publicSettings);
+      Object.assign(settings.value, publicSettings);
       return;
     }
     // 校验失败时后端 reject string，由视图层用 errorMessage() 展示。
     await invoke("settings_save", { settings: newSettings });
-    Object.assign(settings.value, newSettings);
+    Object.assign(settings.value, publicSettings);
+    if (apiKey !== undefined) {
+      settings.value.translation_key_configured = Boolean(apiKey.trim());
+      settings.value.translation_key_error = "";
+    }
   }
 
   async function clearLogs() {

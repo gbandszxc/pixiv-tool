@@ -59,6 +59,31 @@
       </fieldset>
     </template>
 
+    <template v-else-if="section === 'translation'">
+      <span class="field-hint">{{ t('translation.settingsHint') }}</span>
+      <div class="m3-field">
+        <label for="translation-url">{{ t('translation.apiUrl') }}</label>
+        <md-outlined-text-field id="translation-url" :value="form.translation_api_url" placeholder="https://api.openai.com/v1" @input="form.translation_api_url = ($event.target as HTMLInputElement).value" />
+        <span class="field-hint">{{ t('translation.urlHint') }}</span>
+      </div>
+      <div class="m3-field">
+        <label for="translation-key">API Key</label>
+        <md-outlined-text-field id="translation-key" type="password" autocomplete="new-password" :value="translationKey" :placeholder="t(form.translation_key_configured ? 'translation.keySaved' : 'translation.keyPlaceholder')" @input="translationKey = ($event.target as HTMLInputElement).value; clearTranslationKey = false" />
+        <span class="field-hint">{{ t('translation.keyHint') }}</span>
+        <span v-if="form.translation_key_error" class="field-hint credential-error" role="alert">{{ form.translation_key_error }}</span>
+        <md-text-button v-if="form.translation_key_configured" :disabled="clearTranslationKey" @click="clearTranslationKey = true; translationKey = ''">{{ t(clearTranslationKey ? 'translation.keyWillClear' : 'translation.clearKey') }}</md-text-button>
+      </div>
+      <div class="m3-field">
+        <label for="translation-model">{{ t('translation.model') }}</label>
+        <md-outlined-text-field id="translation-model" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
+      </div>
+      <div class="m3-field">
+        <label for="translation-json">{{ t('translation.advanced') }}</label>
+        <md-outlined-text-field id="translation-json" type="textarea" rows="5" :value="translationJson" :error="Boolean(translationJsonError)" :error-text="translationJsonError" @input="translationJson = ($event.target as HTMLTextAreaElement).value; translationJsonError = ''" />
+        <span class="field-hint">{{ t('translation.jsonHint') }}</span>
+      </div>
+    </template>
+
     <template v-else-if="section === 'advanced'">
       <div class="m3-field">
         <label for="saucenao-api-key">{{ t("settings.saucenaoApiKey") }}</label>
@@ -105,7 +130,7 @@ import { useI18n } from "vue-i18n";
 import { useSettingsStore } from "../../stores/settings";
 import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
-import { errorMessage, setWindowTheme } from "../../api/tauri";
+import { errorMessage, setWindowTheme, type Settings } from "../../api/tauri";
 import { notify } from "../../ui/notify";
 import type { SettingsSection } from "./sections";
 
@@ -117,7 +142,17 @@ const authStore = useAuthStore();
 const formats = ["txt", "markdown"];
 const confirmDialog = ref<HTMLDialogElement | null>(null);
 const confirmAction = ref<"logs" | "auth" | null>(null);
-const form = ref({ output_dir: "downloads", output_formats: ["txt", "markdown"], language: locale.value, theme: "auto", theme_color: "pixiv", startup_page: groupRoots.discover, max_wait_seconds: 180, show_r18: true, thumb_quality_grid: "medium", thumb_quality_detail: "medium", thumb_quality_fullscreen: "large", saucenao_api_key: "" });
+const form = ref<Settings>({ ...settingsStore.settings });
+const translationKey = ref("");
+const clearTranslationKey = ref(false);
+const translationJson = ref("{}");
+const translationJsonError = ref("");
+function resetTranslationDraft() {
+  translationKey.value = "";
+  clearTranslationKey.value = false;
+  translationJson.value = JSON.stringify(form.value.translation_extra, null, 2);
+  translationJsonError.value = "";
+}
 const startupPageOptions = computed(() => Object.entries(groupRoots).map(([group, value]) => ({ value, label: t(`workspace.${group}`) })));
 const savedSnapshot = ref("");
 const langOptions = computed(() => [{ label: t("settings.languages.zh-CN"), value: "zh-CN" }, { label: t("settings.languages.en-US"), value: "en-US" }]);
@@ -133,18 +168,28 @@ function toggleFormat(format: string, checked: boolean) { form.value.output_form
 /** 语言与主题同理是即时预览：立即切 i18n / 写 localStorage，落盘仍等保存。 */
 function applyLanguage(lang: string) { locale.value = lang; localStorage.setItem("pixiv-tool-lang", lang); }
 function changeLang(lang: string) { applyLanguage(lang); form.value.language = lang; }
-function snapshot() { return JSON.stringify(form.value); }
+function snapshot() { return JSON.stringify([form.value, translationJson.value]); }
 function applyPreview() { const dark = form.value.theme === "dark" || (form.value.theme === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches); document.documentElement.classList.toggle("dark", dark); document.documentElement.dataset.palette = form.value.theme_color || "pixiv"; setWindowTheme(dark ? "dark" : "light").catch(() => {}); }
 watch(() => [form.value.theme, form.value.theme_color], applyPreview);
-onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180; form.value = { ...settingsStore.settings }; savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); });
+onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180; form.value = { ...settingsStore.settings }; resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); });
 /** 有未保存改动：弹窗据此决定关闭前是否提示。 */
-function hasUnsaved() { return Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
+function hasUnsaved() { return Boolean(translationKey.value) || clearTranslationKey.value || Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
 /** 回滚到上次保存值（取消 / 确认放弃修改）。主题预览随表单回到已保存值。 */
-function reset() { form.value = { ...settingsStore.settings }; savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); }
+function reset() { form.value = { ...settingsStore.settings }; resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); }
 defineExpose({ save, reset, hasUnsaved });
 async function save(): Promise<boolean> {
   if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) { notify(t("settings.maxWaitInvalid")); return false; }
-  try { await settingsStore.saveSettings(form.value); savedSnapshot.value = snapshot(); notify(t("settings.saved")); return true; } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); return false; }
+  let extra: Record<string, unknown>;
+  try {
+    extra = JSON.parse(translationJson.value);
+    if (!extra || Array.isArray(extra) || typeof extra !== "object") throw new Error();
+  } catch { translationJsonError.value = t("translation.jsonInvalid"); notify(translationJsonError.value); return false; }
+  try {
+    await settingsStore.saveSettings({ ...form.value, translation_extra: extra,
+      ...(clearTranslationKey.value ? { translation_api_key: "" } : translationKey.value.trim() ? { translation_api_key: translationKey.value } : {}) });
+    form.value = { ...settingsStore.settings };
+    resetTranslationDraft(); savedSnapshot.value = snapshot(); notify(t("settings.saved")); return true;
+  } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); return false; }
 }
 async function handleBrowse() { try { const path = await settingsStore.selectDirectory(); if (path) form.value.output_dir = path; } catch { notify(t("settings.pickFailed")); } }
 async function openConfirm(action: "logs" | "auth") { confirmAction.value = action; await nextTick(); confirmDialog.value?.showModal(); }
@@ -161,6 +206,7 @@ async function handleConfirm() { const action = confirmAction.value; closeConfir
 .settings-number-input { width: 140px; }
 .settings-api-key-input { flex: 1; min-width: 0; }
 .field-hint { color: var(--ink-muted); font-size: 12px; }
+.credential-error { color: var(--md-sys-color-error); }
 .danger-button { --md-text-button-label-text-color: #ba1a1a; }
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
 /* 维护组：说明在左（标题 + 提示两行）、动作按钮在右，行间以 divider 分隔 */

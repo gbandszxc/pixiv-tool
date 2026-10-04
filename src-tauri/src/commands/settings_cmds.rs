@@ -22,7 +22,10 @@ use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 15] = [
+const WRITABLE_KEYS: [&str; 18] = [
+    "translation_api_url",
+    "translation_model",
+    "translation_extra",
     "startup_page",
     "output_dir",
     "output_formats",
@@ -42,23 +45,52 @@ const WRITABLE_KEYS: [&str; 15] = [
 
 /// 读取当前配置。
 #[tauri::command]
-pub async fn settings_get(state: State<'_, AppState>) -> Result<Settings, String> {
-    Ok(state.settings_snapshot())
+pub async fn settings_get(state: State<'_, AppState>) -> Result<Value, String> {
+    let mut result = serde_json::to_value(state.settings_snapshot()).map_err(|_| "无法读取设置")?;
+    match crate::translation::read_api_key() {
+        Ok(key) => {
+            result["translation_key_configured"] = json!(key.is_some_and(|key| !key.is_empty()));
+            result["translation_key_error"] = json!("");
+        }
+        Err(error) => {
+            result["translation_key_configured"] = json!(false);
+            result["translation_key_error"] = json!(error);
+        }
+    }
+    Ok(result)
 }
 
 /// 更新配置并持久化。settings 是 partial JSON（只更新出现的键）。
 #[tauri::command]
 pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Result<Value, String> {
-    let updated =
-        apply_settings_patch(&state.settings_snapshot(), &settings, &state.paths.data_dir)?;
-    // 先落盘再更新内存：磁盘失败时内存保持旧值，避免两处状态漂移
-    updated
-        .save(&state.paths.config_dir)
-        .map_err(|err| format!("保存设置失败: {err}"))?;
     let mut guard = state
         .settings
         .lock()
         .map_err(|_| "设置表锁中毒".to_string())?;
+    let previous = guard.clone();
+    let updated = apply_settings_patch(&previous, &settings, &state.paths.data_dir)?;
+    let key_patch = settings
+        .get("translation_api_key")
+        .map(|value| {
+            let key = value.as_str().ok_or("翻译 API Key 必须是字符串")?.trim();
+            if key.encode_utf16().count() > 1200 || key.chars().any(char::is_control) {
+                return Err("翻译 API Key 过长或含控制字符");
+            }
+            Ok(key)
+        })
+        .transpose()?;
+    // 先落盘再更新内存：磁盘失败时内存保持旧值，避免两处状态漂移
+    updated
+        .save(&state.paths.config_dir)
+        .map_err(|err| format!("保存设置失败: {err}"))?;
+    if let Some(key) = key_patch {
+        if let Err(error) = crate::translation::write_api_key(key) {
+            previous
+                .save(&state.paths.config_dir)
+                .map_err(|_| "凭据保存失败且配置回滚失败，请重新保存设置")?;
+            return Err(error);
+        }
+    }
     *guard = updated;
     Ok(json!({ "status": "success" }))
 }
@@ -133,8 +165,10 @@ pub fn apply_settings_patch(
             Value::String(key.trim().to_string()),
         );
     }
-    serde_json::from_value(Value::Object(merged))
-        .map_err(|err| format!("设置字段格式不正确: {err}"))
+    let updated: Settings = serde_json::from_value(Value::Object(merged))
+        .map_err(|_| "设置字段格式不正确".to_string())?;
+    crate::translation::validate_settings(&updated)?;
+    Ok(updated)
 }
 
 /// 清空 app.log。
