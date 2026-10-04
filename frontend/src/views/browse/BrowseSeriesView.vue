@@ -235,7 +235,7 @@ function openInPixiv(): void {
 </script>
 
 <template>
-  <div class="page-view">
+  <div class="page-view series-view">
     <div class="browse-list-header">
       <ListRefreshButton :busy="loading || switching" @refresh="load(page, !hasData)" />
     </div>
@@ -298,7 +298,7 @@ function openInPixiv(): void {
       <p v-if="pageError" class="page-error" role="alert">{{ pageError }}</p>
 
       <!-- 分集列表：切页保留旧内容，局部过渡降透明（不闪烁） -->
-      <div class="series-body" :class="{ switching }">
+      <div class="series-body" :class="{ switching, 'is-empty': !visibleContents.length }">
         <SeriesEpisodeGrid v-if="mode === 'grid'" :kind="kind" :items="visibleContents" />
         <SeriesEpisodeList v-else :kind="kind" :items="visibleContents" />
       </div>
@@ -450,15 +450,16 @@ function openInPixiv(): void {
   font-size: 13px;
 }
 
-/* 末行与翻页器之间的滚动末端留白：本页 .app-content 的底部内边距归零（sticky 翻页器要贴到
- * 滚动区真实底边，容器内边距会把吸附矩形顶上来），这段余量改由此处自持——同时是全局搜索悬浮
- * 按钮（bottom 3 × space-xl、高 2 × space-xl + space-sm）的驻留带，末行与空态都不被它压住。 */
-:deep(.app-pagination.is-reader) {
-  margin-top: calc(var(--space-xl) * 3);
+/* 末行与翻页器之间的滚动末端余量（承自 .app-content 原底部内边距，见 App.vue .series-page）：
+ * 既留出末行呼吸空间，也是全局搜索悬浮按钮（bottom 3 × space-xl、高 2 × space-xl + space-sm）
+ * 的驻留带，末行不被它压住。空列表时由 .series-state 自带的间距承担，不叠加。 */
+.series-body {
+  margin-bottom: calc(var(--space-xl) * 3);
+  transition: opacity 0.15s ease;
 }
 
-.series-body {
-  transition: opacity 0.15s ease;
+.series-body.is-empty {
+  margin-bottom: 0;
 }
 
 .series-body.switching {
@@ -470,6 +471,21 @@ function openInPixiv(): void {
   .series-body {
     transition: none;
   }
+}
+
+/* ===== 翻页器 ===== */
+
+/* 内容不足一屏时翻页器也要落到底栏：sticky 只在元素将要跑出视口时吸附、不会把它往下拉，
+ * 因此页面列至少占满一屏，翻页器以 margin-top: auto 落到列底；内容超一屏时自动余量归 0，
+ * 翻页器退回列尾，仍由 reader 变体的 sticky 吸底。 */
+.series-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+:deep(.app-pagination.is-reader) {
+  margin-top: auto;
 }
 
 /* ===== 状态区 ===== */
