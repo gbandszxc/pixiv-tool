@@ -450,6 +450,13 @@ function openInPixiv(): void {
   font-size: 13px;
 }
 
+/* 末行与翻页器之间的滚动末端留白：本页 .app-content 的底部内边距归零（sticky 翻页器要贴到
+ * 滚动区真实底边，容器内边距会把吸附矩形顶上来），这段余量改由此处自持——同时是全局搜索悬浮
+ * 按钮（bottom 3 × space-xl、高 2 × space-xl + space-sm）的驻留带，末行与空态都不被它压住。 */
+:deep(.app-pagination.is-reader) {
+  margin-top: calc(var(--space-xl) * 3);
+}
+
 .series-body {
   transition: opacity 0.15s ease;
 }

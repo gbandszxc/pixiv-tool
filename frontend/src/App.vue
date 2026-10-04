@@ -15,7 +15,7 @@
     <section ref="workspaceEl" class="workspace" :class="{ 'panel-open': panel.visible }">
     <div class="workspace-body">
     <div class="main-pane">
-    <main ref="contentEl" class="app-content" :class="{ 'detail-page': route.path.startsWith('/browse/work/') }" tabindex="-1">
+    <main ref="contentEl" class="app-content" :class="{ 'detail-page': route.path.startsWith('/browse/work/'), 'series-page': route.name === 'browse-series' }" tabindex="-1">
       <router-view v-slot="{ Component, route: pageRoute }">
         <KeepAlive :key="browseSession" :include="cachedBrowseViews" :max="20">
           <component :is="Component" :key="pageRoute.path.startsWith('/browse/') ? pageRoute.path : undefined" />
@@ -197,6 +197,10 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(toastTimer); layoutAnchor 
 .main-pane { min-width:0; min-height:0; position:relative; display:flex; flex-direction:column; container:main-pane / size; }
 .app-content { flex:1; min-width:0; padding-bottom:calc(var(--space-xl) * 3); }
 .app-content.detail-page { padding-bottom:var(--space-xl); }
+/* 系列分集页：底栏翻页器是 sticky 尾行，必须贴到滚动区真实底边。sticky 的吸附矩形会被滚动
+ * 容器的底部内边距内缩（元素停在「视口底 − padding」处、下方漏出滚动内容），故该页把滚动末端
+ * 余量从容器内边距改为内容自持——见 BrowseSeriesView 的 .series-body。 */
+.app-content.series-page { padding-bottom:0; }
 @media (max-width:640px) { .app-content.detail-page { padding-bottom:var(--space-lg); } }
 .download-panel { border-top:1px solid color-mix(in srgb,var(--md-sys-color-outline) 35%,transparent); }
 .search-fab { position:absolute; right:var(--space-xl); bottom:calc(var(--space-xl) * 3); width:calc(2 * var(--space-xl) + var(--space-sm)); height:calc(2 * var(--space-xl) + var(--space-sm)); --md-filled-tonal-icon-button-container-width:calc(2 * var(--space-xl) + var(--space-sm)); --md-filled-tonal-icon-button-container-height:calc(2 * var(--space-xl) + var(--space-sm)); --md-filled-tonal-icon-button-container-shape:50%; }
