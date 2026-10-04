@@ -81,7 +81,7 @@ function tagName(name: string): string {
 const total = ref<number | null>(null);
 let offsetCursor = 0;
 
-const list = useInfiniteList<BrowseWorkItem>(async (page) => {
+const list = useInfiniteList<BrowseWorkItem>(async (page, isCurrent) => {
   const offset = page === 1 ? 0 : offsetCursor;
   const data = await browseBookmarkList(
     kind.value,
@@ -90,8 +90,10 @@ const list = useInfiniteList<BrowseWorkItem>(async (page) => {
     offset,
     BOOKMARK_PAGE_SIZE[kind.value]
   );
-  offsetCursor = data.next ?? offset;
-  if (page === 1) total.value = data.total;
+  if (isCurrent()) {
+    offsetCursor = data.next ?? offset;
+    if (page === 1) total.value = data.total;
+  }
   return { items: data.items, total: data.total, next_page: data.next == null ? null : page + 1 };
 });
 const { items, loading, loadingMore, error, hasMore, loadMore, retry } = list;

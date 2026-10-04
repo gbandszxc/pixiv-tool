@@ -13,7 +13,7 @@ use tauri::ipc::Channel;
 use tauri_plugin_opener::OpenerExt;
 use tokio::{io::AsyncWriteExt, sync::watch};
 
-use super::update_cmds::{is_stable_tag, shared_clients};
+use super::update_cmds::{is_stable_tag, read_metadata, shared_clients};
 
 const DOWNLOAD_PREFIX: &str = "https://github.com/gbandszxc/pixiv-tool/releases/download/";
 static ACTIVE: Mutex<Option<watch::Sender<bool>>> = Mutex::new(None);
@@ -190,7 +190,7 @@ async fn release_asset(version: &str, kind: &str) -> Result<Asset, String> {
         let Ok(response) = request(&url, false).await else {
             continue;
         };
-        let body = response.text().await.map_err(|_| "读取发布信息失败")?;
+        let body = read_metadata(response).await?;
         let release: Release = serde_json::from_str(&body).map_err(|_| "发布信息格式无效")?;
         if release.draft || release.prerelease || release.tag_name != tag {
             return Err("发布版本无效".into());

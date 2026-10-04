@@ -176,6 +176,10 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 
 **The Native-First Rule.** 已由 Material Web 覆盖的按钮、输入、选择、复选、单选、标签页和进度条不重写外观；原生 `dialog`、`details` 和表格只补充当前实现所需的容器样式。
 
+敏感输入（手动 PHPSESSID、SauceNAO API Key、翻译 API Key）使用 Material Web
+password 类型遮罩，不改变既有字段布局或 token。手动 Session 关闭弹窗或切回
+浏览器登录时清空草稿，提交中禁用字段并阻止重复 Enter。
+
 
 ### 核心导航与下载工作区（ADR 0015）
 

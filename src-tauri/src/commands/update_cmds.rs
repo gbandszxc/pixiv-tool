@@ -20,6 +20,7 @@ use std::cmp::Ordering;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde::Serialize;
 use wreq::header::{HeaderMap, HeaderValue};
 use wreq::redirect::Policy as RedirectPolicy;
@@ -35,6 +36,7 @@ const RELEASES_URL: &str = "https://github.com/gbandszxc/pixiv-tool/releases";
 const REQUEST_TIMEOUT_SECS: u64 = 15;
 /// 最终 URL / HTML 里 tag 路径的公共前缀。
 const TAG_PATH_MARKER: &str = "/releases/tag/";
+const MAX_METADATA_BYTES: usize = 4_000_000;
 
 /// 单通道请求结果。
 enum FetchOutcome {
@@ -96,14 +98,37 @@ async fn fetch_release_tag(client: &wreq::Client) -> FetchOutcome {
     // uri() 即跟随重定向后的最终 URL；releases/latest 302 后形如
     // .../releases/tag/v1.2.3，直接从中取 tag，HTML 扫描只做回退。
     let final_url = response.uri().to_string();
-    let body = match response.text().await {
+    if let Some(tag) = tag_from_url(&final_url) {
+        return FetchOutcome::Tag(tag);
+    }
+    let body = match read_metadata(response).await {
         Ok(body) => body,
         Err(_) => return FetchOutcome::Unreachable,
     };
-    match tag_from_url(&final_url).or_else(|| first_stable_tag_in_html(&body)) {
+    match first_stable_tag_in_html(&body) {
         Some(tag) => FetchOutcome::Tag(tag),
         None => FetchOutcome::NoTag,
     }
+}
+
+/// 元数据按实际接收长度设限，不能仅信任 Content-Length（分块或压缩响应可缺失）。
+pub(super) async fn read_metadata(response: wreq::Response) -> Result<String, String> {
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_METADATA_BYTES as u64)
+    {
+        return Err("发布信息过大".into());
+    }
+    let mut stream = std::pin::pin!(response.bytes_stream());
+    let mut body = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| "读取发布信息失败")?;
+        if chunk.len() > MAX_METADATA_BYTES - body.len() {
+            return Err("发布信息过大".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    String::from_utf8(body).map_err(|_| "发布信息编码无效".into())
 }
 
 /// 由稳定版 tag 与当前版本组装返回体（tag 允许 v 前缀，版本号本体统一
@@ -227,6 +252,56 @@ fn first_stable_tag_in_html(html: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn metadata_limit_covers_declared_and_chunked_bodies() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (chunked, size, expected) in [
+            (false, 6, Ok("abcdef")),
+            (false, MAX_METADATA_BYTES + 1, Err("发布信息过大")),
+            (true, MAX_METADATA_BYTES + 1, Err("发布信息过大")),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).await.unwrap();
+                let headers = if chunked {
+                    "Transfer-Encoding: chunked".to_string()
+                } else {
+                    format!("Content-Length: {size}")
+                };
+                socket
+                    .write_all(
+                        format!("HTTP/1.1 200 OK\r\n{headers}\r\nConnection: close\r\n\r\n")
+                            .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                if chunked {
+                    let mut body = format!("{size:x}\r\n").into_bytes();
+                    body.resize(body.len() + size, b'a');
+                    body.extend_from_slice(b"\r\n0\r\n\r\n");
+                    // 接收端超限会主动关闭连接，服务器写入失败属于预期。
+                    let _ = socket.write_all(&body).await;
+                } else if size == 6 {
+                    socket.write_all(b"abcdef").await.unwrap();
+                }
+            });
+            let response = wreq::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}/"))
+                .send()
+                .await
+                .unwrap();
+            let result = read_metadata(response).await;
+            assert_eq!(result.as_deref().map_err(String::as_str), expected);
+            server.await.unwrap();
+        }
+    }
 
     // ---- 版本比较 ----
 

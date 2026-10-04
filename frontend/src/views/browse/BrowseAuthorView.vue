@@ -15,7 +15,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   经适配转 page 语义；不显示取消收藏动作 —— 列表项 bookmarkId 是查看者态，UI 不使用）。
  * - 未登录 / 无权限等错误直接展示 api 层归一文案（invokeBrowse 已联动登录弹窗）。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, shallowRef, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import "@material/web/iconbutton/outlined-icon-button.js";
@@ -162,10 +162,10 @@ const lists = {
   illust: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "illust", page)),
   manga: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "manga", page)),
   novel: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "novel", page)),
-  bookmark: useInfiniteList<BrowseWorkItem>(async (page) => {
+  bookmark: useInfiniteList<BrowseWorkItem>(async (page, isCurrent) => {
     const offset = page === 1 ? 0 : bookmarkOffset;
     const data = await browseBookmarkList("illust", "show", null, offset, 24); // 官方作者收藏页 24/页
-    bookmarkOffset = data.next ?? offset;
+    if (isCurrent()) bookmarkOffset = data.next ?? offset;
     return { items: data.items, total: data.total, next_page: data.next == null ? null : page + 1 };
   }),
 } satisfies Record<AuthorTab, WorkList>;
@@ -252,6 +252,12 @@ onMounted(() => {
   ensureStarted("illust");
   window.addEventListener("resize", onWindowResize, { passive: true });
 });
+
+onActivated(() => {
+  window.addEventListener("resize", onWindowResize, { passive: true });
+  void nextTick(measureBio);
+});
+onDeactivated(() => window.removeEventListener("resize", onWindowResize));
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", onWindowResize);

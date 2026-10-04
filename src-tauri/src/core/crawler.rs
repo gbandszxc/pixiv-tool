@@ -317,6 +317,9 @@ pub(crate) async fn run_novel_items(
             }
             counters.total += 1;
             paused_total += wait_if_paused(&controls).await;
+            if controls.is_cancelled() {
+                break;
+            }
             // 最大等待时间：超过自动失败（暂停时长不计入）
             if timeout_exceeded(started.elapsed(), paused_total, max_wait_seconds) {
                 timed_out = true;
@@ -533,6 +536,9 @@ pub(crate) async fn run_illust_items(args: IllustCrawlArgs, preset_ids: Option<V
                 counters.total += 1;
             }
             paused_total += wait_if_paused(&controls).await;
+            if controls.is_cancelled() {
+                break;
+            }
             if timeout_exceeded(started.elapsed(), paused_total, max_wait_seconds) {
                 timed_out = true;
                 break;

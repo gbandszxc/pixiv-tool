@@ -65,7 +65,7 @@
 | `user-agent` | Chrome147 Windows UA（与 wreq `Emulation::Chrome147` 配套） | client.rs:44,146 |
 | `referer` | `https://www.pixiv.net/`（ajax 与图片下载都带） | client.rs:46,292 |
 | `accept-language` | `zh-CN,zh;q=0.9,en;q=0.8` | client.rs:47 |
-| `x-csrf-token` | Cookie 里的 `x-csrf-token` 拆出放默认头；写操作另取主站 token 覆盖 | client.rs:156-159 |
+| `x-csrf-token` | Cookie 里的 `x-csrf-token` 拆出放 ajax 默认头；写操作另取主站 token 覆盖；下载禁用默认头，绝不携带此 token | client.rs `new` / `download_request` |
 | `Cookie` | 其余 cookie 拼 `k=v; k2=v2`（排序稳定），**只在 ajax 请求**携带；图片下载不带 | client.rs:150-165,270-274 |
 
 - 项目**不发** `x-user-id` 头（research §11.10 建议贴近官方；实测 GET 不带也正确）。
@@ -94,7 +94,7 @@
 | 429 | `RateLimit` | 请求过于频繁（429），已触发全队列暂停 |
 | 500–599 | `Server` | Pixiv 服务端错误 |
 | 其余（含其他 2xx） | `Client(msg)` | `客户端错误: HTTP {code}` / `API error: {message}` |
-| 网络 / 超时 | `Network(msg)` | 网络错误: {err}: {mask_url(url)}（URL 查询串被剥掉，client.rs:112） |
+| 网络 / 超时 | `Network(msg)` | 仅输出请求超时或请求/响应读取失败及去查询串、锚点的地址；不格式化可能内嵌原始 URL 的 wreq 错误 |
 
 ## 3. 端点总览
 
@@ -326,15 +326,15 @@
 ### 5.2 防盗链规则
 
 - 不带 `Referer` 或非 pixiv Referer → **403**；`Referer: https://www.pixiv.net/` 固定值即可（来源路径不参与校验）。
-- 不需要 Cookie；`download_bytes` / `send_download` 只额外带 Referer，不带 pixiv cookie（client.rs:288）。
+- 不需要 Cookie；`download_bytes` / `send_download` 只接受 pximg HTTPS 白名单，下载请求禁用客户端默认头，只显式携带 UA、Referer、Accept-Language，Cookie 与 x-csrf-token 均不携带。
 - CDN 响应自带长缓存（`cache-control: max-age=31536000`），代理层据此做磁盘缓存。
 
 ### 5.3 代理层（`src-tauri/src/image_proxy.rs`）
 
 - 入口 `handle_image_request` image_proxy.rs:539；前端 `convertFileSrc(encodeURIComponent(url), "pixiv-img")`。
-- 白名单 `is_allowed_pximg_url` image_proxy.rs:174：仅 `https` 且 host 以 `.pximg.net` 结尾（挡 userinfo 诱导、后缀欺骗）；路径兼容 percent-encoded 与未编码（`path_to_pximg_url` image_proxy.rs:203）。白名单外 → 403。
+- 白名单 `is_allowed_pximg_url`（image_proxy.rs）：仅 `https` 且 host 以 `.pximg.net` 结尾，拒绝 userinfo、authority 的 percent 编码与非 443 端口（挡凭据地址、后缀欺骗与解析分歧）；路径兼容 percent-encoded 与未编码（`path_to_pximg_url`）。白名单外 → 403；抓取下载同样复用此校验。
 - 缓存：键 = `SHA-256(完整 URL)` + 原扩展名（`cache_key` image_proxy.rs:238）；目录 `<data>/cache/img/`；上限 1GB（`IMAGE_CACHE_MAX_BYTES` image_proxy.rs:46），超出按 mtime 从旧到新清理（`trim_cache` image_proxy.rs:290）。
-- 回源：进程级共享的无 cookie client（`cdn_client`，`send_download` 自带 Referer）；全局并发 10（`CDN_MAX_CONCURRENT_DOWNLOADS`）；同一 URL 并发冷启动单飞合并（`coalesce_download_with`）。下载完成即回传，后台串行缓存写入临时文件后原子重命名，目录扫描与淘汰用 `spawn_blocking`；写盘维护结束前在途条目保留共享字节，避免重复回源。缓存失败不影响图片响应。离线回归：`returns_before_cache_write_and_shares_until_persisted`。
+- 回源：进程级共享的无 cookie client（`cdn_client`，`send_download` 自带 Referer）；全局并发 10（`CDN_MAX_CONCURRENT_DOWNLOADS`）；同一 URL 并发冷启动单飞合并（`coalesce_download_with`）。下载完成即回传，后台串行缓存写入临时文件后原子重命名，目录扫描与淘汰用 `spawn_blocking`；最多 10 份响应在后台等待/执行缓存维护，满载时只跳过该次缓存，仍完整返回图片，避免慢磁盘下无界保留字节。写盘维护结束前在途条目保留共享字节，避免重复回源。缓存失败不影响图片响应。离线回归：`returns_before_cache_write_and_shares_until_persisted` / `saturated_cache_queue_returns_image_without_retaining_inflight_bytes`。
 - 重试：`download_with_retry` image_proxy.rs:503——首次 + `[200,500]ms` 两次重试，总预算 15s（`DOWNLOAD_TIMEOUT_SECS` image_proxy.rs:42）；404 / 401 / 403 / 429 为终止态不重试（`should_retry` image_proxy.rs:338），CDN 的 429 立即 502、无跨请求退避。
 - 响应：成功 200 + 按扩展名 Content-Type + `Cache-Control: public, max-age=31536000, immutable`（image_response image_proxy.rs:577）；CDN 404 → 404，其余失败 → 502（error_response image_proxy.rs:587）。
 - 内存所有权：`download_bytes` / `download_bytes_ungated` 返回 `bytes::Bytes`，单飞等待者共享同一字节缓冲；只在 Tauri 成功响应的独占 `Cow<[u8]>` 边界转为 `Vec<u8>`。不改变 CDN 端点、请求头、响应体、错误分类或缓存策略；仍整包接收，响应收集期间的峰值未因这次减少复制而消失。
@@ -415,7 +415,7 @@
 | `/novel/bookmark_setting.php` | `bookmark_remove` browse_api.rs:2247；`novel_delete_form` :1726 | `live_write.rs::live_bookmark_add_remove_novel_roundtrip` | `bookmark_request_encoding_and_forms` | browse.ts:512 |
 | `/ajax/user/self` | `fetch_session_probe` csrf.rs:169；`self_user_id` browse_api.rs:427；`get_user_self` api.rs:312 | `live_read.rs::live_self_and_csrf` | `parse_self_success` / `self_uid_cache_roundtrip` | 登录流程；browse_api.rs:2155,2175 |
 | `https://www.pixiv.net/`（`__NEXT_DATA__`） | `fetch_web_csrf_token` csrf.rs:224；`parse_next_data_token` :200 | `live_read.rs::live_home_street`（+ `live_write.rs` 两用例） | `parse_next_data_token_string_wrapped_state` | street / bookmark 写操作前置 |
-| `i.pximg.net` 图片 | `handle_image_request` image_proxy.rs:539；`download_bytes` client.rs:422 | `live_read.rs::live_image_download_with_referer` | `whitelist_accepts_pximg_subdomains` / `handle_serves_from_cache_without_network` | `pixiv-img` 协议（全前端 `<img>`） |
+| `i.pximg.net` 图片 | `handle_image_request`（image_proxy.rs）；`download_bytes` / `download_request`（client.rs） | `live_read.rs::live_image_download_with_referer` | `whitelist_accepts_pximg_subdomains` / `handle_serves_from_cache_without_network` / `download_request_does_not_forward_credentials` / `network_error_does_not_expose_query_or_fragment` / `saturated_cache_queue_returns_image_without_retaining_inflight_bytes` / `offline_guard::image_download_rejects_untrusted_hosts_without_network` | `pixiv-img` 协议（全前端 `<img>`） |
 | `/bookmark_add.php` / `/rpc_group_setting.php` | `set_user_follow` / `user_follow_request` / `validate_user_follow_response` | `live_write.rs::live_user_follow_roundtrip`（双重开关） | `user_follow_form_and_success_signals` / `offline_guard::user_follow_validates_before_login_and_requires_login` | `BrowseAuthorView.vue` / `browseUserFollow` |
 
 ### 8.2 pixiv 侧变了怎么定位（5 步）

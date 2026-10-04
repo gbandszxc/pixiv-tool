@@ -16,6 +16,7 @@ import AppPagination from "../components/common/AppPagination.vue";
 import { useHistoryStore } from "../stores/history";
 import type { HistoryCategory, HistoryItem } from "../stores/history";
 import { notify } from "../ui/notify";
+import { errorMessage } from "../api/tauri";
 
 const { t } = useI18n(); const historyStore = useHistoryStore(); const router = useRouter();
 const loading = ref(false), keyword = ref(""), checkedRowKeys = ref<string[]>([]), batchDeleting = ref(false), clearing = ref(false), category = ref<HistoryCategory>("all");
@@ -29,7 +30,7 @@ const someRowsSelected = computed(() => !allRowsSelected.value && checkedRowKeys
 const confirmText = computed(() => pendingAction.value === "batch" ? t("history.batchDeleteConfirm", { count: checkedRowKeys.value.length }) : pendingAction.value === "all" ? t("history.deleteAllConfirm") : t("history.deleteConfirm"));
 function formatCapturedAt(iso: string) { const date = new Date(iso); if (Number.isNaN(date.getTime())) return iso; const utc8 = new Date(date.getTime() + 8 * 3600 * 1000), pad = (n: number) => String(n).padStart(2, "0"); return `${utc8.getUTCFullYear()}-${pad(utc8.getUTCMonth() + 1)}-${pad(utc8.getUTCDate())} ${pad(utc8.getUTCHours())}:${pad(utc8.getUTCMinutes())}:${pad(utc8.getUTCSeconds())}`; }
 function toggleRow(key: string, checked: boolean) { checkedRowKeys.value = checked ? [...checkedRowKeys.value, key] : checkedRowKeys.value.filter((item) => item !== key); } function toggleAll(checked: boolean) { checkedRowKeys.value = checked ? rows.value.map(rowKey) : []; }
-async function loadData() { loading.value = true; try { await historyStore.fetchHistory(category.value, keyword.value || undefined); checkedRowKeys.value = checkedRowKeys.value.filter((key) => rows.value.some((row) => rowKey(row) === key)); } finally { loading.value = false; } }
+async function loadData() { loading.value = true; try { await historyStore.fetchHistory(category.value, keyword.value || undefined); checkedRowKeys.value = checkedRowKeys.value.filter((key) => rows.value.some((row) => rowKey(row) === key)); } catch (error) { notify(errorMessage(error) || t("common.browseLoadFailed")); } finally { loading.value = false; } }
 function search() { historyStore.page = 1; loadData(); } function changeCategory(value: HistoryCategory) { category.value = value; checkedRowKeys.value = []; historyStore.page = 1; loadData(); } function openConfirm(action: "batch" | "all" | HistoryItem) { pendingAction.value = action; confirmDialog.value?.showModal(); }
 /** 分页回调：页码经 v-model:currentPage 已回写 store；容量切换由父级回第 1 页再重查（DESIGN.md 分页区规则）。 */
 function onPagerChange({ pageSize: nextSize }: { page: number; pageSize: number | undefined }) { if (nextSize !== undefined && nextSize !== historyStore.pageSize) { historyStore.pageSize = nextSize; historyStore.page = 1; } loadData(); }

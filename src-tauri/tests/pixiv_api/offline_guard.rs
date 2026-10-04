@@ -34,6 +34,23 @@ use pixiv_tool_lib::paths::AppPaths;
 use pixiv_tool_lib::settings::Settings;
 use pixiv_tool_lib::state::AppState;
 
+/// 下载地址校验在发送之前完成，不触碰本机服务或外部网络。
+#[tokio::test]
+async fn image_download_rejects_untrusted_hosts_without_network() {
+    let client =
+        pixiv_tool_lib::pixiv::client::PixivClient::new(&std::collections::HashMap::new()).unwrap();
+    for url in [
+        "http://127.0.0.1/private?token=synthetic",
+        "https://i.pximg.net.evil.invalid/a.jpg",
+        "https://user:synthetic@i.pximg.net/a.jpg",
+        "https://i.pximg.net:8443/a.jpg",
+    ] {
+        let error = client.download_bytes(url).await.unwrap_err().to_string();
+        assert!(error.contains("白名单"));
+        assert!(!error.contains("synthetic"));
+    }
+}
+
 /// 临时目录里的完整 AppState（与 smoke_commands::temp_state 同构），
 /// 额外把 cookies 换成 uuid 隔离条目，保证「未登录」且不碰真实凭据。
 fn temp_state(tag: &str) -> (AppState, std::path::PathBuf) {
@@ -87,7 +104,9 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_channel_impl(&state, "illust", None).await.unwrap_err(),
+        browse_channel_impl(&state, "illust", None)
+            .await
+            .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
@@ -241,7 +260,9 @@ async fn invalid_params_rejected_before_login_guard() {
         "不支持的频道模式: safe"
     );
     assert_eq!(
-        browse_channel_impl(&state, "video", None).await.unwrap_err(),
+        browse_channel_impl(&state, "video", None)
+            .await
+            .unwrap_err(),
         "不支持的频道类型: video"
     );
     assert_eq!(
@@ -262,7 +283,9 @@ async fn invalid_params_rejected_before_login_guard() {
         "不支持的搜索类型: video"
     );
     assert_eq!(
-        browse_work_counts_impl(&state, "illust", &[]).await.unwrap_err(),
+        browse_work_counts_impl(&state, "illust", &[])
+            .await
+            .unwrap_err(),
         "作品 ID 列表不能为空"
     );
     let too_many: Vec<i64> = (1..=61).collect();

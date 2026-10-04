@@ -24,7 +24,8 @@ use tauri::webview::Cookie;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::auth::browser_login::{
-    LOGIN_TIMEOUT_SEC, LOGIN_URL, LoginResult, POLL_INTERVAL_MILLIS, url_host,
+    LOGIN_TIMEOUT_SEC, LOGIN_URL, LoginResult, POLL_INTERVAL_MILLIS, is_pixiv_cookie_domain,
+    url_host,
 };
 use crate::pixiv::csrf::{ProbeError, fetch_session_probe};
 
@@ -36,7 +37,7 @@ const WINDOW_WIDTH: f64 = 960.0;
 const WINDOW_HEIGHT: f64 = 720.0;
 
 /// 从 webview 原生 cookie 存储的全量快照中提取 Pixiv 域 Cookie：
-/// domain 去掉前导 '.' 后以 "pixiv.net" 结尾，且 name/value 非空
+/// domain 仅允许 pixiv.net 及其子域，且 name/value 非空
 /// （与 browser_login::extract_pixiv_cookies 同语义）。
 ///
 /// 刻意不用 `cookies_for_url`：其对 domain 的匹配在部分平台是精确匹配，
@@ -48,8 +49,7 @@ fn extract_pixiv_cookies_from_store(cookies: &[Cookie<'static>]) -> HashMap<Stri
             let domain = cookie.domain().unwrap_or("");
             let name = cookie.name();
             let value = cookie.value();
-            // 与 CDP 版一致：剥前导 '.' 后大小写敏感地 ends_with("pixiv.net")
-            let is_pixiv = domain.trim_start_matches('.').ends_with("pixiv.net");
+            let is_pixiv = is_pixiv_cookie_domain(domain);
             (is_pixiv && !name.is_empty() && !value.is_empty())
                 .then(|| (name.to_string(), value.to_string()))
         })
@@ -261,6 +261,7 @@ mod tests {
             make_cookie("plain", "v", Some("www.pixiv.net")),
             // 非 pixiv 域 / 伪装域
             make_cookie("evil", "v", Some("pixiv.net.evil.com")),
+            make_cookie("PHPSESSID", "foreign-session", Some("evilpixiv.net")),
             make_cookie("google", "v", Some(".google.com")),
             // 空值 / 空 name 过滤
             make_cookie("empty_value", "", Some(".pixiv.net")),

@@ -265,7 +265,7 @@ const fn uses_shards() -> bool {
     cfg!(windows)
 }
 
-/// 按字符切分（UTF-16 安全：BMP 内 1 char = 1 unit），末片为余数。
+/// 按 UTF-16 单元切分，不拆 Unicode 字符；非 BMP 字符占两个单元。
 fn chunk_payload(payload: &str, limit: usize) -> Vec<String> {
     let mut parts = Vec::new();
     // 容量按字节长度给上限提示（≥ 字符数）；limit 为 usize::MAX（不分片）时
@@ -273,8 +273,13 @@ fn chunk_payload(payload: &str, limit: usize) -> Vec<String> {
     let mut current = String::with_capacity(limit.min(payload.len()));
     let mut count = 0;
     for c in payload.chars() {
+        let units = c.len_utf16();
+        if count + units > limit && !current.is_empty() {
+            parts.push(std::mem::take(&mut current));
+            count = 0;
+        }
         current.push(c);
-        count += 1;
+        count += units;
         if count == limit {
             parts.push(std::mem::take(&mut current));
             count = 0;
@@ -324,6 +329,14 @@ mod tests {
         let payload = "登录态测试".repeat(600);
         let parts = chunk_payload(&payload, PART_CHAR_LIMIT);
         assert_eq!(parts.concat(), payload);
+    }
+
+    #[test]
+    fn chunk_non_bmp_fits_windows_credential_limit() {
+        let payload = "a😀".repeat(1500);
+        let parts = chunk_payload(&payload, 1200);
+        assert_eq!(parts.concat(), payload);
+        assert!(parts.iter().all(|p| p.encode_utf16().count() <= 1200));
     }
 
     #[cfg(windows)]

@@ -174,16 +174,15 @@ impl AccountManager {
     /// 账号的 CookieStore（实例缓存；条目名非法 → None）。
     pub fn entry_store(&self, user_id: &str) -> Option<CookieStore> {
         let name = entry_name(user_id)?;
-        if let Ok(map) = self.stores.lock() {
-            if let Some(store) = map.get(&name) {
-                return Some(store.clone());
-            }
+        if let Ok(mut stores) = self.stores.lock() {
+            return Some(
+                stores
+                    .entry(name.clone())
+                    .or_insert_with(|| CookieStore::with_account(&name))
+                    .clone(),
+            );
         }
-        let store = CookieStore::with_account(&name);
-        if let Ok(mut map) = self.stores.lock() {
-            map.insert(name, store.clone());
-        }
-        Some(store)
+        Some(CookieStore::with_account(&name))
     }
 
     /// 覆盖保存账号的独立凭据（登记 / 切出时归档当前镜像用）。
@@ -259,6 +258,11 @@ impl AccountManager {
     pub fn remove(&self, user_id: &str) -> Result<(), String> {
         if let Some(store) = self.entry_store(user_id) {
             store.clear()?;
+        }
+        if let Some(name) = entry_name(user_id) {
+            if let Ok(mut stores) = self.stores.lock() {
+                stores.remove(&name);
+            }
         }
         let mut idx = self.load_index();
         idx.accounts.retain(|a| a.user_id != user_id);

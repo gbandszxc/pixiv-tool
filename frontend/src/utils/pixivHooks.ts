@@ -16,6 +16,10 @@ export interface DownloadTarget {
 
 /** 用系统默认浏览器打开 pixiv 页面；非 Tauri（浏览器 mock 走查）退回 window.open。失败向上抛，由调用方提示。 */
 export async function openInBrowser(url: string): Promise<void> {
+  const target = new URL(url);
+  if (!["https:", "http:"].includes(target.protocol) || target.username || target.password) {
+    throw new Error("不支持的外部网页地址");
+  }
   if (!isTauri()) {
     window.open(url, "_blank", "noopener");
     return;

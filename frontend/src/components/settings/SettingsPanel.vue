@@ -100,7 +100,7 @@
     <template v-else-if="section === 'advanced'">
       <div class="m3-field">
         <div class="field-label"><label for="saucenao-api-key">{{ t('settings.saucenaoApiKey') }}</label><HelpTooltip :label="t('settings.saucenaoApiKey')" :text="t('settings.saucenaoApiKeyHint')" /></div>
-        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" class="settings-api-key-input" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /></div>
+        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" type="password" autocomplete="new-password" class="settings-api-key-input" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /></div>
       </div>
       <div class="m3-field">
         <div class="field-label"><label for="max-wait">{{ t('settings.maxWait') }}</label><HelpTooltip :label="t('settings.maxWait')" :text="t('settings.maxWaitHint')" /></div>

@@ -6,7 +6,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 
 **pixiv-tool**：本地运行的 Pixiv 客户端。V1 = 小说抓取（单篇 / 系列 / 用户全集）+ 插画抓取（单幅 / 用户全集），v1.2 起增加只读浏览模式。
 
-技术栈：Tauri 2（Rust 后端，`#[tauri::command]` IPC）+ Vue 3 / TypeScript / Vite 5 / **@material/web（Material 3）**。**无本地 HTTP 服务、无后端进程**，IPC 直连。
+技术栈：Tauri 2（Rust 后端，`#[tauri::command]` IPC）+ Vue 3 / TypeScript / Vite 6.4.3+ / **@material/web（Material 3）**。**无本地 HTTP 服务、无后端进程**，IPC 直连。
 
 真相源：`docs/SPEC.md`（单上下文仓库，不另设 `CONTEXT.md`）。
 
@@ -59,7 +59,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 | `docs/SPEC.md` | 项目规格：范围 / 技术栈 / 架构 / 数据模型 / IPC 命令 / 风险登记 | 任何行为、契约、参数、目录职责变化（对照「硬约束 1」） |
 | `DESIGN.md` | 前端视觉与交互规范真相源：色彩 / 字号 / 间距 / 圆角 / 层级 / 动效 / 组件 | 改 token、组件规则或视觉方向时，与 `.impeccable/design.json` 同批更新 |
 | `.impeccable/design.json` | `DESIGN.md` 的结构化伴随视图（impeccable 工具消费） | 与 `DESIGN.md` 一一对应，同上 |
-| `docs/adr/` | 架构决策记录，当前 `0001` ~ `0018` | 满足「新开 ADR 触发条件」时追加；编号连续，旧档不删 |
+| `docs/adr/` | 架构决策记录，当前 `0001` ~ `0019` | 满足「新开 ADR 触发条件」时追加；编号连续，旧档不删 |
 | `docs/PACKAGING.md` | 打包 / 分发 / 构建环境 / 三平台图标 / macOS 签名 | 改构建命令、工具链、Tauri 权限声明、图标流程、发布或签名策略 |
 | `docs/PIXIV-API.md` | pixiv 接口契约事实源（端点 / 参数 / 分页 / 实现与测试映射 / 维护矩阵） | 任何 pixiv 端点、参数、响应解析、分页语义变化时，与代码、`src-tauri/tests/pixiv_api/` 同批更新 |
 | `docs/research/` | 外部接口调研证据档案（pixiv 只读浏览 API 等） | 补充新的抓包 / 实测证据；契约或分页语义变化改 `docs/PIXIV-API.md` 并回填勘误 |
@@ -75,13 +75,15 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 ---
 
 小说单页翻译与共享设定集的现行决策见 ADR `0017`（`docs/adr/0017-novel-page-translation.md`）。
+安全补丁要求的 Vite 6.4.3+ 与 Rust 1.88 最低版本见 ADR `0019`
+（`docs/adr/0019-security-patched-toolchain.md`）。
 
 ## 技术栈
 
 | 层 | 选型 |
 |---|---|
 | 桌面外壳 + 后端 | Tauri 2（Rust，`#[tauri::command]` IPC） |
-| 前端 | Vue 3.4+ · TypeScript · Vite 5 · Vue Router 4 · Pinia · @material/web（Material 3） |
+| 前端 | Vue 3.4+ · TypeScript · Vite 6.4.3+ · Vue Router 4 · Pinia · @material/web（Material 3） |
 | HTTP 抓取 | wreq 6（Chrome147 指纹伪装；版本锁定，见 ADR 0008） |
 | 数据库 | SQLite（rusqlite，schema 兼容旧版） |
 | 依赖 | cargo（后端）+ pnpm（前端） |

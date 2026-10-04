@@ -130,12 +130,12 @@ impl TaskManager {
         if !matches!(category, "novel" | "illustration") {
             return Err(format!("未知任务分类: {category}"));
         }
-        let allowed: [&str; 3] = if category == "novel" {
-            ["single", "series", "user"]
+        let allowed = if category == "novel" {
+            matches!(source_type, "single" | "series" | "user")
         } else {
-            ["single", "user", ""] // illustration 无 series，第三位占位
+            matches!(source_type, "single" | "user")
         };
-        if !allowed.contains(&source_type) {
+        if !allowed {
             return Err(format!("未知来源类型: {source_type}"));
         }
         if !cookies
@@ -148,6 +148,9 @@ impl TaskManager {
             .trim()
             .parse()
             .map_err(|_| format!("来源 ID 必须是数字: {source_id}"))?;
+        if source_num <= 0 {
+            return Err("来源 ID 必须是正整数".into());
+        }
 
         let task_id = uuid::Uuid::new_v4().to_string();
         let now = now_iso();
@@ -555,6 +558,41 @@ mod tests {
             .unwrap_err(),
             "来源 ID 必须是数字: abc"
         );
+        assert!(tm.list_tasks(None).unwrap().is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn create_task_rejects_empty_illustration_source_and_nonpositive_id() {
+        let (tm, dir) = temp_manager("source-boundary");
+        assert_eq!(
+            tm.create_task(
+                "",
+                "1",
+                vec![],
+                "illustration",
+                logged_in_cookies(),
+                Settings::default(),
+                noop_sink()
+            )
+            .unwrap_err(),
+            "未知来源类型: "
+        );
+        for id in ["0", "-1"] {
+            assert_eq!(
+                tm.create_task(
+                    "single",
+                    id,
+                    vec![],
+                    "novel",
+                    logged_in_cookies(),
+                    Settings::default(),
+                    noop_sink()
+                )
+                .unwrap_err(),
+                "来源 ID 必须是正整数"
+            );
+        }
         assert!(tm.list_tasks(None).unwrap().is_empty());
         cleanup(&dir);
     }

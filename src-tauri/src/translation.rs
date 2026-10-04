@@ -690,8 +690,7 @@ async fn translate_page_flow(
     if current.len() > 120_000 {
         return Err("本页超过 120KB，请使用支持长上下文的独立翻译工具".into());
     }
-    let source = source_lines(current);
-    if source.is_empty() {
+    if source_lines(current).is_empty() {
         return Err("本页没有可翻译文字".into());
     }
     let _ = progress.send("queued".into());

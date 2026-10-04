@@ -43,7 +43,7 @@
 | 层 | 选型 |
 |---|---|
 | 桌面外壳 + 后端 | **Tauri 2（Rust）**，单进程，IPC 通信（见 ADR 0008） |
-| 前端 | **Vue 3.4+ · TypeScript · Vite 5 · Vue Router 4（hash） · Pinia · @tauri-apps/api** |
+| 前端 | **Vue 3.4+ · TypeScript · Vite 6.4.3+ · Vue Router 4（hash） · Pinia · @tauri-apps/api** |
 | UI 组件库 | **@material/web（Material 3）** |
 | CSS | 原生 CSS + CSS Variables + Vue `<style scoped>` |
 | HTTP 客户端 | **wreq 6（Chrome147 指纹伪装，BoringSSL）** |
@@ -96,6 +96,9 @@
 - **进度推送**：Tauri 事件 `task://progress`、`task://done`。
 - **更新下载进度**：`download_app_update` 的 IPC Channel（独立于抓取任务事件，见 §7.2）。
 - **安全边界**：无网络监听面；IPC 仅限本 webview。
+  主窗生产 CSP 限制脚本为自身资源（Tauri 注入脚本由构建阶段补充 hash），
+  禁止 object 与表单提交；开发 CSP 仅额外允许本机 Vite HMR WebSocket。
+  Material Web 所需内联样式保留，图片允许既有 HTTPS、data/blob 和自定义协议。
 
 ### 3.3 数据与配置目录
 
@@ -224,6 +227,12 @@ CookieStore.save（keyring 存储）→ finally：CDP Browser.close，
    userData.id）时静默继续轮询——登录跳转尚未完成是正常情况。
 4. Cookie 值不得写入日志（登录全程只记录端口 / 状态 / 计数类信息）。
 
+Cookie 域只匹配 `pixiv.net` 或以 `.pixiv.net` 为标签后缀的子域，不接受
+`evilpixiv.net`。CDP 单次调用最多 10s，关闭 WebSocket 最多 3s；错误仅显示
+方法与数字错误代码，不回显浏览器返回的 message/data。轮询借用响应数组，
+避免每轮复制 Cookie/页面树。手动 Session 输入使用 password 遮罩，关闭弹窗
+或切回浏览器登录时清空草稿，提交中忽略重复 Enter。
+
 **登录状态检查**（`commands/auth_cmds.rs::auth_status`）：App 启动时以同一套
 wreq 指纹调 `/ajax/user/self?lang=zh` 探测 cookie 有效性（整体 2s 超时，返回
 `userData.{id, pixivId, name}`）；401/403 → 清空本地 cookie，其余失败（含
@@ -254,12 +263,13 @@ illusts + manga（illusts 在前、manga 在后）；`resolve_total` 预取任�
 #### Crawler 与任务运行（`core/crawler.rs` / `core/task_manager.rs`）
 
 - `create_task` 校验（category ∈ {novel, illustration}、source_type 合法、
-  非空 PHPSESSID、source_id 为数字）通过后：INSERT tasks(pending) → 注册
+  非空 PHPSESSID、source_id 为正整数；插画来源仅 single/user）通过后：INSERT tasks(pending) → 注册
   `TaskControls` → `tokio::spawn` 后台跑爬虫 → **立即返回 task_id**；
   校验失败不落库。
 - `TaskControls`：`tokio::sync::watch` 暂停闸门（`send_replace` 写入，避免
   爬虫尚未 subscribe 时丢暂停请求）+ `AtomicBool` 取消标志；cancel 同时解除
   暂停，正在下载的当前项会下完再退出。
+  暂停等待结束后再次检查取消，取消暂停任务不会开始下一项。
 - 每项开始前检查取消与暂停（暂停时长不计入超时判定）；已下载
   （is_novel_downloaded / is_illust_downloaded）→ skipped+1 不发事件；
   单项失败 → 计入 failed_ids 不中断；每项成功即写库 + 推 `task://progress`。
@@ -283,6 +293,8 @@ pending → running ⇄ paused
 ### 4.3 限速与容错（`pixiv/client.rs`）
 
 小说翻译直连用户模型服务，独立于 Pixiv 限速：全局串行、单请求 180s、响应上限 4MB、不自动重试（避免重复费用）。两轮处理与持久化见 ADR 0017；正文输入上限 8MB、单页 120KB、设定集 160KB，超限明确拒绝。
+翻译进入串行队列前的空正文检查即时释放临时行数组，避免在排队及两轮请求期间
+同时保留同一页的重复文本副本。
 
 | 参数 | 值 |
 |---|---|
@@ -304,6 +316,11 @@ pending → running ⇄ paused
 仅 `pixiv-img` 的 Tauri `Cow<[u8]>` 响应边界转换为独占 `Vec<u8>`；磁盘命中仍
 直接返回读盘缓冲。仍是整包接收，不承诺降低单次下载的分配峰值；画质、请求
 头、空响应错误、限速与重试保持不变。
+
+下载只允许 pximg HTTPS 子域（443），拒绝 URL 内凭据和非标准端口；下载请求
+关闭默认头继承，仅重新附加 UA/Referer/Accept-Language，不发送 Cookie 或
+x-csrf-token。网络错误只回传类别及去 query/fragment 的地址，不包含 wreq
+原始错误字符串。成功 AJAX body 以移动值返回，避免深克隆整个响应树。
 
 ### 4.4 Exporter（输出格式，`core/exporter.rs`）
 
@@ -336,6 +353,8 @@ pending → running ⇄ paused
 
 标题净化后为空：小说文件名只剩 id 后缀（`_12345.md`），插画以 artwork id
 兜底（`safe_title_or_id`）。
+插画 URL 扩展名仅接受 1–8 位 ASCII 字母数字，其余用 `bin`，防止路径分隔符或
+Windows ADS 注入；正常 jpg/png/gif/zip 等后缀保持不变。
 
 **目录布局**：小说统一平铺在输出目录 `novel/` 子目录（系列归属由文件名序号
 表达）；插画在 `pic/` 子目录，用户全集再套一层
@@ -512,6 +531,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   自动分片为 `default.p1..pN`（头条目提交点最后写，读到头才算有效）；
   macOS / Linux 单条目存储——每个分片是独立 keychain 条目（各自 ACL），
   分片会在重编译/重打包后把授权弹窗按条目数放大（弹窗治理，见 PACKAGING）
+  Windows 分片按 UTF-16 单元计数（每片最多 1200），不拆非 BMP 字符。
 - **多账号**（ADR 0010）：`default` 条目恒为**当前激活账号的镜像**，
   抓取客户端 / auth_status / webview 自动注入等读取方零感知；每账号另存
   独立条目 `u-<user_id>`（分片规则同上）；账号索引
@@ -522,6 +542,9 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   退出登录移除当前账号（镜像 + 条目 + 索引项），有剩余账号时自动激活列表
   中首个账号；auth_status 探测确定
   失效（401/403）时同样移除，避免死账号
+
+账号移除同步驱逐内存中的 CookieStore 实例；切换前检查账号已登记，避免任意
+user_id 创建无界凭据缓存。实例创建与插入在同一次短锁内完成。
 
 ---
 
@@ -672,12 +695,18 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   不执行挂载加载。插画/漫画/小说频道以及不同作者/系列互相隔离；搜索与排行的
   query 仍驱动参数变化，同一路径不因 query replace 重新挂载。
   KeepAlive 缓存仅在当前登录会话内存中，登录/退出/账号变更立即清空。
+  离开可缓存页时即保存实际滚动位置，首屏尚未登记 afterEach 的页面也能正确
+  返回；下载历史读取失败保留现有快照、恢复 loading 并用统一通知提示错误。
   首页另以已确认的 user_id 隔离 localStorage 卡片快照（`pixiv-tool-home-v1:`，
   24h 有效、每账号最多 120 条、仅展示字段，不含凭据）；挂载时先显示有效快照，
   同时请求最新推荐，成功替换并更新快照、失败保留旧卡片并显示错误。
   未确认账号不读写快照，已卸载页面的迟到响应不更新缓存。
   其余页面应用重启后首次进入重新加载。停用的 WorkGrid 断开无限加载观察器，
   不在后台继续自动翻页。
+  无限列表每次 reset/reload 递增请求世代，卸载后忽略迟到响应和错误；收藏
+  游标与 total 同样受保护。发现页停用后停止自动补拉、重新激活按需恢复，
+  作者页停用时移除 resize 监听。应用退出与拖拽的异步订阅若卸载后才完成，
+  立即反订阅；卸载也清除通知计时器和布局 DOM 引用。
   作品查看器与小说阅读器不缓存，避免保留全屏/阅读键盘监听；它们返回上游列表时
   使用上述缓存。除首页首次挂载的后台刷新外，数据有变化时由用户主动刷新列表。
   渐进加载回归页：启动 `dev.ps1 frontend start` 后打开 `/tests/loading.html`。
@@ -695,6 +724,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   代理冷缓存下载完成即返回共享字节，后台串行写临时文件并原子重命名，目录扫描与
   淘汰放到阻塞线程；后台持有在途条目至落盘维护完成，期间新请求复用同一下载。
   缓存写入失败不影响已经返回的图片；仍按单张完整字节响应，不做字节流式传输。
+  后台缓存队列最多保留 10 份完整响应，慢磁盘拥塞时跳过新缓存写入但仍返回
+  图片，结束时释放许可与在途条目；缓存 key 复用既有 sha2 实现。
 - **作品查看器（插画/漫画）**：图片舞台为竖向滚动容器、**无自有底色**（与页面同底色，浅色
   主题即白），图片满幅（滚动区上/左/下 padding 为 0、页框直角，整体圆角由舞台 16px 圆角 +
   `overflow: hidden` 承担）；多页作品自上而下逐页排列，
@@ -799,6 +830,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 - **打开原页 / 返填**：浏览页的「在浏览器中打开」走系统默认浏览器
   （官方 `tauri-plugin-opener`，capability `opener:default`）；
   频道页卡片与作品级页面另有「返填表单」→ 就地打开下载面板并预填来源，不改变当前 URL 或路由历史。
+  公共外链入口只接受无 userinfo 的 HTTP/HTTPS URL，拒绝 file/javascript 等协议。
 
 ---
 
@@ -834,9 +866,9 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `translation_test(probe)` | 用未保存草稿发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则 |
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
-| `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状） |
+| `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状）；page ≥ 1，pageSize 为 1–200，拒绝偏移溢出 |
 | `browse_history_record(kind, workId, title, authorId, authorName, cover?, pageCount, xRestrict)` | 记录一次浏览访问（同 kind+workId 覆写并按访问时间置顶；作品详情页加载成功后上报） |
-| `browse_history_list(page, pageSize, kind?)` | 浏览访问历史分页查询（`visited_at` 倒序，最近访问在前）；`kind` 省略=全部，否则 illust/manga/novel 过滤，非法值报错 |
+| `browse_history_list(page, pageSize, kind?)` | 浏览访问历史分页查询（`visited_at` 倒序，最近访问在前）；page ≥ 1，pageSize 为 1–200，拒绝偏移溢出；`kind` 省略=全部，否则 illust/manga/novel 过滤，非法值报错 |
 | `browse_history_clear()` | 清空浏览访问历史（返回 `{status, deleted}`） |
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
@@ -929,6 +961,8 @@ debug/便携未知包类型提示发布页兜底。macOS 原生包优先同架�
 摘要不是签名验证。URL 只接受本仓库固定 releases/download 前缀和该版本文件名。
 元数据请求每通道 15s；安装包响应头等待 30s、每通道请求总超时 1h、分块 30s 无数据超时；先系统代理、请求失败再直连，
 传输中断由用户重试，不断点续传。单次更新独立于 Pixiv 任务队列、不占抓取并发。
+更新检查优先从重定向后的 URL 提取版本，成功即不读取 HTML；HTML 回退与
+Release JSON 均按实际响应字节累计限制在 4MB，不能仅依赖 Content-Length。
 
 `progress: Channel<UpdateProgress>` 载荷为 `{phase:downloading|opening,file_name,downloaded,total,bytes_per_second}`，
 下载中最多约每 200ms 发一次、速度取近 2s 窗口，开始和完成各发一次；前端展示百分比、已下载/总大小、
@@ -941,6 +975,10 @@ Windows 由系统文件关联启动 MSI/NSIS；macOS `open`、Linux `xdg-open` �
 ---
 
 ## 8. 开发与构建
+
+最低 Rust 版本为 **1.88**（edition 2024），与 `time` / `serde_with` 安全补丁的
+MSRV 一致；Vite 使用 **6.4.3+**，修复 Windows 开发服务器路径绕过与
+UNC 路径触发的凭据泄露风险，维护理由见 ADR 0019。
 
 ### 8.1 开发模式
 
@@ -1046,6 +1084,11 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 | 鉴权 | 不需要（无网络面） |
 | 日志脱敏 | 日志不记录任何 Cookie 值；URL 记录去 query |
 
+Session 与 SauceNAO Key 输入采用 password 遮罩；翻译 Key 继续使用系统凭据库，
+SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个 `/data/` 和
+`/config/`，覆盖翻译缓存、登录 profile 及未来新增用户文件。审查范围、回归结果
+和平台依赖残余风险见 [安全与资源审查记录](research/security-review-2026-10-04.md)。
+
 ---
 
 ## 11. 风险登记
@@ -1061,6 +1104,7 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 | R7 | 登录探测依赖 `/ajax/user/self` 扁平结构（顶层 userData/token） | 低 | `fetch_session_probe` 双分类错误 + 以非空 `userData.id` 为权威判据；pixiv 改版时重新探测（旧栈页面内 `meta.apiClient.token` 多路径 JS 提取已随旧栈移除） |
 | R8 | Chromium CDP 登录依赖本机浏览器 | 低 | 支持 Chrome/Edge/Chromium；缺失时回退内嵌 webview 登录窗（ADR 0009，2026-08-21 真人登录实测 PASS）；残余风险：WebKit 指纹变化可能影响 reCAPTCHA 通过率，届时仍有手动 Cookie 兜底 |
 | R9 | wreq 为 RC 版本且锁版本，风控指纹需随 pixiv 更新 | 中 | 升级 emulation 档位需重新 spike 验证；版本线不可低于 Apache 化（3.0.0-rc.12） |
+| R10 | Linux GTK 传递依赖 glib 0.18.5 含 VariantStrIter 安全性问题（RUSTSEC-2024-0429） | 中 | Windows 不使用此依赖树；修复需 glib≥0.20 与 GTK/WebKit 上游兼容升级，保留风险并跟踪，详见 2026-10-04 安全审查记录 |
 | ~~R10~~ | ~~三平台发布 CI 首跑未验证~~（历史） | **✅ 已消除** | GitCode 无流水线，release CI 已整体移除（2026-08-21），打包仅在本地按需执行（§8.4） |
 
 ---

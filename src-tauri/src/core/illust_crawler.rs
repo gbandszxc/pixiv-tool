@@ -43,12 +43,18 @@ pub(crate) fn derive_page_url(p0_url: &str, page: i64) -> String {
 }
 
 /// 从 URL 取扩展名：去查询串/锚点，取**末段路径**中最后一个 `.` 之后的部分；
-/// 末段无 `.` 或扩展名为空 → "bin"。
+/// 仅接受 1..=8 位 ASCII 字母数字；其余回退 "bin"，避免 Windows 路径分隔符/ADS。
 pub(crate) fn url_ext(url: &str) -> String {
     let no_query = url.split(['?', '#']).next().unwrap_or("");
     let last_segment = no_query.rsplit('/').next().unwrap_or("");
     match last_segment.rsplit_once('.') {
-        Some((_, ext)) if !ext.is_empty() => ext.to_string(),
+        Some((_, ext))
+            if !ext.is_empty()
+                && ext.len() <= 8
+                && ext.bytes().all(|byte| byte.is_ascii_alphanumeric()) =>
+        {
+            ext.to_string()
+        }
         _ => "bin".to_string(),
     }
 }
@@ -170,6 +176,15 @@ mod tests {
         assert_eq!(url_ext("https://i.pximg.net/a/b/x_p0.png#frag"), "png");
         assert_eq!(url_ext("https://i.pximg.net/a/noext"), "bin");
         assert_eq!(url_ext("https://i.pximg.net/a/trailing."), "bin");
+        assert_eq!(
+            url_ext("https://i.pximg.net/a/image.jpg\\..\\private"),
+            "bin"
+        );
+        assert_eq!(url_ext("https://i.pximg.net/a/image.jpg:secret"), "bin");
+        assert_eq!(
+            url_ext("https://i.pximg.net/a/image.verylongextension"),
+            "bin"
+        );
     }
 
     #[test]

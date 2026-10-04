@@ -89,8 +89,11 @@ function captureLayout() {
   const main = contentEl.value; if (!main) return;
   layoutTop = main.scrollTop;
   const top = main.getBoundingClientRect().top;
-  const card = [...main.querySelectorAll<HTMLElement>('.work-card')].find(el => el.getBoundingClientRect().bottom > top);
-  layoutAnchor = card ? { element: card, offset: card.getBoundingClientRect().top - top } : undefined;
+  layoutAnchor = undefined;
+  for (const card of main.querySelectorAll<HTMLElement>('.work-card')) {
+    const rect = card.getBoundingClientRect();
+    if (rect.bottom > top) { layoutAnchor = { element: card, offset: rect.top - top }; break; }
+  }
 }
 function restoreLayout() {
   const main = contentEl.value; if (!main) return;
@@ -110,7 +113,7 @@ function isCachedBrowsePage(path: string): boolean {
   return path.startsWith("/browse/") && !path.startsWith("/browse/work/");
 }
 const removeBeforeEach = router.beforeEach((to, from) => {
-  if (to.path !== from.path && isCachedBrowsePage(from.path) && browseScroll.has(from.path)) {
+  if (to.path !== from.path && isCachedBrowsePage(from.path)) {
     browseScroll.set(from.path, contentEl.value?.scrollTop ?? 0);
   }
 });
@@ -150,6 +153,7 @@ watch(browseSession, () => {
 onBeforeUnmount(() => { removeBeforeEach(); removeAfterEach(); });
 const showLoginDialog = ref(false); const showSettings = ref(false); const showExitConfirm = ref(false); const exitDialog = ref<HTMLDialogElement>();
 const siderCollapsed = ref(false); const notification = ref(""); let toastTimer: number | undefined; let unlistenExit: (() => void) | undefined;
+let disposed = false;
 interface MenuItem { path: string; label: string; icon: SidebarIconName; group: NavigationGroup }
 const menuItems = computed<MenuItem[]>(() => [
   { path: groupRoots.discover, label: t("workspace.discover"), icon: "discover", group: "discover" },
@@ -179,8 +183,8 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(entries => { const width = entries[0]?.contentRect.width ?? 0; if (lastWidth && width !== lastWidth) restoreLayout(); lastWidth = width; captureLayout(); });
   if (workspaceEl.value) resizeObserver.observe(workspaceEl.value);
   contentEl.value?.addEventListener('scroll', captureLayout, { passive: true });
-  media.addEventListener("change", onMediaChange); authStore.fetchAccounts(); if (isTauri()) listen("app://confirm-exit", () => showExitConfirm.value = true).then(fn => unlistenExit = fn); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
-onBeforeUnmount(() => { stopTasks?.(); resizeObserver?.disconnect(); window.removeEventListener('keydown', onWorkspaceKey); window.removeEventListener('pixiv-tool:image-fullscreen', onImageFullscreen); contentEl.value?.removeEventListener('scroll', captureLayout); media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
+  media.addEventListener("change", onMediaChange); authStore.fetchAccounts(); if (isTauri()) void listen("app://confirm-exit", () => { if (!disposed) showExitConfirm.value = true; }).then(fn => { if (disposed) fn(); else unlistenExit = fn; }).catch(() => {}); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
+onBeforeUnmount(() => { disposed = true; clearTimeout(toastTimer); layoutAnchor = undefined; stopTasks?.(); resizeObserver?.disconnect(); window.removeEventListener('keydown', onWorkspaceKey); window.removeEventListener('pixiv-tool:image-fullscreen', onImageFullscreen); contentEl.value?.removeEventListener('scroll', captureLayout); media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
 </script>
 
 <style scoped>

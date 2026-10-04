@@ -99,7 +99,7 @@ Windows、deb/rpm/appimage on Linux——`tauri.conf.json` 的 `targets` 为 `al
 | Windows | MSVC Build Tools、WebView2 SDK（一般随系统）、cmake、**LLVM/libclang**（`winget install LLVM.LLVM`） |
 | Linux | webkit2gtk-4.1、cmake、gcc/g++、libclang-dev |
 
-Rust ≥ 1.85（edition 2024）。首次构建约 5–15 分钟（BoringSSL 现场编译 +
+Rust ≥ 1.88（edition 2024）。首次构建约 5–15 分钟（BoringSSL 现场编译 +
 bindgen），增量秒级。
 
 ### Windows 工具链标准（本机实测，2026-10-01）
@@ -119,6 +119,21 @@ MSVC 链接器（link.exe）不在 PATH 时包一层
 Git Bash 里 tauri CLI 用 frontend 的本地依赖：`./frontend/node_modules/.bin/tauri`。
 
 ## 3. 关键依赖约束
+
+- **Vite 6.4.3+**，配合 `@vitejs/plugin-vue` 5.2.4：旧 Vite 5 无修复
+  Windows 路径绕过与 UNC/NTLM 泄露的补丁版本。只升级构建工具，不改变
+  Vue、Material Web 与 IPC 架构；`pnpm-lock.yaml` 同时收敛传递依赖安全补丁。
+- **Rust 1.88+**：`time` 0.3.47 与 `serde_with` 3.21 安全补丁要求，见 ADR 0019。
+  wreq 指纹锁定保持不变；GTK/WebKit 等不能兼容升级的传递依赖须记录
+  上游限制与真实可达性，不能用添加另一版本依赖来掩盖旧版本告警。
+- **Tauri CSP** 已启用：生产脚本仅允许应用自身资源，Tauri 负责 IPC 初始化
+  脚本的 hash/nonce；样式保留 `unsafe-inline` 兼容 Material Web 与动态样式。
+  图片允许 HTTPS 缩略图、data/blob 与 `pixiv-img` / `pixiv-avatar` 自定义协议
+  （Windows 的 `http://*.localhost` 转换亦允许）；连接仅限应用自身与 IPC。
+  开发 CSP 额外允许 9961 的本机 HMR WebSocket。登录回退窗无远程 IPC 授权。
+- 仓库根 `/data/` 与 `/config/` 整体忽略，包含翻译产物与两种浏览器登录
+  profile；依赖审计使用 `pnpm --dir frontend audit --registry=https://registry.npmjs.org`，
+  默认镜像未实现 audit API 时不能把请求失败当作无漏洞。
 
 - **wreq = 6.0.0-rc.31 / wreq-util = 3.0.0-rc.14**：指纹伪装库，锁定版本。
   wreq-util **必须 ≥ 3.0.0-rc.12**（Apache-2.0；更早版本 GPL-3.0 传染）。

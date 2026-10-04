@@ -23,7 +23,26 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' https: data: blob: pixiv-img: pixiv-avatar: http://pixiv-img.localhost http://pixiv-avatar.localhost",
+        "connect-src": "'self' ipc: http://ipc.localhost https://ipc.localhost",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' https: data: blob: pixiv-img: pixiv-avatar: http://pixiv-img.localhost http://pixiv-avatar.localhost",
+        "connect-src": "'self' ipc: http://ipc.localhost https://ipc.localhost ws://localhost:9961 ws://127.0.0.1:9961",
+        "object-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'none'"
+      }
     }
   },
   "bundle": {

@@ -84,13 +84,15 @@ async function chooseFile(): Promise<void> {
 // ===== 拖拽（仅 Tauri；浏览器无此 API，静默降级为仅文件选择 / URL）=====
 
 let unlistenDragDrop: (() => void) | undefined;
+let disposed = false;
 
 onMounted(async () => {
   // 直跳本页时确保 settings 已就绪（App.vue 挂载时也拉过一次，幂等）
   void settingsStore.fetchSettings().catch(() => {});
   if (!isTauri()) return;
   try {
-    unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
+    const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+      if (disposed) return;
       if (event.payload.type === "enter") {
         dragHover.value = true;
       } else if (event.payload.type === "leave") {
@@ -101,12 +103,15 @@ onMounted(async () => {
         if (path) adoptFile(path);
       }
     });
+    if (disposed) unlisten();
+    else unlistenDragDrop = unlisten;
   } catch {
     // 拖拽事件不可用时静默降级（选择文件 / URL 通道不受影响）
   }
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   unlistenDragDrop?.();
   unlistenDragDrop = undefined;
 });

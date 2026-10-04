@@ -11,7 +11,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  * - 顶部过滤 chips（全部/插画/漫画）为纯前端过滤（按 item.kind，ugoira 归入插画）。
  * - 说明位：发现推荐不含小说（小字注释，不做成 tab）。
  */
-import { computed, onMounted, ref, shallowRef, watch } from "vue";
+import { computed, onActivated, onDeactivated, onMounted, ref, shallowRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { browseDiscover, errorMessage, type BrowseWorkItem, type WorkKind } from "../../api/browse";
@@ -48,6 +48,7 @@ const loadingMore = ref(false);
 /** 首屏失败与追加失败共用：无内容时由 WorkGrid 呈现错误态，有内容时在页内展示重试行 */
 const error = ref("");
 const hasMore = ref(true);
+const active = ref(true);
 /** 已出现过的条目键（kind:id），discover 每批几乎不重叠但不去重，由前端保证唯一 */
 const seen = new Set<string>();
 
@@ -56,7 +57,7 @@ function keyOf(item: BrowseWorkItem): string {
 }
 
 async function fetchBatch(): Promise<void> {
-  if (loading.value || loadingMore.value || error.value || !hasMore.value) return;
+  if (!active.value || loading.value || loadingMore.value || error.value || !hasMore.value) return;
   const initial = items.value.length === 0;
   if (initial) loading.value = true;
   else loadingMore.value = true;
@@ -91,12 +92,15 @@ function refresh(): void {
 onMounted(() => {
   void fetchBatch();
 });
+onActivated(() => { active.value = true; });
+onDeactivated(() => { active.value = false; });
 
 const filtered = computed(() => items.value.filter((item) => kindMatches(item.kind)));
 
 /** 极端情况兜底：过滤后为空但推荐池还有余量时，继续拉取直至出现该类条目或见底。 */
-watch([filtered, hasMore, loading, loadingMore, error], () => {
+watch([filtered, hasMore, loading, loadingMore, error, active], () => {
   if (
+    active.value &&
     filter.value !== "all" &&
     !filtered.value.length &&
     items.value.length &&

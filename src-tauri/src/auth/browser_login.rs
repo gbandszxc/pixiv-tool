@@ -124,7 +124,7 @@ fn which(name: &str) -> Option<PathBuf> {
 }
 
 /// 从 CDP Storage.getCookies 结果（Value 数组）提取 Pixiv 域 Cookie：
-/// domain 去掉前导 '.' 后以 "pixiv.net" 结尾，且 name/value 非空。
+/// domain 仅允许 pixiv.net 及其子域，且 name/value 非空。
 pub fn extract_pixiv_cookies(items: &[Value]) -> HashMap<String, String> {
     items
         .iter()
@@ -132,12 +132,17 @@ pub fn extract_pixiv_cookies(items: &[Value]) -> HashMap<String, String> {
             let domain = item.get("domain").and_then(Value::as_str).unwrap_or("");
             let name = item.get("name").and_then(Value::as_str).unwrap_or("");
             let value = item.get("value").and_then(Value::as_str).unwrap_or("");
-            // 与 Python 一致：剥前导 '.' 后大小写敏感地 endswith("pixiv.net")
-            let is_pixiv = domain.trim_start_matches('.').ends_with("pixiv.net");
+            let is_pixiv = is_pixiv_cookie_domain(domain);
             (is_pixiv && !name.is_empty() && !value.is_empty())
                 .then(|| (name.to_string(), value.to_string()))
         })
         .collect()
+}
+
+/// Cookie 域必须按 DNS 标签边界匹配，避免把 evilpixiv.net 的同名 Cookie 带入会话。
+pub(crate) fn is_pixiv_cookie_domain(domain: &str) -> bool {
+    let domain = domain.trim_start_matches('.');
+    domain.eq_ignore_ascii_case("pixiv.net") || domain.to_ascii_lowercase().ends_with(".pixiv.net")
 }
 
 /// 登录页跳回 Pixiv 主站后才探测 Session（url host ∈ {pixiv.net, www.pixiv.net}，
@@ -278,9 +283,8 @@ pub fn pixiv_session_cookie_keys(items: &[Value]) -> Vec<(String, String, String
         .filter_map(|item| {
             let name = item.get("name").and_then(Value::as_str).unwrap_or("");
             let domain = item.get("domain").and_then(Value::as_str).unwrap_or("");
-            let is_pixiv_session = name == "PHPSESSID"
-                && !domain.is_empty()
-                && domain.trim_start_matches('.').ends_with("pixiv.net");
+            let is_pixiv_session =
+                name == "PHPSESSID" && !domain.is_empty() && is_pixiv_cookie_domain(domain);
             is_pixiv_session.then(|| {
                 let path = item
                     .get("path")
@@ -305,9 +309,9 @@ async fn clear_pixiv_session(cdp: &mut CdpClient) -> Result<usize> {
     let items = result
         .get("cookies")
         .and_then(Value::as_array)
-        .cloned()
+        .map(Vec::as_slice)
         .unwrap_or_default();
-    let keys = pixiv_session_cookie_keys(&items);
+    let keys = pixiv_session_cookie_keys(items);
     for (name, domain, path) in &keys {
         cdp.call(
             "Storage.setCookies",
@@ -344,7 +348,7 @@ async fn ensure_fresh_login_page(cdp: &mut CdpClient) -> Result<()> {
     for info in targets
         .get("targetInfos")
         .and_then(Value::as_array)
-        .cloned()
+        .map(Vec::as_slice)
         .unwrap_or_default()
     {
         let is_blank_page = info.get("type").and_then(Value::as_str) == Some("page")
@@ -384,9 +388,9 @@ async fn login_loop(cdp: &mut CdpClient, child: &mut Child) -> Result<LoginResul
         let target_infos = targets
             .get("targetInfos")
             .and_then(Value::as_array)
-            .cloned()
+            .map(Vec::as_slice)
             .unwrap_or_default();
-        if !has_pixiv_main_target(&target_infos) {
+        if !has_pixiv_main_target(target_infos) {
             tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MILLIS)).await;
             continue;
         }
@@ -397,9 +401,9 @@ async fn login_loop(cdp: &mut CdpClient, child: &mut Child) -> Result<LoginResul
         let cookie_items = result
             .get("cookies")
             .and_then(Value::as_array)
-            .cloned()
+            .map(Vec::as_slice)
             .unwrap_or_default();
-        let mut cookies = extract_pixiv_cookies(&cookie_items);
+        let mut cookies = extract_pixiv_cookies(cookie_items);
 
         if let Some(phpsessid) = cookies
             .get("PHPSESSID")
@@ -497,6 +501,7 @@ mod tests {
             json!({"name": "multi_dot", "value": "v", "domain": "..pixiv.net"}),
             // 非 pixiv 域
             json!({"name": "evil", "value": "v", "domain": "pixiv.net.evil.com"}),
+            json!({"name": "PHPSESSID", "value": "foreign-session", "domain": "evilpixiv.net"}),
             json!({"name": "google", "value": "v", "domain": ".google.com"}),
             // 空值 / 空 name 过滤
             json!({"name": "empty_value", "value": "", "domain": ".pixiv.net"}),
@@ -590,6 +595,7 @@ mod tests {
             json!({"name": "PHPSESSID", "value": "s3", "domain": "..pixiv.net", "path": "/sub"}),
             // 非 pixiv 域
             json!({"name": "PHPSESSID", "value": "x", "domain": "pixiv.net.evil.com", "path": "/"}),
+            json!({"name": "PHPSESSID", "value": "foreign-session", "domain": "evilpixiv.net", "path": "/"}),
             // pixiv 域但不是会话 cookie（设备态保留，不清）
             json!({"name": "device_token", "value": "d", "domain": ".pixiv.net", "path": "/"}),
             // 缺 domain / 空 name 容错

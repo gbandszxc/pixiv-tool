@@ -405,6 +405,14 @@ pub async fn auth_account_switch(
     state: State<'_, AppState>,
     user_id: String,
 ) -> Result<Value, String> {
+    if !state
+        .accounts
+        .list()
+        .iter()
+        .any(|account| account.user_id == user_id)
+    {
+        return Err("账号未登记，无法切换登录态".to_string());
+    }
     let target = state
         .accounts
         .load_cookies(&user_id)?

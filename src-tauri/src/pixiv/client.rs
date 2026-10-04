@@ -105,7 +105,7 @@ pub(crate) fn json_truthy(value: &Value) -> bool {
 
 /// ajax 响应体提取：`error` 为真值 → `Client("API error: {message}")`；
 /// 否则返回 `body` 字段（缺失时返回整个对象）。对齐 Python `_get`。
-pub(crate) fn extract_ajax_body(body: Value) -> Result<Value, PixivError> {
+pub(crate) fn extract_ajax_body(mut body: Value) -> Result<Value, PixivError> {
     if body.get("error").is_some_and(json_truthy) {
         let message = match body.get("message") {
             Some(Value::String(s)) => s.clone(),
@@ -114,7 +114,10 @@ pub(crate) fn extract_ajax_body(body: Value) -> Result<Value, PixivError> {
         };
         return Err(PixivError::Client(format!("API error: {message}")));
     }
-    Ok(body.get("body").cloned().unwrap_or(body))
+    match body.get_mut("body") {
+        Some(value) => Ok(value.take()),
+        None => Ok(body),
+    }
 }
 
 /// 日志脱敏：去掉查询串（Python `_mask_url`）。
@@ -123,7 +126,13 @@ pub(crate) fn mask_url(url: &str) -> &str {
 }
 
 fn network_err(err: wreq::Error, url: &str) -> PixivError {
-    PixivError::Network(format!("{err}: {}", mask_url(url)))
+    // wreq::Error 的 Display 可能包含原始请求 URL，不把它送进日志/IPC。
+    let reason = if err.is_timeout() {
+        "请求超时"
+    } else {
+        "请求或响应读取失败"
+    };
+    PixivError::Network(format!("{reason}: {}", mask_url(url)))
 }
 
 /// header 值可安全入 HTTP 头（无控制字符 / DEL）。
@@ -295,10 +304,11 @@ impl PixivClient {
 
     /// 发下载 GET（只额外带 Referer，不带 pixiv cookie）。
     async fn send_download(&self, url: &str) -> Result<wreq::Response, PixivError> {
+        if !crate::image_proxy::is_allowed_pximg_url(url) {
+            return Err(PixivError::Client("下载地址不在 pximg HTTPS 白名单".into()));
+        }
         let resp = self
-            .http
-            .get(url)
-            .header("referer", REFERER)
+            .download_request(url)
             .send()
             .await
             .map_err(|e| network_err(e, url))?;
@@ -311,6 +321,16 @@ impl PixivClient {
             return Err(err);
         }
         Ok(resp)
+    }
+
+    fn download_request(&self, url: &str) -> wreq::RequestBuilder {
+        // 默认头含登录会话的 x-csrf-token；下载不能继承任何鉴权头。
+        self.http
+            .get(url)
+            .default_headers(false)
+            .header("user-agent", USER_AGENT)
+            .header("referer", REFERER)
+            .header("accept-language", ACCEPT_LANGUAGE)
     }
 
     /// GET `{BASE_URL}{path}` 并解析 JSON，返回 body 字段（无 body 时返回整个对象）。
@@ -547,6 +567,10 @@ mod tests {
             extract_ajax_body(body).unwrap(),
             serde_json::json!({"id": 1})
         );
+        assert_eq!(
+            extract_ajax_body(serde_json::json!({"body": null})).unwrap(),
+            Value::Null
+        );
         // 无 error 键、无 body 键 → 返回整个对象
         let whole = serde_json::json!({"userData": {}, "token": "t"});
         assert_eq!(extract_ajax_body(whole.clone()).unwrap(), whole);
@@ -570,6 +594,63 @@ mod tests {
             Err(PixivError::Client(msg)) => assert_eq!(msg, "API error: "),
             other => panic!("预期 Client 错误，实际 {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn download_request_does_not_forward_credentials() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let cookies = HashMap::from([
+            ("PHPSESSID".into(), "synthetic-session".into()),
+            ("x-csrf-token".into(), "synthetic-csrf".into()),
+        ]);
+        let mut client = PixivClient::new(&cookies).unwrap();
+        client.http = wreq::Client::builder().no_proxy().default_headers(client.default_headers.clone()).build().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/test.jpg", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nIMG").await.unwrap();
+            String::from_utf8(request).unwrap().to_ascii_lowercase()
+        });
+        tokio::time::timeout(Duration::from_secs(3), client.download_request(&url).send()).await.unwrap().unwrap();
+        let request = tokio::time::timeout(Duration::from_secs(3), server).await.unwrap().unwrap();
+        assert!(request.contains("referer: https://www.pixiv.net/"));
+        assert!(!request.contains("cookie:"));
+        assert!(!request.contains("x-csrf-token:"));
+        assert!(!request.contains("synthetic"));
+    }
+
+    #[test]
+    fn network_error_does_not_expose_query_or_fragment() {
+        let error = client()
+            .http
+            .get("https://i.pximg.net/a.jpg?secret=synthetic")
+            .header("x-test", "invalid\r\nheader")
+            .build()
+            .unwrap_err();
+        let message =
+            network_err(error, "https://i.pximg.net/a.jpg?secret=synthetic#token").to_string();
+        assert!(message.contains("https://i.pximg.net/a.jpg"));
+        assert!(!message.contains("secret"));
+        assert!(!message.contains("synthetic"));
+        assert!(!message.contains("token"));
+    }
+
+    #[tokio::test]
+    async fn download_rejects_untrusted_url_without_network() {
+        let error = client()
+            .download_bytes("http://127.0.0.1/private?secret=synthetic")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PixivError::Client(_)));
+        assert!(!error.to_string().contains("synthetic"));
     }
 
     #[test]
