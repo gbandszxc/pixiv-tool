@@ -1,17 +1,22 @@
 <script setup lang="ts">
 /**
- * 评论区（browse-ui-v1 / F6）：只读展示作品评论 roots + 内联回复。
+ * 评论区（browse-ui-v1 / F6）：展示作品评论 roots + 内联回复，并支持发表。
  *
  * - 分页自持：roots 用 offset 游标（browse_work_comments，接口无 total，不显示总数）；
  *   has_replies 条目展开后按 page 游标续拉回复（browse_comment_replies）。
+ * - 发表：根评论与「回复某条根评论」（browse_comment_add，parent_id = 该评论 id）。
+ *   成功后重拉首页 / 该评论回复首页，展示服务端权威数据（头像、时间、回复数）。
+ *   回复入口只挂在根评论上（回复某条回复需嵌套 parent 语义，未验证，不做）。
  * - 正文纯文本渲染（white-space: pre-wrap，绝不 v-html，URL 保持纯文本）；
  *   表情评论（content 空 + stamp_url）渲染 stamp 图。
  * - 未登录错误由 api 层统一联动登录弹窗，此处只展示归一文案 + 重试。
  * - 评论区被作者关闭（roots 恒 400 → 后端 disabled 信封）为终态提示，非错误、无重试。
  */
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
+  COMMENT_MAX_CHARS,
+  browseCommentAdd,
   browseCommentReplies,
   browseWorkComments,
   errorMessage,
@@ -23,6 +28,8 @@ import {
 const props = defineProps<{
   kind: ListWorkKind;
   id: number;
+  /** 作品作者的用户 id（发表评论必传；省略/0 时隐藏发表入口） */
+  authorId?: number;
 }>();
 
 const { t } = useI18n();
@@ -37,6 +44,8 @@ const loadingMore = ref(false);
 const error = ref("");
 /** 评论区被作者关闭（disabled 信封）：终态，非错误 */
 const closed = ref(false);
+/** 首屏是否成功加载过：发表后重拉首页时不让发表区随 loading 卸载重建（避免闪烁与草稿区闪失） */
+const loaded = ref(false);
 
 /** 请求序号：快速切换作品时丢弃过期响应（回复请求沿用同一序号快照） */
 let reqSeq = 0;
@@ -55,6 +64,7 @@ async function fetchPage(offset: number): Promise<void> {
     const data = await browseWorkComments({ kind: props.kind, id: props.id, offset });
     if (seq !== reqSeq) return;
     if (first) closed.value = data.disabled === true;
+    loaded.value = true;
     comments.value = first ? data.comments : [...comments.value, ...data.comments];
     // 预建展开态，避免渲染期再写 reactive map
     ensureRepliesStates(comments.value);
@@ -148,6 +158,90 @@ function onAvatarError(comment: BrowseComment): void {
   brokenAvatars.add(comment.id);
 }
 
+// ===== 发表 / 回复 =====
+
+/** 根评论草稿与提交状态 */
+const draft = ref("");
+const posting = ref(false);
+const postError = ref("");
+
+/** 当前打开回复框的根评论 id（同时只开一个）；null = 未打开 */
+const replyTarget = ref<string | null>(null);
+const replyDraft = ref("");
+const replyPosting = ref(false);
+const replyError = ref("");
+
+/** 作品作者 id（后端要求随请求回传；未知 = 0） */
+const authorId = computed(() => props.authorId ?? 0);
+
+/**
+ * 显示发表入口：首屏已成功加载、无错误态、评论区未关闭、作者 id 已知。
+ * 未登录不预判——发表时由 api 层弹登录窗（与浏览命令一致）。
+ */
+const showComposer = computed(
+  () => loaded.value && !error.value && !closed.value && authorId.value > 0
+);
+
+const canSubmitRoot = computed(() => draft.value.trim().length > 0);
+const canSubmitReply = computed(() => replyDraft.value.trim().length > 0);
+
+/** 发表根评论：成功后重拉首页（评论按时间倒序，新评论出现在顶部）。 */
+async function submitRoot(): Promise<void> {
+  if (!canSubmitRoot.value || posting.value) return;
+  posting.value = true;
+  postError.value = "";
+  try {
+    await browseCommentAdd({
+      kind: props.kind,
+      id: props.id,
+      authorId: authorId.value,
+      comment: draft.value,
+    });
+    draft.value = "";
+    await fetchPage(0);
+  } catch (err) {
+    postError.value = errorMessage(err) || t("browse.comments.postFailed");
+  } finally {
+    posting.value = false;
+  }
+}
+
+function startReply(comment: BrowseComment): void {
+  replyTarget.value = comment.id;
+  replyDraft.value = "";
+  replyError.value = "";
+}
+
+function cancelReply(): void {
+  replyTarget.value = null;
+  replyDraft.value = "";
+  replyError.value = "";
+}
+
+/** 回复根评论：成功后展开该评论的回复并重拉第 1 页（新回复可见）。 */
+async function submitReply(comment: BrowseComment): Promise<void> {
+  if (!canSubmitReply.value || replyPosting.value) return;
+  replyPosting.value = true;
+  replyError.value = "";
+  try {
+    await browseCommentAdd({
+      kind: props.kind,
+      id: props.id,
+      authorId: authorId.value,
+      comment: replyDraft.value,
+      parentId: comment.id,
+    });
+    cancelReply();
+    comment.has_replies = true;
+    expandedIds.add(comment.id);
+    await loadRepliesPage(comment, 1);
+  } catch (err) {
+    replyError.value = errorMessage(err) || t("browse.comments.postFailed");
+  } finally {
+    replyPosting.value = false;
+  }
+}
+
 // ===== kind / id 变化：整体重置并重拉首屏 =====
 
 function resetAll(): void {
@@ -158,6 +252,12 @@ function resetAll(): void {
   loadingMore.value = false;
   error.value = "";
   closed.value = false;
+  loaded.value = false;
+  draft.value = "";
+  postError.value = "";
+  posting.value = false;
+  replyPosting.value = false;
+  cancelReply();
   for (const key of Object.keys(repliesMap)) delete repliesMap[key];
   expandedIds.clear();
   brokenAvatars.clear();
@@ -170,6 +270,29 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
 <template>
   <section class="comments">
     <h2 class="comments-title">{{ t("browse.comments.title") }}</h2>
+
+    <!-- 发表根评论（评论区关闭 / 无作者 id / 首屏错误时不显示） -->
+    <div v-if="showComposer" class="composer">
+      <md-outlined-text-field
+        class="composer-field"
+        type="textarea"
+        rows="2"
+        :value="draft"
+        :maxlength="COMMENT_MAX_CHARS"
+        :placeholder="t('browse.comments.placeholder')"
+        :aria-label="t('browse.comments.placeholder')"
+        :disabled="posting"
+        :error="Boolean(postError)"
+        :error-text="postError"
+        @input="draft = ($event.target as HTMLTextAreaElement).value"
+      />
+      <div class="composer-bar">
+        <span class="composer-count" aria-hidden="true">{{ draft.length }} / {{ COMMENT_MAX_CHARS }}</span>
+        <md-filled-button :disabled="!canSubmitRoot || posting" @click="submitRoot">
+          {{ posting ? t("browse.comments.posting") : t("browse.comments.submit") }}
+        </md-filled-button>
+      </div>
+    </div>
 
     <!-- 首屏骨架：3 条占位（纯色块，无动画） -->
     <div v-if="loading && !comments.length" class="comments-skeleton" aria-hidden="true">
@@ -216,6 +339,33 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
               <!-- 正文：纯文本（契约保证无 HTML）；表情评论渲染 stamp 图 -->
               <img v-if="c.stamp_url" class="stamp" :src="pxSrc(c.stamp_url)" :alt="t('browse.comments.stampAlt')" />
               <p v-else-if="c.content" class="content">{{ c.content }}</p>
+            </div>
+          </div>
+
+          <!-- 发表回复：入口挂根评论（同时只开一个回复框） -->
+          <div v-if="showComposer" class="comment-actions">
+            <button type="button" class="reply-link" @click="startReply(c)">{{ t("browse.comments.reply") }}</button>
+          </div>
+          <div v-if="replyTarget === c.id" class="composer reply-composer">
+            <md-outlined-text-field
+              class="composer-field"
+              type="textarea"
+              rows="2"
+              :value="replyDraft"
+              :maxlength="COMMENT_MAX_CHARS"
+              :placeholder="t('browse.comments.replyPlaceholder', { name: c.user_name })"
+              :aria-label="t('browse.comments.replyPlaceholder', { name: c.user_name })"
+              :disabled="replyPosting"
+              :error="Boolean(replyError)"
+              :error-text="replyError"
+              @input="replyDraft = ($event.target as HTMLTextAreaElement).value"
+            />
+            <div class="composer-bar">
+              <span class="composer-count" aria-hidden="true">{{ replyDraft.length }} / {{ COMMENT_MAX_CHARS }}</span>
+              <md-text-button :disabled="replyPosting" @click="cancelReply">{{ t("common.cancel") }}</md-text-button>
+              <md-filled-button :disabled="!canSubmitReply || replyPosting" @click="submitReply(c)">
+                {{ replyPosting ? t("browse.comments.posting") : t("browse.comments.replySubmit") }}
+              </md-filled-button>
             </div>
           </div>
 
@@ -307,6 +457,68 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
   font-size: 16px;
   font-weight: 700;
   line-height: 1.4;
+}
+
+/* ===== 发表评论 / 回复 ===== */
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: 0;
+  margin-bottom: var(--space-lg);
+}
+
+.composer-field {
+  width: 100%;
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+/* 字数计数贴左，按钮组贴右 */
+.composer-count {
+  margin-right: auto;
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+.comment-actions {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-xxs);
+}
+
+.reply-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.reply-link:hover {
+  text-decoration: underline;
+}
+
+.reply-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.reply-composer {
+  margin-top: var(--space-sm);
+  margin-bottom: 0;
 }
 
 /* ===== 评论行 ===== */

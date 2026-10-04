@@ -292,7 +292,7 @@ pending → running ⇄ paused
 
 ### 4.3 限速与容错（`pixiv/client.rs`）
 
-小说翻译直连用户模型服务，独立于 Pixiv 限速：全局串行、单请求 180s、响应上限 4MB、不自动重试（避免重复费用）。支持 Chat Completions（默认）/ Responses / Anthropic Messages 三种协议（ADR 0020）。两轮处理与持久化见 ADR 0017；正文输入上限 8MB、单页 120KB、设定集 160KB，超限明确拒绝。
+小说翻译直连用户模型服务，独立于 Pixiv 限速：全局串行、单请求 180s、响应上限 4MB、不自动重试（避免重复费用）。支持 Chat Completions（默认）/ Responses / Anthropic Messages 三种协议（ADR 0020）；URL 主机名含 `opencode` 时（zen Go 档等网关的硬性要求）为生成与 `/models` 请求附加稳定会话头 `x-opencode-session`，取值为 SHA-256 派生的 UUID 形态——小说翻译按 `pixiv-tool-novel-<novel_id>` 以小说为会话单位、探测用固定 seed，跨重启恒定，其它供应商不加此头（ADR 0021）。两轮处理与持久化见 ADR 0017；正文输入上限 8MB、单页 120KB、设定集 160KB，超限明确拒绝。
 翻译进入串行队列前的空正文检查即时释放临时行数组，避免在排队及两轮请求期间
 同时保留同一页的重复文本副本。
 
@@ -680,7 +680,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   端点与响应结构的契约事实源为 `docs/PIXIV-API.md`（`docs/research/pixiv-browse-api.md`
   为 2026-10-01 调研证据档案，保留当日字段细节与失效端点勘误）。
   唯一例外是首页 street 流（POST，需 csrf token，见 ADR 0012 §3）。
-- **IPC 契约**：浏览相关 24 个命令（浏览端点 21 + 浏览访问历史 3，§7）。浏览端点返回体统一
+- **IPC 契约**：浏览相关 25 个命令（浏览端点 22 + 浏览访问历史 3，§7）。浏览端点返回体统一
   `BrowseWorkItem` 卡片结构（id/kind/title/author/cover/page_count/x_restrict/tags/series…），
   浏览访问历史返回 `browse_history_list` 的分页行（§7）；前端契约类型与
   mock 层在 `frontend/src/api/browse.ts`（非 Tauri 环境返回确定性样例数据，供浏览器
@@ -865,7 +865,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `settings_get` / `settings_save(settings)` | 配置读写（白名单 20 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 高级 JSON；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_get(novel)` | 读取本机小说设定集和已译页；novel=`{novel_id,title,tags,description,content}`；返回 `{bible:{style,terms},pages:{页码:[{line,text}]}}`，原文和元信息 SHA256 区分版本 |
 | `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel（供后端与测试使用，界面只回显统一「翻译中」）；返回 `{status,lines,target_language}`，status=`translated` 时 lines 为 `[{line,text}]`（line 为该页原始文本的零起行号，可能来自本机缓存），status=`already_target_language` 时未调用模型、lines 为空；目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言，见 ADR 0018 |
-| `translation_models(probe)` | 用未保存草稿探测模型列表端点（按 `format` 协议从同一基址推导 `/models`；OpenAI 系 Bearer，Anthropic `x-api-key` + 版本头），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
+| `translation_models(probe)` | 用未保存草稿探测模型列表端点（按 `format` 协议从同一基址推导 `/models`；OpenAI 系 Bearer，Anthropic `x-api-key` + 版本头，opencode 主机附会话标识头），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
 | `translation_test(probe)` | 用未保存草稿按所选协议发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则 |
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
@@ -892,6 +892,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_watchlist(kind)` | 追更列表：manga/novel 两个子 tab（/ajax/watch_list/*，按 maxPage 聚合 ≤20 页） |
 | `browse_work_comments(kind, id, offset)` | 作品评论根列表（illusts/novels comments/roots，limit=10，offset 游标；作者关闭评论区 → `{"comments":[],"disabled":true}`，非报错） |
 | `browse_comment_replies(kind, commentId, page)` | 评论回复列表（comments/replies，page 从 1） |
+| `browse_comment_add(kind, id, authorId, comment, parentId?)` | 发表评论 / 回复评论（插画·漫画 `/rpc/post_comment.php`、小说 `/novel/rpc/post_comment.php`，form + `x-csrf-token`；`authorId` = 作品作者 userId；给出 `parentId` 即回复该评论；正文 1–140 字） |
 | `browse_bookmark_list(kind, rest, tag, offset, limit)` | 收藏列表（自己：illusts 48/页、novels 30/页；offset + total 翻页） |
 | `browse_bookmark_tags(kind)` | 收藏标签（一次返回 public/private 两组，含「未分類」聚合标签） |
 | `browse_bookmark_add(kind, id, restrict, tags)` | 添加收藏（全局 JSON 端点 + x-csrf-token；restrict 0 公开 / 1 非公开） |
@@ -1133,6 +1134,12 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0015 | 核心导航与非模态下载工作区 | [adr/0015-navigation-download-workspace.md](adr/0015-navigation-download-workspace.md) |
 | 0016 | 应用内更新下载与安装引导 | [adr/0016-in-app-update-installation.md](adr/0016-in-app-update-installation.md) |
 | 0016 | 作者关注与浏览写操作边界 | [adr/0016-author-follow.md](adr/0016-author-follow.md) |
+| 0017 | 小说单页两轮翻译与共享设定集 | [adr/0017-novel-page-translation.md](adr/0017-novel-page-translation.md) |
+| 0018 | 小说翻译目标语言与语言一致的快速返回 | [adr/0018-novel-translation-target-language.md](adr/0018-novel-translation-target-language.md) |
+| 0019 | 安全补丁驱动的构建工具链升级 | [adr/0019-security-patched-toolchain.md](adr/0019-security-patched-toolchain.md) |
+| 0020 | 小说翻译支持三种模型接口协议 | [adr/0020-translation-api-formats.md](adr/0020-translation-api-formats.md) |
+| 0021 | 翻译请求对 opencode 网关携带会话标识头 | [adr/0021-translation-session-header.md](adr/0021-translation-session-header.md) |
+| 0022 | 浏览模式发表评论与回复（扩展 ADR 0016 写操作边界） | [adr/0022-browse-comment-posting.md](adr/0022-browse-comment-posting.md) |
 
 ADR 按需追加，不强制一次性写完。
 

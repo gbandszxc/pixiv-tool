@@ -627,17 +627,59 @@ fn parse_completion(body: Value, format: ApiFormat) -> Result<Value, String> {
     parse_model_json(&text)
 }
 
+/// 会话标识请求头：opencode zen 系网关（Go 档）要求每个会话一个稳定 ID（路由与 prompt
+/// 缓存），缺失即 400 MissingSessionID。只对该域名的服务发送，见 [`needs_session_header`]。
+const SESSION_HEADER: &str = "x-opencode-session";
+/// 探测请求（获取模型 / 检测可用）没有小说上下文，用固定会话种子。
+const PROBE_SESSION_SEED: &str = "pixiv-tool-probe";
+
+/// 稳定会话 ID（UUID 形态）：SHA-256 前 16 字节转 8-4-4-4-12 十六进制。
+/// 同一 seed 恒等，跨进程与重启不变——网关的 prompt 缓存与路由依赖这种稳定性。
+fn session_id(seed: &str) -> String {
+    let digest = Sha256::digest(seed.as_bytes());
+    let hex: String = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+/// 小说翻译的会话标识：同一小说的所有页共用（设定集也共享），让网关按会话缓存与路由。
+fn novel_session(novel_id: i64) -> String {
+    session_id(&format!("pixiv-tool-novel-{novel_id}"))
+}
+
+/// 会话标识头只发给 opencode zen 系网关（Go 档缺它即 400），其它供应商不加无用头。
+fn needs_session_header(url: &tauri::Url) -> bool {
+    url.host_str()
+        .is_some_and(|host| host.to_ascii_lowercase().contains("opencode"))
+}
+
 struct TranslationClient<'a> {
     http: wreq::Client,
     url: tauri::Url,
     format: ApiFormat,
     key: String,
+    /// 本次会话标识（见 [`SESSION_HEADER`]）。
+    session: String,
     settings: &'a Settings,
 }
 
 impl TranslationClient<'_> {
-    /// 按协议附加凭据：OpenAI 系走 Bearer，Anthropic 走 x-api-key + 版本头。
+    /// 附加请求头：凭据按协议走 Bearer 或 x-api-key + 版本头；会话标识仅发给需要的网关。
     fn authorized(&self, request: wreq::RequestBuilder) -> wreq::RequestBuilder {
+        let request = if needs_session_header(&self.url) {
+            request.header(SESSION_HEADER, self.session.as_str())
+        } else {
+            request
+        };
         match self.format {
             ApiFormat::Anthropic => request
                 .header("x-api-key", self.key.as_str())
@@ -769,16 +811,16 @@ fn parse_models(body: Value) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, String> {
     let (settings, format, key, http) = probe_client(&probe, 30)?;
-    let request = match format {
-        ApiFormat::Anthropic => http
-            .get(models_url(&settings.translation_api_url, format)?.as_str())
-            .header("x-api-key", key.as_str())
-            .header("anthropic-version", ANTHROPIC_VERSION),
-        _ => http
-            .get(models_url(&settings.translation_api_url, format)?.as_str())
-            .bearer_auth(key),
+    let client = TranslationClient {
+        url: models_url(&settings.translation_api_url, format)?,
+        http,
+        format,
+        key,
+        session: session_id(PROBE_SESSION_SEED),
+        settings: &settings,
     };
-    let response = request
+    let response = client
+        .authorized(client.http.get(client.url.as_str()))
         .send().await.map_err(|_| "无法获取模型列表，请检查 URL 和网络，或手动填写模型 ID")?;
     let body = read_service_response(response).await.map_err(|error| {
         if error.starts_with("翻译服务返回 HTTP") {
@@ -795,7 +837,7 @@ pub async fn translation_test(probe: TranslationProbe) -> Result<(), String> {
     let (settings, format, key, http) = probe_client(&probe, 180)?;
     if settings.translation_model.trim().is_empty() { return Err("请先填写或选择模型 ID".into()); }
     let url = completion_url(&settings.translation_api_url, format)?;
-    let client = TranslationClient { http, url, format, key, settings: &settings };
+    let client = TranslationClient { http, url, format, key, session: session_id(PROBE_SESSION_SEED), settings: &settings };
     let result = client.complete("这是连接检测。仅返回 JSON 对象 {\"ok\":true}，不输出其他文字。", json!("请确认服务可用。")).await?;
     if result.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err("服务已响应，但未返回预期 JSON，请调整高级配置或更换模型".into());
@@ -904,6 +946,7 @@ async fn translate_page_flow(
         url,
         format,
         key,
+        session: novel_session(novel.novel_id),
         settings: &settings,
     };
     let lines = translate_book(
@@ -1058,6 +1101,7 @@ mod tests {
             url: completion_url(&settings.translation_api_url, ApiFormat::ChatCompletions).unwrap(),
             format: ApiFormat::ChatCompletions,
             key: key.clone(),
+            session: novel_session(42),
             settings: &settings,
         };
         let novel = NovelInput {
@@ -1165,6 +1209,7 @@ mod tests {
             url: completion_url(&settings.translation_api_url, ApiFormat::ChatCompletions).unwrap(),
             format: ApiFormat::ChatCompletions,
             key: key.clone(),
+            session: session_id("pixiv-tool-live-real"),
             settings: &settings,
         };
 
@@ -1315,6 +1360,7 @@ mod tests {
             url: completion_url(&bad_settings.translation_api_url, ApiFormat::ChatCompletions).unwrap(),
             format: ApiFormat::ChatCompletions,
             key: key.clone(),
+            session: session_id("pixiv-tool-live-real"),
             settings: &bad_settings,
         };
         let bad_dir = std::env::temp_dir().join(format!("pixiv-translation-live-bad-{}", uuid::Uuid::new_v4()));
@@ -1478,6 +1524,7 @@ mod tests {
             url: completion_url(&settings.translation_api_url, ApiFormat::ChatCompletions).unwrap(),
             format: ApiFormat::ChatCompletions,
             key,
+            session: novel_session(43),
             settings: &settings,
         };
         let novel = NovelInput {
@@ -1672,6 +1719,71 @@ mod tests {
             ..keyed("model-id", "https://example.com/v1", Some("probe-key"))
         };
         assert!(probe_client(&bad_format, 30).is_err());
+    }
+
+    #[test]
+    fn derives_stable_session_ids_and_gates_header_by_host() {
+        let probe = session_id(PROBE_SESSION_SEED);
+        assert_eq!(probe, session_id(PROBE_SESSION_SEED), "同一 seed 恒定");
+        assert_eq!(
+            probe,
+            session_id("pixiv-tool-probe"),
+            "会话 ID 跨调用/跨重启不变"
+        );
+        assert_ne!(probe, novel_session(42), "探测与小说会话不同");
+        assert_ne!(novel_session(42), novel_session(43), "不同小说会话不同");
+        assert_eq!(
+            probe.split('-').map(str::len).collect::<Vec<_>>(),
+            vec![8, 4, 4, 4, 12],
+            "UUID 形态"
+        );
+        assert!(probe.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
+
+        // 只有 opencode 域名的服务需要（也才发送）会话头。
+        for (url, expected) in [
+            ("https://opencode.ai/zen/go/v1", true),
+            ("https://zen.opencode.ai/v1", true),
+            ("https://api.openai.com/v1", false),
+            ("https://api.anthropic.com/v1", false),
+            ("http://localhost:11434/v1", false),
+        ] {
+            assert_eq!(
+                needs_session_header(&completion_url(url, ApiFormat::ChatCompletions).unwrap()),
+                expected,
+                "{url}"
+            );
+        }
+        let settings = Settings::default();
+        let http = wreq::Client::new();
+        let build = |url: &str| TranslationClient {
+            http: http.clone(),
+            url: completion_url(url, ApiFormat::ChatCompletions).unwrap(),
+            format: ApiFormat::ChatCompletions,
+            key: "test-key".into(),
+            session: probe.clone(),
+            settings: &settings,
+        };
+        let opencode = build("https://opencode.ai/zen/go/v1")
+            .authorized(wreq::post("https://opencode.ai/zen/go/v1/chat/completions"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            opencode.headers().get(SESSION_HEADER).unwrap(),
+            probe.as_str()
+        );
+        let openai = build("https://api.openai.com/v1")
+            .authorized(wreq::post("https://api.openai.com/v1/chat/completions"))
+            .build()
+            .unwrap();
+        assert!(
+            openai.headers().get(SESSION_HEADER).is_none(),
+            "其它服务不加会话头"
+        );
+        assert_eq!(
+            openai.headers().get("authorization").unwrap(),
+            "Bearer test-key",
+            "凭据不受会话头开关影响"
+        );
     }
 
     /// 三种协议的请求体装配：系统提示与用户输入落到各自的协议字段。
@@ -2004,6 +2116,7 @@ mod tests {
             url,
             format: ApiFormat::ChatCompletions,
             key: "test-key".into(),
+            session: novel_session(42),
             settings: &settings,
         };
         let progress = Channel::<String>::new(|_| Ok(()));
@@ -2135,6 +2248,7 @@ mod tests {
             url: completion_url(&base, ApiFormat::Responses).unwrap(),
             format: ApiFormat::Responses,
             key: "test-key".into(),
+            session: session_id(PROBE_SESSION_SEED),
             settings: &settings,
         };
         assert_eq!(
@@ -2147,6 +2261,7 @@ mod tests {
             url: completion_url(&base, ApiFormat::Anthropic).unwrap(),
             format: ApiFormat::Anthropic,
             key: "test-key".into(),
+            session: session_id(PROBE_SESSION_SEED),
             settings: &settings,
         };
         assert_eq!(
@@ -2170,5 +2285,8 @@ mod tests {
         assert_eq!(captured[1].1["messages"][0]["content"], payload.to_string());
         assert_eq!(captured[1].1["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
         assert!(captured[1].1.get("store").is_none());
+        // 会话标识头只发给 opencode 域名：本机模拟服务（127.0.0.1）不带。
+        assert!(!captured[0].0.contains("x-opencode-session"));
+        assert!(!captured[1].0.contains("x-opencode-session"));
     }
 }

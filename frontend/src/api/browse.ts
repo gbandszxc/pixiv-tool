@@ -4,8 +4,8 @@
  *
  * 组成：
  * - 契约类型（snake_case，与 Rust browse 命令返回体一致）
- * - 22 个命令的 invoke 封装（v2 的 12 个 + v2.1 评论补充的 2 个 + v3.1 收藏 4 个
- *   + 追更列表 1 个 + 浏览访问历史 3 个（browse-history-ui-v1）；
+ * - 23 个命令的 invoke 封装（v2 的 12 个 + v2.1 评论读取 2 个 + v3.1 收藏 4 个
+ *   + 追更列表 1 个 + 浏览访问历史 3 个（browse-history-ui-v1）+ 评论发表 1 个；
  *   未登录错误 → 派发 `pixiv-tool:open-login` 事件，App.vue 负责弹登录窗）
  * - pxSrc()：pximg 封面 URL → `pixiv-img://` 代理协议（Tauri 环境）
  * - thumbSrc()：按档位改写尺寸段后再走 pxSrc（组件层唯一的缩略图出口）
@@ -313,6 +313,20 @@ export interface BrowseComments {
   disabled?: boolean;
 }
 
+/**
+ * browse_comment_add（发评论 / 回复）返回体。
+ * comment_id 为 pixiv 评论 id 字符串；parent_id 仅回复出现（根评论省略）。
+ */
+export interface PublishedComment {
+  comment_id: string;
+  user_id: number;
+  user_name: string;
+  parent_id?: string;
+}
+
+/** 评论正文字符上限（官方评论框 maxlength=140，与后端 COMMENT_MAX_CHARS 同值）。 */
+export const COMMENT_MAX_CHARS = 140;
+
 // ===== 收藏契约（bookmark-ui-v1 v3.1）=====
 
 /** browse_bookmark_list 返回体（offset 游标分页；next = null 到底）。 */
@@ -573,6 +587,28 @@ export async function browseCommentReplies(params: {
   const { kind, commentId, page = 1 } = params;
   if (!isTauri()) return mockReplies(kind, commentId, page);
   return invokeBrowse<BrowseComments>("browse_comment_replies", { kind, commentId, page });
+}
+
+/**
+ * browse_comment_add：发表评论（parentId 给出即回复该评论；authorId 是作品作者的
+ * 用户 id，来自作品详情 user_id）。未登录错误经 invokeBrowse 统一弹登录窗。
+ */
+export async function browseCommentAdd(params: {
+  kind: ListWorkKind;
+  id: number;
+  authorId: number;
+  comment: string;
+  parentId?: string;
+}): Promise<PublishedComment> {
+  const { kind, id, authorId, comment, parentId } = params;
+  if (!isTauri()) return mockCommentAdd(kind, id, authorId, comment, parentId);
+  return invokeBrowse<PublishedComment>("browse_comment_add", {
+    kind,
+    id,
+    authorId,
+    comment,
+    parentId,
+  });
 }
 
 // ===== 收藏命令封装（bookmark-ui-v1；!isTauri() → mock）=====
@@ -1257,10 +1293,10 @@ function mockCommentRoots(kind: ListWorkKind, id: number): BrowseComment[] {
   });
 }
 
-/** 评论 roots：offset 游标切片，next = hasNext ? offset+len : null。 */
+/** 评论 roots：本地新发评论叠加在顶部后按 offset 游标切片，next = hasNext ? offset+len : null。 */
 async function mockComments(kind: ListWorkKind, id: number, offset = 0): Promise<BrowseComments> {
   await mockDelay();
-  const roots = mockCommentRoots(kind, id);
+  const roots = [...(mockPostedRoots.get(`${kind}:${id}`) ?? []), ...mockCommentRoots(kind, id)];
   const slice = roots.slice(offset, offset + MOCK_COMMENT_PAGE);
   const hasNext = offset + slice.length < roots.length;
   return { comments: slice, next: hasNext ? offset + slice.length : null };
@@ -1285,8 +1321,40 @@ async function mockReplies(kind: ListWorkKind, commentId: string, page = 1): Pro
     if (i > 0) reply.reply_to_user_name = MOCK_AUTHORS[firstIndex];
     return reply;
   });
+  const all = [...(mockPostedReplies.get(`${kind}:${commentId}`) ?? []), ...replies];
   // page 从 1 起；每组 ≤3 条单页装下，第 1 页即到底
-  return { comments: page <= 1 ? replies : [], next: null };
+  return { comments: page <= 1 ? all : [], next: null };
+}
+
+/**
+ * mock：本地「已发表」评论叠加层（仅浏览器 dev mock 生效，刷新页面复位）。
+ * 真实后端发评论后前端会重拉首页，叠加层让 mock 表现一致。
+ * key：根评论 `${kind}:${workId}`，回复 `${kind}:${父评论 id}`。
+ */
+const mockPostedRoots = new Map<string, BrowseComment[]>();
+const mockPostedReplies = new Map<string, BrowseComment[]>();
+let mockCommentSeq = 0;
+
+async function mockCommentAdd(
+  kind: ListWorkKind,
+  id: number,
+  authorId: number,
+  comment: string,
+  parentId?: string
+): Promise<PublishedComment> {
+  await mockDelay();
+  mockCommentSeq += 1;
+  const commentId = parentId ? `${parentId}-n${mockCommentSeq}` : `n${mockCommentSeq}`;
+  const posted: BrowseComment = {
+    id: commentId,
+    user_id: authorId,
+    user_name: MOCK_AUTHORS[0],
+    content: comment,
+  };
+  const store = parentId ? mockPostedReplies : mockPostedRoots;
+  const key = `${kind}:${parentId ?? id}`;
+  store.set(key, [posted, ...(store.get(key) ?? [])]);
+  return { comment_id: commentId, user_id: authorId, user_name: posted.user_name, parent_id: parentId };
 }
 
 // ===== 收藏 mock =====

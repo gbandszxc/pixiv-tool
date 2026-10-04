@@ -47,6 +47,9 @@
 | 小说详情 | `/ajax/novel/{id}` | GET | 全文在 `content`，`[newpage]` 分页标记 |
 | 小说相关推荐 | `/ajax/novel/{id}/recommend/init` | GET | 同插画推荐 |
 | 小说评论 | `/ajax/novels/comments/roots` | GET | `novel_id` + `offset/limit` |
+| 发表评论 / 回复（插画·漫画） | `/rpc/post_comment.php` | POST | form `type=comment&illust_id&author_user_id&comment[&parent_id]`；需 `x-csrf-token`（§14） |
+| 发表评论 / 回复（小说） | `/novel/rpc/post_comment.php` | POST | 同上，路径带 `/novel` 前缀、键为 `novel_id`（§14） |
+| 删除评论（插画·漫画 / 小说） | `/rpc_delete_comment.php` · `/novel/rpc_delete_comment.php` | POST | form `i_id&del_id`；本轮仅供在线写用例发完即删（§14） |
 | 小说系列详情 | `/ajax/novel/series/{id}` | GET | 系列元数据 |
 | 小说系列内容列表 | `/ajax/novel/series_content/{id}` | GET | `last_order` + `limit` 翻页 |
 | 小说系列章节标题 | `/ajax/novel/series/{id}/content_titles` | GET | `[{id,title,available}]` |
@@ -931,3 +934,50 @@ query 参数语义（均实测）：
 ## 作者关注接入补充（2026-10-03）
 
 资料响应 isFollowed 为布尔状态，现映射至作者页 is_followed。关注/取消为旧式表单 POST，参数与响应成功信标见 PIXIV-API §4.10；证据为 [Pixiv Previewer 的原始实现](https://greasyfork.org/en/scripts/30766-pixiv-previewer/code)，本轮未进行真实账号写实测，保留带显式开关的在线往返用例用于契约复核。作者关注为 ADR 0016 授权的浏览写操作。
+
+## 14. 评论写路径（发评论 / 回复 / 删除，2026-10-04 实测）
+
+### 14.1 抓包方式
+
+Chrome 登录态打开**本人作品** `/artworks/150446397`，在官方评论区输入框（`textarea[placeholder="发表评论"]`，实测 `maxlength=140`）提交一条测试评论，再点评论行内「删除」并确认，全程用 DevTools 记录请求/响应；随后在页面内比对 csrf token 来源。**未对他人作品发表或删除任何评论**；测试评论已当场删除，未留在作品上。
+
+### 14.2 发表评论
+
+- 请求：`POST https://www.pixiv.net/rpc/post_comment.php`
+  - 头：`content-type: application/x-www-form-urlencoded; charset=utf-8`、`x-csrf-token: <主站 __NEXT_DATA__ 的 api.token>`（实测与页面内 `props.pageProps.serverSerializedPreloadedState.api.token` **逐字相等**，长度 32）/ `accept: application/json`；`referer` 为作品页（应用侧用固定 `https://www.pixiv.net/` 即可，与既有写端点一致）。
+  - 体（实测原文，正文为中文）：
+    ```
+    type=comment&illust_id=150446397&author_user_id=117482194&comment=%E6%8E%A5%E5%8F%A3%E6%8E%A2%E6%B5%8B...
+    ```
+    其中 `author_user_id` = **作品作者**的 userId（本例作者与登录用户同为 117482194）；`parent_id` 只在回复时出现。
+  - 响应 200：`{"error":false,"message":"","body":{"comment_id":"235373194","comment":"...","user_id":"117482194","user_name":"wllmsb","stamp_id":null,"parent_id":null}}`（`body.user_id` 为字符串；根评论 `parent_id` 为 null）。
+  - 未观察到 recaptcha token 进入请求体（页面确有 recaptcha 脚本加载，但该请求体只含上述四个字段）。
+
+### 14.3 删除评论
+
+- 请求：`POST https://www.pixiv.net/rpc_delete_comment.php`，同 csrf 头，体 `i_id=150446397&del_id=235373194`。
+- 响应 200：`{"error":false,"message":"ok","body":[]}`；响应头含 `x-userid: <登录用户 id>`。
+
+### 14.4 小说变体与回复参数（前端 bundle 反查）
+
+Chrome 未登录态不可用（本轮账号无小说作品），改为在当前页面拉取 pixiv 前端 chunk 并定位评论 API 模块（`https://s.pximg.net/soy/pixiv-web-next/_next/static/chunks/40783-*.js`，模块 74004），逐字摘录（压缩后原文，`qs.stringify` = form-urlencoded）：
+
+```js
+// 插画：POST /rpc/post_comment.php
+{type:"comment",illust_id:`${t}`,author_user_id:`${n}`,comment:a, ...(i!==undefined?{parent_id:`${i}`}:{})}
+// 小说：POST /novel/rpc/post_comment.php
+{type:"comment",novel_id:`${t}`,author_user_id:`${n}`,comment:a, ...(i!==undefined?{parent_id:`${i}`}:{})}
+// 表情评论（同两端点，type=stamp，带 stamp_id，无 comment）
+// 删除：POST /rpc_delete_comment.php | /novel/rpc_delete_comment.php
+{ i_id: t, del_id: n }
+// 集合（collection）评论另有 /ajax/comments/collection/post|delete，本轮不接入
+```
+
+即：小说与插画仅**路径前缀与 id 键名**不同；回复统一用 `parent_id`（根评论不传该字段）；删除两端点参数同形。
+
+### 14.5 未验证项（如实记录）
+
+- 小说评论的真实请求/响应未在线实测（账号无小说作品），仅由前端 bundle 反查确认参数形状；`PIXIV_LIVE_WRITE=1` 的在线用例覆盖插画路径的发→回复→删除往返。
+- 未实测 `parent_id` 指向「某条回复（二级）」时的服务端归位语义（本轮只按根评论 id 回复），故前端回复入口只挂在根评论上。
+- 未实测超长 / 敏感词 / 频率限制时的错误信封文案（`error:true` 走既有 `extract_ajax_body` 通道）。
+- 未接入表情贴图评论（`type=stamp`）与集合评论端点。

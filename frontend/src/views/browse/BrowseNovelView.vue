@@ -541,7 +541,7 @@ function openInPixiv(): void {
               @select="goRelated"
             />
           </template>
-          <CommentsSection v-else kind="novel" :id="id" />
+          <CommentsSection v-else kind="novel" :id="id" :author-id="item?.author_id ?? 0" />
         </section>
       </div>
     </div>

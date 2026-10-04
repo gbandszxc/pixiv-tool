@@ -1,6 +1,9 @@
 //! 写端点在线实测：add → 校验 → delete 往返（默认跳过）。
 //!
-//! 运行门槛（双重保险，防止误改真实收藏）：
+//! 覆盖：收藏 add/delete（插画 / 小说）、关注 / 取关、评论 add（根评论 + 回复）
+//! → delete 往返。
+//!
+//! 运行门槛（双重保险，防止误改真实数据）：
 //! 1. 用例 `#[ignore]`，只在 `./dev.ps1 test-live` 下被收集；
 //! 2. 还必须显式设置环境变量 `PIXIV_LIVE_WRITE=1`，否则打印跳过说明后返回。
 //!
@@ -267,5 +270,157 @@ async fn live_bookmark_add_remove_novel_roundtrip() {
     assert!(
         restored.get("bookmarkState").is_none(),
         "删除后 bookmarkState 应消失（收藏已还原）"
+    );
+}
+
+/// 本人作品列表首件插画的 id（评论写用例只在本人作品上留痕并清理）。
+async fn pick_own_illust(uid: i64) -> i64 {
+    let api = common::live_api();
+    let works = api
+        .get_user_works(uid, "illust", 1)
+        .await
+        .unwrap_or_else(|e| panic!("本人作品列表请求失败（评论写用例取样）: {e}"));
+    common::assert_list_envelope(&works, "本人插画")
+        .first()
+        .map(common::id_of)
+        .filter(|id| *id > 0)
+        .unwrap_or_else(|| panic!("本人作品列表为空，无法执行评论写用例（uid {uid}）"))
+}
+
+/// 评论列表信封里的 id 集合（契约 `{comments:[{id,…}], next?}`）。
+fn comment_ids(listing: &Value) -> Vec<String> {
+    listing["comments"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|c| c["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 评论写路径往返：在**本人作品**上发根评论 → 回复该评论 → 校验可见 →
+/// 无论成败都删除还原（先删回复再删根评论），最后校验列表已消失。
+#[tokio::test]
+#[ignore = "需要真实登录态与网络，且需 PIXIV_LIVE_WRITE=1：./dev.ps1 test-live"]
+async fn live_comment_add_and_delete_roundtrip() {
+    if !write_enabled() {
+        skip_note("live_comment_add_and_delete_roundtrip");
+        return;
+    }
+    let api = common::live_api();
+    let uid = common::live_uid().await;
+    let work_id = pick_own_illust(uid).await;
+
+    // ① 根评论
+    let root = api
+        .post_comment(
+            "illust",
+            work_id,
+            uid,
+            "接口联调测试评论（随后自动删除）",
+            None,
+        )
+        .await;
+    let root_id = root
+        .as_ref()
+        .ok()
+        .and_then(|v| v.get("comment_id").and_then(Value::as_str))
+        .map(str::to_string);
+
+    // ② 回复该根评论（parent_id 分支）
+    let reply = match root_id.as_deref() {
+        Some(rid) => Some(
+            api.post_comment(
+                "illust",
+                work_id,
+                uid,
+                "接口联调测试回复（随后自动删除）",
+                Some(rid),
+            )
+            .await,
+        ),
+        None => None,
+    };
+    let reply_id = reply
+        .as_ref()
+        .and_then(|r| r.as_ref().ok())
+        .and_then(|v| v.get("comment_id").and_then(Value::as_str))
+        .map(str::to_string);
+
+    // ③ 删除前可见性取样（用于证明删除确有状态变化）
+    let before = match root_id.as_deref() {
+        Some(_) => Some(api.get_work_comments("illust", work_id, 0).await),
+        None => None,
+    };
+
+    // ④ 清理：先删回复（挂根评论之下），再删根评论
+    let del_reply = match reply_id.as_deref() {
+        Some(rid) => Some(api.comment_delete("illust", work_id, rid).await),
+        None => None,
+    };
+    let del_root = match root_id.as_deref() {
+        Some(rid) => Some(api.comment_delete("illust", work_id, rid).await),
+        None => None,
+    };
+
+    // ⑤ 删除后再取样
+    let after = match &del_root {
+        Some(Ok(_)) => Some(api.get_work_comments("illust", work_id, 0).await),
+        _ => None,
+    };
+
+    // ---- 全部断言（清理已完成，失败也不留下评论）----
+    let root_value = root.unwrap_or_else(|e| panic!("根评论发布失败（illust {work_id}）: {e}"));
+    let root_returned = root_value["comment_id"].as_str().unwrap_or("");
+    assert!(
+        !root_returned.is_empty(),
+        "根评论响应 comment_id 不应为空，实际: {root_value}"
+    );
+    assert_eq!(
+        root_value.get("parent_id"),
+        None,
+        "根评论响应不应带 parent_id（实测 null → 契约省略）"
+    );
+    assert!(
+        !root_value["user_name"].as_str().unwrap_or("").is_empty(),
+        "根评论响应应含 user_name，实际: {root_value}"
+    );
+
+    let reply_value = reply
+        .expect("未拿到根评论 id，未能验证回复分支")
+        .unwrap_or_else(|e| panic!("回复发布失败（illust {work_id}）: {e}"));
+    assert_eq!(
+        reply_value["parent_id"].as_str(),
+        Some(root_returned),
+        "回复响应 parent_id 应指向被回复的根评论"
+    );
+
+    let visible = comment_ids(
+        &before
+            .expect("未取样删除前评论列表")
+            .unwrap_or_else(|e| panic!("删除前评论列表请求失败（illust {work_id}）: {e}")),
+    );
+    assert!(
+        visible.contains(&root_returned.to_string()),
+        "删除前该评论应出现在列表首页（{visible:?}）"
+    );
+
+    del_reply
+        .expect("未尝试删除回复")
+        .unwrap_or_else(|e| panic!("回复删除失败（评论 {reply_id:?}）: {e}"));
+    del_root
+        .expect("未尝试删除根评论")
+        .unwrap_or_else(|e| panic!("根评论删除失败（评论 {root_returned}）: {e}"));
+
+    let remaining = comment_ids(
+        &after
+            .expect("删除后评论列表请求失败")
+            .unwrap_or_else(|e| panic!("删除后评论列表解析失败（illust {work_id}）: {e}")),
+    );
+    assert!(
+        !remaining.contains(&root_returned.to_string()),
+        "删除后该评论不应仍出现在列表（{remaining:?}）"
     );
 }

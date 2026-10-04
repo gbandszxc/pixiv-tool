@@ -622,6 +622,13 @@ export default {
       closed: "作者已关闭评论区",
       replyTo: "回复 {'@'}{name}",
       stampAlt: "表情贴图",
+      placeholder: "写下你的评论…",
+      replyPlaceholder: "回复 {'@'}{name}…",
+      reply: "回复",
+      submit: "发表",
+      replySubmit: "回复",
+      posting: "发送中…",
+      postFailed: "发表失败，请重试",
     },
     bookmark: {
       kindIllust: "插画·漫画",

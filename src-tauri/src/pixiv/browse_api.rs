@@ -358,6 +358,18 @@ pub struct BrowseComments {
     pub disabled: Option<bool>,
 }
 
+/// 发表评论 / 回复评论的响应（POST post_comment.php 的 body，两种形态同构）。
+#[derive(Debug, Clone, Serialize)]
+pub struct PublishedComment {
+    /// pixiv 评论 id（字符串原样；回复时作为 parent_id 回传）。
+    pub comment_id: String,
+    pub user_id: i64,
+    pub user_name: String,
+    /// 被回复的评论 id（根评论省略；实测根评论响应该字段为 null）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+}
+
 /// 小说系列详情 + 一批内容（游标分页）。
 #[derive(Debug, Clone, Serialize)]
 pub struct BrowseSeriesDetail {
@@ -1706,6 +1718,82 @@ fn parse_comments_replies(body: &Value, page: i64) -> BrowseComments {
 }
 
 // ----------------------------------------------------------------------
+// 评论写端点（发评论 / 回复 / 删除）form 构造与响应解析（纯函数）
+// ----------------------------------------------------------------------
+
+/// 评论正文字符上限（官方评论框 `maxlength=140`，2026-10-04 抓包实测）。
+pub const COMMENT_MAX_CHARS: usize = 140;
+
+/// 发评论请求（写操作，2026-10-04 Chrome 抓包实测）：
+/// - 插画 / 漫画（manga 同走 illust 端点）→ `POST /rpc/post_comment.php`，
+///   form `type=comment&illust_id={作品}&author_user_id={作品作者}&comment={正文}`；
+/// - 小说 → `POST /novel/rpc/post_comment.php`，form 同上，键为 `novel_id`；
+/// - 回复他人评论追加 `&parent_id={目标评论 id}`（根评论**不带**该字段）。
+/// `author_user_id` 是**作品作者**的用户 id（前端由作品详情 `user_id` 传入），
+/// 不是评论者自身 id。
+fn comment_add_request(
+    kind: &str,
+    id: i64,
+    author_id: i64,
+    comment: &str,
+    parent_id: Option<&str>,
+) -> Result<(&'static str, String), PixivError> {
+    let (path, id_key) = match kind {
+        "illust" | "manga" => ("/rpc/post_comment.php", "illust_id"),
+        "novel" => ("/novel/rpc/post_comment.php", "novel_id"),
+        other => return Err(PixivError::Client(format!("不支持的作品类型: {other}"))),
+    };
+    let mut form = format!(
+        "type=comment&{id_key}={id}&author_user_id={author_id}&comment={}",
+        percent_encode(comment)
+    );
+    if let Some(parent) = parent_id {
+        form.push_str(&format!("&parent_id={}", percent_encode(parent)));
+    }
+    Ok((path, form))
+}
+
+/// 删除评论请求（写操作，2026-10-04 Chrome 抓包实测）：
+/// form `i_id={作品 id}&del_id={评论 id}`；插画 / 漫画 →
+/// `/rpc_delete_comment.php`，小说 → `/novel/rpc_delete_comment.php`。
+/// 仅在线写用例发完即删（不留垃圾），未暴露 IPC 命令。
+fn comment_delete_request(
+    kind: &str,
+    id: i64,
+    comment_id: &str,
+) -> Result<(&'static str, String), PixivError> {
+    let path = match kind {
+        "illust" | "manga" => "/rpc_delete_comment.php",
+        "novel" => "/novel/rpc_delete_comment.php",
+        other => return Err(PixivError::Client(format!("不支持的作品类型: {other}"))),
+    };
+    Ok((
+        path,
+        format!("i_id={id}&del_id={}", percent_encode(comment_id)),
+    ))
+}
+
+/// 发评论响应 body → PublishedComment（comment_id 数字 / 字符串两形态）。
+/// 缺 comment_id 视为失败——不因 HTTP 200 就回显成功（对齐关注写操作）。
+fn parse_published_comment(body: &Value) -> Result<PublishedComment, PixivError> {
+    let comment_id = match body.get("comment_id") {
+        Some(Value::String(s)) if !s.is_empty() => s.clone(),
+        Some(Value::Number(n)) => n.to_string(),
+        _ => {
+            return Err(PixivError::Client(
+                "评论发布响应缺少评论 ID，请刷新后重试".into(),
+            ))
+        }
+    };
+    Ok(PublishedComment {
+        comment_id,
+        user_id: body.get("user_id").and_then(as_i64_loose).unwrap_or_default(),
+        user_name: str_field(body, "user_name").unwrap_or_default(),
+        parent_id: str_field(body, "parent_id"),
+    })
+}
+
+// ----------------------------------------------------------------------
 // 收藏（bookmark）parse（纯函数；端点实测 docs/research/pixiv-browse-api.md §11）
 // ----------------------------------------------------------------------
 
@@ -2467,6 +2555,89 @@ impl PixivApi {
             ))
             .await?;
         Ok(to_value(&parse_comments_replies(&body, page)))
+    }
+
+    /// 发表评论 / 回复评论（写操作，需主站 csrf token，与 street / 收藏写同源）。
+    /// `author_id` 是作品作者的用户 id；`parent_id` = 目标评论 id
+    /// （None = 根评论）。返回 `PublishedComment`。
+    /// token 失效自愈策略与收藏写一致（Auth/Client 失败后清缓存）。
+    pub async fn post_comment(
+        &self,
+        kind: &str,
+        id: i64,
+        author_id: i64,
+        comment: &str,
+        parent_id: Option<&str>,
+    ) -> Result<Value, PixivError> {
+        if id <= 0 || author_id <= 0 {
+            return Err(PixivError::Client("作品或作者 ID 无效".into()));
+        }
+        let comment = comment.trim();
+        if comment.is_empty() {
+            return Err(PixivError::Client("评论内容不能为空".into()));
+        }
+        if comment.chars().count() > COMMENT_MAX_CHARS {
+            return Err(PixivError::Client(format!(
+                "评论内容不能超过 {COMMENT_MAX_CHARS} 字"
+            )));
+        }
+        let parent_id = match parent_id {
+            Some(p) if p.trim().is_empty() => {
+                return Err(PixivError::Client("回复目标评论 ID 不能为空".into()))
+            }
+            Some(p) => Some(p.trim()),
+            None => None,
+        };
+        let (path, form) = comment_add_request(kind, id, author_id, comment, parent_id)?;
+        let client = self.client();
+        let token = web_csrf_token(client).await?;
+        match client.post_form(path, Some(&token), &form).await {
+            Ok(text) => {
+                let value: Value = serde_json::from_str(&text)
+                    .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
+                let body = super::client::extract_ajax_body(value)?;
+                Ok(to_value(&parse_published_comment(&body)?))
+            }
+            Err(err) => {
+                if matches!(err, PixivError::Auth | PixivError::Client(_)) {
+                    invalidate_web_csrf();
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// 删除评论（写操作）。**仅供在线写用例发完即删**（不留测试垃圾），
+    /// 未暴露 IPC 命令。
+    pub async fn comment_delete(
+        &self,
+        kind: &str,
+        id: i64,
+        comment_id: &str,
+    ) -> Result<Value, PixivError> {
+        if id <= 0 {
+            return Err(PixivError::Client("作品 ID 无效".into()));
+        }
+        let comment_id = comment_id.trim();
+        if comment_id.is_empty() {
+            return Err(PixivError::Client("评论 ID 不能为空".into()));
+        }
+        let (path, form) = comment_delete_request(kind, id, comment_id)?;
+        let client = self.client();
+        let token = web_csrf_token(client).await?;
+        match client.post_form(path, Some(&token), &form).await {
+            Ok(text) => {
+                let value: Value = serde_json::from_str(&text)
+                    .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
+                super::client::extract_ajax_body(value).map(|_| json!({"deleted": true}))
+            }
+            Err(err) => {
+                if matches!(err, PixivError::Auth | PixivError::Client(_)) {
+                    invalidate_web_csrf();
+                }
+                Err(err)
+            }
+        }
     }
 }
 
@@ -4433,5 +4604,91 @@ mod tests {
         assert!(!PixivError::Client("HTTP 418".into()).is_bad_request());
         assert!(!PixivError::Client("API error: 不正确的请求。".into()).is_bad_request());
         assert!(!PixivError::NotFound.is_bad_request());
+    }
+
+    #[test]
+    fn comment_add_request_shapes_and_encoding() {
+        let (path, form) =
+            comment_add_request("illust", 150446397, 117482194, "a&b=c 好", None).unwrap();
+        assert_eq!(path, "/rpc/post_comment.php");
+        assert_eq!(
+            form,
+            "type=comment&illust_id=150446397&author_user_id=117482194&comment=a%26b%3Dc%20%E5%A5%BD"
+        );
+        // 漫画同走 illust 端点；根评论不带 parent_id
+        assert_eq!(
+            comment_add_request("manga", 1, 2, "hi", None).unwrap(),
+            (
+                "/rpc/post_comment.php",
+                String::from("type=comment&illust_id=1&author_user_id=2&comment=hi")
+            )
+        );
+        // 小说走 /novel 前缀端点，键为 novel_id；回复追加 parent_id
+        assert_eq!(
+            comment_add_request("novel", 9, 8, "hi", Some("235373194")).unwrap(),
+            (
+                "/novel/rpc/post_comment.php",
+                String::from(
+                    "type=comment&novel_id=9&author_user_id=8&comment=hi&parent_id=235373194"
+                )
+            )
+        );
+        // 评论 kind 白名单之外的类型（ugoira）在构造阶段即拒绝
+        assert!(comment_add_request("ugoira", 1, 2, "x", None).is_err());
+    }
+
+    #[test]
+    fn comment_delete_request_shapes() {
+        assert_eq!(
+            comment_delete_request("illust", 150446397, "235373194").unwrap(),
+            (
+                "/rpc_delete_comment.php",
+                String::from("i_id=150446397&del_id=235373194")
+            )
+        );
+        assert_eq!(
+            comment_delete_request("manga", 1, "2").unwrap().0,
+            "/rpc_delete_comment.php"
+        );
+        assert_eq!(
+            comment_delete_request("novel", 1, "2").unwrap(),
+            (
+                "/novel/rpc_delete_comment.php",
+                String::from("i_id=1&del_id=2")
+            )
+        );
+        assert!(comment_delete_request("ugoira", 1, "2").is_err());
+    }
+
+    #[test]
+    fn parse_published_comment_reads_body_and_requires_id() {
+        let posted = parse_published_comment(&json!({
+            "comment_id": "235373194",
+            "comment": "接口测试",
+            "user_id": "117482194",
+            "user_name": "wllmsb",
+            "stamp_id": null,
+            "parent_id": null,
+        }))
+        .unwrap();
+        assert_eq!(posted.comment_id, "235373194");
+        assert_eq!(posted.user_id, 117482194);
+        assert_eq!(posted.user_name, "wllmsb");
+        assert_eq!(posted.parent_id, None, "根评论 parent_id 为 null → 省略");
+        assert_eq!(
+            serde_json::to_value(&posted).unwrap(),
+            json!({"comment_id": "235373194", "user_id": 117482194, "user_name": "wllmsb"})
+        );
+        // 数字 id 形态 + 回复（parent_id 非空）
+        let reply = parse_published_comment(&json!({
+            "comment_id": 7,
+            "parent_id": "235373194",
+        }))
+        .unwrap();
+        assert_eq!(reply.comment_id, "7");
+        assert_eq!(reply.parent_id.as_deref(), Some("235373194"));
+        // 缺 comment_id / 空串 → 失败，不因 HTTP 200 回显成功
+        assert!(parse_published_comment(&json!({"user_name": "x"})).is_err());
+        assert!(parse_published_comment(&json!({"comment_id": ""})).is_err());
     }
 }

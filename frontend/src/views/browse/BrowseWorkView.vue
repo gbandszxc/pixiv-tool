@@ -387,7 +387,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
               @retry="loadRelated"
               @select="openRelated"
             />
-            <CommentsSection v-else :kind="kind" :id="id" />
+            <!-- CommentsSection 需要作品作者 id（发表评论的 author_user_id） -->
+            <CommentsSection v-else :kind="kind" :id="id" :author-id="item?.author_id ?? 0" />
           </div>
         </template>
       </aside>

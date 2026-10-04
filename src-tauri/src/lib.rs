@@ -147,6 +147,7 @@ pub fn run() {
             commands::browse_api_cmds::browse_illust_series,
             commands::browse_api_cmds::browse_work_comments,
             commands::browse_api_cmds::browse_comment_replies,
+            commands::browse_api_cmds::browse_comment_add,
             // 收藏（bookmark-ui-v1 契约 v3.1）
             commands::browse_api_cmds::browse_bookmark_list,
             commands::browse_api_cmds::browse_bookmark_tags,

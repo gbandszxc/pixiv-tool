@@ -622,6 +622,13 @@ export default {
       closed: "The author has disabled comments",
       replyTo: "Reply {'@'}{name}",
       stampAlt: "Stamp",
+      placeholder: "Write a comment…",
+      replyPlaceholder: "Reply to {'@'}{name}…",
+      reply: "Reply",
+      submit: "Post",
+      replySubmit: "Reply",
+      posting: "Sending…",
+      postFailed: "Failed to post, please retry",
     },
     bookmark: {
       kindIllust: "Illustrations & Manga",

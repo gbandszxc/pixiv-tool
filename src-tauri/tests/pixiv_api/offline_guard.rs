@@ -6,7 +6,7 @@
 //!
 //! 不经 GUI / Tauri 运行时，直接调用 `*_impl`（temp_state 模式复制自
 //! tests/smoke_commands.rs，避免跨测试文件共享辅助函数）：
-//! 1. 未登录（隔离空 cookie store）时全部 13 个命令以合法参数调用，
+//! 1. 未登录（隔离空 cookie store）时全部浏览命令以合法参数调用，
 //!    统一被登录守卫拦截，文案逐字等于 `NOT_LOGGED_IN`（含「登录」关键字，
 //!    前端据此弹登录窗）——同时即「合法参数 → 登录守卫」验证；
 //! 2. 非法参数在登录守卫**之前**被粗校验拒绝，返回参数专属中文错误
@@ -22,7 +22,8 @@
 use pixiv_tool_lib::commands::browse_api_cmds::{
     NOT_LOGGED_IN, browse_bookmark_add_impl, browse_bookmark_list_impl,
     browse_bookmark_remove_impl, browse_bookmark_tags_impl, browse_channel_impl,
-    browse_comment_replies_impl, browse_discover_impl, browse_follow_latest_impl,
+    browse_comment_add_impl, browse_comment_replies_impl, browse_discover_impl,
+    browse_follow_latest_impl,
     browse_home_feed_impl, browse_illust_series_impl, browse_novel_series_impl,
     browse_ranking_impl, browse_related_impl, browse_search_impl, browse_user_follow_impl,
     browse_user_profile_impl, browse_user_works_impl, browse_watchlist_impl,
@@ -95,7 +96,70 @@ async fn user_follow_validates_before_login_and_requires_login() {
     cleanup(&dir);
 }
 
-/// ①+③：未登录下全部 13 个命令（合法参数）统一被登录守卫拦截，文案逐字一致。
+/// 评论写（comment-add）参数粗校验：非法参数在登录守卫之前被拒，
+/// 合法参数（含 140 字边界、回复 parent_id）落到登录守卫。
+#[tokio::test]
+async fn comment_add_validates_before_login_and_requires_login() {
+    let (state, dir) = temp_state("comment-add");
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 150446397, 117482194, "你好", None)
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    // 空 / 全空白正文
+    for text in ["", "   ", "\n\t"] {
+        assert_eq!(
+            browse_comment_add_impl(&state, "illust", 1, 1, text, None)
+                .await
+                .unwrap_err(),
+            "评论内容不能为空"
+        );
+    }
+    // 超长（141 字）拒绝；恰好 140 字合法（落在登录守卫）
+    let too_long = "字".repeat(141);
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 1, 1, &too_long, None)
+            .await
+            .unwrap_err(),
+        "评论内容不能超过 140 字"
+    );
+    let exact = format!("{}精准", "字".repeat(138));
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 1, 1, &exact, None)
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    // 非法 kind / 非正 id / 空 parent_id
+    assert_eq!(
+        browse_comment_add_impl(&state, "ugoira", 1, 1, "x", None)
+            .await
+            .unwrap_err(),
+        "不支持的作品类型: ugoira"
+    );
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 0, 1, "x", None)
+            .await
+            .unwrap_err(),
+        "作品 ID 必须为正整数"
+    );
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 1, 0, "x", None)
+            .await
+            .unwrap_err(),
+        "作者 ID 必须为正整数"
+    );
+    assert_eq!(
+        browse_comment_add_impl(&state, "illust", 1, 1, "x", Some("  "))
+            .await
+            .unwrap_err(),
+        "回复目标评论 ID 不能为空"
+    );
+    cleanup(&dir);
+}
+
+/// ①+③：未登录下全部浏览命令（合法参数）统一被登录守卫拦截，文案逐字一致。
 #[tokio::test]
 async fn not_logged_in_blocks_all_commands_with_login_error() {
     let (state, dir) = temp_state("nologin");
@@ -182,6 +246,19 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
     );
     assert_eq!(
         browse_comment_replies_impl(&state, "novel", "900000001", 1)
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    // 评论写（comment-add）：根评论与回复（parent_id）合法参数 → 统一登录守卫
+    assert_eq!(
+        browse_comment_add_impl(&state, "manga", 9000021, 117482194, "测试评论", None)
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    assert_eq!(
+        browse_comment_add_impl(&state, "novel", 9000012, 28640, "回信", Some("900000001"))
             .await
             .unwrap_err(),
         NOT_LOGGED_IN

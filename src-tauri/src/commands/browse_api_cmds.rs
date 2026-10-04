@@ -1,13 +1,14 @@
-//! 浏览命令层（browse-ui-v1，IPC 契约 v2，13 个命令；bookmark-ui-v1 契约
-//! v3.1 追加 4 个收藏命令，watchlist-ui-v1 追加 1 个追更列表命令，
-//! series-episode-ui 追加 1 个系列分集命令，共 19 个）。
+//! 浏览命令层（browse-ui-v1 起的 IPC 契约：浏览端点 18 个 + 收藏 4 个
+//! = 22 个命令）。浏览端点含 v2.1 评论读取 2 个（work_comments /
+//! comment_replies）、评论写 1 个（comment_add）、关注写 1 个（user_follow）；
+//! 收藏 4 个见 bookmark-ui-v1 契约 v3.1。
 //!
 //! 形状约定与 history_cmds 一致：`#[tauri::command]` 薄壳 +
 //! `*_impl(&AppState, ...)` 可离线调用，业务失败统一 `Err(中文文案)`。
 //!
 //! `*_impl` 的调用顺序（离线冒烟 tests/pixiv_api/offline_guard.rs 对齐此顺序）：
 //! 1. 参数粗校验（空 word / page<1 / id 数字域 / offset<0 / 空 comment_id /
-//!    kind-mode-date 白名单）
+//!    空或超长评论正文 / kind-mode-date 白名单）
 //!    → 可读中文 Err。放在登录守卫之前，未登录也能先暴露参数错误；
 //! 2. [`build_browse_api`]：读登录态 → PHPSESSID 为空即
 //!    [`NOT_LOGGED_IN`]（前端 browse IPC 层以「登录」关键字识别并弹登录窗，
@@ -174,6 +175,31 @@ fn validate_user_works_kind(kind: &str) -> Result<(), String> {
 fn validate_comment_kind(kind: &str) -> Result<(), String> {
     if !matches!(kind, "illust" | "manga" | "novel") {
         return Err(format!("不支持的作品类型: {kind}"));
+    }
+    Ok(())
+}
+
+/// 评论正文粗校验（api 层同规则）：trim 后非空，且不超过 140 字
+/// （官方评论框 maxlength=140）。
+fn validate_comment_text(comment: &str) -> Result<(), String> {
+    let text = comment.trim();
+    if text.is_empty() {
+        return Err("评论内容不能为空".to_string());
+    }
+    if text.chars().count() > crate::pixiv::browse_api::COMMENT_MAX_CHARS {
+        return Err(format!(
+            "评论内容不能超过 {} 字",
+            crate::pixiv::browse_api::COMMENT_MAX_CHARS
+        ));
+    }
+    Ok(())
+}
+
+/// 回复目标评论 ID 粗校验：给出时 trim 后必须非空（评论 ID 为 pixiv 数字串，
+/// 但沿用列表返回值原样透传，不做数字域判断）。
+fn validate_comment_parent(parent_id: Option<&str>) -> Result<(), String> {
+    if parent_id.is_some_and(|p| p.trim().is_empty()) {
+        return Err("回复目标评论 ID 不能为空".to_string());
     }
     Ok(())
 }
@@ -624,6 +650,41 @@ pub async fn browse_comment_replies_impl(
     validate_page(page)?;
     build_browse_api(state)?
         .get_comment_replies(kind, comment_id, page)
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// 发表评论 / 回复评论（写操作，需登录 + 主站 csrf token）。
+/// `parent_id` 给出即回复该评论，省略为根评论；`author_id` 是**作品作者**的
+/// 用户 id（前端由作品详情 `user_id` 传入）。返回
+/// `{ comment_id, user_id, user_name, parent_id? }`。
+#[tauri::command]
+pub async fn browse_comment_add(
+    state: State<'_, AppState>,
+    kind: String,
+    id: i64,
+    author_id: i64,
+    comment: String,
+    parent_id: Option<String>,
+) -> Result<Value, String> {
+    browse_comment_add_impl(&state, &kind, id, author_id, &comment, parent_id.as_deref()).await
+}
+
+pub async fn browse_comment_add_impl(
+    state: &AppState,
+    kind: &str,
+    id: i64,
+    author_id: i64,
+    comment: &str,
+    parent_id: Option<&str>,
+) -> Result<Value, String> {
+    validate_comment_kind(kind)?;
+    validate_id(id, "作品")?;
+    validate_id(author_id, "作者")?;
+    validate_comment_text(comment)?;
+    validate_comment_parent(parent_id)?;
+    build_browse_api(state)?
+        .post_comment(kind, id, author_id, comment, parent_id)
         .await
         .map_err(|err| err.to_string())
 }
