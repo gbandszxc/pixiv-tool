@@ -622,7 +622,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ### 6.3 主题
 
-小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式混入 80% ink 保持对比度），底部模式切换 secondary-container/on-secondary-container，状态 ink-muted、错误 error。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；窄窗口自然换行，详见 DESIGN.md 与结构化伴随视图。
+小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式混入 80% ink 保持对比度），原分页底栏的 SVG 翻译图标点击弹出状态、翻译/重译和三种显示选项，默认不额外占用正文高度；模式切换 secondary-container/on-secondary-container，状态 ink-muted、错误 error。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠；弹层外部点击/Esc 关闭与焦点返回，详见 DESIGN.md 与结构化伴随视图。
 
 所有纵向数据滚动区共用 PgUp/PgDn 输入规则（§6.1.1），优先鼠标区域、回退键盘焦点，保留控件原生按键与模态隔离；全屏胶卷与图片区分别滚屏 / 切作品页。样式及交互规则与 DESIGN.md / .impeccable/design.json 保持一致。
 
@@ -801,7 +801,9 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ## 7. IPC 命令设计（invoke）
 
-小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/高级参数校验、锁定译名与别名冲突、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用、第二页共享设定和 Pass 2 失败保留 Pass 1/旧译文。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、JSON 校验、Key 保存/清除/取消后的草稿清理，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
+小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/高级参数校验、锁定译名与别名冲突、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用、第二页共享设定和 Pass 2 失败保留 Pass 1/旧译文。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖 SVG 入口默认收起、弹层焦点/Esc/外部关闭、三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、JSON 校验、Key 保存/清除/取消后的草稿清理，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
+
+显式模型在线验收：忽略测试 `translation::tests::live_two_page_translation` 仅在用户授权后运行；进程环境提供 `PIXIV_TRANSLATION_TEST_KEY`、`PIXIV_TRANSLATION_TEST_URL`、`PIXIV_TRANSLATION_TEST_MODEL`，固定 `reasoning_effort=low`。调用生产两轮管线翻译两个短页（四次请求），检查人物锁定译名、文风、译文对齐与从文件恢复的共享设定，结束清理临时记录；不改应用配置或系统凭据。最近实测见 [在线验收记录](research/novel-translation-live.md)。
 
 命令实现于 `src-tauri/src/commands/`，返回体沿用旧 HTTP 响应形状（snake_case）。
 业务错误（旧 200+`{error}` 风格）在返回值内；校验类错误（旧 4xx/5xx detail）

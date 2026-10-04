@@ -257,6 +257,7 @@ export default {
     filterNovel: "Novels",
   },
   translation: {
+    menu: "Novel translation",
     settingsHint: "Translate one page into Simplified Chinese: prepare the shared story bible, then translate and proofread. Clicking Translate sends this page, metadata, and up to 600 characters on either side to your configured service, usually in two requests.",
     apiUrl: "API URL",
     urlHint: "An API base (such as /v1) or full /chat/completions endpoint. HTTPS for remote services; HTTP is allowed for local models.",

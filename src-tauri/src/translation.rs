@@ -535,6 +535,103 @@ async fn translate_book(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 显式运行的付费服务验收；凭据只从进程环境读取，不改应用设置或系统凭据。
+    #[tokio::test]
+    #[ignore = "需要显式授权访问模型服务和进程环境中的测试 Key"]
+    async fn live_two_page_translation() {
+        let key = std::env::var("PIXIV_TRANSLATION_TEST_KEY").expect("缺少测试 Key 环境变量");
+        let settings = Settings {
+            translation_api_url: std::env::var("PIXIV_TRANSLATION_TEST_URL")
+                .expect("缺少测试 URL 环境变量"),
+            translation_model: std::env::var("PIXIV_TRANSLATION_TEST_MODEL")
+                .expect("缺少测试模型环境变量"),
+            translation_extra: json!({"reasoning_effort":"low"}),
+            ..Settings::default()
+        };
+        validate_settings(&settings).unwrap();
+        let client = TranslationClient {
+            http: wreq::Client::builder()
+                .timeout(Duration::from_secs(180))
+                .redirect(wreq::redirect::Policy::none())
+                .build()
+                .unwrap(),
+            url: completion_url(&settings.translation_api_url).unwrap(),
+            key: key.clone(),
+            settings: &settings,
+        };
+        let novel = NovelInput {
+            novel_id: 42,
+            title: "バーでの再会（翻訳検証）".into(),
+            tags: vec!["小説".into(), "百合".into()],
+            description: "エリとレイナはバーで出会った夫婦。店主と話す短い場面。".into(),
+            content: "[chapter:再会]\nエリとレイナは、このバーで出会った夫婦である。\n女店主は二人のもとに詰め寄り、理由を問いただした。[newpage]エリは妻のレイナを見た。\n「レイナ、帰ろう」\n彼女はうなずき、エリの手を握った。".into(),
+        };
+        let all_pages = pages(&novel).unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("pixiv-translation-live-{}", uuid::Uuid::new_v4()));
+        let path = book_path(&dir, &novel);
+        let progress = Channel::<String>::new(|_| {
+            println!("翻译阶段推进");
+            Ok(())
+        });
+        let started = std::time::Instant::now();
+        let result: Result<(), String> = async {
+            let mut book = TranslationBook::default();
+            translate_book(&client, &novel, &all_pages, 1, &path, &mut book, &progress).await?;
+            let first_bible = book.bible.clone();
+            // 第二页从落盘记录恢复，验证跨页以及重新打开小说后的设定沿用。
+            book = read_book(&path)?;
+            translate_book(&client, &novel, &all_pages, 2, &path, &mut book, &progress).await?;
+            assert_eq!(book.bible.style, first_bible.style);
+            for term in &first_bible.terms {
+                let saved = book
+                    .bible
+                    .terms
+                    .iter()
+                    .find(|item| item.source == term.source)
+                    .unwrap();
+                assert_eq!(saved.translation, term.translation, "跨页锁定译名");
+            }
+            for name in ["エリ", "レイナ"] {
+                let term = book
+                    .bible
+                    .terms
+                    .iter()
+                    .find(|term| {
+                        term.source == name || term.aliases.iter().any(|alias| alias == name)
+                    })
+                    .expect("人物进入共享设定集");
+                for page in 1..=2 {
+                    assert!(
+                        book.pages[&page]
+                            .iter()
+                            .any(|line| line.text.contains(&term.translation)),
+                        "译文使用锁定人物名"
+                    );
+                }
+            }
+            assert_eq!(read_book(&path)?.pages.len(), 2);
+            for (page, lines) in &book.pages {
+                println!("第 {page} 页：");
+                for line in lines {
+                    println!("{}：{}", line.line, line.text.replace(&key, "[REDACTED]"));
+                }
+            }
+            println!(
+                "两页四轮请求通过，耗时 {} 秒，reasoning_effort=low",
+                started.elapsed().as_secs()
+            );
+            Ok(())
+        }
+        .await;
+        // 无论请求是否成功，均清理测试设定集与译文。
+        if dir.exists() {
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+        result.expect("真实模型翻译验收失败");
+    }
+
     #[test]
     fn validates_endpoint_and_advanced_options() {
         assert_eq!(

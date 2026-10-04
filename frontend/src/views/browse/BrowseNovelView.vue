@@ -15,6 +15,7 @@ import AppPagination from "../../components/common/AppPagination.vue";
 import NovelContent from "../../components/browse/NovelContent.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
 import NovelBgPicker from "../../components/browse/NovelBgPicker.vue";
+import NovelTranslationMenu from "../../components/browse/NovelTranslationMenu.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import {
@@ -532,13 +533,6 @@ function openInPixiv(): void {
     </div>
 
     <!-- 翻页器：flex 尾行贴窗口下边（AppPagination reader 变体）；#leading = 字号缩放控件；键盘 ←/→ 翻页仍由本视图层监听 -->
-    <div v-if="hasContent" class="translation-toolbar">
-      <md-outlined-button :disabled="translating || loading" :aria-busy="translating" @click="translatePage">{{ t(currentTranslation.length ? 'translation.retranslate' : 'translation.button') }}</md-outlined-button>
-      <div class="translation-modes" role="group" :aria-label="t('translation.displayMode')">
-        <button v-for="mode in (['original', 'translated', 'bilingual'] as const)" :key="mode" type="button" class="translation-mode" :aria-pressed="translationMode === mode" :class="{ selected: translationMode === mode }" @click="translationMode = mode">{{ t(`translation.${mode}`) }}</button>
-      </div>
-      <span class="translation-status" :class="{ 'is-error': !translating && translationErrorPage === page && translationError }" role="status" aria-live="polite">{{ translationStatus }}</span>
-    </div>
     <AppPagination
       v-if="hasContent"
       variant="reader"
@@ -576,6 +570,15 @@ function openInPixiv(): void {
           </md-icon-button>
           <!-- 阅读背景色块按钮：圆形回显当前色，点击向上弹出居中一排气泡，选色立即应用 -->
           <NovelBgPicker :model-value="readBg" @update:model-value="setReadBg" />
+          <NovelTranslationMenu
+            v-model="translationMode"
+            :status="translationStatus"
+            :error="Boolean(!translating && translationErrorPage === page && translationError)"
+            :busy="translating"
+            :disabled="loading"
+            :translated="currentTranslation.length > 0"
+            @translate="translatePage"
+          />
         </div>
       </template>
       <!-- 底栏右侧阅读进度：md-slider 拉条（拖动快速定位）+ 右侧百分比回显 -->
@@ -598,40 +601,14 @@ function openInPixiv(): void {
 </template>
 
 <style scoped>
-.translation-toolbar {
-  display: flex;
-  flex: none;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  padding: var(--space-xs) var(--space-lg);
-  background: var(--md-sys-color-surface);
-  border-top: 1px solid var(--md-sys-color-outline-variant);
-}
-.translation-modes { display: flex; flex-wrap: wrap; gap: var(--space-xxs); }
-.translation-mode {
-  min-height: 40px;
-  padding: var(--space-sm) var(--space-md);
-  border: 0;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  cursor: pointer;
-}
-.translation-mode:hover:not(.selected) { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
-.translation-mode:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
-.translation-modes .selected {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
-}
-.translation-status { flex: 1; min-width: 0; color: var(--ink-muted); font-size: 12px; overflow-wrap: anywhere; }
-.translation-status.is-error { color: var(--md-sys-color-error); }
 .novel-view[class*="read-bg-"] :deep(.translated-text) {
   color: color-mix(in srgb, var(--md-sys-color-primary) 20%, var(--ink));
 }
-.novel-view[class*="read-bg-"] .translation-toolbar md-outlined-button {
+.novel-view[class*="read-bg-"] :deep(.translation-popover md-outlined-button) {
   --md-outlined-button-label-text-color: color-mix(in srgb, var(--md-sys-color-primary) 20%, var(--ink));
+}
+.novel-view[class*="read-bg-"] :deep(.translation-trigger.active) {
+  --md-icon-button-icon-color: color-mix(in srgb, var(--md-sys-color-primary) 20%, var(--ink));
 }
 /* 满血宽度：抵消 .app-content 的 24px 内边距（640px 下为 16px），让顶栏/翻页器整行贴边。
    固定高度 flex 列：顶栏 / 滚动层 / 翻页器三行铺满视口，负 margin 抵消后顶栏贴窗口上边、
@@ -1089,11 +1066,26 @@ function openInPixiv(): void {
   text-align: right;
 }
 
-@media (max-width: 640px) {
-  .read-progress md-slider {
-    width: 140px;
-    min-width: 140px;
+@media (max-width: 800px) {
+  :deep(.app-pagination.is-reader) {
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: var(--space-sm);
   }
+  :deep(.reader-trailing) { width: 100%; }
+  .read-progress { width: 100%; }
+  .read-progress md-slider {
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    max-width: 140px;
+  }
+}
+
+@media (max-width: 600px) {
+  :deep(.app-pagination.is-reader) { grid-template-columns: auto minmax(0, 1fr); }
+  :deep(.reader-leading) { grid-column: 1 / -1; }
+  :deep(.reader-inner) { grid-column: 1; grid-row: 2; }
+  :deep(.reader-trailing) { grid-column: 2; grid-row: 2; }
 }
 
 .bar-icon {

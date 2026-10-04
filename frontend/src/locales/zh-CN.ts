@@ -258,6 +258,7 @@ export default {
     filterNovel: "小说",
   },
   translation: {
+    menu: "小说翻译",
     settingsHint: "按页翻译为简体中文，先整理共享设定集，再翻译并校对。点击翻译会将本页、作品元信息及前后各最多 600 字发送至你配置的服务，每页通常请求两次。",
     apiUrl: "API URL",
     urlHint: "支持 API 基址（如 /v1）或完整 /chat/completions 地址；远程服务使用 HTTPS，本机模型可使用 HTTP。",

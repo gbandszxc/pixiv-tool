@@ -53,6 +53,16 @@ async function run() {
   app.mount(host); await settle(); await settle();
   const click = async (label: string) => { const element = [...host.querySelectorAll<HTMLElement>(".translation-mode,md-outlined-button")].find(el => el.textContent?.trim() === label); assert(element, `找到按钮 ${label}`); element.click(); await settle(); };
   const selectPage = async (page: number) => { const select = host.querySelector<HTMLSelectElement>(".page-select"); assert(select, "分页存在"); select.value = String(page); select.dispatchEvent(new Event("change", { bubbles: true })); await settle(); };
+  const trigger = host.querySelector<HTMLElement>(".translation-trigger");
+  assert(trigger?.querySelector("svg") && !host.querySelector(".translation-popover"), "底栏 SVG 入口，初始不展开选项");
+  trigger.click(); await settle();
+  assert(document.activeElement === host.querySelector(".translation-popover"), "打开后焦点进入弹层");
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); await settle();
+  assert(!host.querySelector(".translation-popover"), "Esc 关闭弹层");
+  trigger.click(); await settle();
+  host.querySelector<HTMLElement>(".translation-backdrop")!.click(); await settle();
+  assert(!host.querySelector(".translation-popover"), "点击外部关闭弹层");
+  trigger.click(); await settle();
   assert(host.querySelector('[aria-pressed="true"]')?.textContent?.trim() === "双语", "默认双语");
   assert(host.querySelectorAll(".translated-text").length === 2, "恢复已存译文，包括标题");
   assert(!host.querySelector(".novel-content script") && host.querySelector(".translated-text")?.getAttribute("lang") === "zh-CN", "译文纯文本且语言明确");
@@ -63,7 +73,7 @@ async function run() {
   await selectPage(2); assert(host.querySelector(".translation-status")?.textContent?.includes("尚未翻译"), "未译页不显示旧译文");
   await click("翻译本页");
   assert(requestedPage === 2 && !requestedForce && calls === 1, "只请求当前页且非重译");
-  assert(host.querySelector(".translation-toolbar md-outlined-button")?.hasAttribute("disabled"), "翻译时禁用按钮");
+  assert(host.querySelector(".translation-popover md-outlined-button")?.hasAttribute("disabled"), "翻译时禁用按钮");
   await selectPage(1);
   resolvePage([{ line: 0, text: "她微笑了。" }]); await settle();
   assert(!host.querySelector(".novel-content")?.textContent?.includes("她微笑了。"), "异步结果不串到另一页");
@@ -99,6 +109,6 @@ async function run() {
   document.querySelector<HTMLButtonElement>("#preview-dark")!.onclick = () => document.documentElement.classList.add("dark");
   document.querySelector<HTMLButtonElement>("#preview-light")!.onclick = () => document.documentElement.classList.remove("dark");
   document.querySelector<HTMLElement>("#preview-controls")!.hidden = false;
-  document.querySelector("#translation-result")!.textContent = "PASS：模式、图片、跨页异步、错误重试、缓存、设置 JSON 与凭据草稿";
+  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、缓存、设置 JSON 与凭据草稿";
 }
 run().catch(error => { document.querySelector("#translation-result")!.textContent = `FAIL: ${error.message}`; console.error(error); });
