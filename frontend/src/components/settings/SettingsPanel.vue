@@ -56,45 +56,67 @@
     </template>
 
     <template v-else-if="section === 'translation'">
-      <div class="m3-field">
-        <div class="field-label"><label for="translation-url">{{ t('translation.apiUrl') }}</label><HelpTooltip :label="t('translation.apiUrl')" :text="`${t('translation.settingsHint')}\n\n${t('translation.urlHint')}`" /></div>
-        <md-outlined-text-field id="translation-url" :value="form.translation_api_url" placeholder="https://api.openai.com/v1" @input="form.translation_api_url = ($event.target as HTMLInputElement).value" />
-      </div>
-      <div class="m3-field">
-        <div class="field-label"><label for="translation-key">API Key</label><HelpTooltip label="API Key" :text="t('translation.keyHint')" /></div>
-        <md-outlined-text-field id="translation-key" type="password" autocomplete="new-password" :value="translationKey" :placeholder="t(form.translation_key_configured ? 'translation.keySaved' : 'translation.keyPlaceholder')" @input="translationKey = ($event.target as HTMLInputElement).value; clearTranslationKey = false" />
-        <span v-if="form.translation_key_error" class="field-hint credential-error" role="alert">{{ form.translation_key_error }}</span>
-        <md-text-button v-if="form.translation_key_configured" :disabled="clearTranslationKey" @click="clearTranslationKey = true; translationKey = ''">{{ t(clearTranslationKey ? 'translation.keyWillClear' : 'translation.clearKey') }}</md-text-button>
-      </div>
-      <div class="m3-field">
-        <div class="field-label"><label for="translation-model">{{ t('translation.model') }}</label><HelpTooltip :label="t('translation.model')" :text="t('translation.probeHint')" /></div>
-        <div class="m3-row translation-model-row">
-          <md-outlined-select v-if="availableModels.length" id="translation-model" class="translation-model-control" :aria-label="t('translation.model')" :value="form.translation_model" @change="form.translation_model = ($event.target as HTMLSelectElement).value">
-            <md-select-option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</md-select-option>
+      <fieldset class="m3-field settings-fieldset translation-group" role="group" aria-labelledby="translation-group-service">
+        <div id="translation-group-service" class="translation-legend">{{ t("translation.groupService") }}</div>
+        <div class="m3-field">
+          <div class="field-label"><label for="translation-format">{{ t('translation.apiFormat') }}</label><HelpTooltip :label="t('translation.apiFormat')" :text="t('translation.apiFormatHint')" /></div>
+          <md-outlined-select id="translation-format" :value="apiFormat" @change="changeApiFormat(($event.target as HTMLSelectElement).value)">
+            <md-select-option v-for="format in API_FORMATS" :key="format" :value="format">{{ t(`translation.apiFormats.${format}`) }}</md-select-option>
           </md-outlined-select>
-          <md-outlined-text-field v-else id="translation-model" class="translation-model-control" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
-          <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe" @click="runProbe('models')">{{ t(probeBusy === 'models' ? 'translation.fetchingModels' : 'translation.fetchModels') }}</md-outlined-button>
         </div>
-        <md-text-button v-if="availableModels.length" @click="useManualModel">{{ t('translation.manualModel') }}</md-text-button>
-        <span v-if="modelsError" class="field-hint state-error" role="alert">{{ modelsError }}</span>
-      </div>
-      <div class="m3-field">
-        <div class="field-label"><label for="translation-target-language">{{ t('translation.targetLanguage') }}</label><HelpTooltip :label="t('translation.targetLanguage')" :text="t('translation.targetLanguageHint')" /></div>
-        <md-outlined-select id="translation-target-language" :value="canonicalTargetLanguage" @change="form.translation_target_language = ($event.target as HTMLSelectElement).value">
-          <md-select-option value="">{{ t('translation.followUiLanguage', { language: t(`settings.languages.${locale}`) }) }}</md-select-option>
-          <md-select-option v-for="code in TARGET_LANGUAGE_CODES" :key="code" :value="code">{{ t(`translation.targetLanguages.${code}`) }}</md-select-option>
-        </md-outlined-select>
-      </div>
-      <div class="m3-field">
-        <div class="field-label"><label for="translation-json">{{ t('translation.advanced') }}</label><HelpTooltip :label="t('translation.advanced')" :text="t('translation.jsonHint')" /></div>
-        <md-outlined-text-field id="translation-json" type="textarea" rows="5" :value="translationJson" :error="Boolean(translationJsonError)" :error-text="translationJsonError" @input="translationJson = ($event.target as HTMLTextAreaElement).value; translationJsonError = ''" />
-      </div>
-      <div class="m3-row" :aria-busy="Boolean(probeBusy)">
-        <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe || !form.translation_model.trim()" @click="runProbe('test')">{{ t(probeBusy === 'test' ? 'translation.testing' : 'translation.testService') }}</md-outlined-button>
-        <span v-if="probeBusy === 'models'" class="field-hint" role="status">{{ t('translation.fetchingModels') }}</span>
-        <span v-else-if="probeBusy === 'test'" class="field-hint" role="status">{{ t('translation.testing') }}</span>
-        <span v-else-if="testResult" class="field-hint" :class="testFailed ? 'state-error' : 'state-success'" :role="testFailed ? 'alert' : 'status'">{{ testResult }}</span>
-      </div>
+        <div class="m3-field">
+          <div class="field-label"><label for="translation-url">{{ t('translation.apiUrl') }}</label><HelpTooltip :label="t('translation.apiUrl')" :text="`${t('translation.settingsHint')}\n\n${t('translation.urlHint', { endpoint: apiFormatEndpoint })}`" /></div>
+          <md-outlined-text-field id="translation-url" :value="form.translation_api_url" :placeholder="apiFormatPlaceholder" @input="form.translation_api_url = ($event.target as HTMLInputElement).value" />
+        </div>
+        <div class="m3-field">
+          <div class="field-label">
+            <label for="translation-key">API Key</label>
+            <HelpTooltip label="API Key" :text="t('translation.keyHint')" />
+            <span v-if="form.translation_key_configured" class="translation-key-chip" :class="{ 'is-clearing': clearTranslationKey }">{{ t(clearTranslationKey ? 'translation.keyWillClear' : 'translation.keySavedChip') }}</span>
+          </div>
+          <div class="translation-key-row">
+            <md-outlined-text-field id="translation-key" type="password" autocomplete="new-password" :value="translationKey" :placeholder="t(form.translation_key_configured ? 'translation.keyPlaceholderKeep' : 'translation.keyPlaceholder')" @input="translationKey = ($event.target as HTMLInputElement).value; clearTranslationKey = false" />
+            <md-text-button v-if="form.translation_key_configured" class="translation-key-clear" :disabled="clearTranslationKey" @click="clearTranslationKey = true; translationKey = ''">{{ t('translation.clearKey') }}</md-text-button>
+          </div>
+          <span v-if="form.translation_key_error" class="field-hint credential-error" role="alert">{{ form.translation_key_error }}</span>
+        </div>
+      </fieldset>
+
+      <fieldset class="m3-field settings-fieldset translation-group" role="group" aria-labelledby="translation-group-model">
+        <div id="translation-group-model" class="translation-legend">{{ t("translation.groupModel") }}</div>
+        <div class="m3-field">
+          <div class="field-label"><label for="translation-model">{{ t('translation.model') }}</label><HelpTooltip :label="t('translation.model')" :text="t('translation.probeHint')" /></div>
+          <div class="m3-row translation-model-row">
+            <md-outlined-select v-if="availableModels.length" id="translation-model" class="translation-model-control" :aria-label="t('translation.model')" :value="form.translation_model" @change="form.translation_model = ($event.target as HTMLSelectElement).value">
+              <md-select-option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</md-select-option>
+            </md-outlined-select>
+            <md-outlined-text-field v-else id="translation-model" class="translation-model-control" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
+            <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe" @click="runProbe('models')">{{ t(probeBusy === 'models' ? 'translation.fetchingModels' : 'translation.fetchModels') }}</md-outlined-button>
+          </div>
+          <md-text-button v-if="availableModels.length" class="translation-manual-model" @click="useManualModel">{{ t('translation.manualModel') }}</md-text-button>
+          <span v-if="modelsError" class="field-hint state-error" role="alert">{{ modelsError }}</span>
+        </div>
+        <div class="m3-field">
+          <div class="field-label"><label for="translation-target-language">{{ t('translation.targetLanguage') }}</label><HelpTooltip :label="t('translation.targetLanguage')" :text="t('translation.targetLanguageHint')" /></div>
+          <md-outlined-select id="translation-target-language" :value="canonicalTargetLanguage" @change="form.translation_target_language = ($event.target as HTMLSelectElement).value">
+            <md-select-option value="">{{ t('translation.followUiLanguage', { language: t(`settings.languages.${locale}`) }) }}</md-select-option>
+            <md-select-option v-for="code in TARGET_LANGUAGE_CODES" :key="code" :value="code">{{ t(`translation.targetLanguages.${code}`) }}</md-select-option>
+          </md-outlined-select>
+        </div>
+      </fieldset>
+
+      <fieldset class="m3-field settings-fieldset translation-group" role="group" aria-labelledby="translation-group-advanced">
+        <div id="translation-group-advanced" class="translation-legend">{{ t("translation.groupAdvanced") }}</div>
+        <div class="m3-field">
+          <div class="field-label"><label for="translation-json">{{ t('translation.advanced') }}</label><HelpTooltip :label="t('translation.advanced')" :text="t('translation.jsonHint')" /></div>
+          <md-outlined-text-field id="translation-json" type="textarea" rows="5" :value="translationJson" :error="Boolean(translationJsonError)" :error-text="translationJsonError" @input="translationJson = ($event.target as HTMLTextAreaElement).value; translationJsonError = ''" />
+        </div>
+        <div class="translation-probe-row" :aria-busy="Boolean(probeBusy)">
+          <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe || !form.translation_model.trim()" @click="runProbe('test')">{{ t(probeBusy === 'test' ? 'translation.testing' : 'translation.testService') }}</md-outlined-button>
+          <span v-if="probeBusy === 'test'" class="field-hint" role="status">{{ t('translation.testing') }}</span>
+          <span v-else-if="testResult" class="field-hint" :class="testFailed ? 'state-error' : 'state-success'" :role="testFailed ? 'alert' : 'status'">{{ testResult }}</span>
+        </div>
+      </fieldset>
     </template>
 
     <template v-else-if="section === 'advanced'">
@@ -141,7 +163,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import HelpTooltip from "../common/HelpTooltip.vue";
-import { fetchTranslationModels, testTranslationService, TARGET_LANGUAGE_CODES, canonicalLanguage, type TranslationProbe } from "../../api/translation";
+import { fetchTranslationModels, testTranslationService, API_FORMATS, TARGET_LANGUAGE_CODES, canonicalApiFormat, canonicalLanguage, type TranslationProbe } from "../../api/translation";
 import { useSettingsStore } from "../../stores/settings";
 import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
@@ -176,10 +198,26 @@ const modelOptions = computed(() => availableModels.value.includes(form.value.tr
   : [form.value.translation_model, ...availableModels.value]);
 /** 目标语言回显：手改 settings.json 写入的语言别名（如 en-US / zh_Hant）也归一化到白名单 code。 */
 const canonicalTargetLanguage = computed(() => canonicalLanguage(form.value.translation_target_language));
-watch(() => [form.value.translation_api_url, translationKey.value, clearTranslationKey.value], () => {
+/** 接口协议回显：手改 settings.json 写入的未知值按默认 Chat Completions 处理（与后端加载回落一致）。 */
+const apiFormat = computed(() => canonicalApiFormat(form.value.translation_api_format));
+/** URL 帮助与占位随协议变化：端点后缀与常见服务基址各不同。 */
+const API_FORMAT_ENDPOINTS: Record<string, { endpoint: string; placeholder: string }> = {
+  chat_completions: { endpoint: "/chat/completions", placeholder: "https://api.openai.com/v1" },
+  responses: { endpoint: "/responses", placeholder: "https://api.openai.com/v1" },
+  anthropic: { endpoint: "/messages", placeholder: "https://api.anthropic.com/v1" },
+};
+const apiFormatEndpoint = computed(() => API_FORMAT_ENDPOINTS[apiFormat.value].endpoint);
+const apiFormatPlaceholder = computed(() => API_FORMAT_ENDPOINTS[apiFormat.value].placeholder);
+/** 切换协议只换端点推导与探测上下文，URL 文本原样保留（由用户决定是否同步修改）。 */
+function changeApiFormat(value: string) {
+  form.value.translation_api_format = canonicalApiFormat(value);
+  availableModels.value = [];
+  modelsError.value = "";
+}
+watch(() => [form.value.translation_api_url, form.value.translation_api_format, translationKey.value, clearTranslationKey.value], () => {
   availableModels.value = []; modelsError.value = "";
 }, { flush: "sync" });
-watch(() => [form.value.translation_api_url, translationKey.value, clearTranslationKey.value, form.value.translation_model, translationJson.value], () => {
+watch(() => [form.value.translation_api_url, form.value.translation_api_format, translationKey.value, clearTranslationKey.value, form.value.translation_model, translationJson.value], () => {
   probeVersion++; testResult.value = ""; modelsError.value = "";
 }, { flush: "sync" });
 onBeforeUnmount(() => { probeRequest++; });
@@ -202,6 +240,7 @@ async function runProbe(action: "test" | "models") {
   try {
     const probe: TranslationProbe = {
       api_url: form.value.translation_api_url, model: action === "test" ? form.value.translation_model : "",
+      format: apiFormat.value,
       extra: action === "test" ? parseTranslationJson() : {},
       ...(translationKey.value.trim() ? { api_key: translationKey.value } : {}),
     };
@@ -285,6 +324,23 @@ async function handleConfirm() { const action = confirmAction.value; closeConfir
 .state-success { color: var(--state-success-ink); }
 .translation-model-control { flex: 1; min-width: 0; }
 .translation-model-row > md-outlined-button { flex: none; }
+/* 小说翻译：三组子分区（服务连接 / 模型与语言 / 高级）。组标题为 12px/600 辅助层级，
+ * 与 14px/500 字段标签形成层级差；组间用既有 35% outline 分隔线分段，不新增容器或 token。
+ * 用 role="group" + aria-labelledby 给 fieldset 命名，不用 legend——legend 在带 border 的
+ * fieldset 里会被画进 border 缺口（压住分隔线），浮动渲染在各浏览器下又会挤开组内首字段。 */
+fieldset.translation-group { display: block; }
+fieldset.translation-group + fieldset.translation-group { margin-top: var(--space-xl); padding-top: var(--space-lg); border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
+.translation-legend { margin-bottom: var(--space-md); color: var(--ink-muted); font-size: 12px; font-weight: 600; }
+fieldset.translation-group > .m3-field:last-child { margin-bottom: 0; }
+.translation-key-row { display: flex; align-items: center; gap: var(--space-sm); }
+.translation-key-row > md-outlined-text-field { flex: 1; min-width: 0; }
+.translation-key-clear { flex: none; }
+/* 凭据状态胶囊：中性描边胶囊（与频道筛选 chips 同配方）；待清除时文案与描边切 error 角色 */
+.translation-key-chip { display: inline-flex; align-items: center; min-height: 20px; margin-left: var(--space-xxs); padding: 0 var(--space-sm); border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent); border-radius: 999px; color: var(--ink-muted); font-size: 12px; font-weight: 600; }
+.translation-key-chip.is-clearing { color: var(--md-sys-color-error); border-color: color-mix(in srgb, var(--md-sys-color-error) 45%, transparent); }
+/* 低强调动作靠左对齐，不随 grid 拉伸成整行宽的胶囊 */
+.translation-manual-model { justify-self: start; }
+.translation-probe-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-md); }
 .danger-button { --md-text-button-label-text-color: #ba1a1a; }
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
 /* 维护组：名称与帮助图标在左、动作按钮在右，行间以 divider 分隔 */
@@ -292,5 +348,5 @@ async function handleConfirm() { const action = confirmAction.value; closeConfir
 .settings-maintenance-item { display: flex; align-items: center; justify-content: space-between; gap: var(--space-lg); padding: var(--space-md) 0; border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
 .settings-maintenance-text { display: grid; gap: var(--space-xxs); min-width: 0; }
 .settings-maintenance-text strong { color: var(--ink); font-size: 14px; font-weight: 500; }
-@media (max-width: 640px) { .settings-path-row, .translation-model-row { align-items: stretch; flex-direction: column; } }
+@media (max-width: 640px) { .settings-path-row, .translation-model-row, .translation-key-row { align-items: stretch; flex-direction: column; } .translation-key-row > .translation-key-clear { align-self: flex-start; } }
 </style>

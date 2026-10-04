@@ -18,6 +18,15 @@ export interface TranslationBook {
 /** 目标语言白名单，与后端 translation::TARGET_LANGUAGES 一致（顺序即选择项顺序）。 */
 export const TARGET_LANGUAGE_CODES = ["zh-CN", "zh-TW", "en", "ja", "ko", "es", "fr", "de", "ru"] as const;
 
+/** 接口协议白名单，与后端 translation::TRANSLATION_API_FORMATS 一致；默认 Chat Completions。 */
+export const API_FORMATS = ["chat_completions", "responses", "anthropic"] as const;
+export type ApiFormat = (typeof API_FORMATS)[number];
+
+/** 协议回显：手改 settings.json 写入的未知值按默认 Chat Completions 处理（与后端加载回落一致）。 */
+export function canonicalApiFormat(value: string): ApiFormat {
+  return (API_FORMATS as readonly string[]).includes(value) ? (value as ApiFormat) : "chat_completions";
+}
+
 /** 归一化语言标签（与后端 normalize_language_code 一致），仅用于回显选中项。 */
 export function canonicalLanguage(value: string): string {
   const text = value.trim().replace("_", "-").toLowerCase();
@@ -37,6 +46,8 @@ export interface TranslationProbe {
   api_url: string;
   api_key?: string;
   model: string;
+  /** 接口协议（API_FORMATS 之一），空串由后端按默认 Chat Completions 处理。 */
+  format: string;
   extra: Record<string, unknown>;
 }
 

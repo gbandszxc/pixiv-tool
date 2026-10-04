@@ -86,8 +86,47 @@ pub fn write_api_key(key: &str) -> Result<(), String> {
     }
 }
 
-/// URL 可以是 API 基址或完整 chat/completions 端点；HTTP 仅允许本机模型。
-pub fn completion_url(value: &str) -> Result<tauri::Url, String> {
+/// 支持的翻译接口协议；`chat_completions` 为默认（OpenAI 兼容）。
+pub const TRANSLATION_API_FORMATS: [&str; 3] = ["chat_completions", "responses", "anthropic"];
+
+/// Anthropic Messages API 要求的版本头（当前稳定值）。
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Anthropic 未在高级 JSON 给 `max_tokens` 时的默认输出上限（该协议必填）。
+const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 8192;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApiFormat {
+    /// OpenAI 兼容 `/chat/completions`（默认）。
+    ChatCompletions,
+    /// OpenAI `/responses`。
+    Responses,
+    /// Anthropic `/messages`。
+    Anthropic,
+}
+
+impl ApiFormat {
+    /// 端点路径后缀：基址推导与「已给完整端点」判定共用。
+    fn endpoint(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "/chat/completions",
+            Self::Responses => "/responses",
+            Self::Anthropic => "/messages",
+        }
+    }
+}
+
+/// 设置值 → 协议；空串按默认处理（兼容旧配置与旧前端草稿）。
+fn resolve_api_format(value: &str) -> Result<ApiFormat, String> {
+    match value.trim() {
+        "" | "chat_completions" => Ok(ApiFormat::ChatCompletions),
+        "responses" => Ok(ApiFormat::Responses),
+        "anthropic" => Ok(ApiFormat::Anthropic),
+        _ => Err("翻译接口协议无效，请在设置中选择".into()),
+    }
+}
+
+/// URL 可以是 API 基址或当前协议的完整端点；HTTP 仅允许本机模型。
+fn completion_url(value: &str, format: ApiFormat) -> Result<tauri::Url, String> {
     let mut url = tauri::Url::parse(value.trim()).map_err(|_| "翻译 API URL 无效")?;
     let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
     if !(url.scheme() == "https" || url.scheme() == "http" && local)
@@ -99,19 +138,30 @@ pub fn completion_url(value: &str) -> Result<tauri::Url, String> {
     {
         return Err("翻译 URL 须为 HTTPS（本机可用 HTTP），不能包含凭据、查询参数或片段".into());
     }
-    let path = url.path().trim_end_matches('/');
-    if !path.ends_with("/chat/completions") {
-        let path = if path.is_empty() {
-            "/v1/chat/completions".into()
+    let mut path = url.path().trim_end_matches('/').to_string();
+    if !path.ends_with(format.endpoint()) {
+        // 允许粘贴任意协议的完整端点：先剥掉已知端点后缀，再按当前协议拼接。
+        for endpoint in [
+            ApiFormat::ChatCompletions.endpoint(),
+            ApiFormat::Responses.endpoint(),
+            ApiFormat::Anthropic.endpoint(),
+        ] {
+            if path.ends_with(endpoint) {
+                path.truncate(path.len() - endpoint.len());
+                break;
+            }
+        }
+        path = if path.is_empty() {
+            format!("/v1{}", format.endpoint())
         } else {
-            format!("{path}/chat/completions")
+            format!("{path}{}", format.endpoint())
         };
-        url.set_path(&path);
     }
+    url.set_path(&path);
     Ok(url)
 }
 
-pub fn validate_options(value: &Value) -> Result<(), String> {
+fn validate_options(value: &Value, format: ApiFormat) -> Result<(), String> {
     let object = value.as_object().ok_or("翻译高级 JSON 必须是对象")?;
     // 请求的边界由应用控制；其余供应商扩展（包括嵌套 thinking）原样传递。
     const RESERVED: &[&str] = &[
@@ -132,11 +182,19 @@ pub fn validate_options(value: &Value) -> Result<(), String> {
         "authorization",
         "headers",
     ];
-    if object
-        .keys()
-        .any(|key| RESERVED.contains(&key.to_ascii_lowercase().as_str()))
-    {
-        return Err("高级 JSON 不能覆盖模型、消息、输出格式、流式、工具或凭据字段".into());
+    // 各协议的应用自有字段：系统提示与用户输入由应用装配，不允许覆盖。
+    let own: &[&str] = match format {
+        ApiFormat::ChatCompletions => &[],
+        ApiFormat::Responses => &["input", "instructions"],
+        ApiFormat::Anthropic => &["system"],
+    };
+    if object.keys().any(|key| {
+        let key = key.to_ascii_lowercase();
+        RESERVED.contains(&key.as_str()) || own.contains(&key.as_str())
+    }) {
+        return Err(
+            "高级 JSON 不能覆盖模型、消息、系统提示、输出格式、流式、工具或凭据字段".into(),
+        );
     }
     if value.to_string().len() > 16_384 {
         return Err("翻译高级 JSON 不能超过 16KB".into());
@@ -265,8 +323,9 @@ fn with_target_language(template: &str, target: &str) -> String {
 }
 
 pub fn validate_settings(settings: &Settings) -> Result<(), String> {
+    let format = resolve_api_format(&settings.translation_api_format)?;
     if !settings.translation_api_url.trim().is_empty() {
-        completion_url(&settings.translation_api_url)?;
+        completion_url(&settings.translation_api_url, format)?;
     }
     if settings.translation_model.len() > 256
         || settings.translation_model.chars().any(char::is_control)
@@ -276,7 +335,7 @@ pub fn validate_settings(settings: &Settings) -> Result<(), String> {
     if !settings.translation_target_language.trim().is_empty() {
         resolve_target_language(settings)?;
     }
-    validate_options(&settings.translation_extra)
+    validate_options(&settings.translation_extra, format)
 }
 
 fn pages(input: &NovelInput) -> Result<Vec<String>, String> {
@@ -436,46 +495,54 @@ fn validate_translation(
     Ok(result)
 }
 
-fn request_body(settings: &Settings, prompt: &str, input: Value) -> Value {
+/// 按协议装配请求体：模型、系统提示与用户输入由应用写入，其余扩展原样传递。
+fn request_body(settings: &Settings, format: ApiFormat, prompt: &str, input: Value) -> Value {
     let mut body = settings
         .translation_extra
         .as_object()
         .cloned()
         .unwrap_or_default();
     body.insert("model".into(), json!(settings.translation_model.trim()));
-    body.insert(
-        "messages".into(),
-        json!([
-            {"role":"system", "content": prompt},
-            {"role":"user", "content": input.to_string()}
-        ]),
-    );
     body.insert("stream".into(), json!(false));
-    body.insert("store".into(), json!(false));
+    match format {
+        ApiFormat::ChatCompletions => {
+            body.insert(
+                "messages".into(),
+                json!([
+                    {"role":"system", "content": prompt},
+                    {"role":"user", "content": input.to_string()}
+                ]),
+            );
+            body.insert("store".into(), json!(false));
+        }
+        // Responses：instructions 承载系统提示，input 直接给用户文本。
+        ApiFormat::Responses => {
+            body.insert("instructions".into(), json!(prompt));
+            body.insert("input".into(), json!(input.to_string()));
+            body.insert("store".into(), json!(false));
+        }
+        // Anthropic：system 为顶层字段，max_tokens 必填（高级 JSON 可覆盖）。
+        ApiFormat::Anthropic => {
+            body.insert("system".into(), json!(prompt));
+            body.insert(
+                "messages".into(),
+                json!([{"role":"user","content": input.to_string()}]),
+            );
+            body.entry("max_tokens".to_string())
+                .or_insert_with(|| json!(ANTHROPIC_DEFAULT_MAX_TOKENS));
+        }
+    }
     // 不强制 response_format：许多兼容端点只支持普通文本，提示词明确要求 JSON。
     Value::Object(body)
 }
 
-fn parse_completion(body: Value) -> Result<Value, String> {
-    let choice = body
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|choices| choices.first())
-        .ok_or("翻译服务未返回 choices")?;
-    if choice
-        .get("finish_reason")
-        .and_then(Value::as_str)
-        .is_some_and(|reason| reason != "stop")
-    {
-        return Err(
-            "模型未完整输出（可能达到 token 上限或被服务拒绝），请调整高级 JSON 后重试".into(),
-        );
-    }
-    let text = choice
-        .pointer("/message/content")
-        .and_then(Value::as_str)
-        .ok_or("模型未返回文本译文")?
-        .trim();
+fn incomplete_output_error() -> String {
+    "模型未完整输出（可能达到 token 上限或被服务拒绝），请调整高级 JSON 后重试".into()
+}
+
+/// 去掉可选的 JSON 代码块围栏后解析模型输出。
+fn parse_model_json(text: &str) -> Result<Value, String> {
+    let text = text.trim();
     let text = if text.starts_with("```") {
         text.split_once('\n')
             .and_then(|(_, text)| text.strip_suffix("```"))
@@ -487,21 +554,103 @@ fn parse_completion(body: Value) -> Result<Value, String> {
     serde_json::from_str(text).map_err(|_| "模型未返回合法 JSON，请重试或更换模型".into())
 }
 
+/// 各协议的完成状态与文本位置不同，先取出模型文本，再统一解析 JSON。
+fn parse_completion(body: Value, format: ApiFormat) -> Result<Value, String> {
+    let text = match format {
+        ApiFormat::ChatCompletions => {
+            let choice = body
+                .get("choices")
+                .and_then(Value::as_array)
+                .and_then(|choices| choices.first())
+                .ok_or("翻译服务未返回 choices")?;
+            if choice
+                .get("finish_reason")
+                .and_then(Value::as_str)
+                .is_some_and(|reason| reason != "stop")
+            {
+                return Err(incomplete_output_error());
+            }
+            choice
+                .pointer("/message/content")
+                .and_then(Value::as_str)
+                .ok_or("模型未返回文本译文")?
+                .to_string()
+        }
+        ApiFormat::Responses => {
+            match body.get("status").and_then(Value::as_str) {
+                Some("completed") | None => {}
+                Some("incomplete") => return Err(incomplete_output_error()),
+                Some("failed") | Some("cancelled") => {
+                    return Err("模型请求失败，请检查模型 ID 与高级 JSON 后重试".into())
+                }
+                Some(_) => return Err("模型请求未完成，请稍后重试".into()),
+            }
+            body.get("output")
+                .and_then(Value::as_array)
+                .map(|output| {
+                    output
+                        .iter()
+                        .filter_map(|item| item.get("content").and_then(Value::as_array))
+                        .flatten()
+                        .filter(|part| {
+                            part.get("type").and_then(Value::as_str) == Some("output_text")
+                        })
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+                .filter(|text| !text.trim().is_empty())
+                .ok_or("模型未返回文本译文")?
+        }
+        ApiFormat::Anthropic => {
+            if body
+                .get("stop_reason")
+                .and_then(Value::as_str)
+                .is_some_and(|reason| !matches!(reason, "end_turn" | "stop_sequence"))
+            {
+                return Err(incomplete_output_error());
+            }
+            body.get("content")
+                .and_then(Value::as_array)
+                .map(|content| {
+                    content
+                        .iter()
+                        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                        .filter_map(|block| block.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("")
+                })
+                .filter(|text| !text.trim().is_empty())
+                .ok_or("模型未返回文本译文")?
+        }
+    };
+    parse_model_json(&text)
+}
+
 struct TranslationClient<'a> {
     http: wreq::Client,
     url: tauri::Url,
+    format: ApiFormat,
     key: String,
     settings: &'a Settings,
 }
 
 impl TranslationClient<'_> {
+    /// 按协议附加凭据：OpenAI 系走 Bearer，Anthropic 走 x-api-key + 版本头。
+    fn authorized(&self, request: wreq::RequestBuilder) -> wreq::RequestBuilder {
+        match self.format {
+            ApiFormat::Anthropic => request
+                .header("x-api-key", self.key.as_str())
+                .header("anthropic-version", ANTHROPIC_VERSION),
+            _ => request.bearer_auth(&self.key),
+        }
+    }
+
     async fn complete(&self, prompt: &str, input: Value) -> Result<Value, String> {
         let response = self
-            .http
-            .post(self.url.as_str())
-            .bearer_auth(&self.key)
+            .authorized(self.http.post(self.url.as_str()))
             .header("Content-Type", "application/json")
-            .body(request_body(self.settings, prompt, input).to_string())
+            .body(request_body(self.settings, self.format, prompt, input).to_string())
             .send()
             .await
             .map_err(|error| {
@@ -511,7 +660,7 @@ impl TranslationClient<'_> {
                     "无法连接翻译服务，请检查 URL 和网络"
                 }
             })?;
-        parse_completion(read_service_response(response).await?)
+        parse_completion(read_service_response(response).await?, self.format)
     }
 }
 
@@ -561,21 +710,28 @@ pub struct TranslationProbe {
     pub api_key: Option<String>,
     #[serde(default)]
     pub model: String,
+    /// 接口协议（见 [`TRANSLATION_API_FORMATS`]），空串按默认 Chat Completions。
+    #[serde(default)]
+    pub format: String,
     #[serde(default = "empty_options")]
     pub extra: Value,
 }
 
 fn empty_options() -> Value { json!({}) }
 
-fn probe_client(probe: &TranslationProbe, timeout: u64) -> Result<(Settings, tauri::Url, String, wreq::Client), String> {
+fn probe_client(
+    probe: &TranslationProbe,
+    timeout: u64,
+) -> Result<(Settings, ApiFormat, String, wreq::Client), String> {
     let settings = Settings {
         translation_api_url: probe.api_url.clone(),
+        translation_api_format: probe.format.clone(),
         translation_model: probe.model.clone(),
         translation_extra: probe.extra.clone(),
         ..Settings::default()
     };
     validate_settings(&settings)?;
-    let url = completion_url(&probe.api_url)?;
+    let format = resolve_api_format(&settings.translation_api_format)?;
     let key = match &probe.api_key {
         Some(key) => Some(key.trim().to_string()),
         None => read_api_key()?,
@@ -587,12 +743,12 @@ fn probe_client(probe: &TranslationProbe, timeout: u64) -> Result<(Settings, tau
         .timeout(Duration::from_secs(timeout))
         .redirect(wreq::redirect::Policy::none())
         .build().map_err(|_| "无法初始化翻译客户端")?;
-    Ok((settings, url, key, http))
+    Ok((settings, format, key, http))
 }
 
-fn models_url(value: &str) -> Result<tauri::Url, String> {
-    let mut url = completion_url(value)?;
-    let base = url.path().strip_suffix("/chat/completions").ok_or("翻译 API URL 无效")?;
+fn models_url(value: &str, format: ApiFormat) -> Result<tauri::Url, String> {
+    let mut url = completion_url(value, format)?;
+    let base = url.path().strip_suffix(format.endpoint()).ok_or("翻译 API URL 无效")?;
     let path = format!("{base}/models");
     url.set_path(&path);
     Ok(url)
@@ -612,8 +768,17 @@ fn parse_models(body: Value) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, String> {
-    let (_, _, key, http) = probe_client(&probe, 30)?;
-    let response = http.get(models_url(&probe.api_url)?.as_str()).bearer_auth(key)
+    let (settings, format, key, http) = probe_client(&probe, 30)?;
+    let request = match format {
+        ApiFormat::Anthropic => http
+            .get(models_url(&settings.translation_api_url, format)?.as_str())
+            .header("x-api-key", key.as_str())
+            .header("anthropic-version", ANTHROPIC_VERSION),
+        _ => http
+            .get(models_url(&settings.translation_api_url, format)?.as_str())
+            .bearer_auth(key),
+    };
+    let response = request
         .send().await.map_err(|_| "无法获取模型列表，请检查 URL 和网络，或手动填写模型 ID")?;
     let body = read_service_response(response).await.map_err(|error| {
         if error.starts_with("翻译服务返回 HTTP") {
@@ -627,9 +792,10 @@ pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, 
 
 #[tauri::command]
 pub async fn translation_test(probe: TranslationProbe) -> Result<(), String> {
-    let (settings, url, key, http) = probe_client(&probe, 180)?;
+    let (settings, format, key, http) = probe_client(&probe, 180)?;
     if settings.translation_model.trim().is_empty() { return Err("请先填写或选择模型 ID".into()); }
-    let client = TranslationClient { http, url, key, settings: &settings };
+    let url = completion_url(&settings.translation_api_url, format)?;
+    let client = TranslationClient { http, url, format, key, settings: &settings };
     let result = client.complete("这是连接检测。仅返回 JSON 对象 {\"ok\":true}，不输出其他文字。", json!("请确认服务可用。")).await?;
     if result.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err("服务已响应，但未返回预期 JSON，请调整高级配置或更换模型".into());
@@ -726,7 +892,8 @@ async fn translate_page_flow(
     let key = read_api_key()?
         .filter(|key| !key.is_empty())
         .ok_or("请先配置翻译 API Key")?;
-    let url = completion_url(&settings.translation_api_url)?;
+    let format = resolve_api_format(&settings.translation_api_format)?;
+    let url = completion_url(&settings.translation_api_url, format)?;
     let client = wreq::Client::builder()
         .timeout(Duration::from_secs(180))
         .redirect(wreq::redirect::Policy::none())
@@ -735,6 +902,7 @@ async fn translate_page_flow(
     let client = TranslationClient {
         http: client,
         url,
+        format,
         key,
         settings: &settings,
     };
@@ -887,7 +1055,8 @@ mod tests {
                 .redirect(wreq::redirect::Policy::none())
                 .build()
                 .unwrap(),
-            url: completion_url(&settings.translation_api_url).unwrap(),
+            url: completion_url(&settings.translation_api_url, ApiFormat::ChatCompletions).unwrap(),
+            format: ApiFormat::ChatCompletions,
             key: key.clone(),
             settings: &settings,
         };
@@ -993,7 +1162,8 @@ mod tests {
             .unwrap();
         let client = TranslationClient {
             http: http.clone(),
-            url: completion_url(&settings.translation_api_url).unwrap(),
+            url: completion_url(&settings.translation_api_url, ApiFormat::ChatCompletions).unwrap(),
+            format: ApiFormat::ChatCompletions,
             key: key.clone(),
             settings: &settings,
         };
@@ -1003,6 +1173,7 @@ mod tests {
             api_url: settings.translation_api_url.clone(),
             api_key: Some(key.clone()),
             model: String::new(),
+            format: String::new(),
             extra: json!({}),
         })
         .await
@@ -1141,7 +1312,8 @@ mod tests {
         };
         let bad_client = TranslationClient {
             http,
-            url: completion_url(&bad_settings.translation_api_url).unwrap(),
+            url: completion_url(&bad_settings.translation_api_url, ApiFormat::ChatCompletions).unwrap(),
+            format: ApiFormat::ChatCompletions,
             key: key.clone(),
             settings: &bad_settings,
         };
@@ -1303,7 +1475,8 @@ mod tests {
                 .redirect(wreq::redirect::Policy::none())
                 .build()
                 .unwrap(),
-            url: completion_url(&settings.translation_api_url).unwrap(),
+            url: completion_url(&settings.translation_api_url, ApiFormat::ChatCompletions).unwrap(),
+            format: ApiFormat::ChatCompletions,
             key,
             settings: &settings,
         };
@@ -1359,47 +1532,95 @@ mod tests {
 
     #[test]
     fn validates_endpoint_and_advanced_options() {
+        use ApiFormat::*;
         assert_eq!(
-            completion_url("https://example.com/v1/").unwrap().as_str(),
+            completion_url("https://example.com/v1/", ChatCompletions).unwrap().as_str(),
             "https://example.com/v1/chat/completions"
         );
         assert_eq!(
-            completion_url("http://localhost:1234/v1/chat/completions")
+            completion_url("http://localhost:1234/v1/chat/completions", ChatCompletions)
                 .unwrap()
                 .as_str(),
             "http://localhost:1234/v1/chat/completions"
+        );
+        // 各协议基址推导；粘贴其它协议的完整端点时按当前协议改写。
+        assert_eq!(
+            completion_url("https://example.com/v1", Responses).unwrap().as_str(),
+            "https://example.com/v1/responses"
+        );
+        assert_eq!(
+            completion_url("https://api.anthropic.com/v1", Anthropic).unwrap().as_str(),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            completion_url("https://api.anthropic.com/v1/messages", Anthropic).unwrap().as_str(),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            completion_url("https://api.anthropic.com/v1/messages", ChatCompletions).unwrap().as_str(),
+            "https://api.anthropic.com/v1/chat/completions"
+        );
+        assert_eq!(
+            completion_url("https://example.com/v1/chat/completions", Responses).unwrap().as_str(),
+            "https://example.com/v1/responses"
         );
         for url in [
             "http://example.com/v1",
             "https://user:key@example.com/v1",
             "https://example.com/v1?key=secret",
         ] {
-            assert!(completion_url(url).is_err());
+            assert!(completion_url(url, ChatCompletions).is_err());
         }
-        assert!(validate_options(&json!({"reasoning_effort":"high", "thinking":{"type":"enabled","budget_tokens":2000}})).is_ok());
+        assert_eq!(
+            resolve_api_format("").unwrap(),
+            ChatCompletions,
+            "空串按默认协议"
+        );
+        assert_eq!(resolve_api_format(" anthropic ").unwrap(), Anthropic);
+        assert!(resolve_api_format("grpc").is_err());
+        assert!(validate_options(
+            &json!({"reasoning_effort":"high", "thinking":{"type":"enabled","budget_tokens":2000}}),
+            ChatCompletions
+        )
+        .is_ok());
+        // 各协议的应用自有字段不允许被高级 JSON 覆盖。
+        assert!(validate_options(&json!({"instructions":"x"}), Responses).is_err());
+        assert!(validate_options(&json!({"input":"x"}), Responses).is_err());
+        assert!(validate_options(&json!({"system":"x"}), Anthropic).is_err());
+        assert!(validate_options(&json!({"max_tokens":4096}), Anthropic).is_ok());
+        assert!(validate_options(&json!({"max_output_tokens":4096}), Responses).is_ok());
         for value in [
             json!([]),
             json!({"messages":[]}),
             json!({"stream":true}),
             json!({"Authorization":"secret"}),
         ] {
-            assert!(validate_options(&value).is_err());
+            assert!(validate_options(&value, ChatCompletions).is_err());
         }
     }
 
     #[test]
     fn builds_models_url_and_parses_listing() {
+        use ApiFormat::*;
         assert_eq!(
-            models_url("https://example.com/v1").unwrap().as_str(),
+            models_url("https://example.com/v1", ChatCompletions).unwrap().as_str(),
             "https://example.com/v1/models"
         );
         assert_eq!(
-            models_url("https://example.com/v1/chat/completions")
+            models_url("https://example.com/v1/chat/completions", ChatCompletions)
                 .unwrap()
                 .as_str(),
             "https://example.com/v1/models"
         );
-        assert!(models_url("notaurl").is_err());
+        assert_eq!(
+            models_url("https://api.anthropic.com/v1", Anthropic).unwrap().as_str(),
+            "https://api.anthropic.com/v1/models"
+        );
+        assert_eq!(
+            models_url("https://example.com/v1/responses", Responses).unwrap().as_str(),
+            "https://example.com/v1/models"
+        );
+        assert!(models_url("notaurl", ChatCompletions).is_err());
         let listed = parse_models(json!({"data":[{"id":"model-b"},{"id":"model-a"},{"object":"model"},{"id":""}]})).unwrap();
         assert_eq!(listed, vec!["model-a", "model-b"]);
         let huge: Vec<Value> = (0..2001).map(|index| json!({ "id": index })).collect();
@@ -1419,6 +1640,7 @@ mod tests {
             api_url: api_url.into(),
             api_key: api_key.map(str::to_string),
             model: model.into(),
+            format: String::new(),
             extra: json!({}),
         };
         // 空 Key 与坏 URL 在发请求前就被拒绝；空模型只拦生成检测，不拦列表获取。
@@ -1444,6 +1666,103 @@ mod tests {
                 .is_err(),
             "检测请求仍须模型 ID"
         );
+        // 协议随草稿生效：非法协议在发请求前拒绝。
+        let bad_format = TranslationProbe {
+            format: "grpc".into(),
+            ..keyed("model-id", "https://example.com/v1", Some("probe-key"))
+        };
+        assert!(probe_client(&bad_format, 30).is_err());
+    }
+
+    /// 三种协议的请求体装配：系统提示与用户输入落到各自的协议字段。
+    #[test]
+    fn builds_request_body_per_api_format() {
+        let settings = Settings {
+            translation_model: "mock-model".into(),
+            translation_extra: json!({"reasoning_effort":"low"}),
+            ..Settings::default()
+        };
+        let payload = json!({"page": 1, "source_lines": [{"line": 0, "text": "原文"}]});
+        let chat = request_body(&settings, ApiFormat::ChatCompletions, "SYS", payload.clone());
+        assert_eq!(chat["messages"][0]["content"], "SYS");
+        assert_eq!(chat["messages"][1]["content"], payload.to_string());
+        assert_eq!(chat["store"], false);
+        assert!(chat.get("instructions").is_none() && chat.get("system").is_none());
+
+        let responses = request_body(&settings, ApiFormat::Responses, "SYS", payload.clone());
+        assert_eq!(responses["instructions"], "SYS");
+        assert_eq!(responses["input"], payload.to_string());
+        assert_eq!(responses["store"], false);
+        assert_eq!(responses["reasoning_effort"], "low");
+        assert!(responses.get("messages").is_none());
+
+        let anthropic = request_body(&settings, ApiFormat::Anthropic, "SYS", payload.clone());
+        assert_eq!(anthropic["system"], "SYS");
+        assert_eq!(anthropic["messages"][0]["content"], payload.to_string());
+        assert_eq!(anthropic["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
+        assert!(
+            anthropic.get("store").is_none(),
+            "Anthropic 不接受 store 参数"
+        );
+        // 高级 JSON 的 max_tokens 覆盖默认上限。
+        let capped = request_body(
+            &Settings {
+                translation_extra: json!({"max_tokens": 1024}),
+                ..settings.clone()
+            },
+            ApiFormat::Anthropic,
+            "SYS",
+            payload,
+        );
+        assert_eq!(capped["max_tokens"], 1024);
+    }
+
+    /// 三种协议的响应解析：文本位置与完成状态各自不同，统一产出模型 JSON。
+    #[test]
+    fn parses_completion_per_api_format() {
+        use ApiFormat::*;
+        assert_eq!(
+            parse_completion(
+                json!({"choices":[{"finish_reason":"stop","message":{"content":"{\"lines\":[]}"}}]}),
+                ChatCompletions
+            )
+            .unwrap(),
+            json!({"lines":[]})
+        );
+        assert_eq!(
+            parse_completion(
+                json!({"status":"completed","output":[
+                    {"type":"reasoning","content":[{"type":"reasoning_text","text":"忽略"}]},
+                    {"type":"message","content":[{"type":"output_text","text":"{\"lines\":"},{"type":"output_text","text":"[]}"}]}
+                ]}),
+                Responses
+            )
+            .unwrap(),
+            json!({"lines":[]})
+        );
+        assert!(
+            parse_completion(json!({"status":"incomplete","output":[]}), Responses).is_err(),
+            "Responses 未完整输出须报错"
+        );
+        assert!(parse_completion(json!({"status":"failed"}), Responses).is_err());
+        assert_eq!(
+            parse_completion(
+                json!({"stop_reason":"end_turn","content":[{"type":"text","text":"```json\n{\"lines\":[]}\n```"}]}),
+                Anthropic
+            )
+            .unwrap(),
+            json!({"lines":[]})
+        );
+        for body in [
+            json!({"stop_reason":"max_tokens","content":[{"type":"text","text":"{}"}]}),
+            json!({"stop_reason":"refusal","content":[{"type":"text","text":"{}"}]}),
+            json!({"stop_reason":"end_turn","content":[{"type":"tool_use","id":"x"}]}),
+            json!({"stop_reason":"end_turn","content":[]}),
+        ] {
+            assert!(parse_completion(body.clone(), Anthropic).is_err(), "body={body}");
+        }
+        assert!(parse_completion(json!({"output":[]}), Responses).is_err());
+        assert!(parse_completion(json!({}), ChatCompletions).is_err());
     }
 
     #[test]
@@ -1559,11 +1878,12 @@ mod tests {
         );
         assert!(
             parse_completion(
-                json!({"choices":[{"finish_reason":"length","message":{"content":"{}"}}]})
+                json!({"choices":[{"finish_reason":"length","message":{"content":"{}"}}]}),
+                ApiFormat::ChatCompletions
             )
             .is_err()
         );
-        assert_eq!(parse_completion(json!({"choices":[{"finish_reason":"stop","message":{"content":"```json\n{\"lines\":[]}\n```"}}]})).unwrap(),json!({"lines":[]}));
+        assert_eq!(parse_completion(json!({"choices":[{"finish_reason":"stop","message":{"content":"```json\n{\"lines\":[]}\n```"}}]}), ApiFormat::ChatCompletions).unwrap(),json!({"lines":[]}));
     }
     #[test]
     fn persists_bible_and_pages_and_invalidates_changed_source() {
@@ -1678,10 +1998,11 @@ mod tests {
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap();
-        let url = completion_url(&format!("http://{address}/v1")).unwrap();
+        let url = completion_url(&format!("http://{address}/v1"), ApiFormat::ChatCompletions).unwrap();
         let client = TranslationClient {
             http: client,
             url,
+            format: ApiFormat::ChatCompletions,
             key: "test-key".into(),
             settings: &settings,
         };
@@ -1734,5 +2055,120 @@ mod tests {
         assert_eq!(saved.pages.len(), 2);
         assert_eq!(saved.pages[&2][0].text, "她微笑了。");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Responses / Anthropic 协议的端到端装配：路径、凭据头、请求体与响应解析。
+    #[tokio::test]
+    async fn http_roundtrip_for_responses_and_anthropic_formats() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            // 服务端按协议原样返回各自的响应形状（文本内仍是模型 JSON）。
+            let replies = [
+                json!({"status":"completed","output":[
+                    {"type":"reasoning","content":[{"type":"reasoning_text","text":"忽略"}]},
+                    {"type":"message","content":[{"type":"output_text","text":"{\"ok\":true}"}]}
+                ]})
+                .to_string(),
+                json!({"stop_reason":"end_turn","content":[{"type":"text","text":"{\"ok\":true}"}]})
+                    .to_string(),
+            ];
+            let mut captured = Vec::new();
+            for reply in replies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut raw = Vec::new();
+                let (header_end, content_length);
+                loop {
+                    let mut bytes = [0u8; 4096];
+                    let size = socket.read(&mut bytes).await.unwrap();
+                    assert!(size > 0);
+                    raw.extend_from_slice(&bytes[..size]);
+                    if let Some(end) = raw.windows(4).position(|part| part == b"\r\n\r\n") {
+                        header_end = end + 4;
+                        let headers = String::from_utf8_lossy(&raw[..end]).to_ascii_lowercase();
+                        content_length = headers
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length: "))
+                            .unwrap()
+                            .parse::<usize>()
+                            .unwrap();
+                        break;
+                    }
+                }
+                while raw.len() < header_end + content_length {
+                    let mut bytes = [0u8; 4096];
+                    let size = socket.read(&mut bytes).await.unwrap();
+                    assert!(size > 0);
+                    raw.extend_from_slice(&bytes[..size]);
+                }
+                captured.push((
+                    String::from_utf8_lossy(&raw[..header_end]).to_ascii_lowercase(),
+                    serde_json::from_slice::<Value>(&raw[header_end..header_end + content_length])
+                        .unwrap(),
+                ));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+            captured
+        });
+        let http = wreq::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .redirect(wreq::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let base = format!("http://{address}/v1");
+        let settings = Settings {
+            translation_model: "mock-model".into(),
+            translation_extra: json!({"max_output_tokens": 1024}),
+            ..Settings::default()
+        };
+        let payload = json!({"page": 1});
+        // Responses：Bearer 凭据、instructions/input 装配、store=false。
+        let responses = TranslationClient {
+            http: http.clone(),
+            url: completion_url(&base, ApiFormat::Responses).unwrap(),
+            format: ApiFormat::Responses,
+            key: "test-key".into(),
+            settings: &settings,
+        };
+        assert_eq!(
+            responses.complete("SYS", payload.clone()).await.unwrap(),
+            json!({"ok": true})
+        );
+        // Anthropic：x-api-key + 版本头、system/messages/max_tokens，且不带 store。
+        let anthropic = TranslationClient {
+            http,
+            url: completion_url(&base, ApiFormat::Anthropic).unwrap(),
+            format: ApiFormat::Anthropic,
+            key: "test-key".into(),
+            settings: &settings,
+        };
+        assert_eq!(
+            anthropic.complete("SYS", payload.clone()).await.unwrap(),
+            json!({"ok": true})
+        );
+        let captured = server.await.unwrap();
+        assert_eq!(captured.len(), 2);
+        assert!(captured[0].0.starts_with("post /v1/responses http/1.1"), "{}", captured[0].0);
+        assert!(captured[0].0.contains("authorization: bearer test-key"));
+        assert_eq!(captured[0].1["instructions"], "SYS");
+        assert_eq!(captured[0].1["input"], payload.to_string());
+        assert_eq!(captured[0].1["store"], false);
+        assert_eq!(captured[0].1["max_output_tokens"], 1024);
+        assert!(captured[0].1.get("messages").is_none());
+        assert!(captured[1].0.starts_with("post /v1/messages http/1.1"), "{}", captured[1].0);
+        assert!(captured[1].0.contains("x-api-key: test-key"));
+        assert!(captured[1].0.contains("anthropic-version: 2023-06-01"));
+        assert!(!captured[1].0.contains("authorization:"));
+        assert_eq!(captured[1].1["system"], "SYS");
+        assert_eq!(captured[1].1["messages"][0]["content"], payload.to_string());
+        assert_eq!(captured[1].1["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
+        assert!(captured[1].1.get("store").is_none());
     }
 }

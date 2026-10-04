@@ -292,7 +292,7 @@ pending → running ⇄ paused
 
 ### 4.3 限速与容错（`pixiv/client.rs`）
 
-小说翻译直连用户模型服务，独立于 Pixiv 限速：全局串行、单请求 180s、响应上限 4MB、不自动重试（避免重复费用）。两轮处理与持久化见 ADR 0017；正文输入上限 8MB、单页 120KB、设定集 160KB，超限明确拒绝。
+小说翻译直连用户模型服务，独立于 Pixiv 限速：全局串行、单请求 180s、响应上限 4MB、不自动重试（避免重复费用）。支持 Chat Completions（默认）/ Responses / Anthropic Messages 三种协议（ADR 0020）。两轮处理与持久化见 ADR 0017；正文输入上限 8MB、单页 120KB、设定集 160KB，超限明确拒绝。
 翻译进入串行队列前的空正文检查即时释放临时行数组，避免在排队及两轮请求期间
 同时保留同一页的重复文本副本。
 
@@ -459,6 +459,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "novel_bg_color": "",
   "saucenao_api_key": "",
   "translation_api_url": "",
+  "translation_api_format": "chat_completions",
   "translation_model": "",
   "translation_target_language": "",
   "translation_extra": {}
@@ -511,8 +512,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   saucenao.com 免费注册后于 `user.php?page=search-api` 页面获取；仅保存在本机
   settings.json——不入库、不写日志、不进报错原文。接口行为与错误形态见
   `docs/research/saucenao-api.md`。
-- `translation_api_url` / `translation_model` / `translation_target_language` / `translation_extra`：小说翻译 API 基址或完整 Chat Completions 端点、模型 ID、目标语言 code（白名单见 §7 `novel_translate_page`；空串 = 跟随界面语言 `language`）、自定义请求体 JSON 对象，默认空字符串/空字符串/空字符串/空对象。支持 reasoning_effort、max_completion_tokens、供应商 thinking 等扩展；保留字段不允许覆盖，见 ADR 0017、ADR 0018。JSON 上限 16KB，模型 ID 上限 256 字节。HTTP 仅允许本机模型，其他须 HTTPS；禁重定向、URL 凭据/query/fragment。
-- 以上各键在 `settings_save` 白名单内（18 个持久化键，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
+- `translation_api_url` / `translation_api_format` / `translation_model` / `translation_target_language` / `translation_extra`：小说翻译 API 基址或当前协议的完整端点、接口协议（`chat_completions` 默认 / `responses` / `anthropic`，白名单外加载期回落默认）、模型 ID、目标语言 code（白名单见 §7 `novel_translate_page`；空串 = 跟随界面语言 `language`）、自定义请求体 JSON 对象，默认空字符串/`chat_completions`/空字符串/空字符串/空对象。URL 按协议推导端点后缀（`/chat/completions`、`/responses`、`/messages`），`/models` 同源推导；OpenAI 系凭据走 Bearer，Anthropic 走 `x-api-key` + `anthropic-version: 2023-06-01`，请求体与响应解析随协议装配（Anthropic 的 `max_tokens` 默认 8192，可用高级 JSON 覆盖）。高级 JSON 支持 reasoning_effort、max_completion_tokens、供应商 thinking 等扩展；保留字段按协议追加（responses 禁 `input`/`instructions`，anthropic 禁 `system`），不允许覆盖。见 ADR 0017、ADR 0018、ADR 0020。JSON 上限 16KB，模型 ID 上限 256 字节。HTTP 仅允许本机模型，其他须 HTTPS；禁重定向、URL 凭据/query/fragment。
+- 以上各键在 `settings_save` 白名单内（20 个持久化键，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
 
@@ -648,7 +649,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 全局静态帮助采用公共 `components/common/HelpTooltip.vue`：设置六组的字段/分组说明、登录方式与 Session 获取步骤、搜索链接/ID 规则、以图识图介绍/使用说明默认收进相邻帮助图标。悬停、聚焦或点击展开，role=tooltip 与 aria-describedby 保留可访问关联，原生 popover top layer 不受对话框滚动区裁切，按视口空间定位/换行；焦点留在触发器，指针可移入阅读，Esc 优先关闭说明，外部点击/失焦/滚动/resize 收起。校验错误、凭据库错误、进度、空态引导、未配置状态和确认后果保留直显，维护组保留立即生效的短提示。视觉与交互细节同步 DESIGN.md / .impeccable/design.json。
 
-小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式混入 80% ink 保持对比度），原分页底栏的 SVG 翻译图标点击弹出状态、翻译/重译和三种显示选项，默认不额外占用正文高度；模式切换 secondary-container/on-secondary-container，入口与弹层共用 8px 状态指示点（翻译中 primary、本页已译绿、失败 error），失败原因经指示点/入口 title 悬停可读，状态文字始终可读。设定集整理与两轮精翻属内部实现，界面只回显统一的「翻译中…」与最终成败，不展示阶段进度。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；设置页模型 ID 在「获取模型」成功后原位变为下拉（选项含获取结果与当前值，可切回手动输入），「检测可用」以绿色/红色文字区分成败；目标语言默认「跟随界面语言」（选项回显当前界面语言名），可手动指定白名单内的语言；原文语言与目标语言一致时只回显「无需翻译」提示（灰色指示点、不算失败），按钮变为「仍然翻译」可强制走完整流程；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠；弹层外部点击/Esc 关闭与焦点返回，详见 DESIGN.md 与结构化伴随视图。
+小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式混入 80% ink 保持对比度），原分页底栏的 SVG 翻译图标点击弹出状态、翻译/重译和三种显示选项，默认不额外占用正文高度；模式切换 secondary-container/on-secondary-container，入口与弹层共用 8px 状态指示点（翻译中 primary、本页已译绿、失败 error），失败原因经指示点/入口 title 悬停可读，状态文字始终可读。设定集整理与两轮精翻属内部实现，界面只回显统一的「翻译中…」与最终成败，不展示阶段进度。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；设置页模型 ID 在「获取模型」成功后原位变为下拉（选项含获取结果与当前值，可切回手动输入），「检测可用」以绿色/红色文字区分成败；目标语言默认「跟随界面语言」（选项回显当前界面语言名），可手动指定白名单内的语言；设置页「小说翻译」按服务连接（接口协议 / API URL / API Key）/ 模型与语言（模型 ID / 目标语言）/ 高级（JSON 与探测动作）三组分区，组标题 12px/600、组间用既有 35% outline 分隔线分段；接口协议默认 Chat Completions，切换后 URL 帮助与占位、模型列表和探测草稿同步换协议，已存凭据在 Key 标签行以中性胶囊回显「已保存」/「保存时清除」，清除动作与 Key 字段同行、窄窗换行；原文语言与目标语言一致时只回显「无需翻译」提示（灰色指示点、不算失败），按钮变为「仍然翻译」可强制走完整流程；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠；弹层外部点击/Esc 关闭与焦点返回，详见 DESIGN.md 与结构化伴随视图。
 
 所有纵向数据滚动区共用 PgUp/PgDn 输入规则（§6.1.1），优先鼠标区域、回退键盘焦点，保留控件原生按键与模态隔离；全屏胶卷与图片区分别滚屏 / 切作品页。样式及交互规则与 DESIGN.md / .impeccable/design.json 保持一致。
 
@@ -838,7 +839,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 小说翻译设置的高级 JSON 示例在中英文文案中使用 vue-i18n 字面量插值转义花括号，保证生产构建不会因非法占位符抛出异常而使整组设置空白。运行 `node frontend/tests/production-settings.mjs` 可用生产编译与 `tauri.conf.json` 的生产 CSP 执行真实组件离线验收，断言中英文下五个翻译字段正常渲染、JSON 示例完整显示，并继续验证保存、凭据草稿及模型探测。需本机 Chrome；默认使用 Windows 标准安装路径，可用 `CHROME_PATH` 指定。测试产物与独立浏览器配置均存临时目录，结束后清理。
 
-小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/高级参数校验、目标语言解析（跟随界面语言、别名归一化、非法值拒绝）、原文语言判定与一致匹配（日/韩/中简繁/俄/拉丁，简繁互转不跳过）、提示词目标语言注入无残留占位符、锁定译名与别名冲突、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用、第二页共享设定和 Pass 2 失败保留 Pass 1/旧译文；模型输出容错覆盖省略可选字段与多余字段仍通过、缺 terms/缺 source 仍拒绝；语言一致的快速返回在命令流程层验证（中文原文 + zh-CN 不发请求直接返回提示，force 与不同语言照常进入流程）；探测命令单测覆盖 `/models` 路径推导与列表解析（去重排序、空列表/缺 id/超量报错）与 probe 空 Key/坏 URL/空模型的发请求前拒绝。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖 SVG 入口默认收起、弹层焦点/Esc/外部关闭、三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、统一「翻译中」不暴露内部阶段、入口/弹层状态点与 hover 报错、目标语言一致提示与「仍然翻译」强制重译、JSON 校验、Key 保存/清除/取消后的草稿清理，以及获取模型后原位变下拉（保留当前值、可切回手动输入）、检测可用绿/红状态、目标语言默认跟随界面语言并可手动指定、URL 为空禁用探测，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
+小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/协议/高级参数校验（三种协议的端点推导与跨协议完整端点改写、按协议追加的保留字段、协议白名单与非法值拒绝）、目标语言解析（跟随界面语言、别名归一化、非法值拒绝）、原文语言判定与一致匹配（日/韩/中简繁/俄/拉丁，简繁互转不跳过）、提示词目标语言注入无残留占位符、锁定译名与别名冲突、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用（第二页共享设定、Pass 2 失败保留 Pass 1/旧译文）与 Responses/Anthropic 的路径、凭据头、请求体装配和响应解析；模型输出容错覆盖省略可选字段与多余字段仍通过、缺 terms/缺 source 仍拒绝；语言一致的快速返回在命令流程层验证（中文原文 + zh-CN 不发请求直接返回提示，force 与不同语言照常进入流程）；探测命令单测覆盖 `/models` 路径推导（三种协议）与列表解析（去重排序、空列表/缺 id/超量报错）与 probe 空 Key/坏 URL/空模型/非法协议的发请求前拒绝。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖 SVG 入口默认收起、弹层焦点/Esc/外部关闭、三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、统一「翻译中」不暴露内部阶段、入口/弹层状态点与 hover 报错、目标语言一致提示与「仍然翻译」强制重译、设置三组分区与凭据状态胶囊、JSON 校验、Key 保存/清除/取消后的草稿清理，以及获取模型后原位变下拉（保留当前值、可切回手动输入）、检测可用绿/红状态、目标语言默认跟随界面语言并可手动指定、接口协议默认值与切换（URL 占位、模型列表重置、探测草稿带协议）、URL 为空禁用探测，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
 
 全局帮助离线验收：`/tests/help-tooltips.html` 使用真实 SettingsDialog、SettingsPanel、LoginDialog、搜索/以图识图页面，覆盖六组设置、两种登录、默认收起、悬停/焦点/点击、可悬停阅读、Esc 不误关设置与外部关闭，提供宽窄/深浅主题/中英文预览；浏览器 mock，不读取真实凭据。
 
@@ -861,11 +862,11 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 19 键 + 校验，含翻译 URL / 模型 / 目标语言 / 高级 JSON；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 20 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 高级 JSON；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_get(novel)` | 读取本机小说设定集和已译页；novel=`{novel_id,title,tags,description,content}`；返回 `{bible:{style,terms},pages:{页码:[{line,text}]}}`，原文和元信息 SHA256 区分版本 |
 | `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel（供后端与测试使用，界面只回显统一「翻译中」）；返回 `{status,lines,target_language}`，status=`translated` 时 lines 为 `[{line,text}]`（line 为该页原始文本的零起行号，可能来自本机缓存），status=`already_target_language` 时未调用模型、lines 为空；目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言，见 ADR 0018 |
-| `translation_models(probe)` | 用未保存草稿探测 OpenAI 兼容 `/models` 端点（chat/completions 路径同源推导），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
-| `translation_test(probe)` | 用未保存草稿发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则 |
+| `translation_models(probe)` | 用未保存草稿探测模型列表端点（按 `format` 协议从同一基址推导 `/models`；OpenAI 系 Bearer，Anthropic `x-api-key` + 版本头），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
+| `translation_test(probe)` | 用未保存草稿按所选协议发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则 |
 | `clear_logs` | 清空 app.log |
 | `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状）；page ≥ 1，pageSize 为 1–200，拒绝偏移溢出 |

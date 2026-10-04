@@ -48,10 +48,13 @@ pub struct Settings {
     /// 配置文件——不入库、不写日志、不进报错原文）。
     pub saucenao_api_key: String,
     pub translation_api_url: String,
+    /// 翻译接口协议（见 [`crate::translation::TRANSLATION_API_FORMATS`]），
+    /// 默认 `chat_completions`（OpenAI 兼容）。
+    pub translation_api_format: String,
     pub translation_model: String,
     /// 翻译目标语言（见 [`crate::translation::TARGET_LANGUAGES`]），空串 = 跟随界面语言 `language`。
     pub translation_target_language: String,
-    /// Chat Completions 请求体扩展；不含凭据或应用保留字段。
+    /// 模型请求体扩展；不含凭据或应用保留字段，可用键随协议不同。
     pub translation_extra: Value,
 }
 
@@ -74,6 +77,7 @@ impl Default for Settings {
             novel_bg_color: String::new(),
             saucenao_api_key: String::new(),
             translation_api_url: String::new(),
+            translation_api_format: "chat_completions".into(),
             translation_model: String::new(),
             translation_target_language: String::new(),
             translation_extra: serde_json::json!({}),
@@ -160,6 +164,12 @@ impl Settings {
                     && !NOVEL_BG_COLORS.contains(&settings.novel_bg_color.as_str())
                 {
                     settings.novel_bg_color = String::new();
+                }
+                // 翻译接口协议：白名单外的值（含手改 settings.json）回落默认 Chat Completions。
+                if !crate::translation::TRANSLATION_API_FORMATS
+                    .contains(&settings.translation_api_format.as_str())
+                {
+                    settings.translation_api_format = "chat_completions".into();
                 }
                 settings
             }
@@ -327,6 +337,7 @@ mod tests {
         assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
+        assert_eq!(s.translation_api_format, "chat_completions");
         assert!(
             s.output_dir
                 .replace('\\', "/")
@@ -367,6 +378,7 @@ mod tests {
         assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
+        assert_eq!(s.translation_api_format, "chat_completions");
         assert_eq!(s.startup_page, "/browse/home");
         cleanup(&dir);
     }
@@ -491,6 +503,27 @@ mod tests {
                 "bad={bad}"
             );
         }
+    }
+
+    #[test]
+    fn invalid_translation_api_format_falls_back_to_default_on_load() {
+        let dir = temp_config_dir("translate-format");
+        // 手改 settings.json 写入白名单外的协议 → 加载期回落 chat_completions
+        std::fs::write(settings_path(&dir), r#"{"translation_api_format":"grpc"}"#).unwrap();
+        assert_eq!(
+            Settings::load_or_init(&dir).translation_api_format,
+            "chat_completions"
+        );
+        // 合法协议原样保留
+        for format in ["responses", "anthropic"] {
+            std::fs::write(
+                settings_path(&dir),
+                format!(r#"{{"translation_api_format":"{format}"}}"#),
+            )
+            .unwrap();
+            assert_eq!(Settings::load_or_init(&dir).translation_api_format, format);
+        }
+        cleanup(&dir);
     }
 
     #[test]

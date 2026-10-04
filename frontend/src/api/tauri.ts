@@ -120,6 +120,8 @@ export interface Settings {
   /** SauceNAO API Key（以图识图必需；仅保存在本机配置文件，不写日志） */
   saucenao_api_key: string;
   translation_api_url: string;
+  /** 接口协议（取值见 api/translation.ts 的 API_FORMATS），默认 chat_completions */
+  translation_api_format: string;
   translation_model: string;
   /** 翻译目标语言（取值见 api/translation.ts 的 TARGET_LANGUAGE_CODES），空串 = 跟随界面语言 */
   translation_target_language: string;

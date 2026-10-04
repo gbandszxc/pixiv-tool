@@ -22,8 +22,9 @@ use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 19] = [
+const WRITABLE_KEYS: [&str; 20] = [
     "translation_api_url",
+    "translation_api_format",
     "translation_model",
     "translation_target_language",
     "translation_extra",
@@ -543,6 +544,46 @@ mod tests {
                 "bad={bad}"
             );
         }
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_validates_translation_api_format() {
+        let data_dir = temp_data_dir("translate-format");
+        for format in ["chat_completions", "responses", "anthropic"] {
+            let updated = apply_settings_patch(
+                &Settings::default(),
+                &json!({ "translation_api_format": format }),
+                &data_dir,
+            )
+            .unwrap();
+            assert_eq!(updated.translation_api_format, format);
+        }
+        // 非白名单协议 / 非字符串在保存时即拒绝（validate_settings 兜底）。
+        for bad in [json!("grpc"), json!(1)] {
+            assert!(
+                apply_settings_patch(
+                    &Settings::default(),
+                    &json!({ "translation_api_format": bad }),
+                    &data_dir
+                )
+                .is_err(),
+                "bad={bad}"
+            );
+        }
+        // 各协议的应用自有字段不允许出现在高级 JSON 中。
+        assert_eq!(
+            apply_settings_patch(
+                &Settings::default(),
+                &json!({
+                    "translation_api_format": "anthropic",
+                    "translation_extra": { "system": "越权" }
+                }),
+                &data_dir
+            )
+            .unwrap_err(),
+            "高级 JSON 不能覆盖模型、消息、系统提示、输出格式、流式、工具或凭据字段"
+        );
         cleanup(&data_dir);
     }
 

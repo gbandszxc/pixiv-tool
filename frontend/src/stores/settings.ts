@@ -29,6 +29,8 @@ export const useSettingsStore = defineStore("settings", () => {
     // SauceNAO API Key（以图识图必需），默认未配置
     saucenao_api_key: "",
     translation_api_url: "",
+    // 接口协议（默认 Chat Completions），取值见 api/translation.ts 的 API_FORMATS
+    translation_api_format: "chat_completions",
     translation_model: "",
     // 翻译目标语言（空串=跟随界面语言），取值见 api/translation.ts 的 TARGET_LANGUAGE_CODES
     translation_target_language: "",

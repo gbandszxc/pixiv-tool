@@ -66,6 +66,7 @@ function ensureSettings(): Settings {
       novel_bg_color: "",
       saucenao_api_key: "",
       translation_api_url: "",
+      translation_api_format: "chat_completions",
       translation_model: "",
       translation_target_language: "",
       translation_extra: {},

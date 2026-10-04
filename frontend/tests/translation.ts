@@ -27,6 +27,7 @@ let capturedSettings: Record<string, unknown> = {};
 let probeModels: string[] | string = [];
 let probeTestOk = true;
 let lastProbeUrl = "";
+let lastProbeFormat = "";
 const book = { bible: { style: "克制", terms: [] }, pages: { "1": [{ line: 0, text: "序章译名" }, { line: 2, text: "爱丽丝抬头。<script>这是纯文本</script>" }] } };
 window.__TAURI_INTERNALS__ = {
   transformCallback: () => 1,
@@ -38,6 +39,7 @@ window.__TAURI_INTERNALS__ = {
     if (command === "novel_translation_get") return book;
     if (command === "translation_models") {
       lastProbeUrl = args.probe?.api_url ?? "";
+      lastProbeFormat = args.probe?.format ?? "";
       return typeof probeModels === "string" ? Promise.reject(probeModels) : [...probeModels];
     }
     if (command === "translation_test") return probeTestOk ? Promise.resolve() : Promise.reject("模拟检测失败");
@@ -119,14 +121,18 @@ async function run() {
   for (const locale of ["zh-CN", "en-US"] as const) {
     i18n.global.locale.value = locale; await settle();
     assert(!renderErrors.length, `小说翻译设置渲染异常（${locale}）：${renderErrors.map(String).join("；")}`);
-    for (const id of ["translation-url", "translation-key", "translation-model", "translation-target-language", "translation-json"]) {
+    for (const id of ["translation-format", "translation-url", "translation-key", "translation-model", "translation-target-language", "translation-json"]) {
       assert(panelHost.querySelector(`#${id}`), `小说翻译设置字段 ${id} 在 ${locale} 下可见`);
     }
+    assert(panelHost.querySelectorAll("fieldset.translation-group").length === 3, `小说翻译表单分为三组（${locale}）`);
     assert(panelHost.querySelector('[for="translation-json"]')?.parentElement?.textContent?.includes('{"reasoning_effort":"high","max_completion_tokens":8192}'), `JSON 示例在 ${locale} 下完整显示`);
   }
   i18n.global.locale.value = "zh-CN"; await settle();
+  assert([...panelHost.querySelectorAll("fieldset.translation-group > .translation-legend")].map(el => el.textContent?.trim()).join("/") === "服务连接/模型与语言/高级", "子分区标题为服务连接 / 模型与语言 / 高级");
+  assert(panelHost.querySelectorAll('fieldset.translation-group[role="group"][aria-labelledby]').length === 3, "分组以 role=group + aria-labelledby 命名");
   const input = async (id: string, value: string) => { const element = panelHost.querySelector<HTMLElement & { value: string }>(`#${id}`); assert(element, `字段 ${id}`); element.value = value; element.dispatchEvent(new Event("input", { bubbles: true })); await settle(); };
   assert(panelHost.querySelector("#translation-key")?.getAttribute("type") === "password", "Key 为密码字段");
+  assert(panelHost.querySelector(".translation-key-chip")?.textContent?.trim() === "已保存", "已存凭据在标签行显示状态胶囊");
   await input("translation-json", "[]"); assert(!await panel.save(), "拒绝非对象 JSON");
   await input("translation-json", '{"reasoning_effort":"high","thinking":{"budget_tokens":2048}}');
   await input("translation-url", "https://example.com/v1"); await input("translation-model", "test-model"); await input("translation-key", "test-only-key");
@@ -136,6 +142,7 @@ async function run() {
   assert(!panel.hasUnsaved(), "保存后清除脏状态");
   await panel.save(); assert(!("translation_api_key" in capturedSettings), "空白字段不覆盖已存 Key");
   [...panelHost.querySelectorAll<HTMLElement>("md-text-button")].find(el => el.textContent?.trim() === "清除已保存的 Key")?.click(); await settle();
+  assert(panelHost.querySelector(".translation-key-chip")?.textContent?.trim() === "保存时清除 Key", "清除动作在胶囊上回显待清除状态");
   assert(panel.hasUnsaved() && await panel.save() && capturedSettings.translation_api_key === "", "显式清除凭据");
   await input("translation-key", "discard-only"); panel.reset(); await settle(); assert(!panel.hasUnsaved(), "取消清空敏感草稿");
 
@@ -150,6 +157,20 @@ async function run() {
   assert(modelControl.textContent?.includes("glm-model-a") && modelControl.textContent?.includes("test-model"), "下拉列出获取到的模型并保留当前值");
   modelControl.value = "glm-model-a"; modelControl.dispatchEvent(new Event("change")); await settle();
   assert(modelControl.value === "glm-model-a", "选定模型即当前模型");
+  // 接口协议：默认 Chat Completions；切换后 URL 占位、模型列表与探测草稿同步换协议。
+  const formatSelect = panelHost.querySelector<HTMLElement & { value: string }>("#translation-format");
+  assert(formatSelect?.tagName === "MD-OUTLINED-SELECT" && formatSelect.value === "chat_completions", "接口协议默认 Chat Completions");
+  assert(lastProbeFormat === "chat_completions", "探测草稿带上当前协议");
+  formatSelect.value = "anthropic"; formatSelect.dispatchEvent(new Event("change", { bubbles: true })); await settle();
+  const urlField = panelHost.querySelector<HTMLElement & { placeholder: string }>("#translation-url");
+  assert(urlField?.placeholder === "https://api.anthropic.com/v1", "切换协议后 URL 占位跟随");
+  assert(panelHost.querySelector("#translation-model")?.tagName === "MD-OUTLINED-TEXT-FIELD", "切换协议重置已获取的模型列表");
+  probeModels = ["claude-model-b", "claude-model-a"];
+  findButton("获取模型")!.click(); await settle();
+  assert(lastProbeFormat === "anthropic", "切换协议后探测使用新协议");
+  formatSelect.value = "chat_completions"; formatSelect.dispatchEvent(new Event("change", { bubbles: true })); await settle();
+  probeModels = ["glm-model-b", "glm-model-a"];
+  findButton("获取模型")!.click(); await settle();
   findButton("检测可用")!.click(); await settle();
   const okStatus = panelHost.querySelector('[role="status"]');
   assert(okStatus?.textContent?.includes("模型可用") && okStatus.classList.contains("state-success"), "检测成功为绿色状态");
@@ -182,6 +203,6 @@ async function run() {
   document.querySelector<HTMLButtonElement>("#preview-dark")!.onclick = () => document.documentElement.classList.add("dark");
   document.querySelector<HTMLButtonElement>("#preview-light")!.onclick = () => document.documentElement.classList.remove("dark");
   document.querySelector<HTMLElement>("#preview-controls")!.hidden = false;
-  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、状态点与 hover 报错、统一翻译中状态、目标语言一致提示与强制翻译、设置 JSON 与凭据草稿、获取模型原位下拉与绿红检测状态、目标语言选择";
+  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、状态点与 hover 报错、统一翻译中状态、目标语言一致提示与强制翻译、设置三组分区与凭据状态胶囊、JSON 校验与凭据草稿、获取模型原位下拉与绿红检测状态、目标语言选择、接口协议默认值与切换";
 }
 run().catch(error => { document.querySelector("#translation-result")!.textContent = `FAIL: ${error.message}`; console.error(error); });
