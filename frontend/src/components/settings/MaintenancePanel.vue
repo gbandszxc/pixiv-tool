@@ -5,16 +5,20 @@
     <section :aria-label="t('settings.cacheLabel')">
       <div class="maintenance-heading"><h3>{{ t('settings.cacheLabel') }}</h3><span>{{ t('settings.totalSize', { size: info ? formatBytes(info.translation.bytes + info.images.bytes) : '—' }) }}</span></div>
       <div v-for="kind in cacheKinds" :key="kind" class="maintenance-resource">
-        <div class="maintenance-row"><strong>{{ t(`settings.cacheKinds.${kind}`) }}</strong><span class="maintenance-size">{{ info ? formatBytes(info[kind].bytes) : '—' }}</span><md-text-button :disabled="busy || !info || !info[kind].files" @click="askClear(kind)">{{ t('common.clear') }}</md-text-button></div>
-        <div class="maintenance-path"><code>{{ info?.[kind].path || '—' }}</code><md-text-button :disabled="!info" @click="copyPath(info![kind].path)">{{ t('settings.copyPath') }}</md-text-button></div>
-        <p class="field-hint">{{ t(`settings.cacheHints.${kind}`) }}</p>
+        <div class="maintenance-row">
+          <span class="field-label maintenance-name"><strong>{{ t(`settings.cacheKinds.${kind}`) }}</strong><HelpTooltip :label="t(`settings.cacheKinds.${kind}`)" :text="t(`settings.cacheHints.${kind}`)" /></span>
+          <span class="maintenance-size">{{ info ? formatBytes(info[kind].bytes) : '—' }}</span>
+          <CopyPathButton :path="info?.[kind].path ?? ''" :disabled="!info" />
+          <md-text-button :disabled="busy || !info || !info[kind].files" @click="askClear(kind)">{{ t('common.clear') }}</md-text-button>
+        </div>
       </div>
     </section>
     <section :aria-label="t('settings.logsLabel')">
-      <div class="maintenance-heading"><h3>{{ t('settings.logsLabel') }}</h3><span>{{ t('settings.totalSize', { size: info ? formatBytes(info.logs.bytes) : '—' }) }}</span></div>
-      <div class="maintenance-path"><code>{{ info?.logs.path || '—' }}</code><md-text-button :disabled="!info" @click="copyPath(info!.logs.path)">{{ t('settings.copyPath') }}</md-text-button></div>
-      <div class="maintenance-row"><span class="field-hint">{{ t('settings.logsPolling') }}</span><md-text-button :disabled="busy || !info?.logs.bytes" @click="askClear('logs')">{{ t('settings.clearLogs') }}</md-text-button></div>
-      <p class="field-hint">{{ t('settings.logsGuide') }}</p>
+      <div class="maintenance-heading">
+        <span class="field-label maintenance-name"><h3>{{ t('settings.logsLabel') }}</h3><HelpTooltip :label="t('settings.logsLabel')" :text="t('settings.logsGuide')" /></span>
+        <span>{{ t('settings.totalSize', { size: info ? formatBytes(info.logs.bytes) : '—' }) }}</span>
+      </div>
+      <div class="maintenance-row"><span class="field-hint">{{ t('settings.logsPolling') }}</span><CopyPathButton :path="info?.logs.path ?? ''" :disabled="!info" /><md-text-button :disabled="busy || !info?.logs.bytes" @click="askClear('logs')">{{ t('settings.clearLogs') }}</md-text-button></div>
       <pre ref="logElement" class="maintenance-log" tabindex="0" :aria-label="t('settings.recentLogs')">{{ logs || t('settings.logsEmpty') }}</pre>
     </section>
     <dialog ref="confirmation" class="m3-dialog" :aria-label="t('settings.clearStorage')" @close="action = null">
@@ -29,6 +33,8 @@ import { useI18n } from "vue-i18n";
 import { clearCache, clearLogs, getMaintenanceInfo, readLogs, type CacheKind, type MaintenanceInfo } from "../../api/maintenance";
 import { errorMessage } from "../../api/tauri";
 import { notify } from "../../ui/notify";
+import HelpTooltip from "../common/HelpTooltip.vue";
+import CopyPathButton from "./CopyPathButton.vue";
 const { t, locale } = useI18n();
 const cacheKinds: CacheKind[] = ['translation', 'images'];
 const info = ref<MaintenanceInfo | null>(null);
@@ -81,10 +87,6 @@ async function poll(): Promise<void> {
 function onVisibility(): void { if (!document.hidden) { clearTimeout(timer); void poll(); } }
 onMounted(() => { document.addEventListener('visibilitychange', onVisibility); void poll(); });
 onBeforeUnmount(() => { stopped = true; generation++; clearTimeout(timer); document.removeEventListener('visibilitychange', onVisibility); });
-async function copyPath(path: string): Promise<void> {
-  try { await navigator.clipboard.writeText(path); notify(t('settings.pathCopied')); }
-  catch { notify(t('settings.copyFailed')); }
-}
 async function askClear(kind: CacheKind | 'logs'): Promise<void> { action.value = kind; await nextTick(); confirmation.value?.showModal(); }
 async function confirmClear(): Promise<void> {
   const kind = action.value; confirmation.value?.close();
@@ -97,20 +99,16 @@ async function confirmClear(): Promise<void> {
 </script>
 <style scoped>
 .maintenance-storage { display: grid; gap: var(--space-xl); min-width: 0; margin-top: var(--space-lg); }
-.maintenance-heading, .maintenance-row, .maintenance-path, .maintenance-error { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
+.maintenance-heading, .maintenance-row, .maintenance-error { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 .maintenance-heading { justify-content: space-between; margin-bottom: var(--space-sm); }
 .maintenance-heading h3 { margin: 0; font-size: 14px; font-weight: 600; }
 .maintenance-heading > span, .maintenance-size, .field-hint { color: var(--ink-muted); font-size: 12px; }
 .maintenance-size { margin-left: auto; font-variant-numeric: tabular-nums; }
 .maintenance-row strong { font-size: 14px; font-weight: 500; }
-.maintenance-row > md-text-button { margin-left: auto; }
-.maintenance-row > .maintenance-size + md-text-button { margin-left: 0; }
+.maintenance-row > .field-hint { margin-right: auto; }
 .maintenance-resource { padding: var(--space-sm) 0; border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
-.maintenance-path code { flex: 1; min-width: 0; overflow-wrap: anywhere; color: var(--ink-muted); font-size: 12px; }
-.maintenance-path > md-text-button { flex: none; }
 .field-hint { margin: var(--space-xxs) 0; }
 .maintenance-log { margin: var(--space-sm) 0 0; padding: var(--space-md); max-height: calc(10 * var(--space-xl)); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--md-sys-color-surface); border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); border-radius: var(--radius-control); color: var(--ink); font-size: 12px; line-height: 1.5; }
 .maintenance-log:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
 .maintenance-error { color: var(--md-sys-color-error); font-size: 12px; }
-@media (max-width: 640px) { .maintenance-path { align-items: flex-start; } .maintenance-path code { flex-basis: 100%; } }
 </style>
