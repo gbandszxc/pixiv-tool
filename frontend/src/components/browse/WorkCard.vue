@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 作品卡片：封面 + 标题（两行省略）+ 作者行 + 左上角徽标（页数 / R-18）。
+ * 作品卡片：封面 + 标题（两行省略）+ 作者行 + 左上角徽标（页数 + R-18/R-18G，各自独立并列）。
  * 整卡可点击（emit click），键盘可聚焦；无阴影，hover 用 8% primary 状态层（DESIGN.md）。
  */
 import { computed, ref, watch } from "vue";
@@ -37,14 +37,15 @@ const fillLabel = computed(() =>
 /** 小说封面为 1:1.4 竖版，其余按 1:1 方形展示。 */
 const portrait = computed(() => props.item.kind === "novel");
 
-/** R-18 优先于页数徽标。 */
-const badgeText = computed(() => {
+/** 页数徽标：多图（>1）恒显示，插画与漫画同口径，不因 R-18 让位。 */
+const pageBadge = computed(() => (props.item.page_count > 1 ? `${props.item.page_count}P` : ""));
+
+/** R-18 / R-18G 徽标：与页数各自独立，同时命中时并排显示。 */
+const restrictBadge = computed(() => {
   if (props.item.x_restrict === 1) return t("common.browseR18");
   if (props.item.x_restrict === 2) return t("common.browseR18G");
-  return props.item.page_count > 1 ? `${props.item.page_count}P` : "";
+  return "";
 });
-
-const restricted = computed(() => props.item.x_restrict === 1 || props.item.x_restrict === 2);
 
 /** 网格封面档位（thumb_quality_grid）。 */
 const gridTier = useThumbTier("thumb_quality_grid");
@@ -128,7 +129,10 @@ function handleFillForm(): void {
           @load="coverLoaded = true"
           @error="coverFailed = true"
         />
-        <span v-if="badgeText" class="badge" :class="{ restricted }">{{ badgeText }}</span>
+        <span v-if="pageBadge || restrictBadge" class="badges">
+          <span v-if="pageBadge" class="badge">{{ pageBadge }}</span>
+          <span v-if="restrictBadge" class="badge restricted">{{ restrictBadge }}</span>
+        </span>
         <span v-if="item.kind === 'novel'" class="kind-mark" :title="t('nav.browseNovel')">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <!-- lucide book -->
@@ -305,11 +309,18 @@ function handleFillForm(): void {
   inset: 0;
 }
 
-.badge {
+/* 徽标组：左上角，页数与 R-18 各自独立胶囊（窄卡时允许换行） */
+.badges {
   position: absolute;
   top: var(--space-xs);
   left: var(--space-xs);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xxs);
   max-width: calc(100% - 2 * var(--space-xs));
+}
+
+.badge {
   padding: 1px var(--space-sm);
   border-radius: 999px;
   background: var(--md-sys-color-surface-container);

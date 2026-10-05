@@ -107,6 +107,17 @@ async function run() {
   await nextTick();
   assert(fallback.el.querySelector<HTMLImageElement>("img")!.src.includes("600x1200_90"), "两档失败尝试原始 URL");
   fallback.dispose();
+  const badgeTexts = (c: ReturnType<typeof mount>): string[] =>
+    Array.from(c.el.querySelectorAll(".badge")).map((n) => n.textContent ?? "");
+  const multi = mount(WorkCard, { item: { ...item, id: 90, page_count: 3, x_restrict: 1 } });
+  assert(badgeTexts(multi).join("|") === "3P|R-18", "多图 R-18：页数与 R-18 徽标并存");
+  multi.dispose();
+  const single = mount(WorkCard, { item: { ...item, id: 91, page_count: 1, x_restrict: 2 } });
+  assert(badgeTexts(single).join("|") === "R-18G", "单图 R-18G：只显示 R-18G 徽标");
+  single.dispose();
+  const plano = mount(WorkCard, { item: { ...item, id: 92, page_count: 5, x_restrict: 0 } });
+  assert(badgeTexts(plano).join("|") === "5P", "非 R-18 多图：显示页数徽标");
+  plano.dispose();
   const grid = mount(WorkGrid, { items: Array.from({ length: 13 }, (_, n) => ({ ...item, id: n + 1, cover: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>" })) });
   const images = grid.el.querySelectorAll("img");
   assert(images[0].loading === "eager" && images[12].loading === "lazy", "首屏立即请求，其余继续懒加载");
@@ -115,7 +126,7 @@ async function run() {
 
 const output = document.querySelector("#loading-result")!;
 run().then(() => {
-  output.textContent = "PASS：渐进图片、失败保留、首页即时缓存、后台刷新、账号隔离、过期与迟到响应";
+  output.textContent = "PASS：渐进图片、失败保留、首页即时缓存、后台刷新、账号隔离、过期与迟到响应、页数与 R-18 徽标并存";
   output.setAttribute("data-status", "passed");
 }).catch((err: unknown) => {
   output.textContent = `FAIL：${String(err)}`;

@@ -321,7 +321,7 @@ function openWork(item: BrowseWorkItem): void {
   position: relative;
 }
 
-/* rank 徽标：盖在封面右上（左上是页数/R-18 徽标、右下是 novel 角标，互不遮挡） */
+/* rank 徽标：盖在封面右上（左上是页数 + R-18 徽标并排、右下是 novel 角标，互不遮挡） */
 .rank-badge {
   position: absolute;
   top: var(--space-xs);
