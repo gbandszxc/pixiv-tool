@@ -977,14 +977,19 @@ task://done       {task_id, status, done, total, failed, skipped}
 
 启动 3s 后静默检查一次，仅新版弹确认；手动检查沿用账号菜单。用户确认后进入
 `UpdateDialog`：available → downloading → opening → guide；失败进入 error（重新下载 / 打开发布页），取消进入 cancelled（可重新下载）。
-更新不复用携带 Pixiv Cookie 的客户端，不引入本地 HTTP 服务。元数据用 GitHub REST
-`/repos/gbandszxc/pixiv-tool/releases/tags/{tag}`，优先 v 前缀再裸 tag，仅接受精确版本稳定 Release。
+更新不复用携带 Pixiv Cookie 的客户端，不引入本地 HTTP 服务。资产清单双源获取：首选 GitHub REST
+`/repos/gbandszxc/pixiv-tool/releases/tags/{tag}`（结构化、带精确大小与摘要），优先 v 前缀再裸 tag，
+仅接受精确版本稳定 Release；API 被匿名限额或网络失败时回退发布页 `expanded_assets/<tag>` 片段
+（同 github.com 域、不受 API 限额影响），从 `releases/download/<tag>/` 链接提取资产名（安全字符集、去重）、
+从 digest 复制按钮（aria-label 与 value 同开标签）提取 SHA256；片段没有精确大小（按 0 处理），
+两通道均失败才报"无法读取该版本的发布包"。
 按 Tauri bundler 内嵌包类型与编译架构匹配 CI 文件名（见 PACKAGING §8），不模糊匹配、不跨类型降级；
 debug/便携未知包类型提示发布页兜底。macOS 原生包优先同架构 DMG，通用 Mach-O 保持 universal DMG。
 
 每次下载写系统临时目录 `pixiv-tool-update/<version>/<uuid>/<asset>.part`，成功才 rename；
-失败/取消清理该次目录，完成包保留供安装。校验发布资产 size、HTTP Content-Length（存在时）、
-实际接收长度，以及 GitHub asset digest（存在时必须为合法 SHA256）；缺摘要时仍检查大小，
+失败/取消清理该次目录，完成包保留供安装。校验发布资产 size（精确大小存在时对账 Content-Length 与
+实际接收长度；片段回退的 size=0 资产以响应 Content-Length 为对账基准，缺失时仅剩摘要与来源校验），
+以及 GitHub asset digest（存在时必须为合法 SHA256）；缺摘要时仍检查大小，
 摘要不是签名验证。URL 只接受本仓库固定 releases/download 前缀和该版本文件名。
 元数据请求每通道 15s；安装包响应头等待 30s、每通道请求总超时 1h、分块 30s 无数据超时；先系统代理、请求失败再直连，
 传输中断由用户重试，不断点续传。单次更新独立于 Pixiv 任务队列、不占抓取并发。

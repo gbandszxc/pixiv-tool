@@ -24,7 +24,9 @@ macOS .app 交付形式对应 DMG；读取可执行文件 Mach-O 魔数保留 un
 
 ## 影响
 
-增加 GitHub REST 元数据依赖（匿名限额/网络失败可重试或打开发布页），wreq 开启 stream feature、
+增加 GitHub REST 元数据依赖（匿名限额/网络失败自动回退发布页 `expanded_assets/<tag>` 网页片段：
+同 github.com 域、不受 API 匿名限额影响，片段含资产名与 SHA256 摘要但无精确字节大小，
+下载期以响应 Content-Length 对账；两通道均失败才报错），wreq 开启 stream feature、
 使用 sha2 流式哈希；沿用版本锁与系统代理/直连策略。debug/未知便携形式无法自动判断安装方式，
 给出发布页兜底；未来新增发布格式须同步匹配规则、PACKAGING 与测试。完成包由系统临时目录生命周期管理，
 避免清理可能正在使用的安装包。
