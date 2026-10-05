@@ -38,7 +38,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 
 ### 2. 安全边界（不可协商）
 
-- 登录态只进系统凭据存储（macOS Keychain / Windows Credential Manager / Linux Secret Service）。**绝不入库**；`config/` 下不得出现任何 cookie 文件
+- 登录态只进系统凭据存储（macOS Keychain / Windows Credential Manager / Linux Secret Service）。**绝不入库**；`config/` 下不得出现任何 cookie 文件（豁免：`config/login-browser-profile` 与 `config/login-webview-profile` 是浏览器/webview 引擎自管的隔离登录数据目录，属 ADR 0009/0011 既定设计，会话清理时机见 ADR 0011）
 - `data/` 是用户数据（app.db、logs）。**绝不入库**
 - 界面、日志、报错中不得出现 Cookie / token / 登录凭据原文
 - `src-tauri/icons/` **必须入库**（tauri.conf.json 引用，缺失即构建失败）

@@ -167,6 +167,8 @@ export const useAuthStore = defineStore("auth", () => {
     isSwitching.value = true;
     try {
       await invoke("auth_account_switch", { userId: targetUserId });
+      // 先清旧身份再探测：checkStatus 一旦失败，外壳不会残留旧账号头像与 uid
+      clearAuth();
       await checkStatus();
       await fetchAccounts();
     } finally {
@@ -179,6 +181,8 @@ export const useAuthStore = defineStore("auth", () => {
     if (!isTauri()) mockAuthLogout();
     else await invoke("auth_logout");
     // 有剩余账号时后端已回退到首个登录态；无账号时状态自然变为未登录。
+    // 同 switchAccount：先清旧身份，checkStatus 失败时也不残留。
+    clearAuth();
     await checkStatus();
     await fetchAccounts();
   }

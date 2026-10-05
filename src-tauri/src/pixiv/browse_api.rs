@@ -558,13 +558,25 @@ fn cached_self_uid() -> Option<(i64, Instant)> {
 }
 
 /// 自 uid 失效自愈：收藏接口 404/400（uid 失效极罕见）或登录切换后可清缓存。
-#[allow(dead_code)]
 fn invalidate_self_uid() {
     if let Some(cache) = SELF_UID_CACHE.get() {
         if let Ok(mut guard) = cache.lock() {
             *guard = None;
         }
     }
+}
+
+/// 会话身份缓存统一失效：清自 uid 缓存 + 主站 csrf token 缓存。
+///
+/// 两个缓存都是进程级单条（30 分钟 TTL），缓存的是「当前登录身份」的取数
+/// 依据：切换 / 登出 / 重登账号后若不失效，收藏列表 / 标签仍按旧账号 uid
+/// 拼路径、写操作仍带旧会话 token，直到 TTL 过期（用户表现为「切账号必须
+/// 退出程序才能看到新账号收藏」）。所有改变当前登录身份的命令成功路径
+/// （auth_cmds.rs 的 login / login_manual / logout / account_switch /
+/// status 清理分支）都必须调用本函数；缓存未初始化时为无操作。
+pub fn invalidate_session_caches() {
+    invalidate_self_uid();
+    invalidate_web_csrf();
 }
 
 // ----------------------------------------------------------------------
@@ -934,11 +946,12 @@ fn parse_channel(body: &Value, kind: &str) -> BrowseChannel {
             arr.iter()
                 .filter_map(|t| {
                     let name = str_field(t, "tag")?;
-                    let translated_name = tag_translation
-                        .and_then(|m| m.get(&name))
-                        .and_then(|entry| {
-                            str_field(entry, "zh").or_else(|| str_field(entry, "zh_tw"))
-                        });
+                    let translated_name =
+                        tag_translation
+                            .and_then(|m| m.get(&name))
+                            .and_then(|entry| {
+                                str_field(entry, "zh").or_else(|| str_field(entry, "zh_tw"))
+                            });
                     Some(TrendingTag {
                         name,
                         translated_name,
@@ -995,7 +1008,11 @@ fn parse_watchlist(body: &Value, kind: &str) -> (Vec<BrowseWatchlistItem>, i64, 
         parse_index(body, "illust")
     };
     let series: &[Value] = body
-        .get(if is_novel { "novelSeries" } else { "illustSeries" })
+        .get(if is_novel {
+            "novelSeries"
+        } else {
+            "illustSeries"
+        })
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
@@ -1027,7 +1044,11 @@ fn parse_watchlist(body: &Value, kind: &str) -> (Vec<BrowseWatchlistItem>, i64, 
                 }
             }
             let latest_work_id = s
-                .get(if is_novel { "latestNovelId" } else { "latestIllustId" })
+                .get(if is_novel {
+                    "latestNovelId"
+                } else {
+                    "latestIllustId"
+                })
                 .and_then(as_i64_loose);
             // 封面/R-18：小说直接取系列本体；漫画按最新话 id 映射缩略项
             let (cover, x_restrict) = if is_novel {
@@ -1817,12 +1838,15 @@ fn parse_published_comment(body: &Value) -> Result<PublishedComment, PixivError>
         _ => {
             return Err(PixivError::Client(
                 "评论发布响应缺少评论 ID，请刷新后重试".into(),
-            ))
+            ));
         }
     };
     Ok(PublishedComment {
         comment_id,
-        user_id: body.get("user_id").and_then(as_i64_loose).unwrap_or_default(),
+        user_id: body
+            .get("user_id")
+            .and_then(as_i64_loose)
+            .unwrap_or_default(),
         user_name: str_field(body, "user_name").unwrap_or_default(),
         parent_id: str_field(body, "parent_id"),
         stamp_id: str_field(body, "stamp_id"),
@@ -1880,11 +1904,7 @@ fn parse_bookmark_list(
         }
         _ => None,
     };
-    BrowseBookmarkList {
-        items,
-        total,
-        next,
-    }
+    BrowseBookmarkList { items, total, next }
 }
 
 /// 收藏标签数组 `[{tag, cnt}]` → Vec（空 tag 名原样保留：「未分类」聚合标签
@@ -2154,7 +2174,9 @@ impl PixivApi {
             Ok(json!({"is_followed": followed}))
         }
         .await;
-        if matches!(&result, Err(PixivError::Auth)) {
+        // 自愈面与其他写方法对齐（Auth|Client）：token 失效既有 401/403（Auth），
+        // 也有 200 + error 信封（validate 阶段转 Client），统一清缓存重取
+        if matches!(&result, Err(PixivError::Auth | PixivError::Client(_))) {
             invalidate_web_csrf();
         }
         result
@@ -2619,7 +2641,7 @@ impl PixivApi {
         }
         let parent_id = match parent_id {
             Some(p) if p.trim().is_empty() => {
-                return Err(PixivError::Client("回复目标评论 ID 不能为空".into()))
+                return Err(PixivError::Client("回复目标评论 ID 不能为空".into()));
             }
             Some(p) => Some(p.trim()),
             None => None,
@@ -2647,7 +2669,7 @@ impl PixivApi {
         }
         let parent_id = match parent_id {
             Some(p) if p.trim().is_empty() => {
-                return Err(PixivError::Client("回复目标评论 ID 不能为空".into()))
+                return Err(PixivError::Client("回复目标评论 ID 不能为空".into()));
             }
             Some(p) => Some(p.trim()),
             None => None,
@@ -2657,24 +2679,23 @@ impl PixivApi {
     }
 
     /// 评论写公共尾部（文本评论 / 表情贴图共用）：发 form → 解析 `PublishedComment`；
-    /// Auth/Client 失败清主站 csrf 缓存（与收藏写一致）。
+    /// Auth/Client 失败清主站 csrf 缓存（与收藏写一致）。解析阶段（含 200 +
+    /// error 信封转出的 Client、token 失效时的 HTML 登录页）也过同一自愈面。
     async fn post_comment_form(&self, path: &str, form: &str) -> Result<Value, PixivError> {
         let client = self.client();
         let token = web_csrf_token(client).await?;
-        match client.post_form(path, Some(&token), form).await {
-            Ok(text) => {
-                let value: Value = serde_json::from_str(&text)
-                    .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
-                let body = super::client::extract_ajax_body(value)?;
-                Ok(to_value(&parse_published_comment(&body)?))
-            }
-            Err(err) => {
-                if matches!(err, PixivError::Auth | PixivError::Client(_)) {
-                    invalidate_web_csrf();
-                }
-                Err(err)
-            }
+        let result = async {
+            let text = client.post_form(path, Some(&token), form).await?;
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
+            let body = super::client::extract_ajax_body(value)?;
+            Ok(to_value(&parse_published_comment(&body)?))
         }
+        .await;
+        if matches!(&result, Err(PixivError::Auth | PixivError::Client(_))) {
+            invalidate_web_csrf();
+        }
+        result
     }
 
     /// 删除评论（写操作）。**仅供在线写用例发完即删**（不留测试垃圾），
@@ -2695,19 +2716,17 @@ impl PixivApi {
         let (path, form) = comment_delete_request(kind, id, comment_id)?;
         let client = self.client();
         let token = web_csrf_token(client).await?;
-        match client.post_form(path, Some(&token), &form).await {
-            Ok(text) => {
-                let value: Value = serde_json::from_str(&text)
-                    .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
-                super::client::extract_ajax_body(value).map(|_| json!({"deleted": true}))
-            }
-            Err(err) => {
-                if matches!(err, PixivError::Auth | PixivError::Client(_)) {
-                    invalidate_web_csrf();
-                }
-                Err(err)
-            }
+        let result = async {
+            let text = client.post_form(path, Some(&token), &form).await?;
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
+            super::client::extract_ajax_body(value).map(|_| json!({"deleted": true}))
         }
+        .await;
+        if matches!(&result, Err(PixivError::Auth | PixivError::Client(_))) {
+            invalidate_web_csrf();
+        }
+        result
     }
 }
 
@@ -2723,7 +2742,9 @@ const BOOKMARK_LIMIT_MAX: i64 = 100;
 
 impl PixivApi {
     /// 收藏列表：GET /ajax/user/{uid}/(illusts|novels)/bookmarks（§11.1）。
-    /// 自 uid 走 /ajax/user/self 探测缓存；rest: show=公开 / hide=非公开；
+    /// uid：user_id 缺省走 /ajax/user/self 探测缓存；显式传入按该作者取
+    /// 他人公开收藏（§11.8，路径直接用传入 uid，服务端要求 rest=show）；
+    /// rest: show=公开 / hide=非公开；
     /// order 写死 desc（asc 静默空列表）、mode 写死 all（其余值报错）；
     /// 项内带 bookmarkData 收藏态（bookmarkId/bookmarkRestrict）。
     pub async fn bookmark_list(
@@ -2733,12 +2754,19 @@ impl PixivApi {
         tag: Option<&str>,
         offset: i64,
         limit: Option<i64>,
+        user_id: Option<i64>,
     ) -> Result<Value, PixivError> {
         if !matches!(kind, "illust" | "novel") {
             return Err(PixivError::Client(format!("不支持的收藏类型: {kind}")));
         }
         if !matches!(rest, "show" | "hide") {
             return Err(PixivError::Client(format!("不支持的可见范围: {rest}")));
+        }
+        // 他人无私密可见范围（§11.8：rest=hide 服务端直接「没有权限」），前置拒绝
+        if user_id.is_some() && rest != "show" {
+            return Err(PixivError::Client(
+                "他人收藏仅支持 rest=show（私密收藏仅本人可见）".into(),
+            ));
         }
         let offset = offset.max(0);
         let default_limit = if kind == "novel" {
@@ -2748,7 +2776,11 @@ impl PixivApi {
         };
         let limit = limit.unwrap_or(default_limit).clamp(1, BOOKMARK_LIMIT_MAX);
         let client = self.client();
-        let uid = self_user_id(client).await?;
+        // uid：显式传入 = 该作者（他人公开收藏）；缺省 = 登录用户（30min 缓存探测）
+        let uid = match user_id {
+            Some(uid) => uid,
+            None => self_user_id(client).await?,
+        };
         let body = client
             .get_json(&bookmark_list_path(uid, kind, rest, tag, offset, limit))
             .await?;
@@ -2855,28 +2887,37 @@ impl PixivApi {
         }
         let client = self.client();
         let token = web_csrf_token(client).await?;
-        if kind == "illust" {
-            let text = client
-                .post_form(
-                    "/ajax/illusts/bookmarks/delete",
-                    Some(&token),
-                    &illust_delete_form(bookmark_id),
-                )
-                .await?;
-            // 响应错误信标（error 真值 → API error）在重试管线之外解析
-            let value: Value = serde_json::from_str(&text)
-                .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
-            super::client::extract_ajax_body(value).map(|_| Value::Null)
-        } else {
-            client
-                .post_form(
-                    "/novel/bookmark_setting.php",
-                    None,
-                    &novel_delete_form(&token, bookmark_id),
-                )
-                .await?;
-            Ok(Value::Null)
+        let result = async {
+            if kind == "illust" {
+                let text = client
+                    .post_form(
+                        "/ajax/illusts/bookmarks/delete",
+                        Some(&token),
+                        &illust_delete_form(bookmark_id),
+                    )
+                    .await?;
+                // 响应错误信标（error 真值 → API error）在重试管线之外解析
+                let value: Value = serde_json::from_str(&text)
+                    .map_err(|e| PixivError::Client(format!("Pixiv 响应不是有效 JSON: {e}")))?;
+                super::client::extract_ajax_body(value).map(|_| Value::Null)
+            } else {
+                client
+                    .post_form(
+                        "/novel/bookmark_setting.php",
+                        None,
+                        &novel_delete_form(&token, bookmark_id),
+                    )
+                    .await?;
+                Ok(Value::Null)
+            }
         }
+        .await;
+        // 此前两分支均直接透传、无自愈：token 失效（Auth 或 200+error 信封）
+        // 会让取消收藏持续失败到 token TTL 过期，这里对齐其他写方法
+        if matches!(&result, Err(PixivError::Auth | PixivError::Client(_))) {
+            invalidate_web_csrf();
+        }
+        result
     }
 }
 
@@ -2886,6 +2927,9 @@ impl PixivApi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 缓存类测试共享同一组进程级 static，持此门串行执行防并行互踩。
+    static CACHE_TEST_GATE: Mutex<()> = Mutex::new(());
 
     #[test]
     fn user_follow_form_and_success_signals() {
@@ -3153,11 +3197,7 @@ mod tests {
             vec![1, 3]
         );
         assert_eq!(
-            ch.ranking
-                .items
-                .iter()
-                .map(|i| i.rank)
-                .collect::<Vec<_>>(),
+            ch.ranking.items.iter().map(|i| i.rank).collect::<Vec<_>>(),
             vec![Some(1), Some(2)],
             "ranking 条目的 rank 应保留"
         );
@@ -3208,7 +3248,10 @@ mod tests {
         assert!(ch.recommend.items.is_empty());
         assert!(ch.ranking.items.is_empty());
         assert!(ch.new_post.items.is_empty());
-        assert!(ch.tag_sections.is_empty(), "无 recommendByTag 输出空数组不报错");
+        assert!(
+            ch.tag_sections.is_empty(),
+            "无 recommendByTag 输出空数组不报错"
+        );
         assert!(ch.trending_tags.is_empty());
         assert!(ch.ranking_date.is_none());
     }
@@ -3457,7 +3500,11 @@ mod tests {
         assert_eq!(list.total, Some(2345));
         assert_eq!(list.next_page, Some(3), "p=2 < lastPage=3");
         assert_eq!(list.is_last_page, Some(false));
-        assert_eq!(list.last_page, Some(3), "lastPage 原样回传（前端页码分页用）");
+        assert_eq!(
+            list.last_page,
+            Some(3),
+            "lastPage 原样回传（前端页码分页用）"
+        );
 
         let novels = json!({
             "novel": {
@@ -3495,10 +3542,7 @@ mod tests {
         assert_eq!(items[1]["bookmark_count"], 88);
         assert_eq!(items[1]["like_count"], 3);
         assert_eq!(items[1]["view_count"], 100);
-        assert!(
-            items[2].get("bookmark_count").is_none(),
-            "缺失值不能冒充零"
-        );
+        assert!(items[2].get("bookmark_count").is_none(), "缺失值不能冒充零");
     }
 
     // ---- 作品计数批量（browse_work_counts）----
@@ -4066,8 +4110,7 @@ mod tests {
         assert_eq!(first.kind, "illust", "illustType 0/1/2 均入此 kind");
         assert_eq!(first.title, "第14话");
         assert_eq!(
-            first.cover,
-            "https://i.pximg.net/c/360x360/custom-thumb/a.jpg",
+            first.cover, "https://i.pximg.net/c/360x360/custom-thumb/a.jpg",
             "urls.360x360 优先"
         );
         assert_eq!(first.page_count, Some(30));
@@ -4393,6 +4436,7 @@ mod tests {
 
     #[test]
     fn web_csrf_cache_roundtrip() {
+        let _gate = CACHE_TEST_GATE.lock().unwrap();
         // 缓存空 → 未命中；写入 → 命中；失效 → 未命中
         invalidate_web_csrf();
         assert!(cached_web_csrf().is_none());
@@ -4442,17 +4486,14 @@ mod tests {
         assert!(parse_bookmark_data(Some(&json!({}))).is_none());
         assert!(parse_bookmark_data(Some(&json!({"id": ""}))).is_none());
         // 已收藏（公开）：{id, private:false}（§11.7 实测形状）
-        let s =
-            parse_bookmark_data(Some(&json!({"id": "31000000001", "private": false}))).unwrap();
+        let s = parse_bookmark_data(Some(&json!({"id": "31000000001", "private": false}))).unwrap();
         assert_eq!(s.bookmark_id, "31000000001");
         assert_eq!(s.restrict, 0);
         // 已收藏（非公开）
-        let s =
-            parse_bookmark_data(Some(&json!({"id": "31000000002", "private": true}))).unwrap();
+        let s = parse_bookmark_data(Some(&json!({"id": "31000000002", "private": true}))).unwrap();
         assert_eq!(s.restrict, 1);
         // 小说实测数字 id → 统一 String 化
-        let s =
-            parse_bookmark_data(Some(&json!({"id": 3100000001_i64, "private": true}))).unwrap();
+        let s = parse_bookmark_data(Some(&json!({"id": 3100000001_i64, "private": true}))).unwrap();
         assert_eq!(s.bookmark_id, "3100000001");
         // private 字符串形态容错
         let s = parse_bookmark_data(Some(&json!({"id": "1", "private": "true"}))).unwrap();
@@ -4498,7 +4539,8 @@ mod tests {
         let list = parse_bookmark_list(&full, "illust", 96, 48);
         assert_eq!(list.next, None, "96+48 >= total=100");
         // total 缺失：满页 → 仅按 len 推进
-        let no_total = json!({"works": (0..48).map(|i| work(i, json!(i), false)).collect::<Vec<_>>()});
+        let no_total =
+            json!({"works": (0..48).map(|i| work(i, json!(i), false)).collect::<Vec<_>>()});
         let list = parse_bookmark_list(&no_total, "illust", 48, 48);
         assert_eq!(list.next, Some(96));
 
@@ -4592,7 +4634,11 @@ mod tests {
         );
         // percent_encode 边界
         assert_eq!(percent_encode("a b&c=1"), "a%20b%26c%3D1");
-        assert_eq!(percent_encode("AZaz09-_.~"), "AZaz09-_.~", "unreserved 原样");
+        assert_eq!(
+            percent_encode("AZaz09-_.~"),
+            "AZaz09-_.~",
+            "unreserved 原样"
+        );
     }
 
     #[test]
@@ -4637,7 +4683,10 @@ mod tests {
             "bookmarkData": {"id": 3100000001_i64, "private": true}
         });
         let (item, _) = parse_novel_detail(&body);
-        assert_eq!(item.bookmarked, None, "novel 详情 item 不含 bookmarked（现状）");
+        assert_eq!(
+            item.bookmarked, None,
+            "novel 详情 item 不含 bookmarked（现状）"
+        );
         let state = parse_bookmark_data(body.get("bookmarkData")).unwrap();
         assert_eq!(state.bookmark_id, "3100000001");
         assert_eq!(state.restrict, 1);
@@ -4645,6 +4694,7 @@ mod tests {
 
     #[test]
     fn self_uid_cache_roundtrip() {
+        let _gate = CACHE_TEST_GATE.lock().unwrap();
         // 缓存空 → 未命中；写入 → 命中；失效 → 未命中（与 token 缓存同策略）
         invalidate_self_uid();
         assert!(cached_self_uid().is_none());
@@ -4652,6 +4702,29 @@ mod tests {
         *cache.lock().unwrap() = Some((9000099, Instant::now()));
         assert_eq!(cached_self_uid().map(|(uid, _)| uid), Some(9000099));
         invalidate_self_uid();
+        assert!(cached_self_uid().is_none());
+    }
+
+    #[test]
+    fn invalidate_session_caches_clears_both() {
+        let _gate = CACHE_TEST_GATE.lock().unwrap();
+        // 账号变更命令的统一失效入口：未初始化时无操作，不 panic
+        invalidate_session_caches();
+        assert!(cached_web_csrf().is_none());
+        assert!(cached_self_uid().is_none());
+        // 预填两个缓存 → 统一失效 → 双双未命中（切账号后不得残留旧身份）
+        *WEB_CSRF_CACHE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap() = Some(("stale-token".to_string(), Instant::now()));
+        *SELF_UID_CACHE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .unwrap() = Some((9000098, Instant::now()));
+        assert_eq!(cached_web_csrf().as_deref(), Some("stale-token"));
+        assert_eq!(cached_self_uid().map(|(uid, _)| uid), Some(9000098));
+        invalidate_session_caches();
+        assert!(cached_web_csrf().is_none());
         assert!(cached_self_uid().is_none());
     }
 
@@ -4665,9 +4738,13 @@ mod tests {
         })
         .unwrap();
         assert_eq!(closed, json!({"comments": [], "disabled": true}));
-        let normal = serde_json::to_value(&parse_comments_roots(&json!({ "comments": [] }), 0))
-            .unwrap();
-        assert_eq!(normal, json!({ "comments": [] }), "正常信封不应出现 disabled");
+        let normal =
+            serde_json::to_value(&parse_comments_roots(&json!({ "comments": [] }), 0)).unwrap();
+        assert_eq!(
+            normal,
+            json!({ "comments": [] }),
+            "正常信封不应出现 disabled"
+        );
         // 400 判定只认 classify_status 的 "HTTP 400" 文案；API 层 error body
         // （"API error: …"）与其他状态码不触发关闭映射
         assert!(PixivError::Client("HTTP 400".into()).is_bad_request());
@@ -4714,7 +4791,9 @@ mod tests {
             comment_stamp_request("illust", 150446397, 117482194, "301", None).unwrap(),
             (
                 "/rpc/post_comment.php",
-                String::from("type=stamp&illust_id=150446397&author_user_id=117482194&stamp_id=301")
+                String::from(
+                    "type=stamp&illust_id=150446397&author_user_id=117482194&stamp_id=301"
+                )
             )
         );
         assert_eq!(

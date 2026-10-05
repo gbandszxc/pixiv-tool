@@ -83,11 +83,12 @@ async fn pick_unbookmarked(uid: i64, kind: &str) -> i64 {
         .get_ranking(kind, "daily", 1, None)
         .await
         .unwrap_or_else(|e| panic!("{kind} 日榜请求失败（写用例取样）: {e}"));
-    let candidates: Vec<(i64, i64)> = common::assert_list_envelope(&ranking, &format!("{kind} 日榜"))
-        .iter()
-        .take(20)
-        .map(|item| (common::id_of(item), common::author_of(item)))
-        .collect();
+    let candidates: Vec<(i64, i64)> =
+        common::assert_list_envelope(&ranking, &format!("{kind} 日榜"))
+            .iter()
+            .take(20)
+            .map(|item| (common::id_of(item), common::author_of(item)))
+            .collect();
     for (id, author_id) in candidates {
         if author_id == uid {
             continue; // 不能收藏自己的作品
@@ -355,12 +356,10 @@ async fn live_comment_add_and_delete_roundtrip() {
 
     // ②b 表情贴图（stamp 分支：type=stamp&stamp_id，不带 comment）
     let stamped = match root_id.as_deref() {
-        Some(rid) => {
-            Some(
-                api.post_stamp_comment("illust", work_id, uid, STAMP_ID, Some(rid))
-                    .await,
-            )
-        }
+        Some(rid) => Some(
+            api.post_stamp_comment("illust", work_id, uid, STAMP_ID, Some(rid))
+                .await,
+        ),
         None => None,
     };
     let stamped_id = stamped

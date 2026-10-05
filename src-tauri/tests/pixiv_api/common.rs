@@ -46,7 +46,10 @@ pub async fn live_uid() -> i64 {
         .expect("GET /ajax/user/self 失败：登录态可能已失效");
     let uid = as_i64_loose(&user_data["id"]).unwrap_or(0);
     if uid <= 0 {
-        panic!("userData.id 无法解析为正整数（该键存在: {}）", user_data.get("id").is_some());
+        panic!(
+            "userData.id 无法解析为正整数（该键存在: {}）",
+            user_data.get("id").is_some()
+        );
     }
     if token.is_empty() {
         panic!("登录态缺少 csrf token");
@@ -223,7 +226,11 @@ pub fn assert_same_total(raw_total: i64, contract_total: i64, field: &str) {
 
 /// 作品条目最低语义：id 正整数、标题非空、kind 在白名单、作者 id 为正。
 pub fn assert_work_item(item: &Value, what: &str, expect_kind: Option<&str>) {
-    assert!(id_of(item) > 0, "{what}.id 应为正整数，实际: {}", item["id"]);
+    assert!(
+        id_of(item) > 0,
+        "{what}.id 应为正整数，实际: {}",
+        item["id"]
+    );
     assert!(
         item["title"].as_str().is_some_and(|s| !s.is_empty()),
         "{what}.title 不应为空，实际: {}",

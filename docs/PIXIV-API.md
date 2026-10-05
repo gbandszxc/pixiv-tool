@@ -126,7 +126,7 @@
 | `/rpc/post_comment.php` | POST | 发表评论 / 回复 / 官方表情贴图（插画·漫画，需 csrf） | 写操作需登录 | `browse_comment_add` | `post_comment` · `post_stamp_comment` |
 | `/novel/rpc/post_comment.php` | POST | 发表评论 / 回复 / 官方表情贴图（小说，需 csrf） | 写操作需登录 | `browse_comment_add` | `post_comment` · `post_stamp_comment` |
 | `/rpc_delete_comment.php` · `/novel/rpc_delete_comment.php` | POST | 删除评论（**仅在线写用例清理**，无 IPC 命令） | 写操作需登录 | — | browse_api.rs:2612 |
-| `/ajax/user/{uid}/illusts / novels/bookmarks` | GET | 收藏列表（自己） | 需登录 | `browse_bookmark_list` | browse_api.rs:2133 |
+| `/ajax/user/{uid}/illusts / novels/bookmarks` | GET | 收藏列表（自己 / 他人公开收藏） | 需登录 | `browse_bookmark_list` | browse_api.rs:2742 |
 | `/ajax/user/{uid}/illusts / novels/bookmark/tags` | GET | 收藏标签 | 需登录 | `browse_bookmark_tags` | browse_api.rs:2168 |
 | `/ajax/illusts / novels/bookmarks/add` | POST | 添加收藏（需 csrf） | 写操作需登录 | `browse_bookmark_add` | browse_api.rs:2188 |
 | `/ajax/illusts/bookmarks/delete` | POST | 取消插画收藏（需 csrf） | 写操作需登录 | `browse_bookmark_remove` | browse_api.rs:2247 |
@@ -270,8 +270,8 @@
 
 ### 4.6 收藏 / 追更
 
-**GET `/ajax/user/{uid}/illusts / novels/bookmarks?tag=&offset=&limit=&rest=&order=desc&mode=all&lang=zh`** · 实现 `browse_api.rs:2133`（`bookmark_list`）· 在线 `live_read.rs::live_bookmark_list_and_tags` · 离线 `parse_bookmark_list_total_and_next_semantics`、`bookmark_request_encoding_and_forms`
-- uid 由 `/ajax/user/self` 探测并 30min 缓存（`self_user_id` browse_api.rs:427，`SELF_UID_TTL` browse_api.rs:422），前端不传。
+**GET `/ajax/user/{uid}/illusts / novels/bookmarks?tag=&offset=&limit=&rest=&order=desc&mode=all&lang=zh`** · 实现 `browse_api.rs:2742`（`bookmark_list`）· 在线 `live_read.rs::live_bookmark_list_and_tags` · 离线 `parse_bookmark_list_total_and_next_semantics`、`bookmark_request_encoding_and_forms`
+- uid：缺省由 `/ajax/user/self` 探测并 30min 缓存（`self_user_id` browse_api.rs:427，`SELF_UID_TTL` browse_api.rs:422）；IPC 可显式传 `userId` = 该作者的他人公开收藏（§11.8：路径直接用传入 uid、仅支持 rest=show，命令层拒绝 hide 与非正整数；作者页收藏 tab 用）。
 - 参数：`rest` = `show`(公开) / `hide`(非公开)；`tag` 可选（percent-encode，缺省空串）；`offset` ≥ 0；`limit` 默认 illust 48 / novel 30（browse_api.rs:2062）、clamp 1..100；`order=desc`、`mode=all` 写死（asc 静默空列表，其余 mode 报错）。
 - 消费字段：`works[]`（缩略字段见 4.8 + `bookmarkData.{id,private}`）、`total`。
 - 分页：`next = offset + works.len()`（`works.len() < limit` 或 `offset+len >= total` 时 null）。
@@ -433,7 +433,7 @@
 | `/ajax/illusts / novels/comments/replies` | `get_comment_replies` browse_api.rs:2539；`parse_comments_replies` | `live_read.rs::live_comments_roots_and_replies` | `parse_comments_next_cursor_semantics` | browse.ts（`browseCommentReplies`） |
 | `/rpc/post_comment.php` · `/novel/rpc/post_comment.php` | `post_comment` / `post_stamp_comment` browse_api.rs；`comment_add_request` · `comment_stamp_request`；`parse_published_comment` | `live_write.rs::live_comment_add_and_delete_roundtrip`（`PIXIV_LIVE_WRITE=1`） | `comment_add_request_shapes_and_encoding` / `comment_stamp_request_shapes_and_reply` / `parse_published_comment_reads_body_and_requires_id` / `offline_guard::comment_add_validates_before_login_and_requires_login` | `browseCommentAdd`（browse.ts）/ `CommentsSection.vue` / `CommentEmojiPicker.vue`；前端回归 `/tests/comments.html` |
 | `/rpc_delete_comment.php` · `/novel/rpc_delete_comment.php` | `comment_delete` browse_api.rs:2612；`comment_delete_request` :1760 | `live_write.rs::live_comment_add_and_delete_roundtrip`（清理步骤） | `comment_delete_request_shapes` | —（无 IPC，仅供在线用例清理） |
-| `/ajax/user/{uid}/illusts / novels/bookmarks` | `bookmark_list` browse_api.rs:2133；`bookmark_list_path` :1703 | `live_read.rs::live_bookmark_list_and_tags` | `parse_bookmark_list_total_and_next_semantics` | browse.ts:483 |
+| `/ajax/user/{uid}/illusts / novels/bookmarks` | `bookmark_list` browse_api.rs:2742；`bookmark_list_path` :2080 | `live_read.rs::live_bookmark_list_and_tags` | `parse_bookmark_list_total_and_next_semantics` / `offline_guard::invalid_params_rejected_before_login_guard` | browse.ts:675（`browseBookmarkList`）/ `BrowseAuthorView.vue` |
 | `/ajax/user/{uid}/illusts / novels/bookmark/tags` | `bookmark_tags` browse_api.rs:2168；`parse_bookmark_tags` :1545 | `live_read.rs::live_bookmark_list_and_tags` | `parse_bookmark_tags_groups_and_empty_name_kept` | browse.ts:495 |
 | `/ajax/illusts / novels/bookmarks/add` | `bookmark_add` browse_api.rs:2188；`parse_bookmark_add_id` :1557 | `live_write.rs::live_bookmark_add_remove_illust_roundtrip` / `..._novel_roundtrip` | `parse_bookmark_add_id_both_response_shapes` | browse.ts:501 |
 | `/ajax/illusts/bookmarks/delete` | `bookmark_remove` browse_api.rs:2247；`illust_delete_form` :1719 | `live_write.rs::live_bookmark_add_remove_illust_roundtrip` | `bookmark_request_encoding_and_forms` | browse.ts:512 |

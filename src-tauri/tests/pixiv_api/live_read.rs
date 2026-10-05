@@ -326,9 +326,7 @@ async fn live_discover() {
         "discover 所有条目 id 应为正整数"
     );
     common::assert_work_item(&items[0], "discover.items[0]", None);
-    let cover = items[0]["cover"]
-        .as_str()
-        .expect("discover 首条应有封面");
+    let cover = items[0]["cover"].as_str().expect("discover 首条应有封面");
     common::assert_pixiv_url(cover, "discover.items[0].cover");
 }
 
@@ -431,7 +429,11 @@ async fn live_search_artworks_novels() {
         "is_last_page 与 next_page 语义应互斥"
     );
     if !is_last {
-        assert_eq!(art["next_page"].as_i64(), Some(2), "p=1 的 next_page 应为 2");
+        assert_eq!(
+            art["next_page"].as_i64(),
+            Some(2),
+            "p=1 的 next_page 应为 2"
+        );
     }
     let art_items = common::assert_list_envelope(&art, "search artworks");
     assert!(!art_items.is_empty(), "搜索插画 items 不应为空");
@@ -480,7 +482,10 @@ async fn live_search_artworks_novels() {
     let novel_total = novel["total"]
         .as_i64()
         .unwrap_or_else(|| panic!("小说搜索 total 应为整数，实际: {}", novel["total"]));
-    assert!(novel_total >= 1, "小说搜索 total 应 >= 1，实际 {novel_total}");
+    assert!(
+        novel_total >= 1,
+        "小说搜索 total 应 >= 1，实际 {novel_total}"
+    );
     let novel_items = common::assert_list_envelope(&novel, "search novels");
     assert!(!novel_items.is_empty(), "搜索小说 items 不应为空");
     assert!(
@@ -634,7 +639,9 @@ async fn live_detail_metadata_illust_manga_novel() {
         }
         assert!(
             item["tags"].as_array().is_some_and(|tags| !tags.is_empty()
-                && tags.iter().all(|tag| tag.as_str().is_some_and(|text| !text.is_empty()))),
+                && tags
+                    .iter()
+                    .all(|tag| tag.as_str().is_some_and(|text| !text.is_empty()))),
             "{kind} 详情应解析 tags.tags 标签原文"
         );
     }
@@ -732,15 +739,13 @@ async fn live_illust_detail_pages_ugoira() {
         src.starts_with("https://i.pximg.net/img-zip-ugoira/") && src.ends_with(".zip"),
         "ugoira.src 应为 img-zip-ugoira zip 直链，实际: {src}"
     );
-    let frames = ugoira["frames"]
-        .as_array()
-        .expect("ugoira.frames 应为数组");
+    let frames = ugoira["frames"].as_array().expect("ugoira.frames 应为数组");
     assert!(!frames.is_empty(), "ugoira 帧序列不应为空");
     assert!(
-        frames.iter().all(|f| f["file"]
-            .as_str()
-            .is_some_and(|s| !s.is_empty())
-            && f["delay"].as_i64().is_some_and(|d| d >= 0)),
+        frames
+            .iter()
+            .all(|f| f["file"].as_str().is_some_and(|s| !s.is_empty())
+                && f["delay"].as_i64().is_some_and(|d| d >= 0)),
         "ugoira 帧应含 file 与非负 delay"
     );
 }
@@ -1080,9 +1085,11 @@ async fn live_novel_series_detail_and_content() {
         "目录应按 contentOrder 升序"
     );
     assert!(
-        contents.iter().all(|c| common::as_i64_loose(&c["id"]).is_some_and(|v| v > 0)
-            && c["title"].as_str().is_some_and(|s| !s.is_empty())
-            && c["series_order"].as_i64().is_some_and(|v| v >= 1)),
+        contents
+            .iter()
+            .all(|c| common::as_i64_loose(&c["id"]).is_some_and(|v| v > 0)
+                && c["title"].as_str().is_some_and(|s| !s.is_empty())
+                && c["series_order"].as_i64().is_some_and(|v| v >= 1)),
         "目录条目应含正整数 id、非空 title、>=1 的 series_order"
     );
 
@@ -1205,16 +1212,18 @@ async fn live_comments_roots_and_replies() {
             "回复条目应含 id 与 user_name"
         );
         assert!(
-            replies
-                .iter()
-                .any(|c| c["reply_to_user_name"].as_str().is_some_and(|s| !s.is_empty())),
+            replies.iter().any(|c| c["reply_to_user_name"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty())),
             "replies 条目应带 replyToUserName"
         );
         if let Some(next) = replies_body["next"].as_i64() {
             assert_eq!(next, 2, "replies page=1 且 hasNext 时 next 应为 2");
         }
     } else {
-        eprintln!("注意：插画 {work_id} 的根评论均无回复（hasReplies 无 true），跳过 replies 内容校验");
+        eprintln!(
+            "注意：插画 {work_id} 的根评论均无回复（hasReplies 无 true），跳过 replies 内容校验"
+        );
     }
 
     // 小说：日榜前 5 件里找有根评论的作品
@@ -1244,8 +1253,10 @@ async fn live_comments_roots_and_replies() {
     if let Some(body) = novel_thread {
         let comments = body["comments"].as_array().unwrap();
         assert!(
-            comments.iter().all(|c| c["id"].as_str().is_some_and(|s| !s.is_empty())
-                && c["user_name"].as_str().is_some_and(|s| !s.is_empty())),
+            comments
+                .iter()
+                .all(|c| c["id"].as_str().is_some_and(|s| !s.is_empty())
+                    && c["user_name"].as_str().is_some_and(|s| !s.is_empty())),
             "小说根评论应含 id 与 user_name"
         );
     } else {
@@ -1278,7 +1289,8 @@ async fn live_comments_closed_work() {
         .await
         .expect("关闭评论区的作品 roots 不应报错（应映射为 disabled 信封）");
     assert_eq!(
-        body["disabled"], serde_json::json!(true),
+        body["disabled"],
+        serde_json::json!(true),
         "关闭评论区应映射 disabled=true，实际: {body}"
     );
     assert!(
@@ -1301,7 +1313,7 @@ async fn live_bookmark_list_and_tags() {
 
     for kind in ["illust", "novel"] {
         let list = api
-            .bookmark_list(kind, "show", None, 0, None)
+            .bookmark_list(kind, "show", None, 0, None, None)
             .await
             .unwrap_or_else(|e| panic!("收藏列表失败（{kind}，uid {uid}）: {e}"));
         let items = common::assert_list_envelope(&list, &format!("bookmark list {kind}"));
@@ -1316,9 +1328,9 @@ async fn live_bookmark_list_and_tags() {
         );
         if !items.is_empty() {
             assert!(
-                items.iter().all(|i| i["bookmarkId"]
-                    .as_str()
-                    .is_some_and(|s| !s.is_empty())),
+                items
+                    .iter()
+                    .all(|i| i["bookmarkId"].as_str().is_some_and(|s| !s.is_empty())),
                 "{kind} 收藏列表项应带 bookmarkId（当前查看者收藏态）"
             );
             assert!(
@@ -1343,9 +1355,15 @@ async fn live_bookmark_list_and_tags() {
                 items.len()
             ),
         }
+        // uid 直传（他人公开收藏路径，§11.8）：传自己 uid 与缺省 self 等价，形状一致
+        let by_uid = api
+            .bookmark_list(kind, "show", None, 0, Some(10), Some(uid))
+            .await
+            .unwrap_or_else(|e| panic!("uid 直传收藏列表失败（{kind}，uid {uid}）: {e}"));
+        common::assert_list_envelope(&by_uid, &format!("bookmark list by uid {kind}"));
         // 非公开列表（rest=hide）形状可用
         let hidden = api
-            .bookmark_list(kind, "hide", None, 0, Some(10))
+            .bookmark_list(kind, "hide", None, 0, Some(10), None)
             .await
             .unwrap_or_else(|e| panic!("非公开收藏列表失败（{kind}）: {e}"));
         assert!(
@@ -1381,7 +1399,7 @@ async fn live_bookmark_list_and_tags() {
         let probe_offset = total + 1000;
         if probe_offset <= 100_000 {
             let overflow = api
-                .bookmark_list(kind, "show", None, probe_offset, Some(10))
+                .bookmark_list(kind, "show", None, probe_offset, Some(10), None)
                 .await
                 .unwrap_or_else(|e| {
                     panic!("{kind} offset 超界请求应成功（offset={probe_offset}）: {e}")
@@ -1423,11 +1441,7 @@ async fn live_image_download_with_referer() {
     let url = page["small"]
         .as_str()
         .or_else(|| page["medium"].as_str())
-        .unwrap_or_else(|| {
-            page["original"]
-                .as_str()
-                .expect("original 应为字符串")
-        });
+        .unwrap_or_else(|| page["original"].as_str().expect("original 应为字符串"));
     common::assert_pixiv_url(url, "下载样本 URL");
     let bytes = api
         .client()

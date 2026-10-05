@@ -323,7 +323,13 @@ fn browse_history_record_list_clear_round_trip() {
     assert_eq!(cleared["deleted"], json!(3));
 
     // 再查归零；重复清空 deleted=0。
-    assert_eq!(browse_history_list_impl(&state, 1, 20, None).unwrap()["total"], json!(0));
-    assert_eq!(browse_history_clear_impl(&state).unwrap()["deleted"], json!(0));
+    assert_eq!(
+        browse_history_list_impl(&state, 1, 20, None).unwrap()["total"],
+        json!(0)
+    );
+    assert_eq!(
+        browse_history_clear_impl(&state).unwrap()["deleted"],
+        json!(0)
+    );
     cleanup(&dir);
 }

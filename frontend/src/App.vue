@@ -55,6 +55,7 @@ import { useDownloadPanelStore } from "./stores/downloadPanel";
 import { useTaskStore } from "./stores/tasks";
 import { groupRoots, navigationGroup, type NavigationGroup } from "./router/navigation";
 import { usePageScroll } from "./composables/usePageScroll";
+import { resetChannelManual } from "./components/browse/r18Filter";
 
 const router = useRouter(); const route = useRoute(); const { t } = useI18n();
 const authStore = useAuthStore(); const settingsStore = useSettingsStore();
@@ -146,7 +147,7 @@ const removeAfterEach = router.afterEach(async (to, from, failure) => {
   if (to.path === '/browse/search') await focusSearch();
 });
 watch(browseSession, () => {
-  browseScroll.clear(); panel.reset();
+  browseScroll.clear(); panel.reset(); resetChannelManual();
   if (isCachedBrowsePage(route.path)) browseScroll.set(route.path, 0);
   contentEl.value?.scrollTo({ top: 0, behavior: "instant" });
 });

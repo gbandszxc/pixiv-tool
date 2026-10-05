@@ -668,18 +668,20 @@ export async function browseCommentAdd(params: {
 export const BOOKMARK_PAGE_SIZE: Record<BookmarkKind, number> = { illust: 48, novel: 30 };
 
 /**
- * browse_bookmark_list：收藏列表（自己）。tag 语义：null = 全部、"" = 未分类、其余为标签名。
- * 他人公开收藏（作者页收藏 tab）必须显式 rest="show"。
+ * browse_bookmark_list：收藏列表。userId 缺省 = 自己（tag 语义：null = 全部、
+ * "" = 未分类、其余为标签名）；显式传入 = 该作者的他人公开收藏（作者页收藏 tab，
+ * 路径改走 /ajax/user/{userId}/...，他人仅支持 rest="show"，hide 会被后端拒绝）。
  */
 export async function browseBookmarkList(
   kind: BookmarkKind,
   rest: BookmarkRest,
   tag: string | null,
   offset = 0,
-  limit = BOOKMARK_PAGE_SIZE[kind]
+  limit = BOOKMARK_PAGE_SIZE[kind],
+  userId?: number
 ): Promise<BrowseBookmarkList> {
-  if (!isTauri()) return mockBookmarkList(kind, rest, tag, offset, limit);
-  return invokeBrowse<BrowseBookmarkList>("browse_bookmark_list", { kind, rest, tag, offset, limit });
+  if (!isTauri()) return mockBookmarkList(kind, rest, tag, offset, limit, userId);
+  return invokeBrowse<BrowseBookmarkList>("browse_bookmark_list", { kind, rest, tag, offset, limit, userId });
 }
 
 /** browse_bookmark_tags：收藏标签（一次返回 public/private 两组，供公开/私密筛选分别取组）。 */
@@ -1457,14 +1459,17 @@ function mockBookmarkTagOf(kind: BookmarkKind, index: number): string {
   return index % 4 === 3 ? "" : tags[index % tags.length];
 }
 
-/** 收藏列表：池按 tag（null 全部 / "" 未分类 / 标签名）过滤后 offset 切片，next 为续拉游标。 */
+/** 收藏列表：池按 tag（null 全部 / "" 未分类 / 标签名）过滤后 offset 切片，next 为续拉游标。
+ * userId（他人公开收藏）mock 无对应语义，共用样例池保证作者页收藏 tab 视觉验收可用。 */
 async function mockBookmarkList(
   kind: BookmarkKind,
   rest: BookmarkRest,
   tag: string | null,
   offset: number,
-  limit: number
+  limit: number,
+  userId?: number
 ): Promise<BrowseBookmarkList> {
+  void userId;
   await mockDelay();
   const pool = mockBookmarkPool(kind, rest);
   const filtered =

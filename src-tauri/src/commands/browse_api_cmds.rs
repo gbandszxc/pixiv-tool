@@ -610,7 +610,11 @@ pub async fn browse_illust_series(
     browse_illust_series_impl(&state, id, page).await
 }
 
-pub async fn browse_illust_series_impl(state: &AppState, id: i64, page: i64) -> Result<Value, String> {
+pub async fn browse_illust_series_impl(
+    state: &AppState,
+    id: i64,
+    page: i64,
+) -> Result<Value, String> {
     validate_id(id, "系列")?;
     validate_page(page)?;
     build_browse_api(state)?
@@ -733,7 +737,8 @@ pub async fn browse_comment_add_impl(
 // ----------------------------------------------------------------------
 
 /// 收藏列表（插画/漫画混排或小说；tag 筛选 + 公开/私密筛选 + offset 分页，
-/// limit 缺省官方每页条数 illust 48 / novel 30）。自 uid 由后端探测，前端无需传。
+/// limit 缺省官方每页条数 illust 48 / novel 30）。user_id 缺省 = 自己（uid 由
+/// 后端探测）；显式传入 = 该作者的他人公开收藏（作者页收藏 tab，仅 rest=show）。
 #[tauri::command]
 pub async fn browse_bookmark_list(
     state: State<'_, AppState>,
@@ -742,8 +747,9 @@ pub async fn browse_bookmark_list(
     tag: Option<String>,
     offset: i64,
     limit: Option<i64>,
+    user_id: Option<i64>,
 ) -> Result<Value, String> {
-    browse_bookmark_list_impl(&state, &kind, &rest, tag.as_deref(), offset, limit).await
+    browse_bookmark_list_impl(&state, &kind, &rest, tag.as_deref(), offset, limit, user_id).await
 }
 
 pub async fn browse_bookmark_list_impl(
@@ -753,6 +759,7 @@ pub async fn browse_bookmark_list_impl(
     tag: Option<&str>,
     offset: i64,
     limit: Option<i64>,
+    user_id: Option<i64>,
 ) -> Result<Value, String> {
     validate_bookmark_kind(kind)?;
     validate_bookmark_rest(rest)?;
@@ -760,8 +767,14 @@ pub async fn browse_bookmark_list_impl(
         return Err("offset 不能为负数".to_string());
     }
     validate_bookmark_limit(limit)?;
+    if let Some(uid) = user_id {
+        validate_id(uid, "用户")?;
+        if rest != "show" {
+            return Err("他人收藏仅支持 rest=show（私密收藏仅本人可见）".to_string());
+        }
+    }
     build_browse_api(state)?
-        .bookmark_list(kind, rest, tag, offset, limit)
+        .bookmark_list(kind, rest, tag, offset, limit, user_id)
         .await
         .map_err(|err| err.to_string())
 }

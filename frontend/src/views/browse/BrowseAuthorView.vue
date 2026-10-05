@@ -11,8 +11,9 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  * - 作品区：插画 / 漫画 / 小说 / 收藏四个 tab 各自持有独立的 useInfiniteList
  *   （切 tab 不丢已加载内容，回到该 tab 经 IntersectionObserver 续传），
  *   空态按类型给文案；追加页失败在网格下方就地重试。
- *   收藏 tab = 该作者的他人公开收藏（契约：必须显式 rest=show；后端 offset 游标
- *   经适配转 page 语义；不显示取消收藏动作 —— 列表项 bookmarkId 是查看者态，UI 不使用）。
+ *   收藏 tab = 该作者的他人公开收藏（契约：uid 直传 + 显式 rest=show，后端据此走
+ *   /ajax/user/{uid}/... 他人路径；offset 游标经适配转 page 语义；
+ *   不显示取消收藏动作 —— 列表项 bookmarkId 是查看者态，UI 不使用）。
  * - 未登录 / 无权限等错误直接展示 api 层归一文案（invokeBrowse 已联动登录弹窗）。
  */
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, shallowRef, watch } from "vue";
@@ -164,7 +165,7 @@ const lists = {
   novel: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "novel", page)),
   bookmark: useInfiniteList<BrowseWorkItem>(async (page, isCurrent) => {
     const offset = page === 1 ? 0 : bookmarkOffset;
-    const data = await browseBookmarkList("illust", "show", null, offset, 24); // 官方作者收藏页 24/页
+    const data = await browseBookmarkList("illust", "show", null, offset, 24, props.id); // 他人公开收藏：uid 直传 + rest=show，官方作者收藏页 24/页
     if (isCurrent()) bookmarkOffset = data.next ?? offset;
     return { items: data.items, total: data.total, next_page: data.next == null ? null : page + 1 };
   }),

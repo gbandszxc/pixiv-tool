@@ -7,11 +7,13 @@
 //!   其他 → {"status":"cancelled"|"timeout"|"error","message":...}
 //! - auth_login_manual 成功 → {"status":"success","message":"Cookie 已保存","user":{...}}；
 //!   失败 → Err(中文错误文案)
-//! - auth_logout → {"status":"success"}（退出当前账号；有剩余账号则自动回退）
+//! - auth_logout → {"status":"success","fallback_applied":bool,"warning"?:str}
+//!   （退出当前账号；有剩余账号则自动回退，回退失败降级为纯登出；
+//!   warning 为非终态抓取任务提示）
 //!
 //! 多账号扩展（账号索引 + 每账号凭据条目，default 恒为当前账号镜像）：
 //! - auth_accounts_list → {"active": str|null, "accounts": [AccountInfo...]}
-//! - auth_account_switch(user_id) → {"status":"success"}；
+//! - auth_account_switch(user_id) → {"status":"success","warning"?:str}；
 //!   目标凭据缺失/失效 → Err(中文错误文案)
 
 use std::collections::HashMap;
@@ -24,6 +26,8 @@ use tauri::State;
 use crate::accounts::AccountInfo;
 use crate::auth::browser_login::{find_login_browser, open_browser_login};
 use crate::auth::webview_login::open_webview_login;
+use crate::db::TERMINAL_TASK_STATUSES;
+use crate::pixiv::browse_api::invalidate_session_caches;
 use crate::pixiv::client::{PixivClient, PixivError};
 use crate::pixiv::csrf::{ProbeError, fetch_session_probe, normalize_phpsessid};
 use crate::state::AppState;
@@ -83,6 +87,8 @@ pub async fn auth_status(state: State<'_, AppState>) -> Result<Value, String> {
                     log::warn!("移除失效账号失败: {err}");
                 }
             }
+            // 登录身份已清，会话缓存（自 uid / csrf token）一并失效
+            invalidate_session_caches();
             Ok(json!({ "is_logged_in": false }))
         }
         Ok(Err(ProbeFailure::Other(msg))) => {
@@ -214,6 +220,19 @@ fn fallback_account_id<'a>(accounts: &'a [AccountInfo], removed: Option<&str>) -
         .map(|account| account.user_id.as_str())
 }
 
+/// 非终态抓取任务提示：任务在创建时快照账号凭据、全程沿用（重试才读当前
+/// 账号），切换 / 退出账号不影响其运行，但访问权限与限速按创建时账号执行。
+/// 有非终态任务时返回提示文案，随 logout / account_switch 响应交前端提示；
+/// 查询失败视为无提示（提示属增强信息，不得阻塞登出 / 切换主流程）。
+fn running_task_warning(state: &AppState) -> Option<String> {
+    let items = state.db.list_tasks(None).ok()?;
+    let running = items
+        .iter()
+        .filter(|task| !TERMINAL_TASK_STATUSES.contains(&task.status.as_str()))
+        .count();
+    (running > 0).then(|| format!("有 {running} 个进行中的抓取任务仍按其创建时的账号执行"))
+}
+
 /// 多账号列表响应体（纯函数，离线可测）：active + 账号元信息数组，
 /// 有本地头像缓存的账号附带协议 URL。
 fn account_list_body(active: Option<String>, accounts: Vec<AccountInfo>) -> Value {
@@ -311,6 +330,8 @@ pub async fn auth_login(
             .unwrap_or_else(|| json!({}));
         // 多账号：新登录账号登记并激活（头像缓存由随后前端的 auth_status 补）
         enroll_account(&state, &user, cookies, "", true);
+        // 登录身份已变，会话缓存（自 uid / csrf token）一并失效
+        invalidate_session_caches();
         return Ok(json!({
             "status": "success",
             "message": "登录成功",
@@ -351,6 +372,8 @@ pub async fn auth_login_manual(
         .unwrap_or_else(|| json!({}));
     // 多账号：登记并激活（同 auth_login）
     enroll_account(&state, &user, &cookies, "", true);
+    // 登录身份已变，会话缓存（自 uid / csrf token）一并失效
+    invalidate_session_caches();
     Ok(json!({
         "status": "success",
         "message": "Cookie 已保存",
@@ -361,6 +384,9 @@ pub async fn auth_login_manual(
 /// 清空当前账号登录态（等价旧 POST /api/auth/logout）。
 /// 多账号语义：退出 = 清 default 镜像 + 从账号列表移除该账号（含其独立
 /// 凭据条目）；有剩余账号时自动激活首个。
+/// 响应体：`fallback_applied` 是否成功回退到剩余账号；回退任一步失败只记
+/// 日志按纯登出返回 success（此刻后端真实状态就是未登录，向上抛错会让
+/// 用户看到「登出失败」却实际已登出）；`warning` 为非终态任务提示（可选）。
 #[tauri::command]
 pub async fn auth_logout(state: State<'_, AppState>) -> Result<Value, String> {
     let active = state.accounts.active();
@@ -375,17 +401,40 @@ pub async fn auth_logout(state: State<'_, AppState>) -> Result<Value, String> {
             log::warn!("移除已退出账号失败: {err}");
         }
     }
+    let mut fallback_applied = false;
     if let Some(next) = fallback {
-        if let Some(cookies) = state
-            .accounts
-            .load_cookies(&next)?
-            .filter(|c| c.get("PHPSESSID").is_some_and(|v| !v.is_empty()))
-        {
-            state.cookies.save(&cookies)?;
-            state.accounts.set_active(&next)?;
+        match state.accounts.load_cookies(&next) {
+            Ok(Some(cookies)) if cookies.get("PHPSESSID").is_some_and(|v| !v.is_empty()) => {
+                if let Err(err) = state.cookies.save(&cookies) {
+                    log::warn!("回退账号写入 default 失败，按纯登出处理: {err}");
+                } else if let Err(err) = state.accounts.set_active(&next) {
+                    log::warn!("回退账号激活失败，按纯登出处理: {err}");
+                } else {
+                    fallback_applied = true;
+                }
+            }
+            Ok(_) => {
+                // 凭据从未存过或缺 PHPSESSID：条目确定无法切换，移出列表
+                // 维持「列表中的账号皆可切换」（同 auth_status 失效清理模式）
+                log::warn!("回退账号凭据缺失，已从列表移除: {next}");
+                if let Err(err) = state.accounts.remove(&next) {
+                    log::warn!("移除缺失凭据的回退账号失败: {err}");
+                }
+            }
+            Err(err) => {
+                // 凭据读取失败（坏 JSON / keyring 暂时故障）：可能是暂时性
+                // 不可读，保留条目供后续重试，本次按纯登出处理
+                log::warn!("读取回退账号凭据失败，按纯登出处理: {err}");
+            }
         }
     }
-    Ok(json!({ "status": "success" }))
+    // 登录身份已变（无论是否回退成功），会话缓存一并失效
+    invalidate_session_caches();
+    let mut body = json!({ "status": "success", "fallback_applied": fallback_applied });
+    if let Some(warning) = running_task_warning(&state) {
+        body["warning"] = json!(warning);
+    }
+    Ok(body)
 }
 
 /// 已保存账号列表（含当前激活标记与本地头像协议 URL）。
@@ -400,6 +449,7 @@ pub async fn auth_accounts_list(state: State<'_, AppState>) -> Result<Value, Str
 /// 切换当前账号：
 /// 1) 目标账号条目凭据写入 default（缺 PHPSESSID → Err）
 /// 2) 索引 active 指向目标
+/// 3) 会话缓存失效 + 非终态任务提示（`warning`，可选）
 #[tauri::command]
 pub async fn auth_account_switch(
     state: State<'_, AppState>,
@@ -421,9 +471,16 @@ pub async fn auth_account_switch(
 
     state.cookies.save(&target)?;
     state.accounts.set_active(&user_id)?;
+    // 登录身份已变：自 uid / csrf token 进程缓存立即失效，避免收藏列表 /
+    // 写操作在 TTL 内仍按旧账号身份取数或携带旧会话 token
+    invalidate_session_caches();
     log::info!("已切换当前账号");
 
-    Ok(json!({ "status": "success" }))
+    let mut body = json!({ "status": "success" });
+    if let Some(warning) = running_task_warning(&state) {
+        body["warning"] = json!(warning);
+    }
+    Ok(body)
 }
 
 // ----------------------------------------------------------------------
@@ -432,6 +489,59 @@ pub async fn auth_account_switch(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::{Db, TaskInsert, now_iso};
+    use crate::paths::AppPaths;
+    use crate::settings::Settings;
+
+    /// 真实临时库构造（对齐 task_cmds tests 的 temp_state 模式）。
+    fn temp_state(tag: &str) -> (AppState, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "pixiv-tool-authcmd-test-{tag}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Db::open(&dir.join("app.db")).unwrap();
+        let paths = AppPaths {
+            data_dir: dir.clone(),
+            config_dir: dir.join("config"),
+            logs_dir: dir.join("logs"),
+        };
+        (AppState::new(paths, Settings::default(), db), dir)
+    }
+
+    fn insert_task(state: &AppState, task_id: &str, status: &str) {
+        let now = now_iso();
+        state
+            .db
+            .insert_task(&TaskInsert {
+                task_id: task_id.to_string(),
+                source_type: "single".into(),
+                source_id: "1".into(),
+                status: status.into(),
+                created_at: now.clone(),
+                updated_at: now,
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn running_task_warning_counts_non_terminal_only() {
+        let (state, dir) = temp_state("warn");
+        // 空库 → 无提示
+        assert!(running_task_warning(&state).is_none());
+        // 非终态任务计入，终态任务不计入
+        insert_task(&state, "r1", "running");
+        insert_task(&state, "p1", "paused");
+        insert_task(&state, "d1", "done");
+        insert_task(&state, "c1", "canceled");
+        let warning = running_task_warning(&state).unwrap();
+        assert!(
+            warning.contains("2"),
+            "提示应含非终态任务数，实际: {warning}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn auth_status_body_full_fields() {

@@ -65,3 +65,9 @@ export function useChannelR18Filter(
     },
   };
 }
+
+/** 账号切换时清空全部手动档（App.vue 的 browseSession watch 调用）：
+ * 手动档是会话级 UI 偏好，不跨账号残留，新账号回到跟随全局档。 */
+export function resetChannelManual(): void {
+  channelManual.value = { illustration: null, manga: null, novel: null };
+}

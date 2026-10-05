@@ -23,11 +23,11 @@ use pixiv_tool_lib::commands::browse_api_cmds::{
     NOT_LOGGED_IN, browse_bookmark_add_impl, browse_bookmark_list_impl,
     browse_bookmark_remove_impl, browse_bookmark_tags_impl, browse_channel_impl,
     browse_comment_add_impl, browse_comment_replies_impl, browse_discover_impl,
-    browse_follow_latest_impl,
-    browse_home_feed_impl, browse_illust_series_impl, browse_novel_series_impl,
-    browse_ranking_impl, browse_related_impl, browse_search_impl, browse_user_follow_impl,
-    browse_user_profile_impl, browse_user_works_impl, browse_watchlist_impl,
-    browse_work_comments_impl, browse_work_counts_impl, browse_work_detail_impl, build_browse_api,
+    browse_follow_latest_impl, browse_home_feed_impl, browse_illust_series_impl,
+    browse_novel_series_impl, browse_ranking_impl, browse_related_impl, browse_search_impl,
+    browse_user_follow_impl, browse_user_profile_impl, browse_user_works_impl,
+    browse_watchlist_impl, browse_work_comments_impl, browse_work_counts_impl,
+    browse_work_detail_impl, build_browse_api,
 };
 use pixiv_tool_lib::cookies::CookieStore;
 use pixiv_tool_lib::db::Db;
@@ -117,9 +117,17 @@ async fn comment_add_validates_before_login_and_requires_login() {
     );
     // 表情贴图：合法 id（含回复）同样落到登录守卫
     assert_eq!(
-        browse_comment_add_impl(&state, "illust", 150446397, 117482194, None, Some("301"), None)
-            .await
-            .unwrap_err(),
+        browse_comment_add_impl(
+            &state,
+            "illust",
+            150446397,
+            117482194,
+            None,
+            Some("301"),
+            None
+        )
+        .await
+        .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
@@ -308,9 +316,17 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
     );
     // 评论写（comment-add）：文本、根评论 / 回复、表情贴图合法参数 → 统一登录守卫
     assert_eq!(
-        browse_comment_add_impl(&state, "manga", 9000021, 117482194, Some("测试评论"), None, None)
-            .await
-            .unwrap_err(),
+        browse_comment_add_impl(
+            &state,
+            "manga",
+            9000021,
+            117482194,
+            Some("测试评论"),
+            None,
+            None
+        )
+        .await
+        .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
@@ -328,20 +344,34 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_comment_add_impl(&state, "illust", 9000021, 117482194, None, Some("301"), None)
-            .await
-            .unwrap_err(),
+        browse_comment_add_impl(
+            &state,
+            "illust",
+            9000021,
+            117482194,
+            None,
+            Some("301"),
+            None
+        )
+        .await
+        .unwrap_err(),
         NOT_LOGGED_IN
     );
     // 收藏（契约 v3.1）：4 个命令合法参数 → 统一登录守卫拦截
     assert_eq!(
-        browse_bookmark_list_impl(&state, "illust", "show", None, 0, None)
+        browse_bookmark_list_impl(&state, "illust", "show", None, 0, None, None)
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_bookmark_list_impl(&state, "novel", "hide", Some("風景"), 48, Some(30))
+        browse_bookmark_list_impl(&state, "novel", "hide", Some("風景"), 48, Some(30), None)
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    assert_eq!(
+        browse_bookmark_list_impl(&state, "illust", "show", None, 0, None, Some(9000001))
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
@@ -658,7 +688,7 @@ async fn invalid_params_rejected_before_login_guard() {
     // 收藏（契约 v3.1）：非法参数在登录守卫之前被拒
     // kind 白名单（契约只分 illust|novel；manga/ugoira 收藏由前端传 "illust"）
     assert_eq!(
-        browse_bookmark_list_impl(&state, "manga", "show", None, 0, None)
+        browse_bookmark_list_impl(&state, "manga", "show", None, 0, None, None)
             .await
             .unwrap_err(),
         "不支持的收藏类型: manga"
@@ -683,30 +713,43 @@ async fn invalid_params_rejected_before_login_guard() {
     );
     // rest 白名单
     assert_eq!(
-        browse_bookmark_list_impl(&state, "illust", "all", None, 0, None)
+        browse_bookmark_list_impl(&state, "illust", "all", None, 0, None, None)
             .await
             .unwrap_err(),
         "不支持的可见范围: all"
     );
     // offset 负数
     assert_eq!(
-        browse_bookmark_list_impl(&state, "illust", "show", None, -1, None)
+        browse_bookmark_list_impl(&state, "illust", "show", None, -1, None, None)
             .await
             .unwrap_err(),
         "offset 不能为负数"
     );
     // limit 区间（1~100）
     assert_eq!(
-        browse_bookmark_list_impl(&state, "illust", "show", None, 0, Some(0))
+        browse_bookmark_list_impl(&state, "illust", "show", None, 0, Some(0), None)
             .await
             .unwrap_err(),
         "limit 必须在 1~100 之间"
     );
     assert_eq!(
-        browse_bookmark_list_impl(&state, "novel", "show", None, 0, Some(101))
+        browse_bookmark_list_impl(&state, "novel", "show", None, 0, Some(101), None)
             .await
             .unwrap_err(),
         "limit 必须在 1~100 之间"
+    );
+    // user_id 直传（他人公开收藏）：uid 须为正整数、且仅 rest=show
+    assert_eq!(
+        browse_bookmark_list_impl(&state, "illust", "show", None, 0, None, Some(0))
+            .await
+            .unwrap_err(),
+        "用户 ID 必须为正整数"
+    );
+    assert_eq!(
+        browse_bookmark_list_impl(&state, "illust", "hide", None, 0, None, Some(9000001))
+            .await
+            .unwrap_err(),
+        "他人收藏仅支持 rest=show（私密收藏仅本人可见）"
     );
     // restrict 0|1
     assert_eq!(

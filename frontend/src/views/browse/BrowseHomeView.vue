@@ -24,6 +24,12 @@ const cacheUserId = auth.isLoggedIn ? auth.userId : "";
 const items = shallowRef<BrowseWorkItem[]>(readHomeCache(cacheUserId));
 let disposed = false;
 onBeforeUnmount(() => { disposed = true; });
+/** 写缓存前的账号守卫：缓存分桶正确性依赖 KeepAlive 按账号重建，实例若跨账号
+ * 仍存活会把新账号数据写进旧账号桶，比对不一致即拒绝写入（显式校验兜底）。 */
+function persist(): void {
+  if (auth.userId !== cacheUserId) return;
+  saveHomeCache(cacheUserId, items.value);
+}
 const loading = ref(false);
 const refreshing = ref(false);
 const error = ref("");
@@ -39,7 +45,7 @@ async function initialLoad(): Promise<void> {
     const data = await browseHomeFeed();
     if (disposed) return;
     items.value = data.items;
-    saveHomeCache(cacheUserId, items.value);
+    persist();
   } catch (err) {
     if (!disposed) error.value = errorMessage(err);
   } finally {
@@ -58,7 +64,7 @@ async function shuffle(): Promise<void> {
     const fresh = data.items.filter((it) => !seen.has(`${it.kind}:${it.id}`));
     if (fresh.length >= 5) {
       items.value = items.value.concat(fresh);
-      saveHomeCache(cacheUserId, items.value);
+      persist();
     } else exhausted.value = true;
   } catch {
     if (!disposed) notify(t("common.browseLoadFailed"));

@@ -219,7 +219,10 @@ CookieStore.save（keyring 存储）→ finally：CDP Browser.close，
 **关键实现约束**：
 
 1. Chrome / Edge 必须使用应用专属 `user-data-dir`（`config/login-browser-profile`），
-   不得连接用户日常 profile。
+   不得连接用户日常 profile。`login-browser-profile` / `login-webview-profile`
+   两个登录专用 profile 由浏览器 / webview 引擎自管会话数据（含已退出账号
+   残留的 PHPSESSID，登出/切号不触碰，下次登录开窗时清理），豁免于
+   「config/ 下不得出现 cookie 文件」约束（ADR 0009/0011 既定设计）。
 2. CDP 只绑定随机 `127.0.0.1` 端口；拿到 Cookie 后立即经 Browser.close 关闭
    浏览器（3s 宽限后 kill）。
 3. 匿名 `/ajax/user/self` 也返回 HTTP 200 与 token；必须以非空 `userData.id`
@@ -235,8 +238,14 @@ Cookie 域只匹配 `pixiv.net` 或以 `.pixiv.net` 为标签后缀的子域，�
 
 **登录状态检查**（`commands/auth_cmds.rs::auth_status`）：App 启动时以同一套
 wreq 指纹调 `/ajax/user/self?lang=zh` 探测 cookie 有效性（整体 2s 超时，返回
-`userData.{id, pixivId, name}`）；401/403 → 清空本地 cookie，其余失败（含
-超时、网络错误）→ 保留 cookie 仅记日志，UI 显示"未登录"。
+`userData.{id, pixivId, name}`）；401/403 → 清空本地 cookie、移除失效账号
+（多账号语义见 §5.3）并使会话缓存失效（见下），其余失败（含超时、网络错误）
+→ 保留 cookie 仅记日志，UI 显示"未登录"。
+
+**会话缓存失效**（触发点清单与实现见 §5.3）：登录 / 手动登录 / 切换账号 /
+退出登录成功（含上述 auth_status 失效清理）后，后端进程级会话缓存——当前
+用户自 uid 与 web csrf token（各 30min TTL）——统一失效，下一次请求以新
+凭据重建，避免 TTL 内收藏列表仍按旧账号 uid 拼路径、写操作携带旧会话 token。
 
 ### 4.2 抓取任务模型（Source + Crawler + TaskManager）
 
@@ -549,14 +558,29 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   独立条目 `u-<user_id>`（分片规则同上）；账号索引
   `config/accounts.json` **只存用户元信息**（user_id / pixiv_id / name /
   profile_img 原始头像 URL / avatar_file 本地缓存文件名 / saved_at 登记时间），
-  **任何 cookie 都不落 config**。显式登录时双写镜像/账号条目，auth_status 只刷新
+  **任何 cookie 都不落 config**（豁免：`login-browser-profile` /
+  `login-webview-profile` 两个登录专用目录由浏览器 / webview 引擎自管会话
+  数据，属 ADR 0009/0011 既定设计，登出/切号不触碰，下次登录开窗时清理）。
+  显式登录时双写镜像/账号条目，auth_status 只刷新
   索引元信息（旧单账号首次校验仍补建账号条目），避免启动时重复访问 Keychain；
   退出登录移除当前账号（镜像 + 条目 + 索引项），有剩余账号时自动激活列表
-  中首个账号；auth_status 探测确定
-  失效（401/403）时同样移除，避免死账号
+  中首个账号（回退任一步失败降级为记日志按纯登出返回，响应
+  `fallback_applied:false`——此刻 default 已清、active 已空，后端真实状态
+  就是未登录；回退账号凭据确定缺失时移出列表，维持「列表中的账号皆可切换」）；
+  auth_status 探测确定失效（401/403）时同样移除，避免死账号
 
 账号移除同步驱逐内存中的 CookieStore 实例；切换前检查账号已登记，避免任意
 user_id 创建无界凭据缓存。实例创建与插入在同一次短锁内完成。
+
+**会话缓存失效**：登录 / 手动登录 / 登出（含回退降级）/ 切换账号与
+auth_status 失效清理在凭据变更成功后统一调用
+`pixiv::browse_api::invalidate_session_caches()`，清空进程级的自 uid 缓存与
+主站 csrf token 缓存（各 30min TTL）——否则切换账号后收藏列表 / 标签仍按
+旧账号 uid 拼路径、写操作仍带旧会话 token，最长残留一个 TTL。主站 csrf
+token 的写路径自愈覆盖全部 POST 写方法（Auth/Client 失败或 200+error 信封
+一律清缓存重取）。`auth_logout` / `auth_account_switch` 在存在非终态抓取
+任务时附带可选 `warning`（任务沿用创建时账号凭据快照执行，重试才读当前
+账号），由前端提示。
 
 ---
 
@@ -870,12 +894,12 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 
 | 命令 | 说明 |
 |---|---|
-| `auth_status` | 登录态探测（2s 超时；401/403 清 cookie，其余失败保留） |
+| `auth_status` | 登录态探测（2s 超时；401/403 清 cookie 并移除死账号 + 会话缓存失效，其余失败保留） |
 | `auth_login` | 真实 Chromium CDP 登录（长阻塞，最长 300s）；无浏览器时回退内嵌 webview 登录窗（ADR 0009），`PIXIV_TOOL_FORCE_WEBVIEW_LOGIN=1` 强制走 webview |
 | `auth_login_manual(phpsessid)` | 手动 PHPSESSID（normalize → 会话探测 → 存储） |
-| `auth_logout` | 退出当前账号：清 default 镜像 + 移除其账号条目与索引项；有剩余账号则自动激活首个 |
+| `auth_logout` | 退出当前账号：清 default 镜像 + 移除其账号条目与索引项；有剩余账号则自动激活首个，回退失败降级为纯登出；返回 `{status, fallback_applied, warning?}`（warning 为非终态抓取任务仍按创建时账号执行的提示） |
 | `auth_accounts_list` | 已保存账号列表：`{active, accounts:[{user_id,pixiv_id,name,profile_img,avatar_file,avatar_url?,saved_at}]}` |
-| `auth_account_switch(userId)` | 切换当前账号：目标条目写入 default → 索引 active；目标凭据缺失/失效 → Err |
+| `auth_account_switch(userId)` | 切换当前账号：目标条目写入 default → 索引 active → 会话缓存失效；目标凭据缺失/失效 → Err；存在非终态抓取任务时返回可选 `warning` |
 | `tasks_list(category?)` | 任务列表（按小说/插画过滤） |
 | `task_create(sourceType, sourceId, formats, category)` | 创建抓取任务，后台 tokio 运行 |
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
@@ -915,7 +939,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_work_comments(kind, id, offset)` | 作品评论根列表（illusts/novels comments/roots，limit=10，offset 游标；作者关闭评论区 → `{"comments":[],"disabled":true}`，非报错） |
 | `browse_comment_replies(kind, commentId, page)` | 评论回复列表（comments/replies，page 从 1） |
 | `browse_comment_add(kind, id, authorId, comment?, stampId?, parentId?)` | 发表评论 / 回复评论 / 官方表情贴图（插画·漫画 `/rpc/post_comment.php`、小说 `/novel/rpc/post_comment.php`，form + `x-csrf-token`；`authorId` = 作品作者 userId；`comment` 与 `stampId` **二选一**，正文 1–140 字，`stampId` 为官方贴图 id、不带正文；给出 `parentId` 即回复该评论；返回 `{comment_id,user_id,user_name,parent_id?,stamp_id?}`） |
-| `browse_bookmark_list(kind, rest, tag, offset, limit)` | 收藏列表（自己：illusts 48/页、novels 30/页；offset + total 翻页） |
+| `browse_bookmark_list(kind, rest, tag, offset, limit, userId?)` | 收藏列表（userId 缺省 = 自己：illusts 48/页、novels 30/页，offset + total 翻页；显式传入 = 该作者的他人公开收藏，仅 rest=show，作者页收藏 tab 用） |
 | `browse_bookmark_tags(kind)` | 收藏标签（一次返回 public/private 两组，含「未分類」聚合标签） |
 | `browse_bookmark_add(kind, id, restrict, tags)` | 添加收藏（全局 JSON 端点 + x-csrf-token；restrict 0 公开 / 1 非公开） |
 | `browse_bookmark_remove(kind, id, bookmarkId)` | 取消收藏：插画走 ajax form，小说走旧式 `/novel/bookmark_setting.php` 表单 |
