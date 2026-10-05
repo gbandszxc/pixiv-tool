@@ -82,16 +82,27 @@ pub fn run() {
         // 图片代理协议：前端 convertFileSrc(pximgUrl, "pixiv-img")——传原始 URL，
         // 不要预编码（convertFileSrc 在 Windows 侧会编码一次，预编码会双重编码 403）。
         // pximg 防盗链需 Referer，走后端代下 + 磁盘缓存（data/cache/img）。
-        // 异步注册不阻塞主线程；缓存目录从 AppState.paths 取（AppState 未就绪时
-        // 兜底临时目录，正常时序下不会发生）。
+        // 异步注册不阻塞主线程；缓存目录与上限从 AppState 取（上限跟随设置
+        // image_cache_max_mib 实时读取；AppState 未就绪时兜底临时目录 + 默认上限，
+        // 正常时序下不会发生）。
         .register_asynchronous_uri_scheme_protocol("pixiv-img", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             tauri::async_runtime::spawn(async move {
-                let cache_dir = app
+                let (cache_dir, max_bytes) = app
                     .try_state::<AppState>()
-                    .map(|state| state.paths.data_dir.join("cache").join("img"))
-                    .unwrap_or_else(|| std::env::temp_dir().join("pixiv-tool-img-cache"));
-                let response = image_proxy::handle_image_request(request, &cache_dir).await;
+                    .map(|state| {
+                        (
+                            state.paths.data_dir.join("cache").join("img"),
+                            image_proxy::max_cache_bytes(state.settings_snapshot().image_cache_max_mib),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        (
+                            std::env::temp_dir().join("pixiv-tool-img-cache"),
+                            image_proxy::DEFAULT_MAX_CACHE_BYTES,
+                        )
+                    });
+                let response = image_proxy::handle_image_request(request, &cache_dir, max_bytes).await;
                 responder.respond(response);
             });
         })

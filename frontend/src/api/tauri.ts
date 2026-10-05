@@ -113,6 +113,8 @@ export interface Settings {
   thumb_quality_detail: string;
   /** 大图 / 全屏浮层档位：large | original */
   thumb_quality_fullscreen: string;
+  /** 图片磁盘缓存上限（MiB），合法区间 256~2048，默认 512（分区淘汰见 ADR 0028） */
+  image_cache_max_mib: number;
   /** 小说正文字号缩放（小说阅读器底栏缩放控件写入），默认 1.0，合法区间 0.75~2.0 */
   novel_font_scale: number;
   /** 阅读背景色（语义键，空串=跟随主题） */

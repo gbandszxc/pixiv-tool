@@ -354,12 +354,12 @@
 
 ### 5.3 代理层（`src-tauri/src/image_proxy.rs`）
 
-- 入口 `handle_image_request` image_proxy.rs:539；前端 `convertFileSrc(encodeURIComponent(url), "pixiv-img")`。
+- 入口 `handle_image_request` image_proxy.rs；前端 `convertFileSrc(encodeURIComponent(url), "pixiv-img")`。
 - 白名单 `is_allowed_pximg_url`（image_proxy.rs）：仅 `https` 且 host 以 `.pximg.net` 结尾，拒绝 userinfo、authority 的 percent 编码与非 443 端口（挡凭据地址、后缀欺骗与解析分歧）；路径兼容 percent-encoded 与未编码（`path_to_pximg_url`）。白名单外 → 403；抓取下载同样复用此校验。
-- 缓存：键 = `SHA-256(完整 URL)` + 原扩展名（`cache_key` image_proxy.rs:238）；目录 `<data>/cache/img/`；上限 1GB（`IMAGE_CACHE_MAX_BYTES` image_proxy.rs:46），超出按 mtime 从旧到新清理（`trim_cache` image_proxy.rs:290）。
+- 缓存：键 = `SHA-256(完整 URL)` + 原扩展名（`cache_key` image_proxy.rs）；目录 `<data>/cache/img/`；上限由设置 `image_cache_max_mib` 决定（默认 512 MiB，合法区间 256~2048，`max_cache_bytes` 每次写入后实时读取，ADR 0028）。淘汰（`trim_cache`）为三档分区：按字节数划 小图 ≤1MiB（预算 60%）/ 大图 ≤8MiB（25%）/ 原图（15%），全局未超上限不动，超限只削超预算档、档内按 mtime 从旧到新删除，本次刚写入的文件受保护。
 - 回源：进程级共享的无 cookie client（`cdn_client`，`send_download` 自带 Referer）；全局并发 10（`CDN_MAX_CONCURRENT_DOWNLOADS`）；同一 URL 并发冷启动单飞合并（`coalesce_download_with`）。下载完成即回传，后台串行缓存写入临时文件后原子重命名，目录扫描与淘汰用 `spawn_blocking`；最多 10 份响应在后台等待/执行缓存维护，满载时只跳过该次缓存，仍完整返回图片，避免慢磁盘下无界保留字节。写盘维护结束前在途条目保留共享字节，避免重复回源。缓存失败不影响图片响应。离线回归：`returns_before_cache_write_and_shares_until_persisted` / `saturated_cache_queue_returns_image_without_retaining_inflight_bytes`。
-- 重试：`download_with_retry` image_proxy.rs:503——首次 + `[200,500]ms` 两次重试，总预算 15s（`DOWNLOAD_TIMEOUT_SECS` image_proxy.rs:42）；404 / 401 / 403 / 429 为终止态不重试（`should_retry` image_proxy.rs:338），CDN 的 429 立即 502、无跨请求退避。
-- 响应：成功 200 + 按扩展名 Content-Type + `Cache-Control: public, max-age=31536000, immutable`（image_response image_proxy.rs:577）；CDN 404 → 404，其余失败 → 502（error_response image_proxy.rs:587）。
+- 重试：`download_with_retry` image_proxy.rs——首次 + `[200,500]ms` 两次重试，总预算 15s（`DOWNLOAD_TIMEOUT_SECS`）；404 / 401 / 403 / 429 为终止态不重试（`should_retry`），CDN 的 429 立即 502、无跨请求退避。
+- 响应：成功 200 + 按扩展名 Content-Type + `Cache-Control: public, max-age=31536000, immutable`（image_response）；CDN 404 → 404，其余失败 → 502（error_response）。
 - 内存所有权：`download_bytes` / `download_bytes_ungated` 返回 `bytes::Bytes`，单飞等待者共享同一字节缓冲；只在 Tauri 成功响应的独占 `Cow<[u8]>` 边界转为 `Vec<u8>`。不改变 CDN 端点、请求头、响应体、错误分类或缓存策略；仍整包接收，响应收集期间的峰值未因这次减少复制而消失。
 
 ## 6. 已失效端点与勘误（截至 2026-10-01 实测）

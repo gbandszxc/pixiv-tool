@@ -412,6 +412,13 @@ export default {
       medium: "Medium · up to 1200px (default)",
       large: "Large preview · 600×1200",
     },
+    // Image cache limit (256~2048 MiB; partitioned eviction, see docs/adr/0028-image-cache-limit-and-partitioned-eviction.md)
+    imageCache: "Image cache",
+    imageCacheMax: "Cache limit",
+    imageCacheCustom: "Custom",
+    imageCacheCustomLabel: "Custom limit (MiB)",
+    imageCacheMaxInvalid: "Image cache limit must be an integer between 256 and 2048 MiB",
+    imageCacheMaxHint: "Browsed images are cached locally before display; once the limit is reached the oldest entries are evicted automatically. The cache is partitioned into small / large / original classes (60% / 25% / 15% of the limit), keeping original-file usage lowest. Lowering the limit takes effect gradually as new images are cached; use Maintenance to free space immediately.",
     contentDisplay: "Content",
     showR18: "Show R-18 content",
     showR18Hint: "When off, R-18 / R-18G works are hidden from lists; work pages stay reachable with the blur mask.",

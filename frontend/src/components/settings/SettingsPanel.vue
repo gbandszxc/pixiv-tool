@@ -50,6 +50,20 @@
         </div>
       </fieldset>
       <fieldset class="m3-field settings-fieldset">
+        <legend><span class="field-label">{{ t("settings.imageCache") }}<HelpTooltip :label="t('settings.imageCache')" :text="t('settings.imageCacheMaxHint')" /></span></legend>
+        <div class="m3-field">
+          <label for="image-cache-max">{{ t("settings.imageCacheMax") }}</label>
+          <md-outlined-select id="image-cache-max" :value="cacheMaxSelectValue" @change="changeCacheMax(($event.target as HTMLSelectElement).value)">
+            <md-select-option v-for="preset in cachePresets" :key="preset.value" :value="String(preset.value)">{{ preset.label }}</md-select-option>
+            <md-select-option value="custom">{{ t("settings.imageCacheCustom") }}</md-select-option>
+          </md-outlined-select>
+        </div>
+        <div v-if="cacheMaxCustom" class="m3-field">
+          <label for="image-cache-max-custom">{{ t("settings.imageCacheCustomLabel") }}</label>
+          <md-outlined-text-field id="image-cache-max-custom" class="settings-number-input" type="number" min="256" max="2048" step="64" :value="String(form.image_cache_max_mib)" @input="form.image_cache_max_mib = Number(($event.target as HTMLInputElement).value)" />
+        </div>
+      </fieldset>
+      <fieldset class="m3-field settings-fieldset">
         <legend><span class="field-label">{{ t("settings.contentDisplay") }}<HelpTooltip :label="t('settings.contentDisplay')" :text="t('settings.showR18Hint')" /></span></legend>
         <div class="m3-row"><label class="m3-choice"><md-checkbox :checked="form.show_r18" @change="form.show_r18 = ($event.target as HTMLInputElement).checked" />{{ t("settings.showR18") }}</label></div>
       </fieldset>
@@ -280,6 +294,19 @@ const paletteOptions = computed(() => ["pixiv", "indigo", "jade", "violet", "amb
 const gridTierOptions = computed(() => ["small", "medium", "large"].map(value => ({ value, label: t(`settings.thumbTiers.${value}`) })));
 const detailTierOptions = computed(() => [{ value: "medium", label: t("settings.thumbDetailTiers.medium") }, { value: "large", label: t("settings.thumbDetailTiers.large") }, { value: "original", label: t("settings.thumbTiers.original") }]);
 const fullscreenTierOptions = computed(() => [{ value: "large", label: t("settings.thumbTiers.large") }, { value: "original", label: t("settings.thumbTiers.original") }]);
+/** 图片缓存上限预设档（MiB），与后端合法区间 256~2048 对齐；区间外的现值走「自定义」。 */
+const cachePresets = [
+  { value: 256, label: "256 MiB" },
+  { value: 512, label: "512 MiB" },
+  { value: 1024, label: "1 GiB" },
+  { value: 2048, label: "2 GiB" },
+];
+const cacheMaxCustom = computed(() => !cachePresets.some((preset) => preset.value === form.value.image_cache_max_mib));
+const cacheMaxSelectValue = computed(() => (cacheMaxCustom.value ? "custom" : String(form.value.image_cache_max_mib)));
+/** 选「自定义」时保持当前数值原样，由自定义输入框接管；选预设直接落值。 */
+function changeCacheMax(value: string) {
+  if (value !== "custom") form.value.image_cache_max_mib = Number(value);
+}
 
 function toggleFormat(format: string, checked: boolean) { form.value.output_formats = checked ? [...form.value.output_formats, format] : form.value.output_formats.filter((item) => item !== format); }
 /** 语言与主题同理是即时预览：立即切 i18n / 写 localStorage，落盘仍等保存。 */
@@ -296,6 +323,8 @@ function reset() { form.value = { ...settingsStore.settings }; resetTranslationD
 defineExpose({ save, reset, hasUnsaved });
 async function save(): Promise<boolean> {
   if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) { notify(t("settings.maxWaitInvalid")); return false; }
+  const cacheMax = form.value.image_cache_max_mib;
+  if (!Number.isInteger(cacheMax) || cacheMax < 256 || cacheMax > 2048) { notify(t("settings.imageCacheMaxInvalid")); return false; }
   const timeout = form.value.translation_timeout_seconds;
   if (!timeout || timeout < 30 || timeout > 3600) { notify(t("translation.timeoutInvalid")); return false; }
   let extra: Record<string, unknown>;

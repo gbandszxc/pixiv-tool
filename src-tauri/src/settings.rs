@@ -38,6 +38,10 @@ pub struct Settings {
     pub thumb_quality_detail: String,
     /// 全屏浮层档位（见 [`THUMB_FULLSCREEN_TIERS`]）。
     pub thumb_quality_fullscreen: String,
+    /// 图片磁盘缓存上限（MiB），默认 [`DEFAULT_IMAGE_CACHE_MAX_MIB`]，
+    /// 合法区间 [`IMAGE_CACHE_MIN_MIB`] ~ [`IMAGE_CACHE_MAX_MIB`]；
+    /// 非法值在加载期回落默认。消费方为 `image_proxy` 的分区淘汰。
+    pub image_cache_max_mib: i64,
     /// 小说正文字号缩放（小说阅读器底栏缩放控件写入），默认 1.0，
     /// 合法区间 [0.75, 2.0]；非法值在加载期回落 1.0。
     pub novel_font_scale: f64,
@@ -76,6 +80,7 @@ impl Default for Settings {
             thumb_quality_grid: "medium".into(),
             thumb_quality_detail: "medium".into(),
             thumb_quality_fullscreen: "large".into(),
+            image_cache_max_mib: DEFAULT_IMAGE_CACHE_MAX_MIB,
             novel_font_scale: 1.0,
             novel_bg_color: String::new(),
             saucenao_api_key: String::new(),
@@ -95,6 +100,12 @@ pub const THUMB_GRID_TIERS: [&str; 3] = ["small", "medium", "large"];
 pub const THUMB_DETAIL_TIERS: [&str; 3] = ["medium", "large", "original"];
 /// 全屏浮层可选档位。
 pub const THUMB_FULLSCREEN_TIERS: [&str; 2] = ["large", "original"];
+/// 图片磁盘缓存上限默认值（MiB）：取代写死的 1GB（ADR 0028）。
+pub const DEFAULT_IMAGE_CACHE_MAX_MIB: i64 = 512;
+/// 图片磁盘缓存上限合法区间下限（MiB）。
+pub const IMAGE_CACHE_MIN_MIB: i64 = 256;
+/// 图片磁盘缓存上限合法区间上限（MiB）= 2 GiB。
+pub const IMAGE_CACHE_MAX_MIB: i64 = 2048;
 /// 小说阅读背景色可选语义键（空串 = 跟随主题，不在此表内）。
 pub const NOVEL_BG_COLORS: [&str; 5] = ["green", "kraft", "warm", "mist", "blush"];
 /// 四个核心导航入口；发现默认展示推荐首页。
@@ -160,6 +171,12 @@ impl Settings {
                 }
                 if !THUMB_FULLSCREEN_TIERS.contains(&settings.thumb_quality_fullscreen.as_str()) {
                     settings.thumb_quality_fullscreen = "large".into();
+                }
+                // 图片缓存上限：手改 settings.json 写入区间外的值（含 0 与负数）回落默认，
+                // 否则 0 会让每次缓存写入都触发全量淘汰。
+                if !(IMAGE_CACHE_MIN_MIB..=IMAGE_CACHE_MAX_MIB).contains(&settings.image_cache_max_mib)
+                {
+                    settings.image_cache_max_mib = DEFAULT_IMAGE_CACHE_MAX_MIB;
                 }
                 // 小说字号缩放：非有限值（NaN/inf，JSON 文本层面不可表达，纯防御）
                 // 或越出 [0.75, 2.0] 回落默认 1.0（对齐缩略图档位的加载回落做法）。
@@ -320,6 +337,20 @@ fn translation_timeout_message() -> String {
     )
 }
 
+/// JSON 值形式的图片缓存上限校验（bool / 非整数 / 越界都拒绝），通过时返回该整数。
+pub fn validate_image_cache_max_value(v: &Value) -> Result<i64, String> {
+    let message = || {
+        format!("图片缓存上限必须是 {IMAGE_CACHE_MIN_MIB}~{IMAGE_CACHE_MAX_MIB} MiB 之间的整数")
+    };
+    if v.is_boolean() {
+        return Err(message());
+    }
+    match v.as_i64() {
+        Some(n) if (IMAGE_CACHE_MIN_MIB..=IMAGE_CACHE_MAX_MIB).contains(&n) => Ok(n),
+        _ => Err(message()),
+    }
+}
+
 /// JSON 值形式的小说字号缩放校验：bool / 非数字 / 非有限值（NaN/inf）/ 越界都拒绝。
 pub fn validate_novel_font_scale_value(v: &Value) -> Result<(), String> {
     let Some(scale) = v.as_f64().filter(|s| s.is_finite()) else {
@@ -371,6 +402,7 @@ mod tests {
         assert_eq!(s.thumb_quality_grid, "medium");
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
+        assert_eq!(s.image_cache_max_mib, DEFAULT_IMAGE_CACHE_MAX_MIB);
         assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
@@ -417,6 +449,7 @@ mod tests {
         assert_eq!(s.thumb_quality_grid, "medium");
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
+        assert_eq!(s.image_cache_max_mib, DEFAULT_IMAGE_CACHE_MAX_MIB);
         assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
@@ -604,6 +637,69 @@ mod tests {
             );
         }
         cleanup(&dir);
+    }
+
+    #[test]
+    fn image_cache_max_roundtrip_and_invalid_fallback_on_load() {
+        let dir = temp_config_dir("image-cache-max");
+        // 合法值（含区间两端）原样保留
+        for mib in [IMAGE_CACHE_MIN_MIB, 512, 1024, IMAGE_CACHE_MAX_MIB] {
+            std::fs::write(
+                settings_path(&dir),
+                format!(r#"{{"image_cache_max_mib":{mib}}}"#),
+            )
+            .unwrap();
+            assert_eq!(Settings::load_or_init(&dir).image_cache_max_mib, mib);
+        }
+        // 区间外（含 0 与负数）回落默认：否则 0 会让每次缓存写入都触发全量淘汰
+        for mib in [0, -1, IMAGE_CACHE_MAX_MIB + 1] {
+            std::fs::write(
+                settings_path(&dir),
+                format!(r#"{{"image_cache_max_mib":{mib}}}"#),
+            )
+            .unwrap();
+            assert_eq!(
+                Settings::load_or_init(&dir).image_cache_max_mib,
+                DEFAULT_IMAGE_CACHE_MAX_MIB
+            );
+        }
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn validate_image_cache_max_rules() {
+        let message = "图片缓存上限必须是 256~2048 MiB 之间的整数";
+        // 区间两端与默认值通过，并返回整数本身
+        assert_eq!(
+            validate_image_cache_max_value(&serde_json::json!(256)).unwrap(),
+            256
+        );
+        assert_eq!(
+            validate_image_cache_max_value(&serde_json::json!(2048)).unwrap(),
+            2048
+        );
+        assert_eq!(
+            validate_image_cache_max_value(&serde_json::json!(512)).unwrap(),
+            512
+        );
+        // 越界 / 非整数 / bool / null 全部拒绝，文案精确匹配
+        for bad in [255, 2049, 0, -5] {
+            assert_eq!(
+                validate_image_cache_max_value(&serde_json::json!(bad)).unwrap_err(),
+                message
+            );
+        }
+        for bad in [
+            serde_json::json!(true),
+            serde_json::json!("512"),
+            serde_json::json!(null),
+            serde_json::json!(512.5),
+        ] {
+            assert_eq!(
+                validate_image_cache_max_value(&bad).unwrap_err(),
+                message
+            );
+        }
     }
 
     #[test]

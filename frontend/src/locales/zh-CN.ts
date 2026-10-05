@@ -413,6 +413,13 @@ export default {
       medium: "中 · 最长边 1200（默认）",
       large: "大预览 · 600×1200",
     },
+    // 图片缓存上限（区间 256~2048 MiB，分区淘汰见 docs/adr/0028-image-cache-limit-and-partitioned-eviction.md）
+    imageCache: "图片缓存",
+    imageCacheMax: "缓存上限",
+    imageCacheCustom: "自定义",
+    imageCacheCustomLabel: "自定义上限（MiB）",
+    imageCacheMaxInvalid: "图片缓存上限必须是 256~2048 MiB 之间的整数",
+    imageCacheMaxHint: "浏览过的图片会先存进本机缓存再显示，超出上限后自动按最旧优先清理。缓存内部分小图 / 大图 / 原图三档配额（各占 60% / 25% / 15%），原图占用被压到最低。调小上限后由后续缓存写入逐步生效，需要立即释放空间请在「维护」页清理。",
     contentDisplay: "内容显示",
     showR18: "展示 R-18 内容",
     showR18Hint: "关闭后，列表会隐藏 R-18 / R-18G 作品；已打开的作品详情仍可访问并保留模糊遮罩。",

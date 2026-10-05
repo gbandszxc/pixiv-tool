@@ -455,6 +455,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "thumb_quality_grid": "medium",
   "thumb_quality_detail": "medium",
   "thumb_quality_fullscreen": "large",
+  "image_cache_max_mib": 512,
   "novel_font_scale": 1.0,
   "novel_bg_color": "",
   "saucenao_api_key": "",
@@ -492,6 +493,10 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   不是任何档位的目标。`thumb_quality_fullscreen` 的消费者为全屏浮层（§6.4），
   全屏浮层右侧的胶卷缩略图消费 `thumb_quality_grid` 档（§6.4）。
   手改 settings.json 写入非法档位时，加载期回落到该键默认值（不强制回写文件）。
+- `image_cache_max_mib`：图片磁盘缓存上限（MiB），默认 512，合法区间 256~2048
+  （预设档 256 MiB / 512 MiB / 1 GiB / 2 GiB + 自定义输入，设置弹窗「图片与内容」
+  分组）。上限在每次图片缓存写入后实时读取；分区淘汰策略与边界行为见
+  ADR 0028。手改 settings.json 写入区间外的值时，加载期回落默认 512。
 - `show_r18`：全局 R-18 展示开关（默认 `true`）。关闭后所有作品列表（首页/发现/动态/
   搜索/排行榜/收藏/作者页/频道页各板块/相关推荐/小说相关/系列目录行）在渲染期隐藏（频道手动筛选可在该频道覆盖全局档）
   `x_restrict >= 1` 的作品；详情页仍可访问；**关闭开关时**详情页对
@@ -720,7 +725,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   使用上述缓存。除首页首次挂载的后台刷新外，数据有变化时由用户主动刷新列表。
   渐进加载回归页：启动 `dev.ps1 frontend start` 后打开 `/tests/loading.html`。
 - **图片**：`<img>` 一律经自定义协议 `pixiv-img`（§3.1、ADR 0012 §2），磁盘缓存
-  `<data>/cache/img/`（1GB 上限按 mtime 淘汰），前端 `pxSrc()` 封装。封面 URL 经
+  `<data>/cache/img/`（上限由设置 `image_cache_max_mib` 决定，默认 512 MiB，
+  分区淘汰见 §5.2 与 ADR 0028），前端 `pxSrc()` 封装。封面 URL 经
   `frontend/src/utils/thumb.ts` 按设置档位（`thumb_quality_grid` /
   `thumb_quality_detail` / `thumb_quality_fullscreen`，见 §5.2）改写：**只替换路径里已有的
   `/c/<尺寸段>/` 段**（列表卡片多为 `c/540x540_70`），**或给 `/img-master/img/`
@@ -932,7 +938,8 @@ Alt+F4 / 标题栏关闭）与 Edit 项（撤销/剪切/复制/粘贴/全选，W
 无 PHPSESSID 一律 `Err("未登录或登录态已失效，请先登录")`（前端据此弹登录窗）。
 端点 / 参数 / 响应解析契约见 `docs/PIXIV-API.md`（含端点 → 实现 → 测试的维护矩阵）。
 图片经 `pixiv-img` 自定义协议（`image_proxy.rs`，白名单 `*.pximg.net`，磁盘缓存
-1GB，CDN 并发 10、同 URL 在途合并，单个逻辑下载含全部重试与退避受 15s 总预算
+上限跟随设置 `image_cache_max_mib`（默认 512 MiB，三档分区淘汰见 §5.2 / ADR 0028），
+CDN 并发 10、同 URL 在途合并，单个逻辑下载含全部重试与退避受 15s 总预算
 约束（`DOWNLOAD_TIMEOUT_SECS`），失败 200/500ms 短退避后重试至多 3 次，命中与
 回源统一 `Cache-Control: public, max-age=31536000, immutable`），不走 invoke。
 CDN 下载不占 ajax 限速与 400ms 请求间隔；CDN 侧的 429 不重试、立即回落 502，
@@ -1162,6 +1169,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0025 | 翻译生成请求改用流式，避免长请求被链路按空闲切断 | [adr/0025-translation-streaming.md](adr/0025-translation-streaming.md) |
 | 0026 | 浏览模式发表官方表情（文本表情与贴图） | [adr/0026-browse-comment-emojis.md](adr/0026-browse-comment-emojis.md) |
 | 0027 | 缓存与日志维护及模型错误诊断 | [adr/0027-storage-maintenance-diagnostics.md](adr/0027-storage-maintenance-diagnostics.md) |
+| 0028 | 图片缓存上限可配置 + 三档分区淘汰 | [adr/0028-image-cache-limit-and-partitioned-eviction.md](adr/0028-image-cache-limit-and-partitioned-eviction.md) |
 
 ADR 按需追加，不强制一次性写完。
 

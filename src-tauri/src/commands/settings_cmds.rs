@@ -5,6 +5,7 @@
 //! - settings_save → {"status":"success"}；output_dir 非法 → Err(中文校验消息)；
 //!   max_wait_seconds 非法 → Err("最大等待时间必须是 30~86400 秒之间的整数")；
 //!   translation_timeout_seconds 非法 → Err("翻译超时时间必须是 30~3600 秒之间的整数")；
+//!   image_cache_max_mib 非法 → Err("图片缓存上限必须是 256~2048 MiB 之间的整数")；
 //!   novel_font_scale 非法 → Err("小说字号缩放必须是 0.75~2.0 之间的数字")；
 //!   novel_bg_color 非法 → Err("阅读背景色无效")
 //! - clear_logs → {"status":"success"}（清空 <data_dir>/logs 下当前及轮转 .log 文件）
@@ -16,14 +17,15 @@ use tauri::State;
 
 use crate::settings::{
     STARTUP_PAGES, Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
-    validate_max_wait_value, validate_novel_bg_color_value, validate_novel_font_scale_value,
-    validate_output_dir_value, validate_thumb_tier, validate_translation_timeout_value,
+    validate_image_cache_max_value, validate_max_wait_value, validate_novel_bg_color_value,
+    validate_novel_font_scale_value, validate_output_dir_value, validate_thumb_tier,
+    validate_translation_timeout_value,
 };
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 21] = [
+const WRITABLE_KEYS: [&str; 22] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
@@ -42,6 +44,7 @@ const WRITABLE_KEYS: [&str; 21] = [
     "thumb_quality_grid",
     "thumb_quality_detail",
     "thumb_quality_fullscreen",
+    "image_cache_max_mib",
     "novel_font_scale",
     "novel_bg_color",
     "saucenao_api_key",
@@ -101,8 +104,8 @@ pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Resul
 
 /// partial JSON → 新 Settings（纯函数，离线可测）：
 /// 1. output_dir / max_wait_seconds / translation_timeout_seconds / theme_color /
-///    缩略图档位 / show_r18 / novel_font_scale / novel_bg_color 先做中文校验
-///    （失败即 Err，旧 400 文案）
+///    缩略图档位 / image_cache_max_mib / show_r18 / novel_font_scale / novel_bg_color
+///    先做中文校验（失败即 Err，旧 400 文案）
 /// 2. 白名单键覆盖到当前配置序列化结果上，再反解回 Settings
 ///    （类型不合法的值在反解时以中文错误拒绝）
 pub fn apply_settings_patch(
@@ -139,6 +142,9 @@ pub fn apply_settings_patch(
     }
     if let Some(value) = patch_obj.get("thumb_quality_fullscreen") {
         validate_thumb_tier(value, &THUMB_FULLSCREEN_TIERS, "全屏缩略图档位无效")?;
+    }
+    if let Some(value) = patch_obj.get("image_cache_max_mib") {
+        validate_image_cache_max_value(value)?;
     }
     if patch_obj
         .get("show_r18")
@@ -330,6 +336,32 @@ mod tests {
             )
             .is_ok()
         );
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_updates_and_validates_image_cache_max() {
+        let data_dir = temp_data_dir("image-cache");
+        let updated = apply_settings_patch(
+            &Settings::default(),
+            &json!({"image_cache_max_mib": 1024}),
+            &data_dir,
+        )
+        .unwrap();
+        assert_eq!(updated.image_cache_max_mib, 1024);
+        let message = "图片缓存上限必须是 256~2048 MiB 之间的整数";
+        for bad in [json!(255), json!(2049), json!(true), json!("512")] {
+            assert_eq!(
+                apply_settings_patch(
+                    &Settings::default(),
+                    &json!({"image_cache_max_mib": bad}),
+                    &data_dir
+                )
+                .unwrap_err(),
+                message,
+                "bad={bad}"
+            );
+        }
         cleanup(&data_dir);
     }
 

@@ -43,8 +43,16 @@ const CDN_MAX_CONCURRENT_DOWNLOADS: usize = 10;
 const DOWNLOAD_TIMEOUT_SECS: u64 = 15;
 /// 首次失败后的重试退避（毫秒），按重试序号取；长度即额外重试次数。
 const DOWNLOAD_RETRY_DELAYS_MS: [u64; 2] = [200, 500];
-/// 图片磁盘缓存总大小上限（字节）：1GB，超出按 mtime 从旧到新清理。
-const IMAGE_CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+/// 图片磁盘缓存上限默认值（字节）：设置缺省时的兜底（如 AppState 未就绪的
+/// 异常时序）；正常运行时上限来自设置 `image_cache_max_mib`（ADR 0028）。
+pub const DEFAULT_MAX_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+/// 缓存分区大小分界：≤1MiB 小图（缩略图 / 中等图），≤8MiB 大图（master1200、
+/// ugoira zip 等），其余按原图处理。分区要约束的是磁盘字节，按字节划档对
+/// 目录里已有的旧缓存同样生效，无需迁移（ADR 0028）。
+const CLASS_SIZE_LIMITS: (u64, u64) = (1024 * 1024, 8 * 1024 * 1024);
+/// 分区预算占上限的百分比，合计 100：小图命中率最高留最多，原图单张可达
+/// 数十 MiB 最挤占空间，压到最低（ADR 0028）。
+const CLASS_BUDGET_PERCENTS: [u64; 3] = [60, 25, 15];
 
 /// 全局 CDN 下载闸门（进程级，与具体 client 无关）。
 static CDN_GATE: LazyLock<tokio::sync::Semaphore> =
@@ -226,9 +234,55 @@ fn collect_cache_entries(dir: &Path) -> std::io::Result<Vec<CacheEntry>> {
     Ok(entries)
 }
 
-/// 缓存总量超上限时按 mtime 从旧到新删除直至低于上限；
-/// `keep`（本次刚写的文件）永不被删。失败只记日志，不向上传播。
+/// 缓存分区：按文件字节划入 小图 / 大图 / 原图 三档（见 [`CLASS_SIZE_LIMITS`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheClass {
+    Small,
+    Large,
+    Original,
+}
+
+impl CacheClass {
+    fn index(self) -> usize {
+        match self {
+            CacheClass::Small => 0,
+            CacheClass::Large => 1,
+            CacheClass::Original => 2,
+        }
+    }
+}
+
+fn cache_class_with(size: u64, limits: (u64, u64)) -> CacheClass {
+    if size <= limits.0 {
+        CacheClass::Small
+    } else if size <= limits.1 {
+        CacheClass::Large
+    } else {
+        CacheClass::Original
+    }
+}
+
+/// 设置值（MiB）→ 缓存上限字节；越界值夹回合法区间（防御绕过加载/保存
+/// 校验路径的值，正常时序下设置层已保证区间）。
+pub fn max_cache_bytes(mib: i64) -> u64 {
+    let clamped = mib.clamp(
+        crate::settings::IMAGE_CACHE_MIN_MIB,
+        crate::settings::IMAGE_CACHE_MAX_MIB,
+    );
+    clamped as u64 * 1024 * 1024
+}
+
+/// 分区淘汰（ADR 0028）：全局未超上限不动任何文件；超限时按档施加预算
+/// （上限 × [`CLASS_BUDGET_PERCENTS`]），只削超预算的档——档内按 mtime 从旧到
+/// 新删除直至回到预算内，`keep`（本次刚写入的文件）永不被删。单文件大于
+/// 整档预算时该档只留它自己，总量会短暂越过上限，由后续写入的下一轮淘汰
+/// 压回。失败只记日志，不向上传播。
 pub fn trim_cache(dir: &Path, keep: &Path, max_bytes: u64) {
+    trim_cache_partitioned(dir, keep, max_bytes, CLASS_SIZE_LIMITS);
+}
+
+/// 同上，大小分界可注入（单测用极小分界避免造大文件）。
+fn trim_cache_partitioned(dir: &Path, keep: &Path, max_bytes: u64, limits: (u64, u64)) {
     let entries = match collect_cache_entries(dir) {
         Ok(entries) => entries,
         Err(err) => {
@@ -236,26 +290,50 @@ pub fn trim_cache(dir: &Path, keep: &Path, max_bytes: u64) {
             return;
         }
     };
-    let mut total: u64 = entries.iter().map(|e| e.size).sum();
+    let total: u64 = entries.iter().map(|e| e.size).sum();
     if total <= max_bytes {
         return;
     }
-    let mut victims: Vec<&CacheEntry> = entries.iter().filter(|e| e.path != keep).collect();
-    victims.sort_by_key(|e| e.modified);
-    let mut removed = 0usize;
-    for victim in victims {
-        if total <= max_bytes {
-            break;
+    let budgets: [u64; 3] =
+        std::array::from_fn(|idx| max_bytes * CLASS_BUDGET_PERCENTS[idx] / 100);
+    let mut class_totals = [0u64; 3];
+    for entry in &entries {
+        class_totals[cache_class_with(entry.size, limits).index()] += entry.size;
+    }
+    let mut removed = [0usize; 3];
+    for class in [CacheClass::Small, CacheClass::Large, CacheClass::Original] {
+        let idx = class.index();
+        if class_totals[idx] <= budgets[idx] {
+            continue;
         }
-        match std::fs::remove_file(&victim.path) {
-            Ok(()) => {
-                total = total.saturating_sub(victim.size);
-                removed += 1;
+        let mut victims: Vec<&CacheEntry> = entries
+            .iter()
+            .filter(|e| e.path != keep && cache_class_with(e.size, limits) == class)
+            .collect();
+        victims.sort_by_key(|e| e.modified);
+        for victim in victims {
+            if class_totals[idx] <= budgets[idx] {
+                break;
             }
-            Err(err) => log::debug!("缓存清理删除失败 {}: {err}", victim.path.display()),
+            match std::fs::remove_file(&victim.path) {
+                Ok(()) => {
+                    class_totals[idx] = class_totals[idx].saturating_sub(victim.size);
+                    removed[idx] += 1;
+                }
+                Err(err) => log::debug!("缓存清理删除失败 {}: {err}", victim.path.display()),
+            }
         }
     }
-    log::info!("图片缓存清理：删除 {removed} 个文件，剩余 {total} / 上限 {max_bytes} 字节");
+    let removed_total: usize = removed.iter().sum();
+    if removed_total > 0 {
+        let remaining: u64 = class_totals.iter().sum();
+        log::info!(
+            "图片缓存分区清理：删除 {removed_total} 个文件（小图 {} / 大图 {} / 原图 {}），剩余 {remaining} / 上限 {max_bytes} 字节",
+            removed[0],
+            removed[1],
+            removed[2]
+        );
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -373,7 +451,7 @@ impl Drop for InflightGuard {
 /// 取到 cell 后立即释放 std 锁（持锁跨 await 会串行化全部下载）。
 async fn coalesce_download_with<F, Fut>(
     url: &str,
-    cache_dir: Option<&Path>,
+    cache: Option<(&Path, u64)>,
     fetch: F,
 ) -> Result<Bytes, DownloadFailure>
 where
@@ -406,12 +484,12 @@ where
         .cell
         .get_or_init(|| async {
             let bytes = fetch().await?;
-            if let Some((cache_dir, pending)) = cache_dir.and_then(|dir| {
+            if let Some((cache_dir, max_bytes, pending)) = cache.and_then(|(dir, max)| {
                 CACHE_PENDING_GATE
                     .clone()
                     .try_acquire_owned()
                     .ok()
-                    .map(|permit| (dir, permit))
+                    .map(|permit| (dir, max, permit))
             }) {
                 entry.refs.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
                 let cache_guard = InflightGuard {
@@ -430,7 +508,7 @@ where
                             log::info!("图片已缓存: {}", cache_path.display());
                             // 目录扫描与淘汰是阻塞 I/O，只在后台阻塞线程运行。
                             let _ = tokio::task::spawn_blocking(move || {
-                                trim_cache(&cache_dir, &cache_path, IMAGE_CACHE_MAX_BYTES);
+                                trim_cache(&cache_dir, &cache_path, max_bytes);
                             })
                             .await;
                         }
@@ -447,10 +525,10 @@ where
     }
 }
 
-/// 读空时的回源：单飞合并同一 URL，成功即返回、后台落盘并修剪缓存；失败不写盘、
-/// 不记忆失败（下一次调用重新取数）。
-async fn coalesce_image(url: &str, cache_dir: &Path) -> Result<Bytes, DownloadFailure> {
-    coalesce_download_with(url, Some(cache_dir), || async {
+/// 读空时的回源：单飞合并同一 URL，成功即返回、后台落盘并按分区预算修剪缓存；
+/// 失败不写盘、不记忆失败（下一次调用重新取数）。
+async fn coalesce_image(url: &str, cache_dir: &Path, max_bytes: u64) -> Result<Bytes, DownloadFailure> {
+    coalesce_download_with(url, Some((cache_dir, max_bytes)), || async {
         let bytes = download_with_retry(url).await.map_err(|err| {
             log::debug!("pixiv-img 下载失败详情: {err}");
             DownloadFailure::from(&err)
@@ -508,10 +586,12 @@ async fn write_cache_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// 协议请求主入口：解析 → 校验 → 缓存回读 / 代下落盘 → 响应。
+/// `max_bytes` 为当前设置的缓存上限（字节），传入后台落盘后的分区淘汰。
 /// 状态码语义：403 白名单外；404 CDN 无此文件；502 下载失败。
 pub async fn handle_image_request(
     request: Request<Vec<u8>>,
     cache_dir: &Path,
+    max_bytes: u64,
 ) -> Response<Cow<'static, [u8]>> {
     let Some(url) = path_to_pximg_url(request.uri().path()) else {
         log::debug!("pixiv-img 拒绝路径: {}", request.uri().path());
@@ -534,7 +614,7 @@ pub async fn handle_image_request(
         Err(_) => {}
     }
 
-    match coalesce_image(&url, cache_dir).await {
+    match coalesce_image(&url, cache_dir, max_bytes).await {
         // Tauri 协议响应要求 Cow<[u8]>：仅在此处转换为独占 Vec。
         Ok(bytes) => image_response(&key, bytes.to_vec()),
         Err(DownloadFailure::NotFound) => {
@@ -758,11 +838,90 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 分区淘汰注入的极小分界：小图 ≤100B、大图 ≤300B、原图 >300B。
+    const TINY_LIMITS: (u64, u64) = (100, 300);
+
+    #[test]
+    fn cache_class_boundaries_follow_size_limits() {
+        assert_eq!(cache_class_with(100, TINY_LIMITS), CacheClass::Small);
+        assert_eq!(cache_class_with(101, TINY_LIMITS), CacheClass::Large);
+        assert_eq!(cache_class_with(300, TINY_LIMITS), CacheClass::Large);
+        assert_eq!(cache_class_with(301, TINY_LIMITS), CacheClass::Original);
+    }
+
+    #[test]
+    fn max_cache_bytes_clamps_to_settings_range() {
+        use crate::settings::{IMAGE_CACHE_MAX_MIB, IMAGE_CACHE_MIN_MIB};
+        assert_eq!(max_cache_bytes(512), 512 * 1024 * 1024);
+        assert_eq!(max_cache_bytes(0), IMAGE_CACHE_MIN_MIB as u64 * 1024 * 1024);
+        assert_eq!(
+            max_cache_bytes(999_999),
+            IMAGE_CACHE_MAX_MIB as u64 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn trim_cache_partition_evicts_over_budget_class_oldest_first() {
+        let dir = temp_dir("trim-partition");
+        std::fs::create_dir_all(&dir).expect("临时目录创建不应失败");
+        // 上限 1000 → 预算 小图 600 / 大图 250 / 原图 150。
+        // 小图与大图都在预算内，只有原图档超预算：从旧到新删到预算内。
+        let small_old = dir.join("small_old.jpg");
+        let small_new = dir.join("small_new.jpg");
+        let large = dir.join("large.jpg");
+        let orig_old = dir.join("orig_old.jpg");
+        let orig_new = dir.join("orig_new.jpg");
+        write_with_mtime(&small_old, 80, 400);
+        write_with_mtime(&small_new, 80, 300);
+        write_with_mtime(&large, 200, 250);
+        write_with_mtime(&orig_old, 400, 200);
+        write_with_mtime(&orig_new, 400, 100);
+
+        trim_cache_partitioned(&dir, &small_old, 1000, TINY_LIMITS);
+        assert!(small_old.exists() && small_new.exists() && large.exists(), "预算内档位不应被删");
+        assert!(!orig_old.exists() && !orig_new.exists(), "超预算原图档应从旧到新清空");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn trim_cache_keeps_everything_while_under_global_limit() {
+        let dir = temp_dir("trim-global-first");
+        std::fs::create_dir_all(&dir).expect("临时目录创建不应失败");
+        // 总量未超上限时即使某档超过自身预算也不删——分区只在超限 squeeze 时生效，
+        // 否则小图为主的缓存会白白丢掉 40% 空间。
+        let small = dir.join("small.jpg");
+        let orig = dir.join("orig.jpg");
+        write_with_mtime(&small, 80, 200);
+        write_with_mtime(&orig, 400, 100);
+
+        trim_cache_partitioned(&dir, &small, 2000, TINY_LIMITS);
+        assert!(small.exists() && orig.exists(), "全局未超上限不应删除任何文件");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn trim_cache_protects_keep_and_oversized_single_file() {
+        let dir = temp_dir("trim-keep");
+        std::fs::create_dir_all(&dir).expect("临时目录创建不应失败");
+        // 上限 500 → 原图预算 75。keep（本次刚写，最旧）受保护；
+        // 档内其余文件删除后仍超预算，keep 自己留下（总量短暂越上限）。
+        let keep = dir.join("keep.jpg");
+        let other = dir.join("other.jpg");
+        write_with_mtime(&keep, 400, 500);
+        write_with_mtime(&other, 350, 100);
+
+        trim_cache_partitioned(&dir, &keep, 500, TINY_LIMITS);
+        assert!(keep.exists(), "本次刚写入的文件不应被删");
+        assert!(!other.exists(), "档内其余超预算文件应被删除");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[tokio::test]
     async fn handle_rejects_non_whitelist_with_403() {
         let response = handle_image_request(
             request_for("/https%3A%2F%2Fevil.example.com%2Fa.jpg"),
             Path::new("unused"),
+            DEFAULT_MAX_CACHE_BYTES,
         )
         .await;
         assert_eq!(response.status(), 403);
@@ -779,6 +938,7 @@ mod tests {
         let response = handle_image_request(
             request_for("/https%3A%2F%2Fi.pximg.net%2Fimg%2Fa.jpg"),
             &dir,
+            DEFAULT_MAX_CACHE_BYTES,
         )
         .await;
         assert_eq!(response.status(), 200);
@@ -862,7 +1022,7 @@ mod tests {
         let gate = CACHE_WRITE_GATE.lock().await;
         let bytes = tokio::time::timeout(
             Duration::from_millis(200),
-            coalesce_download_with(&url, Some(&dir), || async {
+            coalesce_download_with(&url, Some((&dir, DEFAULT_MAX_CACHE_BYTES)), || async {
                 Ok(Bytes::from_static(b"IMG"))
             }),
         )
@@ -871,7 +1031,7 @@ mod tests {
         .expect("下载成功");
         assert_eq!(bytes.as_ref(), b"IMG");
         assert!(!dir.join(cache_key(&url)).exists(), "回传不等缓存落盘");
-        let shared = coalesce_download_with(&url, Some(&dir), || async {
+        let shared = coalesce_download_with(&url, Some((&dir, DEFAULT_MAX_CACHE_BYTES)), || async {
             panic!("缓存写入期间不应再次下载同一图片")
         })
         .await
@@ -907,7 +1067,7 @@ mod tests {
             .unwrap();
         let url = uuid_url("saturated-cache");
         let dir = temp_dir("saturated-cache");
-        let bytes = coalesce_download_with(&url, Some(&dir), || async {
+        let bytes = coalesce_download_with(&url, Some((&dir, DEFAULT_MAX_CACHE_BYTES)), || async {
             Ok(Bytes::from_static(b"IMG"))
         })
         .await
