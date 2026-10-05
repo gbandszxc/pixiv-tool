@@ -9,7 +9,7 @@
       :aria-expanded="show"
       @click="toggle()"
     >
-      <img v-if="avatarSrc" class="avatar avatar-image" :src="avatarSrc" alt="" @error="avatarFailed = true" />
+      <img v-if="avatarSrc" class="avatar avatar-image" :src="avatarSrc" alt="" @error="onAvatarError" />
       <span v-else class="avatar">{{ chipInitial }}</span>
       <span v-if="!collapsed" class="account-name">{{ accountLabel }}</span>
       <svg v-if="!collapsed" class="chip-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m18 15-6-6-6 6" /></svg>
@@ -89,11 +89,22 @@ const show = ref(false); const popover = ref<HTMLElement | null>(null);
 const logoutDialog = ref<HTMLDialogElement | null>(null); const logoutConfirmOpen = ref(false);
 const updateDialog = ref<InstanceType<typeof UpdateDialog> | null>(null);
 const updateChecking = ref(false);
-const avatarFailed = ref(false); const avatarSrc = computed(() => avatarFailed.value ? "" : authStore.avatarUrl);
+const avatarFailed = ref(false);
+/** 头像加载失败自动重试一次：cache-bust query 绕开 webview 侧可能缓存的坏响应
+ * （头像协议 handler 只取路径文件名，query 无害），二次失败才回退首字母。 */
+const avatarRetry = ref(0);
+let avatarRetryTimer: number | undefined;
+const avatarSrc = computed(() => (avatarFailed.value || !authStore.avatarUrl) ? "" : authStore.avatarUrl + (avatarRetry.value ? `?r=${avatarRetry.value}` : ""));
 
 const accountLabel = computed(() => authStore.isLoggedIn ? authStore.pixivId || authStore.name : t("auth.accounts"));
 const chipInitial = computed(() => accountLabel.value.charAt(0).toUpperCase());
-watch(() => authStore.avatarUrl, () => { avatarFailed.value = false; });
+/** 头像加载失败：延迟 300ms 换 cache-bust URL 重试一次，再失败才落首字母回退。 */
+function onAvatarError() {
+  if (avatarRetry.value > 0) { avatarFailed.value = true; return; }
+  window.clearTimeout(avatarRetryTimer);
+  avatarRetryTimer = window.setTimeout(() => { avatarRetry.value = 1; }, 300);
+}
+watch(() => authStore.avatarUrl, () => { avatarFailed.value = false; avatarRetry.value = 0; window.clearTimeout(avatarRetryTimer); });
 
 const GITHUB_HOME = "https://github.com/gbandszxc/pixiv-tool";
 /** 版本回显动态读真实 app 版本；非 Tauri 环境读不到时保持占位符。 */
@@ -106,7 +117,7 @@ onMounted(async () => {
     checkAppUpdate().then((info) => { if (info.has_update) showUpdateDialog(info); }).catch(() => {});
   }, 3000);
 });
-onBeforeUnmount(() => window.clearTimeout(startupUpdateTimer));
+onBeforeUnmount(() => { window.clearTimeout(startupUpdateTimer); window.clearTimeout(avatarRetryTimer); });
 async function openGitHub() { close(); try { await openUrl(GITHUB_HOME); } catch (error) { notify(errorMessage(error) || t("auth.githubOpenFailed")); } }
 
 /** 有新版本时记录信息并弹确认弹窗（手动检查与启动静默检查共用）。 */

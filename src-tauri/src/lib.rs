@@ -67,6 +67,9 @@ pub fn run() {
                     };
                     tauri::http::Response::builder()
                         .header("Content-Type", mime)
+                        // WebView2 对无缓存头的 http 形态响应可能落本地 HTTP 缓存，
+                        // 旧图/坏响应会被持续复用；本地读盘零成本，一律禁缓存。
+                        .header("Cache-Control", "no-store")
                         .body(Cow::Owned(bytes))
                         .expect("带 Content-Type 的响应构造不会失败")
                 }
@@ -74,6 +77,9 @@ pub fn run() {
                     log::warn!("头像协议 404: {name} ({err})");
                     tauri::http::Response::builder()
                         .status(404)
+                        // 404 禁缓存：文件就位后（代下完成/瞬时锁释放）下一次请求必须真正
+                        // 回源，否则 webview 缓存的 404 会让头像持续回退首字母直到重启。
+                        .header("Cache-Control", "no-store")
                         .body(Cow::Borrowed(&[][..]))
                         .expect("静态 404 响应构造不会失败")
                 }
