@@ -190,7 +190,8 @@ pub fn apply_settings_patch(
 pub async fn clear_logs(state: State<'_, AppState>) -> Result<Value, String> {
     let paths = state.paths.clone();
     tauri::async_runtime::spawn_blocking(move || super::maintenance_cmds::clear_log_files(&paths))
-        .await.map_err(|e| e.to_string())??;
+        .await
+        .map_err(|e| e.to_string())??;
     Ok(json!({ "status": "success" }))
 }
 
@@ -369,7 +370,14 @@ mod tests {
     fn patch_validates_translation_timeout() {
         let data_dir = temp_data_dir("translate-timeout");
         let message = "翻译超时时间必须是 30~3600 秒之间的整数";
-        for bad in [json!(10), json!(0), json!(3601), json!(true), json!("600"), json!(null)] {
+        for bad in [
+            json!(10),
+            json!(0),
+            json!(3601),
+            json!(true),
+            json!("600"),
+            json!(null),
+        ] {
             assert_eq!(
                 apply_settings_patch(
                     &Settings::default(),

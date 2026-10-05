@@ -604,7 +604,11 @@ mod tests {
             ("x-csrf-token".into(), "synthetic-csrf".into()),
         ]);
         let mut client = PixivClient::new(&cookies).unwrap();
-        client.http = wreq::Client::builder().no_proxy().default_headers(client.default_headers.clone()).build().unwrap();
+        client.http = wreq::Client::builder()
+            .no_proxy()
+            .default_headers(client.default_headers.clone())
+            .build()
+            .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/test.jpg", listener.local_addr().unwrap());
         let server = tokio::spawn(async move {
@@ -616,11 +620,20 @@ mod tests {
                 assert!(count > 0);
                 request.extend_from_slice(&buffer[..count]);
             }
-            socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nIMG").await.unwrap();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nIMG")
+                .await
+                .unwrap();
             String::from_utf8(request).unwrap().to_ascii_lowercase()
         });
-        tokio::time::timeout(Duration::from_secs(3), client.download_request(&url).send()).await.unwrap().unwrap();
-        let request = tokio::time::timeout(Duration::from_secs(3), server).await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(3), client.download_request(&url).send())
+            .await
+            .unwrap()
+            .unwrap();
+        let request = tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(request.contains("referer: https://www.pixiv.net/"));
         assert!(!request.contains("cookie:"));
         assert!(!request.contains("x-csrf-token:"));

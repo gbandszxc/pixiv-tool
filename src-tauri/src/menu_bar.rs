@@ -26,10 +26,10 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
 
 use tauri::{Manager, WebviewWindow};
+use webview2_com::AcceleratorKeyPressedEventHandler;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_KEY_EVENT_KIND, COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_UP,
 };
-use webview2_com::AcceleratorKeyPressedEventHandler;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -117,7 +117,12 @@ fn show() {
         let hwnd = HWND(top as _);
         let _ = SetMenu(hwnd, Some(HMENU(menu as _)));
         let _ = DrawMenuBar(hwnd);
-        let _ = PostMessageW(Some(hwnd), WM_SYSCOMMAND, WPARAM(SC_KEYMENU as usize), LPARAM(0));
+        let _ = PostMessageW(
+            Some(hwnd),
+            WM_SYSCOMMAND,
+            WPARAM(SC_KEYMENU as usize),
+            LPARAM(0),
+        );
     }
 }
 

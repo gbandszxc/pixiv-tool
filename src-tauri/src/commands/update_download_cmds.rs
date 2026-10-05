@@ -330,7 +330,8 @@ fn running_universal_binary() -> bool {
     file.read_exact(&mut magic).is_ok()
         && matches!(
             magic,
-            [0xca, 0xfe, 0xba, 0xbe] | [0xbe, 0xba, 0xfe, 0xca]
+            [0xca, 0xfe, 0xba, 0xbe]
+                | [0xbe, 0xba, 0xfe, 0xca]
                 | [0xca, 0xfe, 0xba, 0xbf]
                 | [0xbf, 0xba, 0xfe, 0xca]
         )
@@ -648,9 +649,9 @@ mod tests {
             (6, None, Some(digest_abcdef.clone()), true), // API 通道：精确 size，分块传输
             (7, None, None, false),                       // 实收不足精确 size
             (6, None, Some(format!("sha256:{}", "0".repeat(64))), false), // digest 不符
-            (0, Some(6), Some(digest_abcdef.clone()), true),  // 回退通道：CL 对账 + 片段摘要
-            (0, Some(6), None, true),                         // 回退通道：仅 CL 对账
-            (0, None, None, true),                            // CL 缺失：仅剩来源校验
+            (0, Some(6), Some(digest_abcdef.clone()), true), // 回退通道：CL 对账 + 片段摘要
+            (0, Some(6), None, true),                     // 回退通道：仅 CL 对账
+            (0, None, None, true),                        // CL 缺失：仅剩来源校验
         ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
@@ -678,14 +679,19 @@ mod tests {
                 }
                 Ok(())
             });
-            let dir = std::env::temp_dir().join(format!("pixiv-update-test-{}", uuid::Uuid::new_v4()));
+            let dir =
+                std::env::temp_dir().join(format!("pixiv-update-test-{}", uuid::Uuid::new_v4()));
             tokio::fs::create_dir(&dir).await.unwrap();
             let file = dir.join("installer.part");
             let mut sample = asset("test.msi");
             sample.browser_download_url = format!("http://{address}/installer");
             sample.size = asset_size;
             sample.digest = digest;
-            assert_eq!(transfer(&sample, &file, &channel).await.is_ok(), succeeds, "用例失败: size={asset_size} cl={content_length:?}");
+            assert_eq!(
+                transfer(&sample, &file, &channel).await.is_ok(),
+                succeeds,
+                "用例失败: size={asset_size} cl={content_length:?}"
+            );
             server.await.unwrap();
             let events = messages.lock().unwrap();
             assert!(events.iter().any(|json| json.contains("downloading")));
@@ -723,7 +729,10 @@ mod tests {
         );
         assert_eq!(
             digests_in_html(&html),
-            vec![("Pixiv.Tool_1.2.1_x64_en-US.msi".to_string(), digest.to_string())]
+            vec![(
+                "Pixiv.Tool_1.2.1_x64_en-US.msi".to_string(),
+                digest.to_string()
+            )]
         );
         assert!(asset_names_in_html("没有资产的页面", "v1.2.1").is_empty());
         assert!(digests_in_html("没有摘要的页面").is_empty());

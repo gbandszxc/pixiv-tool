@@ -250,7 +250,9 @@ enum SourceLanguage {
     Japanese,
     Korean,
     /// 中文；用字倾向只区分简繁，用于匹配 zh-CN / zh-TW。
-    Chinese { traditional: bool },
+    Chinese {
+        traditional: bool,
+    },
     Russian,
     /// 拉丁文字：无法区分具体语种，只用于匹配 en。
     Latin,
@@ -269,7 +271,9 @@ fn detect_language(text: &str) -> SourceLanguage {
     for character in text.chars().take(4000) {
         match character {
             '\u{3040}'..='\u{30ff}' | '\u{31f0}'..='\u{31ff}' => kana += 1,
-            '\u{ac00}'..='\u{d7af}' | '\u{1100}'..='\u{11ff}' | '\u{3130}'..='\u{318f}' => hangul += 1,
+            '\u{ac00}'..='\u{d7af}' | '\u{1100}'..='\u{11ff}' | '\u{3130}'..='\u{318f}' => {
+                hangul += 1
+            }
             '\u{4e00}'..='\u{9fff}' | '\u{3400}'..='\u{4dbf}' => {
                 han += 1;
                 traditional += usize::from(TRADITIONAL_ONLY.contains(character));
@@ -551,7 +555,13 @@ fn parse_model_json(text: &str) -> Result<Value, String> {
         text
     };
     serde_json::from_str(text).map_err(|error| {
-        log::warn!("模型输出 JSON 解析失败：类别 {:?}，行 {}，列 {}，{} 字节（不记录正文）", error.classify(), error.line(), error.column(), text.len());
+        log::warn!(
+            "模型输出 JSON 解析失败：类别 {:?}，行 {}，列 {}，{} 字节（不记录正文）",
+            error.classify(),
+            error.line(),
+            error.column(),
+            text.len()
+        );
         "模型未返回合法 JSON，请重试或更换模型".into()
     })
 }
@@ -567,11 +577,10 @@ fn stream_event_text(format: ApiFormat, event: &Value) -> Option<&str> {
         ApiFormat::ChatCompletions => event
             .pointer("/choices/0/delta/content")
             .and_then(Value::as_str),
-        ApiFormat::Responses => {
-            (event.get("type").and_then(Value::as_str) == Some("response.output_text.delta"))
-                .then(|| event.get("delta").and_then(Value::as_str))
-                .flatten()
-        }
+        ApiFormat::Responses => (event.get("type").and_then(Value::as_str)
+            == Some("response.output_text.delta"))
+        .then(|| event.get("delta").and_then(Value::as_str))
+        .flatten(),
         ApiFormat::Anthropic => (event.get("type").and_then(Value::as_str)
             == Some("content_block_delta")
             // thinking_delta 等推理增量不属于译文，只收 text_delta。
@@ -630,7 +639,9 @@ impl StreamReader {
     fn push(&mut self, chunk: &[u8]) -> Result<(), String> {
         self.pending.extend_from_slice(chunk);
         while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
-            let line = String::from_utf8_lossy(&self.pending[..end]).trim().to_string();
+            let line = String::from_utf8_lossy(&self.pending[..end])
+                .trim()
+                .to_string();
             self.pending.drain(..=end);
             self.line(&line);
         }
@@ -662,7 +673,13 @@ impl StreamReader {
             return;
         };
         if event.get("error").is_some() {
-            log::warn!("翻译服务流内错误：{}", crate::translation_diagnostics::service_error(&event["error"], &self.diagnostic_key));
+            log::warn!(
+                "翻译服务流内错误：{}",
+                crate::translation_diagnostics::service_error(
+                    &event["error"],
+                    &self.diagnostic_key
+                )
+            );
             let code = event.pointer("/error/code");
             self.failure = Some(
                 if code.and_then(Value::as_str) == Some("1301")
@@ -677,22 +694,49 @@ impl StreamReader {
         }
         self.completed |= match self.format {
             ApiFormat::ChatCompletions => {
-                event.pointer("/choices/0/finish_reason").and_then(Value::as_str) == Some("stop")
+                event
+                    .pointer("/choices/0/finish_reason")
+                    .and_then(Value::as_str)
+                    == Some("stop")
             }
             ApiFormat::Responses => {
                 event.get("type").and_then(Value::as_str) == Some("response.completed")
             }
             ApiFormat::Anthropic => {
-                matches!(event.pointer("/delta/stop_reason").and_then(Value::as_str), Some("end_turn" | "stop_sequence"))
-                    || event.get("type").and_then(Value::as_str) == Some("message_stop")
+                matches!(
+                    event.pointer("/delta/stop_reason").and_then(Value::as_str),
+                    Some("end_turn" | "stop_sequence")
+                ) || event.get("type").and_then(Value::as_str) == Some("message_stop")
             }
         };
         if let Some(message) = stream_event_error(self.format, &event) {
-            let details = event.pointer("/response/error").map(|error| crate::translation_diagnostics::service_error(error, &self.diagnostic_key)).unwrap_or_default();
-            log::warn!("翻译流未成功完成：type={} finish_reason={} stop_reason={} {details}",
-                crate::translation_diagnostics::redact(event.get("type").and_then(Value::as_str).unwrap_or(""), &self.diagnostic_key),
-                crate::translation_diagnostics::redact(event.pointer("/choices/0/finish_reason").and_then(Value::as_str).unwrap_or(""), &self.diagnostic_key),
-                crate::translation_diagnostics::redact(event.pointer("/delta/stop_reason").and_then(Value::as_str).unwrap_or(""), &self.diagnostic_key));
+            let details = event
+                .pointer("/response/error")
+                .map(|error| {
+                    crate::translation_diagnostics::service_error(error, &self.diagnostic_key)
+                })
+                .unwrap_or_default();
+            log::warn!(
+                "翻译流未成功完成：type={} finish_reason={} stop_reason={} {details}",
+                crate::translation_diagnostics::redact(
+                    event.get("type").and_then(Value::as_str).unwrap_or(""),
+                    &self.diagnostic_key
+                ),
+                crate::translation_diagnostics::redact(
+                    event
+                        .pointer("/choices/0/finish_reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                    &self.diagnostic_key
+                ),
+                crate::translation_diagnostics::redact(
+                    event
+                        .pointer("/delta/stop_reason")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                    &self.diagnostic_key
+                )
+            );
             self.failure = Some(message);
         }
         if let Some(text) = stream_event_text(self.format, &event) {
@@ -710,7 +754,10 @@ impl StreamReader {
             return Err(failure);
         }
         if !self.completed {
-            log::warn!("翻译响应流提前结束：未收到完成信号，已收集 {} 字节模型文本", self.text.len());
+            log::warn!(
+                "翻译响应流提前结束：未收到完成信号，已收集 {} 字节模型文本",
+                self.text.len()
+            );
             return Err("翻译响应流提前结束（未收到完成信号），请重试本页翻译".into());
         }
         if self.text.trim().is_empty() {
@@ -721,14 +768,21 @@ impl StreamReader {
 }
 
 /// 读完整条流并取回模型文本；中途断流单独给文案，好让用户知道重试即可。
-async fn read_stream_text(response: wreq::Response, format: ApiFormat, key: &str) -> Result<String, String> {
+async fn read_stream_text(
+    response: wreq::Response,
+    format: ApiFormat,
+    key: &str,
+) -> Result<String, String> {
     let mut reader = StreamReader::new(format);
     reader.diagnostic_key = key.to_owned();
     let mut raw = 0usize;
     let mut stream = std::pin::pin!(response.bytes_stream());
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| {
-            log::warn!("翻译响应流中断：{}", crate::translation_diagnostics::redact(&error.to_string(), key));
+            log::warn!(
+                "翻译响应流中断：{}",
+                crate::translation_diagnostics::redact(&error.to_string(), key)
+            );
             "翻译响应流中断（长请求可能被网络切断），请重试本页翻译".to_string()
         })?;
         raw += chunk.len();
@@ -810,7 +864,10 @@ impl TranslationClient<'_> {
             .await
             .map_err(|error| {
                 if error.is_timeout() {
-                    log::warn!("翻译请求超时：{} 秒", translation_timeout_seconds(self.settings.translation_timeout_seconds));
+                    log::warn!(
+                        "翻译请求超时：{} 秒",
+                        translation_timeout_seconds(self.settings.translation_timeout_seconds)
+                    );
                     // 文案跟随实际生效的超时（设置项），不再写死秒数。
                     format!(
                         "翻译请求超时（{} 秒），可降低思考深度或调大设置里的翻译超时",
@@ -818,7 +875,11 @@ impl TranslationClient<'_> {
                     )
                 } else {
                     // 只报可排查的成因类别，不回显原始报错（含 URL）与凭据（ADR 0017）。
-                    log::warn!("翻译请求失败（{}）：{}", transport_hint(&error), crate::translation_diagnostics::redact(&error.to_string(), &self.key));
+                    log::warn!(
+                        "翻译请求失败（{}）：{}",
+                        transport_hint(&error),
+                        crate::translation_diagnostics::redact(&error.to_string(), &self.key)
+                    );
                     format!(
                         "无法连接翻译服务（{}），请检查 URL 与网络/代理设置",
                         transport_hint(&error)
@@ -908,7 +969,9 @@ pub struct TranslationProbe {
     pub extra: Value,
 }
 
-fn empty_options() -> Value { json!({}) }
+fn empty_options() -> Value {
+    json!({})
+}
 
 /// 探测请求缺省超时（秒）= 设置页默认值。
 fn default_translation_timeout() -> i64 {
@@ -942,34 +1005,50 @@ fn probe_client(
     let key = match &probe.api_key {
         Some(key) => Some(key.trim().to_string()),
         None => read_api_key()?,
-    }.filter(|key| !key.is_empty()).ok_or("请先配置翻译 API Key")?;
+    }
+    .filter(|key| !key.is_empty())
+    .ok_or("请先配置翻译 API Key")?;
     if key.len() > 8192 || key.chars().any(char::is_control) {
         return Err("翻译 API Key 格式无效".into());
     }
     let http = wreq::Client::builder()
         .timeout(Duration::from_secs(timeout))
         .redirect(wreq::redirect::Policy::none())
-        .build().map_err(|_| "无法初始化翻译客户端")?;
+        .build()
+        .map_err(|_| "无法初始化翻译客户端")?;
     Ok((settings, format, key, http))
 }
 
 fn models_url(value: &str, format: ApiFormat) -> Result<tauri::Url, String> {
     let mut url = completion_url(value, format)?;
-    let base = url.path().strip_suffix(format.endpoint()).ok_or("翻译 API URL 无效")?;
+    let base = url
+        .path()
+        .strip_suffix(format.endpoint())
+        .ok_or("翻译 API URL 无效")?;
     let path = format!("{base}/models");
     url.set_path(&path);
     Ok(url)
 }
 
 fn parse_models(body: Value) -> Result<Vec<String>, String> {
-    let data = body.get("data").and_then(Value::as_array).ok_or("服务未返回兼容的模型列表，可手动填写模型 ID")?;
-    if data.len() > 2000 { return Err("模型列表超过 2000 项，请手动填写模型 ID".into()); }
-    let mut models: Vec<String> = data.iter().filter_map(|item| item.get("id").and_then(Value::as_str))
+    let data = body
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or("服务未返回兼容的模型列表，可手动填写模型 ID")?;
+    if data.len() > 2000 {
+        return Err("模型列表超过 2000 项，请手动填写模型 ID".into());
+    }
+    let mut models: Vec<String> = data
+        .iter()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
         .filter(|id| !id.trim().is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
-        .map(str::to_string).collect();
+        .map(str::to_string)
+        .collect();
     models.sort();
     models.dedup();
-    if models.is_empty() { return Err("服务未返回可选模型，可手动填写模型 ID".into()); }
+    if models.is_empty() {
+        return Err("服务未返回可选模型，可手动填写模型 ID".into());
+    }
     Ok(models)
 }
 
@@ -986,14 +1065,18 @@ pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, 
     };
     let response = client
         .authorized(client.http.get(client.url.as_str()))
-        .send().await.map_err(|_| "无法获取模型列表，请检查 URL 和网络，或手动填写模型 ID")?;
-    let body = read_json_body(response, &client.key).await.map_err(|error| {
-        if error.starts_with("翻译服务返回 HTTP") {
-            format!("{error}；部分服务不提供 /models 列表，可手动填写模型 ID")
-        } else {
-            error
-        }
-    })?;
+        .send()
+        .await
+        .map_err(|_| "无法获取模型列表，请检查 URL 和网络，或手动填写模型 ID")?;
+    let body = read_json_body(response, &client.key)
+        .await
+        .map_err(|error| {
+            if error.starts_with("翻译服务返回 HTTP") {
+                format!("{error}；部分服务不提供 /models 列表，可手动填写模型 ID")
+            } else {
+                error
+            }
+        })?;
     parse_models(body)
 }
 
@@ -1002,10 +1085,24 @@ pub async fn translation_test(probe: TranslationProbe) -> Result<(), String> {
     // 检测可用是一次真实生成请求：用草稿里的超时（与「获取模型列表」固定 30 秒不同）。
     let (settings, format, key, http) =
         probe_client(&probe, translation_timeout_seconds(probe.timeout_seconds))?;
-    if settings.translation_model.trim().is_empty() { return Err("请先填写或选择模型 ID".into()); }
+    if settings.translation_model.trim().is_empty() {
+        return Err("请先填写或选择模型 ID".into());
+    }
     let url = completion_url(&settings.translation_api_url, format)?;
-    let client = TranslationClient { http, url, format, key, session: session_id(PROBE_SESSION_SEED), settings: &settings };
-    let result = client.complete("这是连接检测。仅返回 JSON 对象 {\"ok\":true}，不输出其他文字。", json!("请确认服务可用。")).await?;
+    let client = TranslationClient {
+        http,
+        url,
+        format,
+        key,
+        session: session_id(PROBE_SESSION_SEED),
+        settings: &settings,
+    };
+    let result = client
+        .complete(
+            "这是连接检测。仅返回 JSON 对象 {\"ok\":true}，不输出其他文字。",
+            json!("请确认服务可用。"),
+        )
+        .await?;
     if result.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err("服务已响应，但未返回预期 JSON，请调整高级配置或更换模型".into());
     }
@@ -1213,15 +1310,26 @@ async fn translate_book(
         source.len(),
         book.bible.terms.len()
     );
-    let candidate: CandidateBible =
-        serde_json::from_value(client.complete(&with_target_language(PREPARE_PROMPT, target_language), input.clone()).await?)
-            .map_err(|_| "模型设定集结构无效")?;
+    let candidate: CandidateBible = serde_json::from_value(
+        client
+            .complete(
+                &with_target_language(PREPARE_PROMPT, target_language),
+                input.clone(),
+            )
+            .await?,
+    )
+    .map_err(|_| "模型设定集结构无效")?;
     book.bible = merge_bible(&book.bible, candidate.into())?;
     // Pass 1 先落盘；Pass 2 失败仍能沿用术语，不写半页译文。
     save_book(path, book)?;
     input["locked_bible"] = json!(book.bible);
     let _ = progress.send("translate".into());
-    log::info!("小说 {} 第 {} 页：Pass 2 翻译 {} 行", novel.novel_id, page, source.len());
+    log::info!(
+        "小说 {} 第 {} 页：Pass 2 翻译 {} 行",
+        novel.novel_id,
+        page,
+        source.len()
+    );
     // 模型译文同样容忍多余字段；缺 line/text 仍报错。
     #[derive(Deserialize)]
     struct Output {
@@ -1234,7 +1342,10 @@ async fn translate_book(
     }
     let output: Output = serde_json::from_value(
         client
-            .complete(&with_target_language(TRANSLATE_PROMPT, target_language), input)
+            .complete(
+                &with_target_language(TRANSLATE_PROMPT, target_language),
+                input,
+            )
             .await?,
     )
     .map_err(|_| "模型译文结构无效")?;
@@ -1242,7 +1353,10 @@ async fn translate_book(
         output
             .lines
             .into_iter()
-            .map(|line| TranslatedLine { line: line.line, text: line.text })
+            .map(|line| TranslatedLine {
+                line: line.line,
+                text: line.text,
+            })
             .collect(),
         &source,
     )?;
@@ -1261,29 +1375,71 @@ mod tests {
         use crate::cookies::CookieStore;
         use crate::pixiv::{api::PixivApi, client::PixivClient};
         let sample = std::env::var("PIXIV_TRANSLATION_SAMPLE").is_ok();
-        let id: i64 = if sample { 1 } else { std::env::var("PIXIV_TRANSLATION_NOVEL_ID").expect("缺少小说 ID").parse().unwrap() };
+        let id: i64 = if sample {
+            1
+        } else {
+            std::env::var("PIXIV_TRANSLATION_NOVEL_ID")
+                .expect("缺少小说 ID")
+                .parse()
+                .unwrap()
+        };
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let settings = Settings::load_or_init(&root.join("config"));
         let format = resolve_api_format(&settings.translation_api_format).unwrap();
         let client = TranslationClient {
-            http: wreq::Client::builder().timeout(Duration::from_secs(translation_timeout_seconds(settings.translation_timeout_seconds))).redirect(wreq::redirect::Policy::none()).build().unwrap(),
+            http: wreq::Client::builder()
+                .timeout(Duration::from_secs(translation_timeout_seconds(
+                    settings.translation_timeout_seconds,
+                )))
+                .redirect(wreq::redirect::Policy::none())
+                .build()
+                .unwrap(),
             url: completion_url(&settings.translation_api_url, format).unwrap(),
-            format, key: read_api_key().unwrap().expect("未配置翻译 Key"),
-            session: novel_session(id), settings: &settings,
+            format,
+            key: read_api_key().unwrap().expect("未配置翻译 Key"),
+            session: novel_session(id),
+            settings: &settings,
         };
         let input = if sample {
-            NovelInput { novel_id: id, title: "帰り道".into(), tags: vec![], description: String::new(), content: "アリスは駅で友人のレイナを待っていた。\n二人は夕焼けを見ながら家に帰った。".into() }
+            NovelInput {
+                novel_id: id,
+                title: "帰り道".into(),
+                tags: vec![],
+                description: String::new(),
+                content:
+                    "アリスは駅で友人のレイナを待っていた。\n二人は夕焼けを見ながら家に帰った。"
+                        .into(),
+            }
         } else {
             let cookies = CookieStore::new().load().unwrap().expect("未登录");
             let api = PixivApi::new(std::sync::Arc::new(PixivClient::new(&cookies).unwrap()));
             let novel = api.get_novel(id).await.unwrap();
-            NovelInput { novel_id: id, title: novel.title, tags: vec![], description: String::new(), content: novel.content }
+            NovelInput {
+                novel_id: id,
+                title: novel.title,
+                tags: vec![],
+                description: String::new(),
+                content: novel.content,
+            }
         };
         let all_pages = pages(&input).unwrap();
-        let dir = std::env::temp_dir().join(format!("pixiv-translation-retest-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("pixiv-translation-retest-{}", uuid::Uuid::new_v4()));
         let mut book = TranslationBook::default();
-        let result = translate_book(&client, &input, &all_pages, 1, &book_path(&dir, &input), &mut book, &Channel::<String>::new(|_| Ok(())), resolve_target_language(&settings).unwrap().1).await;
-        if dir.exists() { std::fs::remove_dir_all(&dir).unwrap(); }
+        let result = translate_book(
+            &client,
+            &input,
+            &all_pages,
+            1,
+            &book_path(&dir, &input),
+            &mut book,
+            &Channel::<String>::new(|_| Ok(())),
+            resolve_target_language(&settings).unwrap().1,
+        )
+        .await;
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
         if std::env::var("PIXIV_TRANSLATION_EXPECT_REJECTION").is_ok() {
             assert!(result.unwrap_err().contains("内容审核"));
             assert!(book.pages.is_empty());
@@ -1384,13 +1540,17 @@ mod tests {
         let target = resolve_target_language(&settings).unwrap().1;
         let result: Result<(), String> = async {
             let mut book = TranslationBook::default();
-            translate_book(&client, &novel, &all_pages, 1, &path, &mut book, &progress, target)
-                .await?;
+            translate_book(
+                &client, &novel, &all_pages, 1, &path, &mut book, &progress, target,
+            )
+            .await?;
             let first_bible = book.bible.clone();
             // 第二页从落盘记录恢复，验证跨页以及重新打开小说后的设定沿用。
             book = read_book(&path)?;
-            translate_book(&client, &novel, &all_pages, 2, &path, &mut book, &progress, target)
-                .await?;
+            translate_book(
+                &client, &novel, &all_pages, 2, &path, &mut book, &progress, target,
+            )
+            .await?;
             assert_eq!(book.bible.style, first_bible.style);
             for term in &first_bible.terms {
                 let saved = book
@@ -1486,7 +1646,9 @@ mod tests {
         .await
         .expect("获取模型列表失败（不提供 /models 的服务请手动填写模型 ID）");
         assert!(
-            listed.iter().any(|model| model == &settings.translation_model),
+            listed
+                .iter()
+                .any(|model| model == &settings.translation_model),
             "模型列表应包含配置的模型 {}，实际 {} 项",
             settings.translation_model,
             listed.len()
@@ -1567,7 +1729,10 @@ mod tests {
         let all_pages = pages(&input).unwrap();
         let progress = Channel::<String>::new(|_| Ok(()));
 
-        let dir = std::env::temp_dir().join(format!("pixiv-translation-live-real-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "pixiv-translation-live-real-{}",
+            uuid::Uuid::new_v4()
+        ));
         let path = book_path(&dir, &input);
         let started = std::time::Instant::now();
         let target = resolve_target_language(&settings).unwrap().1;
@@ -1619,17 +1784,31 @@ mod tests {
         };
         let bad_client = TranslationClient {
             http,
-            url: completion_url(&bad_settings.translation_api_url, ApiFormat::ChatCompletions).unwrap(),
+            url: completion_url(
+                &bad_settings.translation_api_url,
+                ApiFormat::ChatCompletions,
+            )
+            .unwrap(),
             format: ApiFormat::ChatCompletions,
             key: key.clone(),
             session: session_id("pixiv-tool-live-real"),
             settings: &bad_settings,
         };
-        let bad_dir = std::env::temp_dir().join(format!("pixiv-translation-live-bad-{}", uuid::Uuid::new_v4()));
+        let bad_dir = std::env::temp_dir().join(format!(
+            "pixiv-translation-live-bad-{}",
+            uuid::Uuid::new_v4()
+        ));
         let bad_path = book_path(&bad_dir, &input);
         let mut bad_book = TranslationBook::default();
         let error = translate_book(
-            &bad_client, &input, &all_pages, 1, &bad_path, &mut bad_book, &progress, target,
+            &bad_client,
+            &input,
+            &all_pages,
+            1,
+            &bad_path,
+            &mut bad_book,
+            &progress,
+            target,
         )
         .await
         .expect_err("不存在的模型应报错");
@@ -1646,15 +1825,22 @@ mod tests {
 
     #[test]
     fn detects_source_language_and_matches_target() {
-        let japanese = "エリは妻のレイナを見た。「レイナ、帰ろう」彼女はうなずき、エリの手を握った。";
+        let japanese =
+            "エリは妻のレイナを見た。「レイナ、帰ろう」彼女はうなずき、エリの手を握った。";
         let simplified = "她们看着窗外的云，说着话，点了点头，心里很暖。";
         let traditional = "她們看著窗外的雲，說著話，點了點頭，心裡很暖。";
         let korean = "그녀는 미소를 지었다. 그는 천천히 걸어갔다.";
         let english = "She looked at her wife and smiled. The bartender asked why they came.";
         let russian = "Она посмотрела на жену и улыбнулась. Барменша спросила, зачем они пришли.";
         assert_eq!(detect_language(japanese), SourceLanguage::Japanese);
-        assert_eq!(detect_language(simplified), SourceLanguage::Chinese { traditional: false });
-        assert_eq!(detect_language(traditional), SourceLanguage::Chinese { traditional: true });
+        assert_eq!(
+            detect_language(simplified),
+            SourceLanguage::Chinese { traditional: false }
+        );
+        assert_eq!(
+            detect_language(traditional),
+            SourceLanguage::Chinese { traditional: true }
+        );
         assert_eq!(detect_language(korean), SourceLanguage::Korean);
         assert_eq!(detect_language(english), SourceLanguage::Latin);
         assert_eq!(detect_language(russian), SourceLanguage::Russian);
@@ -1694,10 +1880,19 @@ mod tests {
             ..Settings::default()
         };
         assert!(resolve_target_language(&invalid).is_err());
-        assert!(validate_settings(&invalid).is_err(), "非法目标语言在保存时即拒绝");
+        assert!(
+            validate_settings(&invalid).is_err(),
+            "非法目标语言在保存时即拒绝"
+        );
         assert!(validate_settings(&Settings::default()).is_ok());
         // 界面语言非法只在翻译时拒绝（不阻塞无关设置保存）。
-        assert!(resolve_target_language(&Settings { language: "xx".into(), ..Settings::default() }).is_err());
+        assert!(
+            resolve_target_language(&Settings {
+                language: "xx".into(),
+                ..Settings::default()
+            })
+            .is_err()
+        );
     }
 
     #[test]
@@ -1712,10 +1907,8 @@ mod tests {
     /// 原文已是目标语言：流程直接返回提示，不发任何请求（配置指向不可达端口）。
     #[tokio::test]
     async fn skips_translation_when_source_is_target_language() {
-        let dir = std::env::temp_dir().join(format!(
-            "pixiv-translation-skip-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("pixiv-translation-skip-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = crate::db::Db::open(&dir.join("app.db")).unwrap();
         let paths = crate::paths::AppPaths {
@@ -1748,7 +1941,11 @@ mod tests {
         assert!(skipped.lines.is_empty());
         assert_eq!(skipped.target_language, "zh-CN");
         // force 与不同语言都照常进入流程：配置不可达，必然报错（证明没有走快速返回）。
-        assert!(translate_page_flow(&state, &chinese, 1, true, &progress).await.is_err());
+        assert!(
+            translate_page_flow(&state, &chinese, 1, true, &progress)
+                .await
+                .is_err()
+        );
         let japanese = NovelInput {
             novel_id: 8,
             title: "日本語".into(),
@@ -1756,7 +1953,11 @@ mod tests {
             description: String::new(),
             content: "エリは妻のレイナを見た。「レイナ、帰ろう」".into(),
         };
-        assert!(translate_page_flow(&state, &japanese, 1, false, &progress).await.is_err());
+        assert!(
+            translate_page_flow(&state, &japanese, 1, false, &progress)
+                .await
+                .is_err()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1794,10 +1995,15 @@ mod tests {
             title: "バーでの再会（英語翻訳検証）".into(),
             tags: vec!["小説".into()],
             description: "エリとレイナはバーで出会った夫婦。".into(),
-            content: "[chapter:再会]\nエリとレイナは、このバーで出会った夫婦である。\n「レイナ、帰ろう」".into(),
+            content:
+                "[chapter:再会]\nエリとレイナは、このバーで出会った夫婦である。\n「レイナ、帰ろう」"
+                    .into(),
         };
         let all_pages = pages(&novel).unwrap();
-        let dir = std::env::temp_dir().join(format!("pixiv-translation-live-en-{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!(
+            "pixiv-translation-live-en-{}",
+            uuid::Uuid::new_v4()
+        ));
         let path = book_path(&dir, &novel);
         let progress = Channel::<String>::new(|_| Ok(()));
         let started = std::time::Instant::now();
@@ -1811,13 +2017,18 @@ mod tests {
             assert_eq!(lines.len(), source.len());
             for line in &lines {
                 assert!(
-                    !line.text.chars().any(|c| matches!(c, '\u{4e00}'..='\u{9fff}' | '\u{3040}'..='\u{30ff}')),
+                    !line
+                        .text
+                        .chars()
+                        .any(|c| matches!(c, '\u{4e00}'..='\u{9fff}' | '\u{3040}'..='\u{30ff}')),
                     "英文目标不得残留中日文：{}",
                     line.text
                 );
             }
             assert!(
-                lines.iter().any(|line| line.text.chars().any(|c| c.is_ascii_alphabetic())),
+                lines
+                    .iter()
+                    .any(|line| line.text.chars().any(|c| c.is_ascii_alphabetic())),
                 "英文译文应含拉丁字母"
             );
             println!(
@@ -1843,7 +2054,9 @@ mod tests {
     fn validates_endpoint_and_advanced_options() {
         use ApiFormat::*;
         assert_eq!(
-            completion_url("https://example.com/v1/", ChatCompletions).unwrap().as_str(),
+            completion_url("https://example.com/v1/", ChatCompletions)
+                .unwrap()
+                .as_str(),
             "https://example.com/v1/chat/completions"
         );
         assert_eq!(
@@ -1854,23 +2067,33 @@ mod tests {
         );
         // 各协议基址推导；粘贴其它协议的完整端点时按当前协议改写。
         assert_eq!(
-            completion_url("https://example.com/v1", Responses).unwrap().as_str(),
+            completion_url("https://example.com/v1", Responses)
+                .unwrap()
+                .as_str(),
             "https://example.com/v1/responses"
         );
         assert_eq!(
-            completion_url("https://api.anthropic.com/v1", Anthropic).unwrap().as_str(),
+            completion_url("https://api.anthropic.com/v1", Anthropic)
+                .unwrap()
+                .as_str(),
             "https://api.anthropic.com/v1/messages"
         );
         assert_eq!(
-            completion_url("https://api.anthropic.com/v1/messages", Anthropic).unwrap().as_str(),
+            completion_url("https://api.anthropic.com/v1/messages", Anthropic)
+                .unwrap()
+                .as_str(),
             "https://api.anthropic.com/v1/messages"
         );
         assert_eq!(
-            completion_url("https://api.anthropic.com/v1/messages", ChatCompletions).unwrap().as_str(),
+            completion_url("https://api.anthropic.com/v1/messages", ChatCompletions)
+                .unwrap()
+                .as_str(),
             "https://api.anthropic.com/v1/chat/completions"
         );
         assert_eq!(
-            completion_url("https://example.com/v1/chat/completions", Responses).unwrap().as_str(),
+            completion_url("https://example.com/v1/chat/completions", Responses)
+                .unwrap()
+                .as_str(),
             "https://example.com/v1/responses"
         );
         for url in [
@@ -1912,7 +2135,9 @@ mod tests {
     fn builds_models_url_and_parses_listing() {
         use ApiFormat::*;
         assert_eq!(
-            models_url("https://example.com/v1", ChatCompletions).unwrap().as_str(),
+            models_url("https://example.com/v1", ChatCompletions)
+                .unwrap()
+                .as_str(),
             "https://example.com/v1/models"
         );
         assert_eq!(
@@ -1922,15 +2147,22 @@ mod tests {
             "https://example.com/v1/models"
         );
         assert_eq!(
-            models_url("https://api.anthropic.com/v1", Anthropic).unwrap().as_str(),
+            models_url("https://api.anthropic.com/v1", Anthropic)
+                .unwrap()
+                .as_str(),
             "https://api.anthropic.com/v1/models"
         );
         assert_eq!(
-            models_url("https://example.com/v1/responses", Responses).unwrap().as_str(),
+            models_url("https://example.com/v1/responses", Responses)
+                .unwrap()
+                .as_str(),
             "https://example.com/v1/models"
         );
         assert!(models_url("notaurl", ChatCompletions).is_err());
-        let listed = parse_models(json!({"data":[{"id":"model-b"},{"id":"model-a"},{"object":"model"},{"id":""}]})).unwrap();
+        let listed = parse_models(
+            json!({"data":[{"id":"model-b"},{"id":"model-a"},{"object":"model"},{"id":""}]}),
+        )
+        .unwrap();
         assert_eq!(listed, vec!["model-a", "model-b"]);
         let huge: Vec<Value> = (0..2001).map(|index| json!({ "id": index })).collect();
         for body in [
@@ -1965,7 +2197,13 @@ mod tests {
                 .is_err()
         );
         assert!(probe_client(&keyed("model-id", "https://example.com/v1", Some("")), 30).is_err());
-        assert!(probe_client(&keyed("model-id", "https://example.com/v1", Some("probe-key")), 30).is_ok());
+        assert!(
+            probe_client(
+                &keyed("model-id", "https://example.com/v1", Some("probe-key")),
+                30
+            )
+            .is_ok()
+        );
         assert!(
             probe_client(&keyed("", "https://example.com/v1", Some("probe-key")), 30).is_ok(),
             "列表请求允许空模型"
@@ -2127,7 +2365,12 @@ mod tests {
             ..Settings::default()
         };
         let payload = json!({"page": 1, "source_lines": [{"line": 0, "text": "原文"}]});
-        let chat = request_body(&settings, ApiFormat::ChatCompletions, "SYS", payload.clone());
+        let chat = request_body(
+            &settings,
+            ApiFormat::ChatCompletions,
+            "SYS",
+            payload.clone(),
+        );
         assert_eq!(chat["messages"][0]["content"], "SYS");
         assert_eq!(chat["messages"][1]["content"], payload.to_string());
         assert_eq!(chat["store"], false);
@@ -2165,13 +2408,27 @@ mod tests {
     #[test]
     fn rejects_stream_without_completion_signal() {
         for (format, event) in [
-            (ApiFormat::ChatCompletions, json!({"choices":[{"delta":{"content":"{}"}}]})),
-            (ApiFormat::Responses, json!({"type":"response.output_text.delta","delta":"{}"})),
-            (ApiFormat::Anthropic, json!({"type":"content_block_delta","delta":{"type":"text_delta","text":"{}"}})),
+            (
+                ApiFormat::ChatCompletions,
+                json!({"choices":[{"delta":{"content":"{}"}}]}),
+            ),
+            (
+                ApiFormat::Responses,
+                json!({"type":"response.output_text.delta","delta":"{}"}),
+            ),
+            (
+                ApiFormat::Anthropic,
+                json!({"type":"content_block_delta","delta":{"type":"text_delta","text":"{}"}}),
+            ),
         ] {
             let mut reader = StreamReader::new(format);
-            reader.push(format!("data: {event}\n\n").as_bytes()).unwrap();
-            assert!(reader.finish().is_err(), "无完成事件的 EOF 必须报断流，即使文本恰好是合法 JSON");
+            reader
+                .push(format!("data: {event}\n\n").as_bytes())
+                .unwrap();
+            assert!(
+                reader.finish().is_err(),
+                "无完成事件的 EOF 必须报断流，即使文本恰好是合法 JSON"
+            );
         }
     }
 
@@ -2180,7 +2437,9 @@ mod tests {
         for prefix in ["", "data: "] {
             for code in [json!("1301"), json!(1301)] {
                 let mut reader = StreamReader::new(ApiFormat::ChatCompletions);
-                reader.push(b"data: {\"choices\":[{\"delta\":{\"content\":\"{\"}}]}\n\n").unwrap();
+                reader
+                    .push(b"data: {\"choices\":[{\"delta\":{\"content\":\"{\"}}]}\n\n")
+                    .unwrap();
                 let event = json!({"error":{"code":code,"message":"secret-provider-message"}});
                 reader.push(format!("{prefix}{event}").as_bytes()).unwrap();
                 let error = reader.finish().unwrap_err();
@@ -2219,8 +2478,17 @@ mod tests {
             .is_err(),
             "达到 token 上限须报错"
         );
-        assert!(stream(ChatCompletions, "data: {\"error\":{\"message\":\"无权限\"}}\n").is_err());
-        assert!(stream(ChatCompletions, "data: [DONE]\n").is_err(), "空文本须报错");
+        assert!(
+            stream(
+                ChatCompletions,
+                "data: {\"error\":{\"message\":\"无权限\"}}\n"
+            )
+            .is_err()
+        );
+        assert!(
+            stream(ChatCompletions, "data: [DONE]\n").is_err(),
+            "空文本须报错"
+        );
         // Responses：只认 output_text.delta。
         let responses = "event: response.output_text.delta\n\
                          data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"忽略\"}\n\
@@ -2515,7 +2783,8 @@ mod tests {
             .timeout(Duration::from_secs(5))
             .build()
             .unwrap();
-        let url = completion_url(&format!("http://{address}/v1"), ApiFormat::ChatCompletions).unwrap();
+        let url =
+            completion_url(&format!("http://{address}/v1"), ApiFormat::ChatCompletions).unwrap();
         let client = TranslationClient {
             http: client,
             url,
@@ -2568,7 +2837,10 @@ mod tests {
         // 冲突页的 Pass 2 仍带着第 1 页锁定的译名，页译文照常产出。
         let conflict_render: Value =
             serde_json::from_str(requests[3]["messages"][1]["content"].as_str().unwrap()).unwrap();
-        assert_eq!(conflict_render["locked_bible"]["terms"][0]["translation"], "爱丽丝");
+        assert_eq!(
+            conflict_render["locked_bible"]["terms"][0]["translation"],
+            "爱丽丝"
+        );
         let saved = read_book(&path).unwrap();
         assert_eq!(
             saved.bible.terms[0].aliases,
@@ -2675,7 +2947,11 @@ mod tests {
         );
         let captured = server.await.unwrap();
         assert_eq!(captured.len(), 2);
-        assert!(captured[0].0.starts_with("post /v1/responses http/1.1"), "{}", captured[0].0);
+        assert!(
+            captured[0].0.starts_with("post /v1/responses http/1.1"),
+            "{}",
+            captured[0].0
+        );
         assert!(captured[0].0.contains("authorization: bearer test-key"));
         assert_eq!(captured[0].1["instructions"], "SYS");
         assert_eq!(captured[0].1["input"], payload.to_string());
@@ -2683,7 +2959,11 @@ mod tests {
         assert_eq!(captured[0].1["max_output_tokens"], 1024);
         assert!(captured[0].1.get("messages").is_none());
         assert_eq!(captured[0].1["stream"], true);
-        assert!(captured[1].0.starts_with("post /v1/messages http/1.1"), "{}", captured[1].0);
+        assert!(
+            captured[1].0.starts_with("post /v1/messages http/1.1"),
+            "{}",
+            captured[1].0
+        );
         assert!(captured[1].0.contains("x-api-key: test-key"));
         assert!(captured[1].0.contains("anthropic-version: 2023-06-01"));
         assert!(!captured[1].0.contains("authorization:"));

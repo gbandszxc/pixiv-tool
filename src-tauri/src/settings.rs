@@ -174,7 +174,8 @@ impl Settings {
                 }
                 // 图片缓存上限：手改 settings.json 写入区间外的值（含 0 与负数）回落默认，
                 // 否则 0 会让每次缓存写入都触发全量淘汰。
-                if !(IMAGE_CACHE_MIN_MIB..=IMAGE_CACHE_MAX_MIB).contains(&settings.image_cache_max_mib)
+                if !(IMAGE_CACHE_MIN_MIB..=IMAGE_CACHE_MAX_MIB)
+                    .contains(&settings.image_cache_max_mib)
                 {
                     settings.image_cache_max_mib = DEFAULT_IMAGE_CACHE_MAX_MIB;
                 }
@@ -323,7 +324,9 @@ pub fn validate_translation_timeout_value(v: &Value) -> Result<i64, String> {
         return Err(translation_timeout_message());
     }
     match v.as_i64() {
-        Some(n) if (TRANSLATION_TIMEOUT_MIN_SECONDS..=TRANSLATION_TIMEOUT_MAX_SECONDS).contains(&n) => {
+        Some(n)
+            if (TRANSLATION_TIMEOUT_MIN_SECONDS..=TRANSLATION_TIMEOUT_MAX_SECONDS).contains(&n) =>
+        {
             Ok(n)
         }
         _ => Err(translation_timeout_message()),
@@ -339,9 +342,8 @@ fn translation_timeout_message() -> String {
 
 /// JSON 值形式的图片缓存上限校验（bool / 非整数 / 越界都拒绝），通过时返回该整数。
 pub fn validate_image_cache_max_value(v: &Value) -> Result<i64, String> {
-    let message = || {
-        format!("图片缓存上限必须是 {IMAGE_CACHE_MIN_MIB}~{IMAGE_CACHE_MAX_MIB} MiB 之间的整数")
-    };
+    let message =
+        || format!("图片缓存上限必须是 {IMAGE_CACHE_MIN_MIB}~{IMAGE_CACHE_MAX_MIB} MiB 之间的整数");
     if v.is_boolean() {
         return Err(message());
     }
@@ -695,10 +697,7 @@ mod tests {
             serde_json::json!(null),
             serde_json::json!(512.5),
         ] {
-            assert_eq!(
-                validate_image_cache_max_value(&bad).unwrap_err(),
-                message
-            );
+            assert_eq!(validate_image_cache_max_value(&bad).unwrap_err(), message);
         }
     }
 

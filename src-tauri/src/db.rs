@@ -20,7 +20,9 @@ fn history_offset(page: i64, page_size: i64) -> Result<i64, String> {
     if page < 1 || !(1..=200).contains(&page_size) {
         return Err("页码必须大于等于 1，每页条数必须在 1–200 之间".into());
     }
-    (page - 1).checked_mul(page_size).ok_or_else(|| "分页偏移超出支持范围".into())
+    (page - 1)
+        .checked_mul(page_size)
+        .ok_or_else(|| "分页偏移超出支持范围".into())
 }
 
 const SCHEMA_SQL: &str = "
@@ -896,7 +898,11 @@ impl Db {
             }
         }
         let offset = history_offset(page, page_size)?;
-        let where_sql = if kind.is_some() { " WHERE kind = ?" } else { "" };
+        let where_sql = if kind.is_some() {
+            " WHERE kind = ?"
+        } else {
+            ""
+        };
         let mut params: Vec<SqlValue> = Vec::new();
         if let Some(k) = kind {
             params.push(SqlValue::from(k.to_string()));
@@ -1319,13 +1325,33 @@ mod tests {
     #[test]
     fn history_pagination_rejects_unbounded_limit_and_overflow() {
         let (db, dir) = temp_db("history-bounds");
-        for (page, size) in [(0, 20), (-1, 20), (i64::MIN, 20), (1, -1), (1, 0), (1, 201), (1, i64::MAX), (i64::MAX, 200)] {
-            assert!(db.list_history("all", page, size, None).is_err(), "非法分页 {page}/{size}");
-            assert!(db.list_browse_history(page, size, None).is_err(), "非法浏览分页 {page}/{size}");
+        for (page, size) in [
+            (0, 20),
+            (-1, 20),
+            (i64::MIN, 20),
+            (1, -1),
+            (1, 0),
+            (1, 201),
+            (1, i64::MAX),
+            (i64::MAX, 200),
+        ] {
+            assert!(
+                db.list_history("all", page, size, None).is_err(),
+                "非法分页 {page}/{size}"
+            );
+            assert!(
+                db.list_browse_history(page, size, None).is_err(),
+                "非法浏览分页 {page}/{size}"
+            );
         }
         assert!(db.list_history("all", 1, 200, None).unwrap().0.is_empty());
         assert!(db.list_browse_history(1, 200, None).unwrap().0.is_empty());
-        assert!(db.list_history("all", i64::MAX, 1, None).unwrap().0.is_empty());
+        assert!(
+            db.list_history("all", i64::MAX, 1, None)
+                .unwrap()
+                .0
+                .is_empty()
+        );
         cleanup(&dir);
     }
 

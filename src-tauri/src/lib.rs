@@ -93,7 +93,9 @@ pub fn run() {
                     .map(|state| {
                         (
                             state.paths.data_dir.join("cache").join("img"),
-                            image_proxy::max_cache_bytes(state.settings_snapshot().image_cache_max_mib),
+                            image_proxy::max_cache_bytes(
+                                state.settings_snapshot().image_cache_max_mib,
+                            ),
                         )
                     })
                     .unwrap_or_else(|| {
@@ -102,7 +104,8 @@ pub fn run() {
                             image_proxy::DEFAULT_MAX_CACHE_BYTES,
                         )
                     });
-                let response = image_proxy::handle_image_request(request, &cache_dir, max_bytes).await;
+                let response =
+                    image_proxy::handle_image_request(request, &cache_dir, max_bytes).await;
                 responder.respond(response);
             });
         })

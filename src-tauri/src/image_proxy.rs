@@ -294,8 +294,7 @@ fn trim_cache_partitioned(dir: &Path, keep: &Path, max_bytes: u64, limits: (u64,
     if total <= max_bytes {
         return;
     }
-    let budgets: [u64; 3] =
-        std::array::from_fn(|idx| max_bytes * CLASS_BUDGET_PERCENTS[idx] / 100);
+    let budgets: [u64; 3] = std::array::from_fn(|idx| max_bytes * CLASS_BUDGET_PERCENTS[idx] / 100);
     let mut class_totals = [0u64; 3];
     for entry in &entries {
         class_totals[cache_class_with(entry.size, limits).index()] += entry.size;
@@ -527,7 +526,11 @@ where
 
 /// 读空时的回源：单飞合并同一 URL，成功即返回、后台落盘并按分区预算修剪缓存；
 /// 失败不写盘、不记忆失败（下一次调用重新取数）。
-async fn coalesce_image(url: &str, cache_dir: &Path, max_bytes: u64) -> Result<Bytes, DownloadFailure> {
+async fn coalesce_image(
+    url: &str,
+    cache_dir: &Path,
+    max_bytes: u64,
+) -> Result<Bytes, DownloadFailure> {
     coalesce_download_with(url, Some((cache_dir, max_bytes)), || async {
         let bytes = download_with_retry(url).await.map_err(|err| {
             log::debug!("pixiv-img 下载失败详情: {err}");
@@ -878,8 +881,14 @@ mod tests {
         write_with_mtime(&orig_new, 400, 100);
 
         trim_cache_partitioned(&dir, &small_old, 1000, TINY_LIMITS);
-        assert!(small_old.exists() && small_new.exists() && large.exists(), "预算内档位不应被删");
-        assert!(!orig_old.exists() && !orig_new.exists(), "超预算原图档应从旧到新清空");
+        assert!(
+            small_old.exists() && small_new.exists() && large.exists(),
+            "预算内档位不应被删"
+        );
+        assert!(
+            !orig_old.exists() && !orig_new.exists(),
+            "超预算原图档应从旧到新清空"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -895,7 +904,10 @@ mod tests {
         write_with_mtime(&orig, 400, 100);
 
         trim_cache_partitioned(&dir, &small, 2000, TINY_LIMITS);
-        assert!(small.exists() && orig.exists(), "全局未超上限不应删除任何文件");
+        assert!(
+            small.exists() && orig.exists(),
+            "全局未超上限不应删除任何文件"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1031,11 +1043,12 @@ mod tests {
         .expect("下载成功");
         assert_eq!(bytes.as_ref(), b"IMG");
         assert!(!dir.join(cache_key(&url)).exists(), "回传不等缓存落盘");
-        let shared = coalesce_download_with(&url, Some((&dir, DEFAULT_MAX_CACHE_BYTES)), || async {
-            panic!("缓存写入期间不应再次下载同一图片")
-        })
-        .await
-        .expect("应共享已经下载的图片");
+        let shared =
+            coalesce_download_with(&url, Some((&dir, DEFAULT_MAX_CACHE_BYTES)), || async {
+                panic!("缓存写入期间不应再次下载同一图片")
+            })
+            .await
+            .expect("应共享已经下载的图片");
         assert_eq!(bytes.as_ptr(), shared.as_ptr());
         drop(gate);
         tokio::time::timeout(Duration::from_secs(5), async {
