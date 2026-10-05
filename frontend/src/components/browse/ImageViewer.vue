@@ -25,7 +25,7 @@ const viewerPrefs = { spread: false, rtl: true };
  *   遮罩期间只加载首页、不可进入全屏浮层；
  * - ugoira：仅显示封面帧 + 说明行（V1 不做帧动画）。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { pxSrc, thumbSrc, type ThumbTier } from "../../api/browse";
 import { useThumbTier } from "../../composables/useThumbTier";
@@ -90,6 +90,9 @@ function lowSrc(index: number): string {
 // ===== 渐进加载 =====
 
 const scrollEl = ref<HTMLElement | null>(null);
+/** 舞台滚动位置：KeepAlive 停用时 DOM 已被移出文档，那时读 scrollTop 只能得到 0，
+ * 所以在滚动过程中记录、激活时还原（见 onScroll / onActivated）。 */
+let savedScrollTop = 0;
 /** 页元素引用（下标与 pages 对齐） */
 const itemEls: (HTMLElement | null)[] = [];
 
@@ -115,6 +118,7 @@ function resetPages(): void {
     p.width && p.height ? { w: p.width, h: p.height } : { w: 2, h: 3 }
   );
   focusedPage.value = 0;
+  savedScrollTop = 0;
   // 换作品时浮层一并复位：旧的下标可能落在新数组之外
   fullscreen.value = false;
   fsPage.value = 0;
@@ -174,6 +178,8 @@ function syncFromScroll(): void {
 let rafId = 0;
 
 function onScroll(): void {
+  // 滚动即记录位置：停用时 DOM 已被 KeepAlive 移出文档，那时再读 scrollTop 只会是 0。
+  savedScrollTop = scrollEl.value?.scrollTop ?? 0;
   if (rafId) return;
   rafId = requestAnimationFrame(() => {
     rafId = 0;
@@ -476,16 +482,36 @@ watch(
   { immediate: true }
 );
 
-onMounted(() => {
+/**
+ * 详情页进 KeepAlive：停用期间摘掉 window 监听，否则 ←/→ 会在别的页面上翻本页的图。
+ */
+function attachWindowListeners(): void {
   window.addEventListener("keydown", onKeydown, { capture: true });
   window.addEventListener("resize", onScroll, { passive: true });
+}
+
+function detachWindowListeners(): void {
+  window.removeEventListener("keydown", onKeydown, { capture: true });
+  window.removeEventListener("resize", onScroll);
+}
+
+onMounted(() => {
+  attachWindowListeners();
   syncFromScroll();
 });
 
+onActivated(() => {
+  attachWindowListeners();
+  const el = scrollEl.value;
+  if (el) el.scrollTop = savedScrollTop;
+  syncFromScroll();
+});
+
+onDeactivated(detachWindowListeners);
+
 onBeforeUnmount(() => {
-  window.dispatchEvent(new CustomEvent('pixiv-tool:image-fullscreen', { detail: false }));
-  window.removeEventListener("keydown", onKeydown, { capture: true });
-  window.removeEventListener("resize", onScroll);
+  window.dispatchEvent(new CustomEvent("pixiv-tool:image-fullscreen", { detail: false }));
+  detachWindowListeners();
   if (rafId) cancelAnimationFrame(rafId);
   if (pendingTimer) clearTimeout(pendingTimer);
 });

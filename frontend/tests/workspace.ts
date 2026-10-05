@@ -53,6 +53,19 @@ async function run() {
   goBack(router); await waitFor(() => router.currentRoute.value.path==='/browse/feed');
   goBack(router); await waitFor(() => router.currentRoute.value.path==='/browse/home'); await settle();
   assert(document.querySelector('.work-card')===first && Math.abs(main.scrollTop-top)<2,'详情与跨分区返回恢复缓存和位置');
+  // 插画详情页进 KeepAlive：作者页与相关推荐往返复用同一实例，不再重新加载
+  await router.push('/browse/work/illust/9000005'); await waitFor(() => !!document.querySelector('.work-view .stage-scroll')); await settle();
+  const cachedWork = document.querySelector('.work-view');
+  assert(!!document.querySelector('.work-view .author-name')?.textContent,'详情加载出作者行');
+  await router.push('/browse/user/2'); await waitFor(() => router.currentRoute.value.path==='/browse/user/2'); await settle();
+  window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); await settle();
+  assert(router.currentRoute.value.path==='/browse/user/2','详情停用后不再响应 Esc 返回');
+  goBack(router); await waitFor(() => router.currentRoute.value.path==='/browse/work/illust/9000005'); await settle();
+  assert(document.querySelector('.work-view')===cachedWork && !document.querySelector('.work-view .sk-line'),'从作者页返回复用已加载详情，不重新加载');
+  await router.push('/browse/work/illust/9000006'); await waitFor(() => !!document.querySelector('.work-view .stage-scroll') && document.querySelector('.work-view')!==cachedWork); await settle();
+  goBack(router); await waitFor(() => router.currentRoute.value.path==='/browse/work/illust/9000005'); await settle();
+  assert(document.querySelector('.work-view')===cachedWork,'相关推荐回退复用已加载详情，不重新加载');
+  await router.push('/browse/home'); await waitFor(() => router.currentRoute.value.path==='/browse/home'); await settle();
   window.dispatchEvent(new KeyboardEvent('keydown',{key:'k',ctrlKey:true,bubbles:true})); await waitFor(() => router.currentRoute.value.path==='/browse/search'); await settle();
   assert(!document.querySelector('.search-fab') && document.activeElement?.classList.contains('search-field'),'Ctrl+K进入搜索并聚焦，搜索页无重复胶囊');
   assert(document.body.innerText.includes('以图识图'),'搜索页提供以图识图');
@@ -122,6 +135,6 @@ async function run() {
   window.dispatchEvent(new CustomEvent('pixiv-tool:image-fullscreen',{detail:false})); await settle();
   panel.open({form:'novel',sourceType:'single',sourceId:9000005}); await settle();
   const output=document.querySelector<HTMLOutputElement>('#workspace-result')!;
-  output.value='PASS：四入口、返填与草稿、缓存返回、搜索、旧链接、后台任务事件与轮询、失败与重复提交'; output.dataset.result='pass';
+  output.value='PASS：四入口、返填与草稿、缓存返回、详情复用、搜索、旧链接、后台任务事件与轮询、失败与重复提交'; output.dataset.result='pass';
 }
 run().catch(error=>{const output=document.querySelector<HTMLOutputElement>('#workspace-result')!;output.value=`FAIL：${String(error)}`;output.dataset.result='fail';console.error(error);});

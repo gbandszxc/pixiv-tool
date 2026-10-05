@@ -105,13 +105,17 @@ function restoreLayout() {
 const cachedBrowseViews = [
   "BrowseHomeView", "BrowseChannelView", "BrowseDiscoverView", "BrowseFeedView",
   "BrowseWatchlistView", "BrowseSearchView", "BrowseRankingView", "BrowseBookmarkView",
-  "BrowseHistoryView", "BrowseAuthorView", "BrowseSeriesView",
+  "BrowseHistoryView", "BrowseAuthorView", "BrowseSeriesView", "BrowseWorkView",
 ];
 const browseSession = computed(() => `${authStore.isLoggedIn}:${authStore.userId}`);
 // 与 KeepAlive 相同的 20 页 LRU 边界；主内容滚动不在 window 上。
 const browseScroll = new Map<string, number>();
+/** 缓存集内的页面返回时按 path 恢复主内容滚动。插画/漫画详情（BrowseWorkView）同样入缓存：
+ * 作者页与相关推荐的往返复用已加载的舞台，不再重新加载；小说阅读器自持阅读位置与翻译状态，
+ * 暂不纳入。 */
 function isCachedBrowsePage(path: string): boolean {
-  return path.startsWith("/browse/") && !path.startsWith("/browse/work/");
+  if (path.startsWith("/browse/work/")) return /^\/browse\/work\/(illust|manga)\//.test(path);
+  return path.startsWith("/browse/");
 }
 const removeBeforeEach = router.beforeEach((to, from) => {
   if (to.path !== from.path && isCachedBrowsePage(from.path)) {

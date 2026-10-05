@@ -15,7 +15,7 @@ const revealedWorkIds = new Set<number>();
  * 右列下段为可切换面板——相关推荐（默认）/ 评论，由顶栏评论按钮控制，评论按需分页拉取。
  * 相关推荐经 router.push 保留来路（watch 参数重拉）。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { goBack } from "../../router/navigation";
 import { useI18n } from "vue-i18n";
@@ -229,8 +229,32 @@ function onKeydown(e: KeyboardEvent): void {
   goBack(router);
 }
 
-onMounted(() => window.addEventListener("keydown", onKeydown));
-onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
+/**
+ * 详情页按 path 进 KeepAlive（返回不重新加载）：停用期间必须摘掉 window 监听，
+ * 否则 Esc 会在别的页面上触发本页返回。信息列滚动位置在滚动过程中记录、激活时还原
+ * ——停用发生在 DOM 被移出文档之后，那时读 scrollTop 只会是 0（舞台同理，见 ImageViewer）。
+ */
+let infoScrollTop = 0;
+
+function rememberInfoScroll(): void {
+  infoScrollTop = infoCol.value?.scrollTop ?? 0;
+}
+
+function attachKeydown(): void {
+  window.addEventListener("keydown", onKeydown);
+}
+
+function detachKeydown(): void {
+  window.removeEventListener("keydown", onKeydown);
+}
+
+onMounted(attachKeydown);
+onActivated(() => {
+  attachKeydown();
+  if (infoCol.value) infoCol.value.scrollTop = infoScrollTop;
+});
+onDeactivated(detachKeydown);
+onBeforeUnmount(detachKeydown);
 </script>
 
 <template>
@@ -333,7 +357,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       </section>
 
       <!-- 右：信息列（320px，可滚动；窄窗时排在图片下方） -->
-      <aside ref="infoCol" class="info-col">
+      <aside ref="infoCol" class="info-col" @scroll.passive="rememberInfoScroll">
         <template v-if="loading">
           <div class="sk-line w40" aria-hidden="true"></div>
           <div class="sk-line w80" aria-hidden="true"></div>
