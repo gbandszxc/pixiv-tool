@@ -101,7 +101,7 @@ export default {
     browseRanking: "Ranking",
     browseBookmark: "Bookmarks",
     browseHistory: "History",
-    browseMe: "My page",
+    browseMe: "Profile",
     saucenao: "Image Search",
   },
   auth: {
@@ -259,7 +259,7 @@ export default {
     filterNovel: "Novels",
   },
   browseMe: {
-    loginRequired: "Sign in to view your page",
+    loginRequired: "Sign in to view your profile",
     editProfile: "Edit profile",
     submitWork: "Submit illustration",
   },

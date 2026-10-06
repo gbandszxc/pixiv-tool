@@ -18,8 +18,9 @@ const viewerPrefs = { spread: false, rtl: true, vertical: false, verticalScale: 
  *   先铺 medium 档（540px）占位层再换高清；全屏浮层走 thumb_quality_fullscreen，
  *   胶卷缩略图走 thumb_quality_grid；
  * - 全屏滚轮 / PgUp / PgDn 按页或跨页组前后切换，胶卷仍原生滚动；
- * - 浮层另有竖屏模式（连续纵向滚动，条漫友好）：单/双列仍由双图开关控制，固定从上
- *   到下、不提供方向切换；滚轮与 ↑/↓ 为原生滚动，PgUp/PgDn 走全局按屏滚动，←/→
+ * - 浮层另有竖屏模式（连续纵向滚动，条漫友好）：固定单列、从上到下，与双图（跨页）
+ *   模式互斥——进入竖屏即按单列渲染、双页开关随之隐藏，退出后开关恢复可见并保持此前
+ *   选择；不提供方向切换；滚轮与 ↑/↓ 为原生滚动，PgUp/PgDn 走全局按屏滚动，←/→
  *   对齐上下页行首；胶卷点击滚到该页、标记视口内各页；页框宽度比例（0.5~1）会话
  *   内记忆；图片按视口窗口懒加载（占位盒预留高度，不一次性加载全部原图）；进出
  *   竖屏保持当前页；
@@ -296,13 +297,14 @@ watch(rtl, (v) => (viewerPrefs.rtl = v));
 watch(vertical, (v) => (viewerPrefs.vertical = v));
 watch(verticalScale, (v) => (viewerPrefs.verticalScale = v));
 
-/** 双图仅对多页作品生效（单页作品没有可跨的页） */
-const spreadOn = computed(() => spread.value && multi.value);
-/** 竖屏（连续纵向滚动）同样仅多页作品生效；单页作品无滚动阅读可言（控件也随之隐藏） */
+/** 竖屏（连续纵向滚动）仅多页作品生效；单页作品无滚动阅读可言（控件也随之隐藏） */
 const verticalOn = computed(() => vertical.value && multi.value);
-/** 阅读方向生效：仅 paged + 双图（单页一屏一张；竖屏固定从上到下，不参与镜像） */
-const rtlActive = computed(() => spreadOn.value && rtl.value && !verticalOn.value);
-/** 翻页步进：双图一屏两张，步进 2（竖屏按同一分块组行：1-2 / 3-4 …） */
+/** 双图仅对多页作品生效（单页作品没有可跨的页），且与竖屏互斥（竖屏固定单列）；
+ *  `spread` 偏好本身不动：竖屏下只是不生效，退出竖屏即恢复此前选择 */
+const spreadOn = computed(() => spread.value && multi.value && !verticalOn.value);
+/** 阅读方向生效：仅 paged + 双图（单页一屏一张；竖屏与双图互斥，固定从上到下、不参与镜像） */
+const rtlActive = computed(() => spreadOn.value && rtl.value);
+/** 翻页步进：双图一屏两张，步进 2（竖屏与双图互斥，恒 1） */
 const pageStep = computed(() => (spreadOn.value ? 2 : 1));
 
 /** 一屏显示的页（下标，按 DOM 从左到右排列；从右往左时当前页在右） */
@@ -317,9 +319,9 @@ const spreadEnd = computed(() =>
   visiblePages.value.length > 1 ? fsPage.value + 1 : fsPage.value
 );
 
-/** 页码标签：paged 双图显示区间（第 N-M 页），竖屏恒显示视口内最靠上的那一页 */
+/** 页码标签：paged 双图显示区间（第 N-M 页），竖屏固定单列即恒显示视口内最靠上的那一页 */
 const pageLabel = computed(() =>
-  !verticalOn.value && spreadEnd.value > fsPage.value
+  spreadEnd.value > fsPage.value
     ? t("browse.work.pageRangeOf", {
         from: fsPage.value + 1,
         to: spreadEnd.value + 1,
@@ -360,7 +362,7 @@ const fsSlots = computed<FsSlot[]>(() =>
   }))
 );
 
-// ----- 竖屏（连续纵向滚动）：行模型 + 懒加载窗口（paged 分支不参与） -----
+// ----- 竖屏（连续纵向滚动）：固定单列 + 懒加载窗口（paged 分支不参与） -----
 
 /** 竖屏行模型的页视图：在 FsSlot 基础上附带「是否已进入加载窗口」。 */
 interface FsSlotView {
@@ -371,24 +373,17 @@ interface FsSlotView {
   live: boolean;
 }
 
-/** 全部行（按 pageStep 分块组行）：DOM 全量占位（aspect-ratio 预留高度，滚动不跳动），
+/** 竖屏每行一页（固定单列，与双图互斥）：DOM 全量占位（aspect-ratio 预留高度，滚动不跳动），
  * 图片仅在该页进入加载窗口（fsLive）后才挂载 —— 不一次性加载全部原图。 */
-const fsRows = computed<FsSlotView[][]>(() => {
-  const one = (index: number): FsSlotView => ({
+const fsVertSlots = computed<FsSlotView[]>(() =>
+  props.pages.map((_, index) => ({
     index,
     src: fsSrcOf(index),
     low: fsLowOf(index),
     state: fsStates.value[index] ?? "loading",
     live: fsLive.value[index] === true,
-  });
-  const rows: FsSlotView[][] = [];
-  for (let i = 0; i < props.pages.length; i += pageStep.value) {
-    const row: FsSlotView[] = [];
-    for (let j = i; j < Math.min(i + pageStep.value, props.pages.length); j += 1) row.push(one(j));
-    rows.push(row);
-  }
-  return rows;
-});
+  }))
+);
 
 const fsStageEl = ref<HTMLElement | null>(null);
 /** 竖屏页元素引用（下标与 pages 对齐） */
@@ -422,21 +417,20 @@ function activateFs(from: number, to: number): void {
 let fsPendingPage: number | null = null;
 let fsPendingTimer = 0;
 
-/** 竖屏：滚动到某页所在行并对齐页顶（block: start），同时推进加载窗口。 */
+/** 竖屏：滚动到该页所在行（固定单列 = 该页本身）并对齐页顶（block: start），同时推进加载窗口。 */
 function scrollToFsRow(index: number, behavior?: ScrollBehavior): void {
-  const rowStart = spreadOn.value ? index - (index % 2) : index;
-  const el = fsSlotEls[rowStart];
+  const el = fsSlotEls[index];
   if (!el) return;
   const smooth = behavior !== "auto" && !prefersReducedMotion();
-  fsPendingPage = smooth ? rowStart : null;
+  fsPendingPage = smooth ? index : null;
   if (fsPendingTimer) clearTimeout(fsPendingTimer);
   if (smooth) fsPendingTimer = window.setTimeout(() => (fsPendingPage = null), 500);
   el.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
-  fsPage.value = rowStart;
-  activateFs(rowStart, rowStart + pageStep.value);
+  fsPage.value = index;
+  activateFs(index, index + 1);
 }
 
-/** 滚动同步：页码 = 视口内最靠上的页；加载窗口 = 视口内各页向外各留 1 行余量。 */
+/** 滚动同步：页码 = 视口内最靠上的页；加载窗口 = 视口内各页向外各留 1 页余量。 */
 function syncFsFromScroll(): void {
   const el = fsStageEl.value;
   if (!el) return;
@@ -458,7 +452,7 @@ function syncFsFromScroll(): void {
   fsVisible.value = visible;
   if (first < 0) return;
   fsPage.value = fsPendingPage ?? first;
-  activateFs(first - 1, last + pageStep.value);
+  activateFs(first - 1, last + 1);
 }
 
 let fsRafId = 0;
@@ -489,6 +483,14 @@ function stepVerticalScale(delta: number): void {
 function resetVerticalScale(): void {
   verticalScale.value = 1;
 }
+
+/** 宽度比例变化会重排各页高度（同一 scrollTop 落到别的页），而用户没动滚动条、不产生
+ *  scroll 事件：等布局落定后重算视口内的页，胶卷标记与页码立即跟上。 */
+watch(verticalScaleValue, async () => {
+  if (!fullscreen.value || !verticalOn.value) return;
+  await nextTick();
+  syncFsFromScroll();
+});
 
 const canPrev = computed(() => multi.value && fsPage.value > 0);
 const canNext = computed(
@@ -535,7 +537,7 @@ function closeFullscreen(): void {
 }
 
 /** 双图模式按「跨页对」对齐（1-2 / 3-4 …）：点胶卷任意一页都落到所属跨页。
- *  竖屏下不改 fsPage 而是滚动到该页所在行（行首对齐）。 */
+ *  竖屏固定单列：不改 fsPage 而是滚动到该页行首（每页自成一行）。 */
 function stepTo(index: number): void {
   let next = Math.min(Math.max(index, 0), Math.max(props.pages.length - 1, 0));
   if (spreadOn.value && next % 2 === 1) next -= 1;
@@ -563,13 +565,9 @@ function onFullscreenWheel(e: WheelEvent): void {
   stepPage(e.deltaY > 0 ? 1 : -1);
 }
 
+/** 双图开关（仅 paged 分支可见）：开启后按跨页对对齐，关掉或开启都保持当前页。 */
 function toggleSpread(): void {
   spread.value = !spread.value;
-  if (verticalOn.value) {
-    // 竖屏下列数变化会重组行模型（DOM 高度重排）：等 DOM 重建后瞬时对齐回当前页行首
-    void nextTick(() => scrollToFsRow(fsPage.value, "auto"));
-    return;
-  }
   if (spreadOn.value) stepTo(fsPage.value);
 }
 
@@ -578,13 +576,14 @@ function toggleRtl(): void {
 }
 
 /** 竖屏开关：进出都保持当前页——回 paged 时跨页对齐行首；进竖屏时滚动定位到该页行首
- *  （DOM 切换是异步的，须等 nextTick 后再滚动与聚焦，焦点给滚动容器让 ↑/↓ 立即可用）。 */
+ *  （DOM 切换是异步的，须等 nextTick 后再滚动与聚焦，焦点给滚动容器让 ↑/↓ 立即可用）。
+ *  竖屏与双图互斥：进竖屏即按单列渲染（双页开关随之隐藏），退出后恢复此前选择。 */
 function toggleVertical(): void {
   vertical.value = !vertical.value;
   if (!verticalOn.value && spreadOn.value) stepTo(fsPage.value);
   void nextTick(() => {
     if (!verticalOn.value) return;
-    activateFs(fsPage.value, fsPage.value + pageStep.value);
+    activateFs(fsPage.value, fsPage.value + 1);
     scrollToFsRow(fsPage.value, "auto");
     syncFsFromScroll();
     fsStageEl.value?.focus({ preventScroll: true });
@@ -660,7 +659,7 @@ watch(fullscreen, async (open) => {
     await nextTick();
     if (verticalOn.value) {
       // 竖屏：定位到进入前停留的页（行首对齐），焦点给滚动容器让 ↑/↓ 立即可用
-      activateFs(fsPage.value, fsPage.value + pageStep.value);
+      activateFs(fsPage.value, fsPage.value + 1);
       scrollToFsRow(fsPage.value, "auto");
       syncFsFromScroll();
       fsStageEl.value?.focus({ preventScroll: true });
@@ -682,11 +681,14 @@ watch(
 function attachWindowListeners(): void {
   window.addEventListener("keydown", onKeydown, { capture: true });
   window.addEventListener("resize", onScroll, { passive: true });
+  // 窗口尺寸变化同样重排竖屏各页高度却不产生 scroll 事件：与滚动同路（rAF 限流）重算视口内的页
+  window.addEventListener("resize", onFsScroll, { passive: true });
 }
 
 function detachWindowListeners(): void {
   window.removeEventListener("keydown", onKeydown, { capture: true });
   window.removeEventListener("resize", onScroll);
+  window.removeEventListener("resize", onFsScroll);
 }
 
 onMounted(() => {
@@ -879,8 +881,8 @@ watch(
           </div>
         </template>
 
-        <!-- 竖屏：连续纵向滚动（条漫友好），滚动由内层 .fs-scroll 承担；行内并列单双页
-             仍由双图开关控制；页框宽度 = 舞台宽 × 比例（--fs-scale），高度随纵横比自适应 -->
+        <!-- 竖屏：连续纵向滚动、固定单列（条漫友好），滚动由内层 .fs-scroll 承担；
+             双图（跨页）与竖屏互斥，页框宽度 = 舞台宽 × 比例（--fs-scale），高度随纵横比自适应 -->
         <div
           v-else
           ref="fsStageEl"
@@ -891,10 +893,8 @@ watch(
           @click.self="closeFullscreen"
           @scroll.passive="onFsScroll"
         >
-          <div v-for="(row, ri) in fsRows" :key="ri" class="fs-row">
+          <div v-for="slot in fsVertSlots" :key="slot.index" class="fs-row">
             <div
-              v-for="slot in row"
-              :key="slot.index"
               :ref="(el) => setFsSlotRef(slot.index, el)"
               class="fs-slot"
               :style="shotStyle(slot.index)"
@@ -944,8 +944,9 @@ watch(
               </md-icon-button>
             </div>
             <span class="fs-divider" aria-hidden="true"></span>
-            <!-- 双图（跨页）开关 -->
+            <!-- 双图（跨页）开关：与竖屏互斥——竖屏固定单列，开关随之隐藏（退出竖屏恢复可见） -->
             <md-icon-button
+              v-if="!verticalOn"
               toggle
               :selected="spreadOn"
               :aria-label="t('browse.work.spread')"
@@ -958,8 +959,8 @@ watch(
                 <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" />
               </svg>
             </md-icon-button>
-            <!-- 竖屏模式（连续纵向滚动）：并列单双页仍由双图开关控制；竖屏固定从上
-                 到下，不提供方向切换（方向开关随之隐藏、翻页组不镜像） -->
+            <!-- 竖屏模式（连续纵向滚动）：固定单列、从上到下，与双图（跨页）互斥
+                 （双页与方向开关随之隐藏、翻页组不镜像） -->
             <md-icon-button
               toggle
               :selected="verticalOn"
@@ -974,9 +975,9 @@ watch(
                 <path d="m8 6 4-4 4 4" />
               </svg>
             </md-icon-button>
-            <!-- 阅读方向：从右往左 / 从左往右（仅 paged + 双图模式；竖屏固定从上到下） -->
+            <!-- 阅读方向：从右往左 / 从左往右（仅双图模式；竖屏与双图互斥、固定从上到下） -->
             <md-icon-button
-              v-if="spreadOn && !verticalOn"
+              v-if="spreadOn"
               :aria-label="t('browse.work.readDir', { dir: rtl ? t('browse.work.dirRtl') : t('browse.work.dirLtr') })"
               :title="t('browse.work.readDir', { dir: rtl ? t('browse.work.dirRtl') : t('browse.work.dirLtr') })"
               @click="toggleRtl"
@@ -1347,12 +1348,11 @@ watch(
   background: rgb(255 255 255 / 0.6);
 }
 
-/* 行模型：行内并列单双页（双列由 is-spread 表达），行间距 16px */
+/* 行模型：固定单列（每行一页，双图与竖屏互斥），页框水平居中，行间距 16px */
 .fs-stage.is-vertical .fs-row {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  gap: var(--space-sm);
 }
 
 .fs-stage.is-vertical .fs-row + .fs-row {
@@ -1364,10 +1364,6 @@ watch(
 .fs-stage.is-vertical .fs-slot {
   width: calc(var(--fs-scale, 1) * 100%);
   max-height: none;
-}
-
-.fs-stage.is-vertical.is-spread .fs-slot {
-  width: calc(var(--fs-scale, 1) * (50% - var(--space-sm) / 2));
 }
 
 /* 竖屏宽度比例组（与详情页顶栏缩放组同规格；浮层内为白系配色） */

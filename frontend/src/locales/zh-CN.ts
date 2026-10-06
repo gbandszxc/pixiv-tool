@@ -101,7 +101,7 @@ export default {
     browseRanking: "排行榜",
     browseBookmark: "收藏",
     browseHistory: "历史",
-    browseMe: "我的主页",
+    browseMe: "主页",
     saucenao: "以图识图",
   },
   auth: {
@@ -260,7 +260,7 @@ export default {
     filterNovel: "小说",
   },
   browseMe: {
-    loginRequired: "登录后可查看我的主页",
+    loginRequired: "登录后可查看主页",
     editProfile: "编辑资料",
     submitWork: "投稿插画作品",
   },

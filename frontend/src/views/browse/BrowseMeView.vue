@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 我的主页（/browse/me，「我的」分区的第三个一级入口）：
+ * 主页（/browse/me，「我的」分区的第三个一级入口）：
  * - uid 由 authStore.userId 响应式解析（登录 / 切号后自动生效，失效响应由 KeepAlive 的
  *   browseSession key 整树重挂保证）；
  * - 动作行「编辑资料 / 投稿插画作品」经官方 opener 打开 pixiv 网页（写操作仍在网页端完成，
@@ -46,18 +46,23 @@ function openExternal(url: string): void {
       <md-filled-button @click="openLogin">{{ t("auth.login") }}</md-filled-button>
     </div>
     <template v-else>
-      <div class="me-actions">
-        <md-outlined-button :title="t('browseMe.editProfile')" @click="openExternal(pixivProfileEditUrl())">{{ t("browseMe.editProfile") }}</md-outlined-button>
-        <md-outlined-button :title="t('browseMe.submitWork')" @click="openExternal(pixivUploadUrl())">{{ t("browseMe.submitWork") }}</md-outlined-button>
-      </div>
       <!-- 复用作者页：资料卡 / 四类 tab / 排序 / 刷新全部继承；本页不再叠返回键与标题 -->
-      <BrowseAuthorView :id="meId" />
+      <BrowseAuthorView :id="meId">
+        <!-- 编辑资料 / 投稿插画作品：经 #lead 并入作者页工具行左端，刷新仍由作者页贴右 -->
+        <template #lead>
+          <div class="me-actions">
+            <md-outlined-button :title="t('browseMe.editProfile')" @click="openExternal(pixivProfileEditUrl())">{{ t("browseMe.editProfile") }}</md-outlined-button>
+            <md-outlined-button :title="t('browseMe.submitWork')" @click="openExternal(pixivUploadUrl())">{{ t("browseMe.submitWork") }}</md-outlined-button>
+          </div>
+        </template>
+      </BrowseAuthorView>
     </template>
   </div>
 </template>
 
 <style scoped>
-.me-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-bottom: var(--space-lg); }
+/* 动作组作为工具行内的单个 flex item 整组换行；下距由 .browse-list-header 的既有 margin-bottom 承担 */
+.me-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
 .me-state { display: flex; flex-direction: column; align-items: center; gap: var(--space-md); padding: var(--space-xl) 0; }
 .state-text { margin: 0; color: var(--ink-muted); font-size: 14px; line-height: 1.5; }
 </style>

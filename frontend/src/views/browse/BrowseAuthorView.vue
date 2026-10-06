@@ -304,6 +304,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="page-view author-view">
     <div class="browse-list-header">
+      <!-- 主页（/browse/me）经 #lead 把写操作入口并入本行左端；普通作者页无插槽内容，DOM 与布局零变化 -->
+      <slot name="lead" />
       <ListRefreshButton :busy="followBusy || profileLoading || lists[activeTab].loading.value || lists[activeTab].loadingMore.value" @refresh="refresh" />
     </div>
     <!-- ===== 头部信息卡（surface-container 区块，无阴影）===== -->

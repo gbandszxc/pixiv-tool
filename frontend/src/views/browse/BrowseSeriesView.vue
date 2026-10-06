@@ -236,18 +236,17 @@ function openInPixiv(): void {
 
 <template>
   <div class="page-view series-view">
-    <div class="browse-list-header">
-      <ListRefreshButton :busy="loading || switching" @refresh="load(page, !hasData)" />
-    </div>
     <!-- 系列头始终保留返回入口，骨架不能遮蔽可操作控件。 -->
     <header class="series-head">
       <div v-if="loading" class="sk sk-cover" aria-hidden="true"></div>
       <img v-else-if="cover" class="cover" :src="cover" alt="" @error="onCoverError" />
       <div class="head-info">
+        <!-- 刷新并入标题行右端（与频道页等同一形态）；标题 min-width:0 可省略，窄窗不挤压刷新。 -->
         <div class="page-heading">
           <PageBackButton />
           <div v-if="loading" class="sk sk-title" aria-hidden="true"></div>
           <h1 v-else class="page-title" :title="head?.title">{{ head?.title || t("common.browseSeriesTitle") }}</h1>
+          <ListRefreshButton :busy="loading || switching" @refresh="load(page, !hasData)" />
         </div>
         <template v-if="loading">
           <div class="sk sk-line w40" aria-hidden="true"></div>
