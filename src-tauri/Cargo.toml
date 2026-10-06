@@ -1,6 +1,6 @@
 [package]
 name = "pixiv-tool"
-version = "1.2.1"
+version = "1.2.2"
 description = "Pixiv Tool —— 本地 Pixiv 小说/插画抓取工具（Tauri 2 桌面应用）"
 authors = ["pixiv-tool"]
 license = "MIT"
