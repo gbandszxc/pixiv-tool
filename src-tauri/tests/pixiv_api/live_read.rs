@@ -991,7 +991,7 @@ async fn live_user_works_illust_novel() {
 
     let (_, illust_author) = ranking_first("illust").await;
     let works = api
-        .get_user_works(illust_author, "illust", 1)
+        .get_user_works(illust_author, "illust", 1, None)
         .await
         .unwrap_or_else(|e| panic!("作者插画作品失败（user {illust_author}）: {e}"));
     let total = works["total"].as_i64().unwrap_or(0);
@@ -1024,9 +1024,45 @@ async fn live_user_works_illust_novel() {
         assert!(is_last, "total={total}<=60 时首批应为最后一页");
     }
 
+    // asc/desc 对照（补充防线；主防线是 browse_api.rs 的离线单测）：
+    // 批内单调随 order 翻转、asc 首项 < desc 首项（最旧 vs 最新）、
+    // total>60 时两批 id 集合不相交。
+    let asc = api
+        .get_user_works(illust_author, "illust", 1, Some("asc"))
+        .await
+        .unwrap_or_else(|e| panic!("作者插画作品 asc 失败（user {illust_author}）: {e}"));
+    let desc_ids: Vec<i64> =
+        common::assert_list_envelope(&works, "user works illust desc")
+            .iter()
+            .map(common::id_of)
+            .collect();
+    let asc_ids: Vec<i64> =
+        common::assert_list_envelope(&asc, "user works illust asc")
+            .iter()
+            .map(common::id_of)
+            .collect();
+    assert!(
+        desc_ids.windows(2).all(|w| w[0] > w[1]),
+        "desc 批内 id 递减（最新在前），实际 {desc_ids:?}"
+    );
+    assert!(
+        asc_ids.windows(2).all(|w| w[0] < w[1]),
+        "asc 批内 id 递增（最旧在前），实际 {asc_ids:?}"
+    );
+    if total > 60 {
+        assert!(
+            asc_ids.first().copied().unwrap_or(0) < desc_ids.first().copied().unwrap_or(0),
+            "asc 首项应最旧（< desc 首项）"
+        );
+        assert!(
+            asc_ids.iter().all(|id| !desc_ids.contains(id)),
+            "total={total}>60 时 asc/desc 首批 id 集合不应相交"
+        );
+    }
+
     let (_, novel_author) = ranking_first("novel").await;
     let works = api
-        .get_user_works(novel_author, "novel", 1)
+        .get_user_works(novel_author, "novel", 1, None)
         .await
         .unwrap_or_else(|e| panic!("作者小说作品失败（user {novel_author}）: {e}"));
     let total = works["total"].as_i64().unwrap_or(0);

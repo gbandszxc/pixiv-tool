@@ -497,13 +497,21 @@ function openInPixiv(): void {
             <router-link class="author-link" :to="`/browse/user/${item.author_id}`">{{ item.author_name }}</router-link>
             <span v-if="restricted" class="r18-pill">{{ restrictedLabel }}</span>
           </p>
+          <!-- 所属系列（合集）入口：胶囊形态与下方标签 chip 区分（primary-container = 应用内跳转） -->
           <router-link
-            v-if="series"
-            class="series-link"
+            v-if="series && series.id > 0"
+            class="series-chip"
             :to="`/browse/series/novel/${series.id}`"
-            :title="t('browse.novel.seriesLabel', { title: series.title, order: series.order })"
+            :title="t('browse.work.seriesEntry', { title: series.title })"
+            :aria-label="t('browse.work.seriesEntry', { title: series.title })"
           >
-            {{ t("browse.novel.seriesLabel", { title: series.title, order: series.order }) }}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- lucide layers -->
+              <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+              <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" />
+              <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" />
+            </svg>
+            <span>{{ t("browse.novel.seriesLabel", { title: series.title, order: series.order }) }}</span>
           </router-link>
           <div v-if="item.tags?.length" class="tag-row">
             <router-link
@@ -959,20 +967,47 @@ html.dark .novel-view[class*="read-bg-"] {
   line-height: 1.6;
 }
 
-.series-link {
-  display: inline-block;
-  margin-top: var(--space-sm);
+/* 系列（合集）入口 chip：primary-container 表达「应用内跳转」，与标签 chip 的
+ * surface-container（检索）区分；信息头为居中块布局，chip 以 inline-flex 参与行内居中 */
+.series-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--md-sys-color-primary);
-  font-size: 13px;
+  margin-top: var(--space-sm);
+  padding: 3px 12px;
+  border-radius: 999px;
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: left;
   text-decoration: none;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
 }
 
-.series-link:hover {
-  text-decoration: underline;
+.series-chip:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-primary-container));
+}
+
+.series-chip:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.series-chip svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .series-chip {
+    transition: none;
+  }
 }
 
 .tag-row {

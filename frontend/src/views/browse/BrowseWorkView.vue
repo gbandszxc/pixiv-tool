@@ -99,6 +99,58 @@ function formatCount(n?: number): string {
   return typeof n === "number" ? n.toLocaleString() : "-";
 }
 
+// ===== 详情页图片缩放（设置键 detail_image_scale，默认 1.0 = 撑满 = 既有观感）=====
+
+/** 区间与步进与后端校验一致（settings.rs 的 DETAIL_IMAGE_SCALE_*）。 */
+const IMAGE_SCALE_MIN = 0.5;
+const IMAGE_SCALE_MAX = 1;
+const IMAGE_SCALE_STEP = 0.1;
+
+function clampScale(value: number): number {
+  return Math.min(IMAGE_SCALE_MAX, Math.max(IMAGE_SCALE_MIN, value));
+}
+
+/**
+ * 乐观步进草稿：settings store 要等 IPC 返回才更新，直接以它为基数会让连点丢步
+ * （0.1 步进下可感知）；外部（设置拉取等）改值后放弃草稿，回到以设置值为准。
+ */
+const zoomDraft = ref<number | null>(null);
+/** 越界 / 缺省容错（浏览器 mock、旧配置、invoke 桩返回 {} 都不会得到 NaN）。 */
+const imageScale = computed(() => clampScale(zoomDraft.value ?? (settings.settings.detail_image_scale || 1)));
+
+watch(
+  () => settings.settings.detail_image_scale,
+  () => {
+    zoomDraft.value = null;
+  }
+);
+
+/** 步进 ±0.1（先取两位小数再夹取）；持久化失败回滚草稿并提示，不打断浏览。 */
+async function stepZoom(delta: number): Promise<void> {
+  const next = Math.round((imageScale.value + delta * IMAGE_SCALE_STEP) * 100) / 100;
+  const value = clampScale(next);
+  if (value === imageScale.value) return;
+  zoomDraft.value = value;
+  try {
+    await settings.saveSettings({ detail_image_scale: value });
+  } catch (err) {
+    zoomDraft.value = null;
+    notify(errorMessage(err));
+  }
+}
+
+/** 重置为默认 100%（撑满）；已在默认值时直接返回，持久化失败回滚草稿并提示。 */
+async function resetZoom(): Promise<void> {
+  if (imageScale.value === 1) return;
+  zoomDraft.value = 1;
+  try {
+    await settings.saveSettings({ detail_image_scale: 1 });
+  } catch (err) {
+    zoomDraft.value = null;
+    notify(errorMessage(err));
+  }
+}
+
 // ===== 加载 =====
 
 async function loadDetail(): Promise<void> {
@@ -332,6 +384,36 @@ onBeforeUnmount(detachKeydown);
           <path d="M15 3h6v6" />
         </svg>
       </md-icon-button>
+      <!-- 图片缩放（持久化到 settings.json）：[−] 值 [+] / 重置；100% = 撑满舞台（默认）。
+           控件规格与小说阅读器底栏字号缩放一致（BrowseNovelView font-scale） -->
+      <div class="zoom-group" role="group" :aria-label="t('browse.work.imageZoomLabel')">
+        <md-icon-button
+          :disabled="imageScale <= IMAGE_SCALE_MIN"
+          :aria-label="t('browse.work.imageZoomOut')"
+          :title="t('browse.work.imageZoomOut')"
+          @click="stepZoom(-1)"
+        >
+          <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /></svg>
+        </md-icon-button>
+        <span class="zoom-value" aria-live="polite">{{ Math.round(imageScale * 100) }}%</span>
+        <md-icon-button
+          :disabled="imageScale >= IMAGE_SCALE_MAX"
+          :aria-label="t('browse.work.imageZoomIn')"
+          :title="t('browse.work.imageZoomIn')"
+          @click="stepZoom(1)"
+        >
+          <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /><path d="M12 8v8" /></svg>
+        </md-icon-button>
+        <!-- 重置：逆时针回环箭头；100% 已是默认值时禁用 -->
+        <md-icon-button
+          :disabled="imageScale === 1"
+          :aria-label="t('browse.work.imageZoomReset')"
+          :title="t('browse.work.imageZoomReset')"
+          @click="resetZoom"
+        >
+          <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+        </md-icon-button>
+      </div>
     </header>
 
     <!-- 错误态（404 / 无权限等）：可读文案 + 返回 -->
@@ -351,6 +433,7 @@ onBeforeUnmount(detachKeydown);
           :restricted="restricted"
           :restrict-label="restrictLabel"
           :ugoira="isUgoira"
+          :stage-scale="imageScale"
           @reveal="reveal"
         />
         <div v-else class="stage-skeleton" aria-hidden="true"></div>
@@ -372,6 +455,26 @@ onBeforeUnmount(detachKeydown);
             <router-link v-for="tag in item.tags" :key="tag" class="tag-chip" :to="{ path: '/browse/search', query: { word: tag, kind: props.kind, s_mode: 's_tag_full' } }" :title="t('common.search')">{{ tag }}</router-link>
           </div>
 
+          <!-- 所属系列（合集）入口：紧邻标签区域；胶囊形态与标签 chip 区分
+               （primary-container = 应用内跳转，标签的 surface-container = 检索）；
+               id <= 0 不渲染（解析层守卫之外的前端双保险） -->
+          <button
+            v-if="detail?.series && detail.series.id > 0"
+            class="series-chip"
+            type="button"
+            :title="t('browse.work.seriesEntry', { title: detail.series.title })"
+            :aria-label="t('browse.work.seriesEntry', { title: detail.series.title })"
+            @click="openSeries"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- lucide layers -->
+              <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+              <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" />
+              <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" />
+            </svg>
+            <span>{{ t("browse.work.seriesEp", { title: detail.series.title, order: detail.series.order }) }}</span>
+          </button>
+
           <!-- 计数行 -->
           <div class="count-row">
             <span class="count" :title="t('browse.work.views')">
@@ -392,11 +495,6 @@ onBeforeUnmount(detachKeydown);
           <p class="meta-line">
             <template v-if="item.width && item.height">{{ item.width }} × {{ item.height }} · </template>{{ dateText }}
           </p>
-
-          <!-- 所属系列 -->
-          <button v-if="detail?.series" class="series-link" type="button" @click="openSeries">
-            {{ t("browse.work.seriesEp", { title: detail.series.title, order: detail.series.order }) }}
-          </button>
 
           <!-- 描述（剥标签纯文本） -->
           <p v-if="plainDescription" class="description">{{ plainDescription }}</p>
@@ -522,6 +620,30 @@ onBeforeUnmount(detachKeydown);
   flex-shrink: 0;
 }
 
+/* 图片缩放组：[−] 值 [+] 重置（与小说阅读器底栏字号缩放同规格） */
+.zoom-group {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-xxs);
+}
+
+.zoom-value {
+  min-width: calc(2 * var(--space-xl));
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* 窄窗：动作组整体落行，标题不被挤没 */
+@media (max-width: 640px) {
+  .work-topbar {
+    flex-wrap: wrap;
+  }
+}
+
 /* ===== 双列主体 ===== */
 
 .work-body {
@@ -642,25 +764,47 @@ onBeforeUnmount(detachKeydown);
   line-height: 1.4;
 }
 
-.series-link {
+/* 系列（合集）入口 chip：primary-container 表达「应用内跳转」，与标签 chip 的
+ * surface-container（检索）区分；配方与标签 chip 同族（999px / 12px·600 / 3px 12px） */
+.series-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
   align-self: flex-start;
-  padding: 0;
+  max-width: 100%;
+  padding: 3px 12px;
   border: none;
-  background: none;
-  color: var(--md-sys-color-primary);
-  font-size: 14px;
-  line-height: 1.5;
+  border-radius: 999px;
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
   text-align: left;
+  overflow-wrap: anywhere;
   cursor: pointer;
+  transition: background-color 0.15s ease;
 }
 
-.series-link:hover {
-  text-decoration: underline;
+.series-chip:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-primary-container));
 }
 
-.series-link:focus-visible {
+.series-chip:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 2px;
+}
+
+.series-chip svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .series-chip {
+    transition: none;
+  }
 }
 
 .description {

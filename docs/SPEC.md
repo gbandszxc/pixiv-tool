@@ -137,7 +137,7 @@ pixiv-tool/
 ├─ frontend/                    # Vue3 + TS + Vite + Material Web（M3）
 │  ├─ src/
 │  │  ├─ views/                 # ToolsView（下载页签壳）/ TasksView / HistoryView / SaucenaoView（以图识图）
-│  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark/History + Work/Series/Author/Novel
+│  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark/History/Me + Work/Series/Author/Novel
 │  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/（核心导航 / PageBackButton）download/（共用下载表单 / 状态栏）settings/（SettingsPanel / SettingsDialog / sections.ts 分组定义）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history，全走 invoke）
@@ -465,6 +465,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "thumb_quality_detail": "medium",
   "thumb_quality_fullscreen": "large",
   "image_cache_max_mib": 512,
+  "detail_image_scale": 1.0,
   "novel_font_scale": 1.0,
   "novel_bg_color": "",
   "saucenao_api_key": "",
@@ -511,6 +512,11 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   `x_restrict >= 1` 的作品；详情页仍可访问；**关闭开关时**详情页对
   `x_restrict >= 1` 的作品保留模糊遮罩 + 「显示」确认（确认后本会话记忆、不持久化），
   **开启开关（默认）时不显示遮罩、直接展示**。
+- `detail_image_scale`：插画/漫画详情页图片宽度占比（默认 `1.0` = 撑满舞台宽度，
+  即改造前观感），合法区间 `0.5`~`1.0`（10% 步进）。**设置弹窗不提供该项**，仅由
+  插画/漫画详情页（§6.4）顶栏缩放控件经 `settings_save` 写入（在白名单内）。
+  保存时非数字 / bool / 越界一律拒绝（"详情页图片缩放必须是 0.5~1.0 之间的数字"）；
+  手改 settings.json 写入非有限值或越出区间时，加载期回落到 `1.0`（不强制回写文件）。
 - `novel_font_scale`：小说正文字号缩放（默认 `1.0`，合法区间 `0.75`~`2.0`），
   小说阅读器（§6.4）正文渲染使用。**设置弹窗不提供该项**，仅由小说阅读器底栏
   缩放控件经 `settings_save` 写入（在白名单内）。保存时非数字 / bool /
@@ -533,7 +539,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   一页通常请求两次，超时按每次请求计算；超时可用的错误文案跟随该值报出实际秒数。
   「检测可用」按草稿里的同名字段（缺省 600）计时，「获取模型列表」固定 30 秒。
   手改 settings.json 写入区间外的值（含 0/负数）时加载期回落默认。见 ADR 0023。
-- 以上各键在 `settings_save` 白名单内（21 个持久化键，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
+- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 23 个键，
+  含兼容保留的 `backend_port`；`saucenao_api_key` 为用户凭据，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
 
@@ -605,10 +612,11 @@ token 的写路径自愈覆盖全部 POST 写方法（Auth/Client 失败或 200+
 | 浏览-排行榜 | `/browse/ranking`（插画/漫画/动图/小说 × 周期 + 日期导航） | ✅ |
 | 浏览-收藏 | `/browse/bookmark`（插画·漫画/小说 × 公开/私密 + 标签筛选） | ✅ |
 | 浏览-历史 | `/browse/history`（浏览访问历史：作品级访问记录网格回显 + 类别筛选 + 分页 + 一键清空） | ✅ |
+| 浏览-我的主页 | `/browse/me`（当前账号作者页复用：资料 + 插画/漫画/小说/收藏 tab；动作行「编辑资料 / 投稿插画作品」跳官方网页；未登录给登录引导；收藏 tab 为作者页的「公开收藏」语义，含私密的完整收藏仍见 /browse/bookmark） | ✅ |
 | 作品查看器 | `/browse/work/illust|:kind=illust|manga>/:id`（多页纵向渐进加载、点击放大进入全屏翻页 + 胶卷缩略图、R-18 遮罩（仅关闭 show_r18 时）、相关推荐 / 评论面板（顶栏评论按钮切换）） | ✅ |
 | 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航、相关推荐 / 评论面板；单页两轮翻译、共享设定集、原文/译文/双语切换） | ✅ |
 | 系列目录 | `/browse/series/:id`（游标加载） | ✅ |
-| 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab） | ✅ |
+| 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab；「我的主页」复用本页组件，见上） | ✅ |
 | 以图识图 | `/saucenao`（SauceNAO 反搜：本地文件/拖拽/URL，pixiv 结果跳作品详情；需在设置中配置 API Key） | ✅ |
 
 **下载页**：页签壳 ToolsView（/tools），默认 /tools/tasks，页签为任务 / 下载历史，右侧新建下载打开面板。旧表单路径重定向到任务页并带 downloadForm/sourceType/sourceId，面板消费后清理这三个 query 键，其余 query/hash 保留。
@@ -658,11 +666,11 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 作者资料行在昵称/统计与网页按钮之间提供关注按钮：未关注为 md-filled-button「关注」，已关注为 md-outlined-button「已关注」（tooltip/aria-label 为取消关注），40px 既有控件密度。公开关注，点击已关注直接取消；成功后回写 is_followed 并 Snackbar 提示，失败保持原状态。提交中禁用、防重并 aria-busy；未知状态禁用并提示刷新，本人资料不显示关注自己。按钮与网页入口为 8px 间距动作组，窄窗随资料区落行。账号切换或作者对象变化后忽略旧请求回显，刷新不与关注操作并发，不重载作品列表。 作者资料响应新增可选 is_followed，映射 Pixiv isFollowed；缺失不推断为未关注。
 
-列表页按「返回与分区标题 + 右侧操作 → 分区导航 → 本页筛选 → 内容」组织。首页/发现、关注、我的分别以核心分区为标题，避免重复当前导航名称；频道保留具体标题。二级导航位于各列表页内，沿内容左边缘对齐，用原生路由链接胶囊标明当前页，发现的频道入口以细分隔线分组；详情不额外堆叠分区导航，侧栏仍继承来路。导航组间 16px，导航到下一区域 24px；页内筛选采用按内容定宽的 Material tabs，禁止均分整页宽度。关注类型与范围并排、窄窗自然换行。下载由父页面提供唯一标题和新建入口，下方为按内容定宽的任务/历史页签；任务类型筛选与批量管理左右分组，窄窗换行，清理完成任务并入管理组。
+列表页按「返回与分区标题 + 右侧操作 → 分区导航 → 本页筛选 → 内容」组织。首页/发现、关注、我的分别以核心分区为标题，避免重复当前导航名称；频道保留具体标题。二级导航位于各列表页内，沿内容左边缘对齐，用原生路由链接胶囊标明当前页，发现的频道入口以细分隔线分组；详情不额外堆叠分区导航，侧栏仍继承来路。导航组间 16px，导航到下一区域 24px；页内筛选采用按内容定宽的 Material tabs，禁止均分整页宽度。关注类型与范围并排、窄窗自然换行；作者页作品工具行另提供排序切换（默认最新在前，语义与记忆见 §6.4「作者页作品排序」）。下载由父页面提供唯一标题和新建入口，下方为按内容定宽的任务/历史页签；任务类型筛选与批量管理左右分组，窄窗换行，清理完成任务并入管理组。
 
 收藏标签从左侧固定栏改为横向换行工具带，按内容占位、最多三行后内部滚动；全部/未分类/标签计数、筛选契约、刷新与取消收藏行为保持不变，作品网格使用全宽。
 
-现行决策见 ADR 0015。侧栏四入口发现（/browse/home）、关注（/browse/feed）、我的（/browse/bookmark）、下载（/tools/tasks）；二级导航组织现有路由，作者 / 系列 / 详情继承实际来源分组，直达归发现。56px 圆形放大镜按钮（无文字，保留可访问名称与 tooltip）+ Ctrl+K / Command+K 跳搜索并聚焦；按钮显示时分页行右侧预留 72px 空间以避免遮挡，以图识图入口在搜索页；阅读器改用顶栏搜索，全屏看图隐藏全局搜索与状态栏。
+现行决策见 ADR 0015。侧栏四入口发现（/browse/home）、关注（/browse/feed）、我的（/browse/bookmark）、下载（/tools/tasks）；二级导航组织现有路由，作者 / 系列 / 详情继承实际来源分组，直达归发现。「我的」分区二级入口为收藏 / 浏览历史 / 我的主页（`/browse/me`，复用作者页组件、归 library 分组，无返回历史时兜底回收藏页）。56px 圆形放大镜按钮（无文字，保留可访问名称与 tooltip）+ Ctrl+K / Command+K 跳搜索并聚焦；按钮显示时分页行右侧预留 72px 空间以避免遮挡，以图识图入口在搜索页；阅读器改用顶栏搜索，全屏看图隐藏全局搜索与状态栏。
 
 下载改为应用级非模态布局面板，宽工作区 ≥1120px 右栏 480px，否则底栏 min(45%,320px)，只放新建表单，小说/插画页签背景继承面板 surface-container。公共 fillDownloadForm(DownloadTarget) 不再导航，所有返填沿用 form/sourceType/sourceId 类型。关闭 / 跳页留草稿，账号变更清空；覆盖手动来源需确认、格式保留；失败留输入，成功更新任务并关闭面板、不跳页。旧 /、/illustration、/tools/novel、/tools/illustration 进入 /tools/tasks 并打开相应面板，保留其它 query/hash，消费 downloadForm/sourceType/sourceId；旧 /tasks、/history 继续兼容。
 
@@ -751,6 +759,13 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   实例、不重新加载，返回上游列表同样使用上述缓存。除首页首次挂载的后台刷新外，
   数据有变化时由用户主动刷新列表。
   渐进加载回归页：启动 `dev.ps1 frontend start` 后打开 `/tests/loading.html`。
+- **作者页作品排序**：作品工具行（插画/漫画/小说三类 tab）提供排序切换，默认时间倒序
+  （= id 降序 = 现行行为），可切正序（id 升序）；收藏 tab 不参与排序。偏好经 localStorage
+  `pixiv-tool-author-order` 记忆、**全局不按账号隔离**（排序属阅读习惯、非账号数据），
+  与 settings.json 无关。切换排序只重置三类作品列表并回到作品区顶部，不触发其它 tab
+  请求。`browse_user_works` 因此新增 `order` 参数（§7）：**先排序后切片**，且**批内条目由
+  后端按请求 id 顺序重排**——对象形响应经 serde_json BTreeMap 按字符串键升序迭代，
+  不重排会呈现「正序」观感（这正是排序需求的来源）；仅本地排序，pixiv 请求串不变。
 - **图片**：`<img>` 一律经自定义协议 `pixiv-img`（§3.1、ADR 0012 §2），磁盘缓存
   `<data>/cache/img/`（上限由设置 `image_cache_max_mib` 决定，默认 512 MiB，
   分区淘汰见 §5.2 与 ADR 0028），前端 `pxSrc()` 封装。封面 URL 经
@@ -770,7 +785,9 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   图片，结束时释放许可与在途条目；缓存 key 复用既有 sha2 实现。
 - **作品查看器（插画/漫画）**：图片舞台为竖向滚动容器、**无自有底色**（与页面同底色，浅色
   主题即白），图片满幅（滚动区上/左/下 padding 为 0、页框直角，整体圆角由舞台 16px 圆角 +
-  `overflow: hidden` 承担）；多页作品自上而下逐页排列，
+  `overflow: hidden` 承担）；页框宽度可缩放——详情页顶栏最右提供 `[−] 值 [+] 重置` 缩放组
+  （写设置键 `detail_image_scale`，默认 1.0 = 撑满舞台 = 既有观感，区间 0.5~1.0、10% 步进，
+  见 §5.2），只收窄页框宽度并保持居中，乐观步进防连点丢步、失败回滚并提示；多页作品自上而下逐页排列，
   滚动到视口附近才发起加载（渐进式；未加载页为按该页 `width` / `height` 预留纵横比的
   纯色占位块，缺省 2:3，避免加载完成后布局跳动），每页先铺 540 低清占位层再换
   `thumb_quality_detail`；单页作品与 R-18 遮罩态整幅在舞台内垂直居中。点击任意页进入
@@ -784,7 +801,15 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   1-2 / 3-4 对齐（点胶卷任意一页落到所属跨页）、翻页步进 2 页、页码显示为区间，并可切换
   阅读方向「从右往左」（默认，当前页在右）/「从左往右」；从右往左时翻页组整组镜像——
   前进按钮落到左侧、箭头改为朝左、键盘 ← 为前进，双图与方向开关不参与镜像；模式与方向
-  会话内记忆、不持久化，单页作品不进入双图。页框本身即全屏入口、可聚焦（`tabindex=0` +
+  会话内记忆、不持久化，单页作品不进入双图。控制条还提供**竖屏模式开关**（连续纵向滚动，
+  条漫友好，仅多页作品）：舞台整列自上而下滚动，行内并列单/双页仍由双图开关控制；
+  竖屏固定从上到下、不提供方向切换（方向开关随之隐藏、翻页组不镜像）；滚轮 / ↑↓ /
+  PgUp / PgDn 走原生滚动与全局按屏滚动（不整页翻页），←/→ 与翻页组对齐上/下一页行首，
+  Esc 关闭，胶卷点击滚到该页行首、白色描边标记视口内各页，页码恒显示视口内最靠上的单页；
+  页框宽度由**宽度比例组** `[−] 值 [+] 重置` 控制（0.5~1.0、10% 步进，双列时每列再取半宽），
+  与详情页缩放设置键相互独立；进出竖屏与开关双图都保持当前页（行首对齐）；图片以
+  aspect-ratio 占位 + 懒加载窗口（DOM 全量占位、`<img>` 进入视口附近才挂载）。模式与宽度
+  同样会话内记忆、不持久化。paged（非竖屏）分支的结构与行为不变。页框本身即全屏入口、可聚焦（`tabindex=0` +
   `role="button"`，Enter / Space 进入浮层并定位到该页，`focus-visible` 为 primary 2px 内环；
   R-18 遮罩态不可聚焦、`tabindex=-1`），右下角「第 N / M 页」深色胶囊徽标跟随滚动，舞台可聚焦
   （Esc 退出浮层后焦点回到舞台）、↑/↓ 原生滚动；舞台滚动条与右侧信息列同配方：6px 常显、
@@ -824,6 +849,10 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   格式化；缺失不冒充零）。小说在信息头元信息行追加三项计数与简介，正文阅读不变。
   标签解析兼容列表数组与详情的 `tags.tags[].tag`；显示原文，使用可键盘访问、可新标签
   打开的搜索链接，携带 `word`、对应 `kind` 与 `s_mode=s_tag_full` 精确标签检索。
+  所属系列（合集）入口为标签行正下方的胶囊 chip（`primary-container` 底、lucide layers
+  图标，与标签 chip 的 `surface-container` 检索形态区分「应用内跳转 vs 检索」），插画/漫画
+  与小说同 recipe；`seriesId <= 0` 不渲染（解析层守卫 + 前端双保险，见
+  `docs/PIXIV-API.md`）。
   描述（插画/漫画 `illustComment`、小说 `description`）统一转为纯文本，解码实体、
   保留换行与段落、去除脚本/样式等非正文，不执行/挂载外部 HTML；空简介/标签不占位。
 - **详情页顶栏与面板（查看器 / 阅读器共用）**：顶栏带文案的动作保持 40px 胶囊（收藏），
@@ -908,7 +937,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 21 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 23 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 详情页图片缩放；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_get(novel)` | 读取本机小说设定集和已译页；novel=`{novel_id,title,tags,description,content}`；返回 `{bible:{style,terms},pages:{页码:[{line,text}]}}`，原文和元信息 SHA256 区分版本 |
 | `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel（供后端与测试使用，界面只回显统一「翻译中」）；返回 `{status,lines,target_language}`，status=`translated` 时 lines 为 `[{line,text}]`（line 为该页原始文本的零起行号，可能来自本机缓存），status=`already_target_language` 时未调用模型、lines 为空；目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言，见 ADR 0018 |
 | `translation_models(probe)` | 用未保存草稿探测模型列表端点（按 `format` 协议从同一基址推导 `/models`；OpenAI 系 Bearer，Anthropic `x-api-key` + 版本头，opencode 主机附会话标识头），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
@@ -936,7 +965,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_related(kind, id, limit)` | 相关推荐一次性池（recommend/init，page 参数无效） |
 | `browse_user_follow(id, followed)` | 公开关注/取消关注，返回 `{ is_followed: boolean }`；正整数 ID 校验后走登录守卫、CSRF 和既有限速 |
 | `browse_user_profile(id)` | 作者资料（/ajax/user/{id}?full=1） |
-| `browse_user_works(id, kind, page)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量 |
+| `browse_user_works(id, kind, page, order?)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量；order = `asc`/`desc`（Optional，缺省/非法回落 `desc` = id 降序 = 时间倒序）；**先排序后切片**、批内条目按请求 id 顺序重排（响应为对象形时键迭代序不可依赖）；分页语义不变；仅本地排序，pixiv 请求串不变 |
 | `browse_novel_series(id, last_order)` | 系列元数据 + 目录（last_order 游标） |
 | `browse_watchlist(kind)` | 追更列表：manga/novel 两个子 tab（/ajax/watch_list/*，按 maxPage 聚合 ≤20 页） |
 | `browse_work_comments(kind, id, offset)` | 作品评论根列表（illusts/novels comments/roots，limit=10，offset 游标；作者关闭评论区 → `{"comments":[],"disabled":true}`，非报错） |

@@ -115,6 +115,11 @@ export interface Settings {
   thumb_quality_fullscreen: string;
   /** 图片磁盘缓存上限（MiB），合法区间 256~2048，默认 512（分区淘汰见 ADR 0028） */
   image_cache_max_mib: number;
+  /**
+   * 插画/漫画详情页图片宽度占比（详情页顶栏缩放控件写入），默认 1.0（撑满舞台），
+   * 合法区间 0.5~1.0。老配置 / 部分 mock 不含该键，消费方读取时按 `|| 1` 兜底。
+   */
+  detail_image_scale: number;
   /** 小说正文字号缩放（小说阅读器底栏缩放控件写入），默认 1.0，合法区间 0.75~2.0 */
   novel_font_scale: number;
   /** 阅读背景色（语义键，空串=跟随主题） */

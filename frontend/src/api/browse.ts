@@ -31,6 +31,8 @@ export type FeedKind = "illust" | "novel";
 export type FeedMode = "all" | "r18";
 /** browse_search / browse_related / browse_user_works 的 kind 取值。 */
 export type ListWorkKind = "illust" | "manga" | "novel";
+/** 作者作品排序：desc = 时间倒序（默认，最新在前）/ asc = 时间正序。 */
+export type WorkOrder = "asc" | "desc";
 /**
  * 收藏命令（browse_bookmark_*）的 kind：pixiv 端点只有 illusts / novels 两族，
  * 插画、漫画、动图共用 illust 族。
@@ -589,14 +591,15 @@ export async function browseUserProfile(id: number): Promise<BrowseUserProfile> 
   return invokeBrowse<BrowseUserProfile>("browse_user_profile", { id });
 }
 
-/** browse_user_works：作者作品（后端按 id 全集降序切片 60/批）。 */
+/** browse_user_works：作者作品（后端按 id 全集排序后 60/批切片；order 缺省 desc）。 */
 export async function browseUserWorks(
   id: number,
   kind: ListWorkKind,
-  page = 1
+  page = 1,
+  order: WorkOrder = "desc"
 ): Promise<BrowseList> {
-  if (!isTauri()) return mockUserWorks(id, kind, page);
-  return invokeBrowse<BrowseList>("browse_user_works", { id, kind, page });
+  if (!isTauri()) return mockUserWorks(id, kind, page, order);
+  return invokeBrowse<BrowseList>("browse_user_works", { id, kind, page, order });
 }
 
 /**
@@ -1059,11 +1062,23 @@ async function mockRanking(
   return { items, date: ymd, prev_date: ymdShift(ymd, -1), next_date: ymdShift(ymd, 1), next_page: next };
 }
 
-/** 作者作品：60/批，3 批后到底（模拟「id 全集降序切片」语义）。 */
-async function mockUserWorks(id: number, kind: ListWorkKind, page = 1): Promise<BrowseList> {
+/** 作者作品：与后端实现同语义——全集按 order 排序后 60/批切片，且批内按请求的 id 顺序渲染。 */
+const MOCK_USER_WORK_PAGES = 3;
+
+async function mockUserWorks(
+  id: number,
+  kind: ListWorkKind,
+  page = 1,
+  order: WorkOrder = "desc"
+): Promise<BrowseList> {
   await mockDelay();
-  const items = mockItems(`user:${id}:${kind}`, page, { kinds: [kind], count: 60 });
-  const next = page < 3 ? page + 1 : null;
+  // 全集 = MOCK_USER_WORK_PAGES 批 × 60；desc 时第 1 页取全集编号最大的一批，
+  // 与后端「先排序后切片」一致（此前每页固定从最小一批开始，页序与生产相反）
+  const idBase = order === "desc" ? (MOCK_USER_WORK_PAGES - page) * 60 : (page - 1) * 60;
+  const items = mockItems(`user:${id}:${kind}`, page, { kinds: [kind], count: 60, idBase });
+  const sign = order === "asc" ? 1 : -1;
+  items.sort((a, b) => sign * (a.id - b.id)); // 可见顺序 = order（批内重排后的等价结果）
+  const next = page < MOCK_USER_WORK_PAGES ? page + 1 : null;
   return { items, total: null, next_page: next, is_last_page: next === null };
 }
 

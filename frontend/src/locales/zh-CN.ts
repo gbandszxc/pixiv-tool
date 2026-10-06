@@ -101,6 +101,7 @@ export default {
     browseRanking: "排行榜",
     browseBookmark: "收藏",
     browseHistory: "历史",
+    browseMe: "我的主页",
     saucenao: "以图识图",
   },
   auth: {
@@ -257,6 +258,11 @@ export default {
     filterIllust: "插画",
     filterManga: "漫画",
     filterNovel: "小说",
+  },
+  browseMe: {
+    loginRequired: "登录后可查看我的主页",
+    editProfile: "编辑资料",
+    submitWork: "投稿插画作品",
   },
   translation: {
     menu: "小说翻译",
@@ -525,9 +531,15 @@ export default {
       bookmarks: "收藏",
       likes: "点赞",
       seriesEp: "{title} · 第 {order} 话",
+      seriesEntry: "所属系列：{title}",
       relatedTitle: "相关推荐",
       fullscreen: "全屏查看",
       exitFullscreen: "退出全屏",
+      imageZoomLabel: "图片缩放",
+      imageZoomOut: "缩小",
+      imageZoomIn: "放大",
+      imageZoomReset: "重置为 100%",
+      verticalMode: "竖屏模式",
     },
     author: {
       follow: "关注",
@@ -544,6 +556,9 @@ export default {
       emptyIllust: "该作者还没有插画作品",
       emptyManga: "该作者还没有漫画作品",
       emptyNovel: "该作者还没有小说作品",
+      orderLabel: "排序",
+      orderNewest: "最新在前",
+      orderOldest: "最早在前",
     },
     discover: {
       filterAll: "全部",

@@ -1328,6 +1328,8 @@ fn parse_illust_detail(body: &Value) -> (BrowseWorkItem, Option<BrowseSeriesRef>
     let series = body
         .get("seriesNavData")
         .filter(|v| v.is_object())
+        // seriesId 缺失/非数字/≤0 → 无系列（不产出假入口）
+        .filter(|s| s.get("seriesId").and_then(as_i64_loose).is_some_and(|id| id > 0))
         .map(|s| BrowseSeriesRef {
             id: s.get("seriesId").and_then(as_i64_loose).unwrap_or(0),
             title: str_field(s, "title").unwrap_or_default(),
@@ -1441,6 +1443,8 @@ fn parse_novel_detail(body: &Value) -> (BrowseWorkItem, Option<BrowseSeriesRef>)
     let series = body
         .get("seriesNavData")
         .filter(|v| v.is_object())
+        // seriesId 缺失/非数字/≤0 → 无系列（不产出假入口）
+        .filter(|s| s.get("seriesId").and_then(as_i64_loose).is_some_and(|id| id > 0))
         .map(|s| BrowseSeriesRef {
             id: s.get("seriesId").and_then(as_i64_loose).unwrap_or(0),
             title: str_field(s, "title").unwrap_or_default(),
@@ -1496,6 +1500,48 @@ fn parse_user_works_batch(body: &Value, fallback_kind: &str) -> Vec<BrowseWorkIt
         .into_iter()
         .filter_map(|v| parse_work_thumb(v, fallback_kind))
         .collect()
+}
+
+/// 作者作品排序（纯本地展示序，不改 pixiv 请求串）：
+/// asc = id 升序（最旧在前）；其余（含未给）一律 desc = id 降序（最新在前，现行默认）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UserWorksOrder {
+    Asc,
+    Desc,
+}
+
+impl UserWorksOrder {
+    /// 未给 / 非法值（任何非 "asc" 字符串）都回落 Desc——这是展示偏好，
+    /// 手误不该让整页作者作品报错（对齐既有「非法档位加载期回落默认」的做法）。
+    pub fn parse(raw: Option<&str>) -> Self {
+        match raw {
+            Some("asc") => Self::Asc,
+            _ => Self::Desc,
+        }
+    }
+}
+
+/// 全集排序 + 60/批切片（**先排序后切片**，page 从 1 起）：返回 (本批 id, total, has_more)。
+/// 抽成纯函数以便离线单测覆盖分页语义（不触碰网络）。
+fn slice_user_works_ids(mut ids: Vec<i64>, order: UserWorksOrder, page: i64) -> (Vec<i64>, i64, bool) {
+    const BATCH: usize = 60;
+    match order {
+        UserWorksOrder::Asc => ids.sort_unstable(),
+        UserWorksOrder::Desc => ids.sort_unstable_by(|a, b| b.cmp(a)),
+    }
+    let total = ids.len() as i64;
+    let start = ((page.max(1) - 1) as usize) * BATCH;
+    let batch: Vec<i64> = ids.into_iter().skip(start).take(BATCH).collect();
+    let has_more = start + BATCH < total as usize;
+    (batch, total, has_more)
+}
+
+/// 把批内条目重排为请求的 id 顺序（对象形响应按键升序返回，直接渲染会得到「正序」观感）。
+/// 未在请求列表中的条目（理论不应出现）稳定地排在最后，不丢条目。
+fn order_user_works_batch(mut items: Vec<BrowseWorkItem>, batch: &[i64]) -> Vec<BrowseWorkItem> {
+    let pos: HashMap<i64, usize> = batch.iter().enumerate().map(|(i, id)| (*id, i)).collect();
+    items.sort_by_key(|item| pos.get(&item.id).copied().unwrap_or(usize::MAX)); // sort_by_key 稳定
+    items
 }
 
 /// /ajax/novel/series_content/{id} body.page.seriesContents → 内容条目。
@@ -2455,15 +2501,16 @@ impl PixivApi {
         Ok(to_value(&parse_user_profile(id, &body)))
     }
 
-    /// 作者作品：profile/all 取 id 全集 → id 降序 → 60/批切片 → illusts|novels?ids[]=。
-    /// next_page = 批索引+1（还有剩余 id 时）。
+    /// 作者作品：profile/all 取 id 全集 → 按 order 排序（默认 id 降序=最新在前）→ 60/批切片
+    /// → illusts|novels?ids[]=。next_page = 批索引+1（还有剩余 id 时）。
+    /// order 仅影响本地排序与切片，pixiv 请求串不变。
     pub async fn get_user_works(
         &self,
         id: i64,
         kind: &str,
         page: i64,
+        order: Option<&str>,
     ) -> Result<Value, PixivError> {
-        const BATCH: usize = 60;
         let (all_key, seg) = match kind {
             "illust" => ("illusts", "illusts"),
             "manga" => ("manga", "illusts"),
@@ -2478,15 +2525,13 @@ impl PixivApi {
             ))
             .await?;
         let profile = super::api::parse_profile_all(&all);
-        let mut ids = match all_key {
+        let ids = match all_key {
             "illusts" => profile.illusts,
             "manga" => profile.manga,
             _ => profile.novels,
         };
-        ids.sort_unstable_by(|a, b| b.cmp(a)); // id 降序（新作品在前）
-        let total = ids.len() as i64;
-        let start = ((page - 1) as usize) * BATCH;
-        let batch: Vec<i64> = ids.into_iter().skip(start).take(BATCH).collect();
+        let (batch, total, has_more) =
+            slice_user_works_ids(ids, UserWorksOrder::parse(order), page);
         if batch.is_empty() {
             return Ok(to_value(&BrowseList {
                 items: Vec::new(),
@@ -2507,8 +2552,7 @@ impl PixivApi {
             .get_json(&format!("/ajax/user/{id}/{seg}?{query}&lang=zh"))
             .await?;
         let fallback = if kind == "novel" { "novel" } else { "illust" };
-        let items = parse_user_works_batch(&body, fallback);
-        let has_more = start + BATCH < total as usize;
+        let items = order_user_works_batch(parse_user_works_batch(&body, fallback), &batch);
         Ok(to_value(&BrowseList {
             items,
             total: Some(total),
@@ -3777,6 +3821,175 @@ mod tests {
         let (item, _) =
             parse_illust_detail(&json!({"illustId": "1", "bookmarkData": null, "illustType": 0}));
         assert_eq!(item.bookmarked, Some(false));
+    }
+
+    /// 作者作品排序 + 切片：asc/desc 两种序，total 与分批边界。
+    #[test]
+    fn user_works_order_asc_and_desc_slice() {
+        let ids = vec![5, 3, 9, 1, 7];
+        let (batch, total, has_more) =
+            slice_user_works_ids(ids.clone(), UserWorksOrder::Desc, 1);
+        assert_eq!(batch, vec![9, 7, 5, 3, 1], "desc = id 降序（最新在前）");
+        assert_eq!(total, 5);
+        assert!(!has_more, "不足一批时无更多");
+        let (batch, total, _) = slice_user_works_ids(ids, UserWorksOrder::Asc, 1);
+        assert_eq!(batch, vec![1, 3, 5, 7, 9], "asc = id 升序（最旧在前）");
+        assert_eq!(total, 5);
+    }
+
+    /// order 未给 / 非法值一律回落 desc（展示偏好，不因手误报参数错）。
+    #[test]
+    fn user_works_order_invalid_falls_back_to_desc() {
+        assert_eq!(UserWorksOrder::parse(None), UserWorksOrder::Desc);
+        assert_eq!(UserWorksOrder::parse(Some("desc")), UserWorksOrder::Desc);
+        assert_eq!(UserWorksOrder::parse(Some("ASC")), UserWorksOrder::Desc);
+        assert_eq!(UserWorksOrder::parse(Some("时间")), UserWorksOrder::Desc);
+        assert_eq!(UserWorksOrder::parse(Some("asc")), UserWorksOrder::Asc);
+    }
+
+    /// 先排序后切片：各批无交集、并集 = 全集、批内单调（锁死分页语义）。
+    #[test]
+    fn user_works_pages_are_sorted_before_slicing() {
+        // 确定性乱序的 130 个 id：1..=130 降序后把首 10 个挪到末尾
+        let mut ids: Vec<i64> = (1..=130).collect();
+        ids.reverse();
+        let head: Vec<i64> = ids.drain(..10).collect();
+        ids.extend(head);
+        let mut all = ids.clone();
+        all.sort_unstable();
+
+        let collect_pages = |order: UserWorksOrder| -> Vec<Vec<i64>> {
+            (1..=3)
+                .map(|page| slice_user_works_ids(ids.clone(), order, page).0)
+                .collect()
+        };
+
+        // desc：130 = 60 + 60 + 10；第 1 批 = 全局前 60 大（批内降序）
+        let pages = collect_pages(UserWorksOrder::Desc);
+        let desc_all: Vec<i64> = all.iter().rev().copied().collect();
+        assert_eq!(pages[0], desc_all[..60].to_vec(), "desc 第 1 批 = 全局前 60 大且批内降序");
+        assert_eq!(pages[1], desc_all[60..120].to_vec(), "desc 第 2 批 = 其后 60 个继续降序");
+        assert_eq!(pages[2], desc_all[120..].to_vec(), "desc 第 3 批 = 末尾 10 个");
+        assert_eq!(pages[2].len(), 10);
+        let mut union: Vec<i64> = pages.concat();
+        union.sort_unstable();
+        assert_eq!(union, all, "desc 各批并集 = 全集（无重叠无遗漏）");
+
+        // asc：对称——第 1 批 = 全局前 60 小（批内升序）
+        let pages = collect_pages(UserWorksOrder::Asc);
+        assert_eq!(pages[0], all[..60].to_vec(), "asc 第 1 批 = 全局前 60 小且批内升序");
+        assert_eq!(pages[1], all[60..120].to_vec());
+        assert_eq!(pages[2], all[120..].to_vec());
+        let mut union: Vec<i64> = pages.concat();
+        union.sort_unstable();
+        assert_eq!(union, all, "asc 各批并集 = 全集");
+
+        // has_more：第 1/2 批后有剩余 → true；最后一批 → false
+        let (_, total, has_more) = slice_user_works_ids(ids.clone(), UserWorksOrder::Desc, 1);
+        assert_eq!(total, 130);
+        assert!(has_more);
+        assert!(slice_user_works_ids(ids.clone(), UserWorksOrder::Desc, 2).2);
+        let (_, total, has_more) = slice_user_works_ids(ids.clone(), UserWorksOrder::Desc, 3);
+        assert_eq!(total, 130);
+        assert!(!has_more, "最后一批之后无更多");
+    }
+
+    /// 批内重排：items 顺序 = 请求的 id 顺序；不在请求列表的条目留在末尾不丢。
+    #[test]
+    fn user_works_batch_reordered_to_requested_ids() {
+        let entry = |id: &str| json!({"id": id, "illustType": 0, "userId": "1"});
+        // serde_json Map = BTreeMap，对象形按键字符串字典序迭代（"123" < "45" < "777" < "9"）
+        let body = json!({
+            "123": entry("123"),
+            "45": entry("45"),
+            "9": entry("9"),
+            "777": entry("777"),
+        });
+        let items = parse_user_works_batch(&body, "illust");
+        assert_eq!(
+            items.iter().map(|i| i.id).collect::<Vec<_>>(),
+            vec![123, 45, 777, 9],
+            "前提：对象形响应按键字典序迭代（非数值序也非请求序）"
+        );
+        let batch = vec![123, 45, 9];
+        let ordered = order_user_works_batch(items, &batch);
+        assert_eq!(
+            ordered.iter().map(|i| i.id).collect::<Vec<_>>(),
+            vec![123, 45, 9, 777],
+            "批内顺序 = 请求 id 顺序；未请求条目（777）留末尾不丢"
+        );
+        // 空列表 / 空请求列表
+        assert!(order_user_works_batch(Vec::new(), &batch).is_empty());
+        let single = vec![BrowseWorkItem {
+            id: 5,
+            ..BrowseWorkItem::default()
+        }];
+        assert_eq!(
+            order_user_works_batch(single, &[])
+                .iter()
+                .map(|i| i.id)
+                .collect::<Vec<_>>(),
+            vec![5],
+            "空请求列表 → 条目全部落末尾（不丢）"
+        );
+    }
+
+    /// 端到端形状无关性：对象形与数组形给同一批 id → 重排后顺序逐项相同。
+    #[test]
+    fn user_works_batch_object_shape_keeps_request_order() {
+        let batch = vec![123, 45, 9];
+        let entry = |id: &str| json!({"id": id, "illustType": 0, "userId": "1"});
+        let object_shape = json!({
+            "9": entry("9"),
+            "45": entry("45"),
+            "123": entry("123"),
+        });
+        // 数组形按请求顺序返回
+        let array_shape = json!([entry("123"), entry("45"), entry("9")]);
+        let from_object =
+            order_user_works_batch(parse_user_works_batch(&object_shape, "illust"), &batch);
+        let from_array =
+            order_user_works_batch(parse_user_works_batch(&array_shape, "illust"), &batch);
+        let ids_of = |items: &[BrowseWorkItem]| items.iter().map(|i| i.id).collect::<Vec<_>>();
+        assert_eq!(ids_of(&from_object), vec![123, 45, 9]);
+        assert_eq!(
+            ids_of(&from_object),
+            ids_of(&from_array),
+            "两种响应形状经批内重排后顺序逐项相同"
+        );
+    }
+
+    /// 插画详情：seriesId 缺失/非数字/≤0 → 无系列（不产出假入口）。
+    #[test]
+    fn parse_illust_detail_series_requires_positive_id() {
+        let (_, series) = parse_illust_detail(&json!({
+            "seriesNavData": {"seriesId": 0, "title": "x"}
+        }));
+        assert!(series.is_none(), "seriesId=0 → 无系列");
+        let (_, series) = parse_illust_detail(&json!({
+            "seriesNavData": {"title": "无 id"}
+        }));
+        assert!(series.is_none(), "seriesId 缺失 → 无系列");
+        let (_, series) = parse_illust_detail(&json!({
+            "seriesNavData": {"seriesId": "55", "title": "数字串"}
+        }));
+        assert_eq!(series.unwrap().id, 55, "数字串 seriesId 仍解析");
+    }
+
+    /// 小说详情：同插画侧的 seriesId 守卫，next.id 保留。
+    #[test]
+    fn parse_novel_detail_series_requires_positive_id() {
+        let (_, series) = parse_novel_detail(&json!({
+            "seriesNavData": {"seriesId": 0, "title": "x"}
+        }));
+        assert!(series.is_none(), "seriesId=0 → 无系列");
+        let (_, series) = parse_novel_detail(&json!({
+            "seriesNavData": {"seriesId": "55", "title": "数字串",
+                "next": {"id": "9000013"}}
+        }));
+        let series = series.unwrap();
+        assert_eq!(series.id, 55);
+        assert_eq!(series.next_id, Some(9000013), "守卫不影响 next.id 取值");
     }
 
     #[test]

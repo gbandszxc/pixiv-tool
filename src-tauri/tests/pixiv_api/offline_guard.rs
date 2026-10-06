@@ -286,7 +286,20 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_user_works_impl(&state, 28640, "manga", 1)
+        browse_user_works_impl(&state, 28640, "manga", 1, None)
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    // order 合法值（asc）与非法值（回落 desc，不报参数错）都到得了登录守卫
+    assert_eq!(
+        browse_user_works_impl(&state, 28640, "illust", 1, Some("asc"))
+            .await
+            .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    assert_eq!(
+        browse_user_works_impl(&state, 28640, "illust", 1, Some("时间"))
             .await
             .unwrap_err(),
         NOT_LOGGED_IN
@@ -491,7 +504,7 @@ async fn invalid_params_rejected_before_login_guard() {
         "不支持的作品类型: video"
     );
     assert_eq!(
-        browse_user_works_impl(&state, 1, "ugoira", 1)
+        browse_user_works_impl(&state, 1, "ugoira", 1, None)
             .await
             .unwrap_err(),
         "不支持的作品类型: ugoira"
@@ -567,7 +580,7 @@ async fn invalid_params_rejected_before_login_guard() {
         "页码必须从 1 开始"
     );
     assert_eq!(
-        browse_user_works_impl(&state, 1, "illust", 0)
+        browse_user_works_impl(&state, 1, "illust", 0, None)
             .await
             .unwrap_err(),
         "页码必须从 1 开始"
@@ -602,7 +615,7 @@ async fn invalid_params_rejected_before_login_guard() {
         "用户 ID 必须为正整数"
     );
     assert_eq!(
-        browse_user_works_impl(&state, 0, "illust", 1)
+        browse_user_works_impl(&state, 0, "illust", 1, None)
             .await
             .unwrap_err(),
         "用户 ID 必须为正整数"

@@ -9,7 +9,7 @@ export const groupRoots: Record<NavigationGroup, string> = {
 export function navigationGroup(path: string): NavigationGroup | undefined {
   if (path.startsWith("/tools")) return "downloads";
   if (["/browse/feed", "/browse/watchlist"].includes(path)) return "following";
-  if (["/browse/bookmark", "/browse/history"].includes(path)) return "library";
+  if (["/browse/bookmark", "/browse/history", "/browse/me"].includes(path)) return "library";
   if (/^\/browse\/(work|series|user)\//.test(path)) return undefined;
   return "discover";
 }

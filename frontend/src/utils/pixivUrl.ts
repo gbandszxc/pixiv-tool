@@ -30,6 +30,29 @@ export function pixivIllustSeriesUrl(userId: number | string, seriesId: number |
 }
 
 /**
+ * 个人资料编辑页（官方网页版，需登录）。
+ * 证据（2026-10-06 本机 `curl -s -o /dev/null -w "%{http_code} %{redirect_url}"`）：
+ *   /settings/profile    → 302 http://www.pixiv.net/?return_to=%2Fsettings%2Fprofile
+ *   伪路径 /definitely-not-a-real-pixiv-path-xyz123 → 302 https://www.pixiv.net/definitely-not-a-real-pixiv-path-xyz123/
+ *     （**注意**：伪路径不是 404，所以「未登录 302 ⇒ 路径存在」这条判别只在「重定向到 /?return_to=<原路径>」时成立，
+ *      而不是「非 404 即存在」；本函数按前者成立采用）
+ */
+export function pixivProfileEditUrl(): string {
+  return "https://www.pixiv.net/settings/profile";
+}
+
+/**
+ * 作品投稿页（官方网页版，需登录）。
+ * 同上探测：/illustration/create → 302 http://www.pixiv.net/?return_to=%2Fillustration%2Fcreate（判据成立）；
+ * /novel/create → 302 https://www.pixiv.net/novel/create/（自带尾斜杠，与伪路径同形，**按此判据不成立/未证实**）
+ * → 因此本次只提供「插画投稿」入口，按钮文案明确写「投稿插画作品」；
+ * 小说投稿页的真实 URL 需在真实登录态下复核后再考虑补第二个入口。
+ */
+export function pixivUploadUrl(): string {
+  return "https://www.pixiv.net/illustration/create";
+}
+
+/**
  * 解析 Pixiv 页面 URL，识别小说单篇、小说系列、插画/漫画系列、插画作品或用户主页
  */
 export function parsePixivUrl(url: string): ParsedPixivUrl | null {

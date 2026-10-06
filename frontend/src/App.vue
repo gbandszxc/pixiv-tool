@@ -105,7 +105,7 @@ function restoreLayout() {
 const cachedBrowseViews = [
   "BrowseHomeView", "BrowseChannelView", "BrowseDiscoverView", "BrowseFeedView",
   "BrowseWatchlistView", "BrowseSearchView", "BrowseRankingView", "BrowseBookmarkView",
-  "BrowseHistoryView", "BrowseAuthorView", "BrowseSeriesView", "BrowseWorkView",
+  "BrowseHistoryView", "BrowseMeView", "BrowseAuthorView", "BrowseSeriesView", "BrowseWorkView",
 ];
 const browseSession = computed(() => `${authStore.isLoggedIn}:${authStore.userId}`);
 // 与 KeepAlive 相同的 20 页 LRU 边界；主内容滚动不在 window 上。

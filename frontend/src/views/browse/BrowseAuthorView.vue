@@ -11,6 +11,8 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  * - 作品区：插画 / 漫画 / 小说 / 收藏四个 tab 各自持有独立的 useInfiniteList
  *   （切 tab 不丢已加载内容，回到该 tab 经 IntersectionObserver 续传），
  *   空态按类型给文案；追加页失败在网格下方就地重试。
+ *   三类作品 tab 支持升降序切换（默认时间倒序，localStorage 跨会话记忆；
+ *   收藏 tab 是 offset 游标语义，与排序无关，不显示切换控件）。
  *   收藏 tab = 该作者的他人公开收藏（契约：uid 直传 + 显式 rest=show，后端据此走
  *   /ajax/user/{uid}/... 他人路径；offset 游标经适配转 page 语义；
  *   不显示取消收藏动作 —— 列表项 bookmarkId 是查看者态，UI 不使用）。
@@ -22,6 +24,7 @@ import { useI18n } from "vue-i18n";
 import "@material/web/iconbutton/outlined-icon-button.js";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import SectionTabs from "../../components/browse/SectionTabs.vue";
+import SortDirectionToggle from "../../components/common/SortDirectionToggle.vue";
 import {
   browseBookmarkList,
   browseUserProfile,
@@ -32,6 +35,7 @@ import {
   type BrowseUserProfile,
   type BrowseWorkItem,
   type ListWorkKind,
+  type WorkOrder,
 } from "../../api/browse";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
@@ -139,6 +143,25 @@ watch(profile, async () => {
 
 // ===== 作品区：三类作品 + 收藏 tab，各自独立分页 =====
 
+// ===== 排序偏好（localStorage，跨会话记忆；不写 settings.json）=====
+
+/** 与生产默认一致：desc = 时间倒序（最新在前）。 */
+const ORDER_STORAGE_KEY = "pixiv-tool-author-order";
+
+function loadOrder(): WorkOrder {
+  try {
+    return localStorage.getItem(ORDER_STORAGE_KEY) === "asc" ? "asc" : "desc";
+  } catch {
+    return "desc"; // 隐私模式 / 存储被禁：静默回落默认，不影响使用
+  }
+}
+
+function saveOrder(value: WorkOrder): void {
+  try { localStorage.setItem(ORDER_STORAGE_KEY, value); } catch { /* 同上，仅本次会话生效 */ }
+}
+
+const order = ref<WorkOrder>(loadOrder());
+
 /** tab 取值域：三类作品 + 收藏（他人公开收藏）。 */
 type AuthorTab = ListWorkKind | "bookmark";
 
@@ -153,6 +176,9 @@ const tabs = computed(() => [
 
 const activeTab = ref<AuthorTab>("illust");
 
+/** 作品区工具行（排序切换后滚回其顶部）。 */
+const worksBar = ref<HTMLElement | null>(null);
+
 type WorkList = ReturnType<typeof useInfiniteList<BrowseWorkItem>>;
 
 /** 收藏 tab（他人公开收藏）分页游标：后端为 offset，转为 useInfiniteList 的 page 语义。 */
@@ -160,9 +186,9 @@ let bookmarkOffset = 0;
 
 /** 每个 tab 一个独立列表状态机：切 tab 不丢已加载内容，回到该 tab 续传。 */
 const lists = {
-  illust: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "illust", page)),
-  manga: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "manga", page)),
-  novel: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "novel", page)),
+  illust: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "illust", page, order.value)),
+  manga: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "manga", page, order.value)),
+  novel: useInfiniteList<BrowseWorkItem>((page) => browseUserWorks(props.id, "novel", page, order.value)),
   bookmark: useInfiniteList<BrowseWorkItem>(async (page, isCurrent) => {
     const offset = page === 1 ? 0 : bookmarkOffset;
     const data = await browseBookmarkList("illust", "show", null, offset, 24, props.id); // 他人公开收藏：uid 直传 + rest=show，官方作者收藏页 24/页
@@ -194,6 +220,16 @@ function refresh(): void {
   void loadProfile();
   if (activeTab.value === "bookmark") bookmarkOffset = 0;
   lists[activeTab.value].reload();
+}
+
+/** 排序切换：只重置三类作品列表（收藏 tab 与排序无关，保持不动），回到第 1 页并滚回作品区顶部。 */
+function applyOrder(next: WorkOrder): void {
+  if (next === order.value) return;
+  order.value = next;
+  saveOrder(next);
+  for (const kind of ["illust", "manga", "novel"] as const) lists[kind].reset();
+  worksBar.value?.scrollIntoView({ block: "start" });
+  ensureStarted(activeTab.value); // 活动 tab 立即重拉第 1 页；其余 tab 由 watch(activeTab, ensureStarted) 在切回时拉起
 }
 
 watch(
@@ -358,9 +394,19 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <!-- ===== 作品区：四类 tab + 返填（目标随当前 tab）===== -->
-    <div class="works-bar">
+    <!-- ===== 作品区：四类 tab + 排序 + 返填（目标随当前 tab）===== -->
+    <div ref="worksBar" class="works-bar">
       <SectionTabs class="works-tabs" :tabs="tabs" :value="activeTab" @change="activeTab = $event as AuthorTab" />
+      <!-- 排序：仅三类作品 tab 有意义（收藏 tab 为 offset 游标，与排序无关）。
+           外层不设 role=group —— SortDirectionToggle 根节点自带 role=group + aria-label，
+           再嵌一层同名分组会让读屏播报两层。 -->
+      <div v-if="activeTab !== 'bookmark'" class="works-order">
+        <span class="order-label" aria-hidden="true">{{ t("browse.author.orderLabel") }}</span>
+        <SortDirectionToggle :value="order" @change="applyOrder" />
+        <span class="order-state" aria-live="polite">
+          {{ t(order === "desc" ? "browse.author.orderNewest" : "browse.author.orderOldest") }}
+        </span>
+      </div>
       <md-outlined-button @click="fillActiveTab()">
         {{ activeTab === "novel" ? t("browse.hooks.fillNovelForm") : t("browse.hooks.fillIllustForm") }}
       </md-outlined-button>
@@ -580,6 +626,7 @@ onBeforeUnmount(() => {
 /* ===== 作品区 ===== */
 .works-bar {
   display: flex;
+  flex-wrap: wrap; /* 窄窗时排序组整体落行 */
   align-items: center;
   gap: var(--space-md);
   margin-top: var(--space-sm);
@@ -588,6 +635,25 @@ onBeforeUnmount(() => {
 .works-tabs {
   flex: 1;
   min-width: 0;
+}
+
+.works-order {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.order-label,
+.order-state {
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.order-state {
+  min-width: calc(4 * var(--space-xl)); /* 升降切换时文案不抖 */
 }
 
 .works-pane {

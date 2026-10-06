@@ -278,7 +278,7 @@ async fn live_bookmark_add_remove_novel_roundtrip() {
 async fn pick_own_illust(uid: i64) -> i64 {
     let api = common::live_api();
     let works = api
-        .get_user_works(uid, "illust", 1)
+        .get_user_works(uid, "illust", 1, None)
         .await
         .unwrap_or_else(|e| panic!("本人作品列表请求失败（评论写用例取样）: {e}"));
     common::assert_list_envelope(&works, "本人插画")

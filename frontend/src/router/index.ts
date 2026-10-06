@@ -105,6 +105,13 @@ const router = createRouter({
       name: "browse-history",
       component: () => import("../views/browse/BrowseHistoryView.vue"),
     },
+    {
+      // 我的主页：「我的」分区的第三个一级入口。页面内按当前登录态解析 uid，
+      // 复用作者页组件展示资料与作品/收藏 tab（不参与「四个核心导航入口」与 startup_page）。
+      path: "/browse/me",
+      name: "browse-me",
+      component: () => import("../views/browse/BrowseMeView.vue"),
+    },
     ...browseWorkRoutes,
     {
       // 系列分集页：kind = novel（小说系列）| illust（插画/漫画系列，官方接口族不区分；

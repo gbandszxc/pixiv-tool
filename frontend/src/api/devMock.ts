@@ -62,6 +62,8 @@ function ensureSettings(): Settings {
       thumb_quality_fullscreen: "large",
       // 图片磁盘缓存上限（MiB）：区间 256~2048，默认 512
       image_cache_max_mib: 512,
+      // 详情页图片宽度占比（区间 0.5~1.0），默认 1.0（撑满舞台）
+      detail_image_scale: 1,
       // 小说正文字号缩放（区间 0.75~2.0），默认 1.0
       novel_font_scale: 1.0,
       // 阅读背景色语义键（空串=跟随主题），默认未设置

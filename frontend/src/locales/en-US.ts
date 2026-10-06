@@ -101,6 +101,7 @@ export default {
     browseRanking: "Ranking",
     browseBookmark: "Bookmarks",
     browseHistory: "History",
+    browseMe: "My page",
     saucenao: "Image Search",
   },
   auth: {
@@ -256,6 +257,11 @@ export default {
     filterIllust: "Illustrations",
     filterManga: "Manga",
     filterNovel: "Novels",
+  },
+  browseMe: {
+    loginRequired: "Sign in to view your page",
+    editProfile: "Edit profile",
+    submitWork: "Submit illustration",
   },
   translation: {
     menu: "Novel translation",
@@ -525,9 +531,15 @@ export default {
       bookmarks: "Bookmarks",
       likes: "Likes",
       seriesEp: "{title} · Episode {order}",
+      seriesEntry: "Series: {title}",
       relatedTitle: "Related",
       fullscreen: "View fullscreen",
       exitFullscreen: "Exit fullscreen",
+      imageZoomLabel: "Image zoom",
+      imageZoomOut: "Smaller",
+      imageZoomIn: "Larger",
+      imageZoomReset: "Reset to 100%",
+      verticalMode: "Vertical mode",
     },
     author: {
       follow: "Follow",
@@ -544,6 +556,9 @@ export default {
       emptyIllust: "This artist has no illustrations yet",
       emptyManga: "This artist has no manga yet",
       emptyNovel: "This artist has no novels yet",
+      orderLabel: "Sort",
+      orderNewest: "Newest first",
+      orderOldest: "Oldest first",
     },
     discover: {
       filterAll: "All",

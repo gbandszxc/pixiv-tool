@@ -42,6 +42,10 @@ pub struct Settings {
     /// 合法区间 [`IMAGE_CACHE_MIN_MIB`] ~ [`IMAGE_CACHE_MAX_MIB`]；
     /// 非法值在加载期回落默认。消费方为 `image_proxy` 的分区淘汰。
     pub image_cache_max_mib: i64,
+    /// 插画/漫画详情页图片宽度占比（详情页顶栏缩放控件写入），默认 1.0（撑满舞台），
+    /// 合法区间 [`DETAIL_IMAGE_SCALE_MIN`] ~ [`DETAIL_IMAGE_SCALE_MAX`]；
+    /// 非法值在加载期回落 1.0。
+    pub detail_image_scale: f64,
     /// 小说正文字号缩放（小说阅读器底栏缩放控件写入），默认 1.0，
     /// 合法区间 [0.75, 2.0]；非法值在加载期回落 1.0。
     pub novel_font_scale: f64,
@@ -81,6 +85,7 @@ impl Default for Settings {
             thumb_quality_detail: "medium".into(),
             thumb_quality_fullscreen: "large".into(),
             image_cache_max_mib: DEFAULT_IMAGE_CACHE_MAX_MIB,
+            detail_image_scale: 1.0,
             novel_font_scale: 1.0,
             novel_bg_color: String::new(),
             saucenao_api_key: String::new(),
@@ -106,6 +111,10 @@ pub const DEFAULT_IMAGE_CACHE_MAX_MIB: i64 = 512;
 pub const IMAGE_CACHE_MIN_MIB: i64 = 256;
 /// 图片磁盘缓存上限合法区间上限（MiB）= 2 GiB。
 pub const IMAGE_CACHE_MAX_MIB: i64 = 2048;
+/// 详情页图片缩放下限（= 撑满舞台宽度的一半，再小已不可读）。
+pub const DETAIL_IMAGE_SCALE_MIN: f64 = 0.5;
+/// 详情页图片缩放上限（1.0 = 撑满舞台宽度，即既有默认观感）。
+pub const DETAIL_IMAGE_SCALE_MAX: f64 = 1.0;
 /// 小说阅读背景色可选语义键（空串 = 跟随主题，不在此表内）。
 pub const NOVEL_BG_COLORS: [&str; 5] = ["green", "kraft", "warm", "mist", "blush"];
 /// 四个核心导航入口；发现默认展示推荐首页。
@@ -178,6 +187,14 @@ impl Settings {
                     .contains(&settings.image_cache_max_mib)
                 {
                     settings.image_cache_max_mib = DEFAULT_IMAGE_CACHE_MAX_MIB;
+                }
+                // 详情页图片缩放：非有限值（NaN/inf，JSON 文本层面不可表达，纯防御）
+                // 或越出 [0.5, 1.0] 回落默认 1.0（对齐小说字号缩放的加载回落做法）。
+                if !settings.detail_image_scale.is_finite()
+                    || !(DETAIL_IMAGE_SCALE_MIN..=DETAIL_IMAGE_SCALE_MAX)
+                        .contains(&settings.detail_image_scale)
+                {
+                    settings.detail_image_scale = 1.0;
                 }
                 // 小说字号缩放：非有限值（NaN/inf，JSON 文本层面不可表达，纯防御）
                 // 或越出 [0.75, 2.0] 回落默认 1.0（对齐缩略图档位的加载回落做法）。
@@ -365,6 +382,19 @@ pub fn validate_novel_font_scale_value(v: &Value) -> Result<(), String> {
     }
 }
 
+/// JSON 值形式的详情页图片缩放校验：bool / 非数字 / 非有限值（NaN/inf）/ 越界都拒绝。
+pub fn validate_detail_image_scale_value(v: &Value) -> Result<(), String> {
+    let message = "详情页图片缩放必须是 0.5~1.0 之间的数字";
+    let Some(scale) = v.as_f64().filter(|s| s.is_finite()) else {
+        return Err(message.into());
+    };
+    if (DETAIL_IMAGE_SCALE_MIN..=DETAIL_IMAGE_SCALE_MAX).contains(&scale) {
+        Ok(())
+    } else {
+        Err(message.into())
+    }
+}
+
 /// JSON 值形式的小说阅读背景色校验：必须是白名单语义键或空串（空串 = 跟随主题），
 /// 非字符串 / 白名单外的值一律拒绝。
 pub fn validate_novel_bg_color_value(v: &Value) -> Result<(), String> {
@@ -405,6 +435,7 @@ mod tests {
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
         assert_eq!(s.image_cache_max_mib, DEFAULT_IMAGE_CACHE_MAX_MIB);
+        assert_eq!(s.detail_image_scale, 1.0);
         assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
@@ -452,6 +483,7 @@ mod tests {
         assert_eq!(s.thumb_quality_detail, "medium");
         assert_eq!(s.thumb_quality_fullscreen, "large");
         assert_eq!(s.image_cache_max_mib, DEFAULT_IMAGE_CACHE_MAX_MIB);
+        assert_eq!(s.detail_image_scale, 1.0);
         assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.novel_bg_color, "");
         assert_eq!(s.saucenao_api_key, "");
@@ -546,6 +578,53 @@ mod tests {
         ] {
             assert_eq!(
                 validate_novel_font_scale_value(&bad).unwrap_err(),
+                message,
+                "bad={bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_detail_image_scale_falls_back_to_default_on_load() {
+        let dir = temp_config_dir("detailimg");
+        // 手改 settings.json 写入越界值（含 NaN 语义不可表达的上界外）→ 加载期回落 1.0
+        for bad in [9.9, 0.1, 0.0] {
+            std::fs::write(
+                settings_path(&dir),
+                format!(r#"{{"detail_image_scale":{bad}}}"#),
+            )
+            .unwrap();
+            assert_eq!(Settings::load_or_init(&dir).detail_image_scale, 1.0);
+        }
+        // 合法值（含边界）原样保留
+        for scale in [0.5, 0.75, 1.0] {
+            std::fs::write(
+                settings_path(&dir),
+                format!(r#"{{"detail_image_scale":{scale}}}"#),
+            )
+            .unwrap();
+            assert_eq!(Settings::load_or_init(&dir).detail_image_scale, scale);
+        }
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn validate_detail_image_scale_rules() {
+        use serde_json::json;
+        for ok in [json!(1.0), json!(0.5), json!(1), json!(0.75)] {
+            assert!(validate_detail_image_scale_value(&ok).is_ok(), "ok={ok}");
+        }
+        let message = "详情页图片缩放必须是 0.5~1.0 之间的数字";
+        for bad in [
+            json!(0.4),
+            json!(1.5),
+            json!(9.9),
+            json!("abc"),
+            json!(true),
+            json!(null),
+        ] {
+            assert_eq!(
+                validate_detail_image_scale_value(&bad).unwrap_err(),
                 message,
                 "bad={bad}"
             );

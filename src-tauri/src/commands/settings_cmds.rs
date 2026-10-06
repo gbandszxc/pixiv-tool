@@ -6,6 +6,7 @@
 //!   max_wait_seconds 非法 → Err("最大等待时间必须是 30~86400 秒之间的整数")；
 //!   translation_timeout_seconds 非法 → Err("翻译超时时间必须是 30~3600 秒之间的整数")；
 //!   image_cache_max_mib 非法 → Err("图片缓存上限必须是 256~2048 MiB 之间的整数")；
+//!   detail_image_scale 非法 → Err("详情页图片缩放必须是 0.5~1.0 之间的数字")；
 //!   novel_font_scale 非法 → Err("小说字号缩放必须是 0.75~2.0 之间的数字")；
 //!   novel_bg_color 非法 → Err("阅读背景色无效")
 //! - clear_logs → {"status":"success"}（清空 <data_dir>/logs 下当前及轮转 .log 文件）
@@ -17,15 +18,15 @@ use tauri::State;
 
 use crate::settings::{
     STARTUP_PAGES, Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
-    validate_image_cache_max_value, validate_max_wait_value, validate_novel_bg_color_value,
-    validate_novel_font_scale_value, validate_output_dir_value, validate_thumb_tier,
-    validate_translation_timeout_value,
+    validate_detail_image_scale_value, validate_image_cache_max_value, validate_max_wait_value,
+    validate_novel_bg_color_value, validate_novel_font_scale_value, validate_output_dir_value,
+    validate_thumb_tier, validate_translation_timeout_value,
 };
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 22] = [
+const WRITABLE_KEYS: [&str; 23] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
@@ -45,6 +46,7 @@ const WRITABLE_KEYS: [&str; 22] = [
     "thumb_quality_detail",
     "thumb_quality_fullscreen",
     "image_cache_max_mib",
+    "detail_image_scale",
     "novel_font_scale",
     "novel_bg_color",
     "saucenao_api_key",
@@ -104,8 +106,8 @@ pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Resul
 
 /// partial JSON → 新 Settings（纯函数，离线可测）：
 /// 1. output_dir / max_wait_seconds / translation_timeout_seconds / theme_color /
-///    缩略图档位 / image_cache_max_mib / show_r18 / novel_font_scale / novel_bg_color
-///    先做中文校验（失败即 Err，旧 400 文案）
+///    缩略图档位 / image_cache_max_mib / show_r18 / detail_image_scale /
+///    novel_font_scale / novel_bg_color 先做中文校验（失败即 Err，旧 400 文案）
 /// 2. 白名单键覆盖到当前配置序列化结果上，再反解回 Settings
 ///    （类型不合法的值在反解时以中文错误拒绝）
 pub fn apply_settings_patch(
@@ -151,6 +153,9 @@ pub fn apply_settings_patch(
         .is_some_and(|value| !value.is_boolean())
     {
         return Err("R-18 展示开关必须是布尔值".to_string());
+    }
+    if let Some(value) = patch_obj.get("detail_image_scale") {
+        validate_detail_image_scale_value(value)?;
     }
     if let Some(value) = patch_obj.get("novel_font_scale") {
         validate_novel_font_scale_value(value)?;
@@ -566,6 +571,62 @@ mod tests {
                 apply_settings_patch(
                     &Settings::default(),
                     &json!({ "novel_font_scale": bad }),
+                    &data_dir
+                )
+                .unwrap_err(),
+                message,
+                "bad={bad}"
+            );
+        }
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_detail_image_scale_accepts_bounds_and_overrides() {
+        let data_dir = temp_data_dir("detailimg");
+        // 默认值与区间边界（0.5 / 1.0）通过
+        for ok in [json!(1.0), json!(0.5), json!(1)] {
+            assert!(
+                apply_settings_patch(
+                    &Settings::default(),
+                    &json!({ "detail_image_scale": ok }),
+                    &data_dir
+                )
+                .is_ok(),
+                "ok={ok}"
+            );
+        }
+        // 合法值覆盖生效
+        let updated = apply_settings_patch(
+            &Settings::default(),
+            &json!({ "detail_image_scale": 0.75 }),
+            &data_dir,
+        )
+        .unwrap();
+        assert_eq!(updated.detail_image_scale, 0.75);
+        // 缺键时保持原值不变
+        let untouched =
+            apply_settings_patch(&updated, &json!({ "language": "en-US" }), &data_dir).unwrap();
+        assert_eq!(untouched.detail_image_scale, 0.75);
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_rejects_bad_detail_image_scale() {
+        let data_dir = temp_data_dir("detailimg-bad");
+        let message = "详情页图片缩放必须是 0.5~1.0 之间的数字";
+        // 越界 / 非数字 / bool / null 全部拒绝，文案精确匹配
+        for bad in [
+            json!(0.4),
+            json!(1.5),
+            json!("abc"),
+            json!(true),
+            json!(null),
+        ] {
+            assert_eq!(
+                apply_settings_patch(
+                    &Settings::default(),
+                    &json!({ "detail_image_scale": bad }),
                     &data_dir
                 )
                 .unwrap_err(),

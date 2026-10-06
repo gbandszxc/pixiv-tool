@@ -10,7 +10,7 @@ const tabs = computed(() => {
   const entries = group.value === "following"
     ? [["/browse/feed", "workspace.newWorks"], ["/browse/watchlist", "nav.browseWatchlist"]]
     : group.value === "library"
-      ? [["/browse/bookmark", "nav.browseBookmark"], ["/browse/history", "workspace.browseHistory"]]
+      ? [["/browse/bookmark", "nav.browseBookmark"], ["/browse/history", "workspace.browseHistory"], ["/browse/me", "nav.browseMe"]]
       : [["/browse/home", "workspace.recommended"], ["/browse/discover", "workspace.forYou"]];
   return entries.map(([value, label]) => ({ value, label: t(label) }));
 });

@@ -1,6 +1,6 @@
 <script lang="ts">
-/** 全屏浮层的阅读偏好（双图跨页 / 从右往左）：本会话记忆，不持久化。 */
-const viewerPrefs = { spread: false, rtl: true };
+/** 全屏浮层的阅读偏好（双图跨页 / 从右往左 / 竖屏 / 竖屏宽度）：本会话记忆，不持久化。 */
+const viewerPrefs = { spread: false, rtl: true, vertical: false, verticalScale: 1 };
 </script>
 
 <script setup lang="ts">
@@ -18,6 +18,13 @@ const viewerPrefs = { spread: false, rtl: true };
  *   先铺 medium 档（540px）占位层再换高清；全屏浮层走 thumb_quality_fullscreen，
  *   胶卷缩略图走 thumb_quality_grid；
  * - 全屏滚轮 / PgUp / PgDn 按页或跨页组前后切换，胶卷仍原生滚动；
+ * - 浮层另有竖屏模式（连续纵向滚动，条漫友好）：单/双列仍由双图开关控制，固定从上
+ *   到下、不提供方向切换；滚轮与 ↑/↓ 为原生滚动，PgUp/PgDn 走全局按屏滚动，←/→
+ *   对齐上下页行首；胶卷点击滚到该页、标记视口内各页；页框宽度比例（0.5~1）会话
+ *   内记忆；图片按视口窗口懒加载（占位盒预留高度，不一次性加载全部原图）；进出
+ *   竖屏保持当前页；
+ * - 舞台页框宽度占比 stageScale（0.5~1，父视图持久化到设置键 detail_image_scale）
+ *   只收窄页框宽度并居中，默认 1 = 撑满 = 既有观感；
  * - 键盘：本组件在 capture 阶段监听并 stopImmediatePropagation，避免与父视图的同名
  *   按键（Esc 返回）二次处理；浮层内 Esc 只关浮层；
  * - 加载中纯色占位、失败显示重试；
@@ -46,8 +53,10 @@ const props = withDefaults(
     restrictLabel?: string;
     /** ugoira 说明行 */
     ugoira?: boolean;
+    /** 详情舞台页框宽度占比（0.5~1，1 = 撑满 = 既有观感；父视图读设置键 detail_image_scale） */
+    stageScale?: number;
   }>(),
-  { alt: "", restricted: false, restrictLabel: "", ugoira: false }
+  { alt: "", restricted: false, restrictLabel: "", ugoira: false, stageScale: 1 }
 );
 
 const emit = defineEmits<{
@@ -61,6 +70,9 @@ const fullscreenTier = useThumbTier("thumb_quality_fullscreen");
 const gridTier = useThumbTier("thumb_quality_grid");
 
 const multi = computed(() => props.pages.length > 1 && !props.ugoira);
+
+/** 舞台页框宽度占比（父视图传入；防御性夹取到 [0.5, 1]，异常值回落撑满）。 */
+const stageScaleValue = computed(() => Math.min(1, Math.max(0.5, props.stageScale)));
 
 /** 页图片地址：medium 档 = 接口 regular 原样（不插 /c/，与改造前逐字一致）。 */
 function pageSrc(p: { medium?: string; original: string }, tier: ThumbTier): string {
@@ -124,6 +136,10 @@ function resetPages(): void {
   fsPage.value = 0;
   fsFallbackPages.value = [];
   fsStates.value = {};
+  fsLive.value = props.pages.map(() => false);
+  fsVisible.value = [];
+  fsSlotEls.length = 0;
+  fsPendingPage = null;
   // 首屏先放最靠前的两页；其余交给滚动/布局同步
   activate(0, props.restricted ? 0 : 1, 0);
 }
@@ -268,19 +284,25 @@ function setThumbRef(index: number, el: unknown): void {
   thumbEls[index] = (el as HTMLElement | null) ?? null;
 }
 
-// ----- 双图（跨页）模式与阅读方向：会话内记忆（模块级 viewerPrefs） -----
+// ----- 双图（跨页）模式 / 阅读方向 / 竖屏：会话内记忆（模块级 viewerPrefs） -----
 
 const spread = ref(viewerPrefs.spread);
 const rtl = ref(viewerPrefs.rtl);
+const vertical = ref(viewerPrefs.vertical);
+const verticalScale = ref(viewerPrefs.verticalScale);
 
 watch(spread, (v) => (viewerPrefs.spread = v));
 watch(rtl, (v) => (viewerPrefs.rtl = v));
+watch(vertical, (v) => (viewerPrefs.vertical = v));
+watch(verticalScale, (v) => (viewerPrefs.verticalScale = v));
 
 /** 双图仅对多页作品生效（单页作品没有可跨的页） */
 const spreadOn = computed(() => spread.value && multi.value);
-/** 阅读方向生效：仅双图模式（单页一屏一张，方向不改变页面顺序与翻页朝向） */
-const rtlActive = computed(() => spreadOn.value && rtl.value);
-/** 翻页步进：双图一屏两张，步进 2 */
+/** 竖屏（连续纵向滚动）同样仅多页作品生效；单页作品无滚动阅读可言（控件也随之隐藏） */
+const verticalOn = computed(() => vertical.value && multi.value);
+/** 阅读方向生效：仅 paged + 双图（单页一屏一张；竖屏固定从上到下，不参与镜像） */
+const rtlActive = computed(() => spreadOn.value && rtl.value && !verticalOn.value);
+/** 翻页步进：双图一屏两张，步进 2（竖屏按同一分块组行：1-2 / 3-4 …） */
 const pageStep = computed(() => (spreadOn.value ? 2 : 1));
 
 /** 一屏显示的页（下标，按 DOM 从左到右排列；从右往左时当前页在右） */
@@ -295,8 +317,9 @@ const spreadEnd = computed(() =>
   visiblePages.value.length > 1 ? fsPage.value + 1 : fsPage.value
 );
 
+/** 页码标签：paged 双图显示区间（第 N-M 页），竖屏恒显示视口内最靠上的那一页 */
 const pageLabel = computed(() =>
-  spreadEnd.value > fsPage.value
+  !verticalOn.value && spreadEnd.value > fsPage.value
     ? t("browse.work.pageRangeOf", {
         from: fsPage.value + 1,
         to: spreadEnd.value + 1,
@@ -336,6 +359,136 @@ const fsSlots = computed<FsSlot[]>(() =>
     state: fsStates.value[index] ?? "loading",
   }))
 );
+
+// ----- 竖屏（连续纵向滚动）：行模型 + 懒加载窗口（paged 分支不参与） -----
+
+/** 竖屏行模型的页视图：在 FsSlot 基础上附带「是否已进入加载窗口」。 */
+interface FsSlotView {
+  index: number;
+  src: string;
+  low: string;
+  state: "loading" | "ok" | "error";
+  live: boolean;
+}
+
+/** 全部行（按 pageStep 分块组行）：DOM 全量占位（aspect-ratio 预留高度，滚动不跳动），
+ * 图片仅在该页进入加载窗口（fsLive）后才挂载 —— 不一次性加载全部原图。 */
+const fsRows = computed<FsSlotView[][]>(() => {
+  const one = (index: number): FsSlotView => ({
+    index,
+    src: fsSrcOf(index),
+    low: fsLowOf(index),
+    state: fsStates.value[index] ?? "loading",
+    live: fsLive.value[index] === true,
+  });
+  const rows: FsSlotView[][] = [];
+  for (let i = 0; i < props.pages.length; i += pageStep.value) {
+    const row: FsSlotView[] = [];
+    for (let j = i; j < Math.min(i + pageStep.value, props.pages.length); j += 1) row.push(one(j));
+    rows.push(row);
+  }
+  return rows;
+});
+
+const fsStageEl = ref<HTMLElement | null>(null);
+/** 竖屏页元素引用（下标与 pages 对齐） */
+const fsSlotEls: (HTMLElement | null)[] = [];
+/** 已进入加载窗口的页（只增不减：回滚不重复请求，对齐舞台 live 的语义） */
+const fsLive = ref<boolean[]>([]);
+/** 当前视口内的页（胶卷标记；页码取其中最靠上的一页） */
+const fsVisible = ref<number[]>([]);
+
+function setFsSlotRef(index: number, el: unknown): void {
+  fsSlotEls[index] = (el as HTMLElement | null) ?? null;
+}
+
+/** 把 [from, to] 置为已加载（对齐舞台 activate 的「只增不减」做法）。 */
+function activateFs(from: number, to: number): void {
+  const total = props.pages.length;
+  let next: boolean[] | null = null;
+  for (let i = Math.max(0, from); i <= Math.min(total - 1, to); i += 1) {
+    if (!fsLive.value[i]) {
+      next ??= fsLive.value.slice();
+      next[i] = true;
+    }
+  }
+  if (next) fsLive.value = next;
+}
+
+/**
+ * 程序化滚动期间钉住页码（对齐舞台 scrollToPage 的 pendingFocus 做法）：平滑动画会
+ * 持续触发 scroll，若不钉住，syncFsFromScroll 会把页码算回动画途中的旧页，连按 ←/→ 丢步。
+ */
+let fsPendingPage: number | null = null;
+let fsPendingTimer = 0;
+
+/** 竖屏：滚动到某页所在行并对齐页顶（block: start），同时推进加载窗口。 */
+function scrollToFsRow(index: number, behavior?: ScrollBehavior): void {
+  const rowStart = spreadOn.value ? index - (index % 2) : index;
+  const el = fsSlotEls[rowStart];
+  if (!el) return;
+  const smooth = behavior !== "auto" && !prefersReducedMotion();
+  fsPendingPage = smooth ? rowStart : null;
+  if (fsPendingTimer) clearTimeout(fsPendingTimer);
+  if (smooth) fsPendingTimer = window.setTimeout(() => (fsPendingPage = null), 500);
+  el.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+  fsPage.value = rowStart;
+  activateFs(rowStart, rowStart + pageStep.value);
+}
+
+/** 滚动同步：页码 = 视口内最靠上的页；加载窗口 = 视口内各页向外各留 1 行余量。 */
+function syncFsFromScroll(): void {
+  const el = fsStageEl.value;
+  if (!el) return;
+  const box = el.getBoundingClientRect();
+  let first = -1;
+  let last = -1;
+  const visible: number[] = [];
+  for (let i = 0; i < fsSlotEls.length; i += 1) {
+    const item = fsSlotEls[i];
+    if (!item) continue;
+    const rect = item.getBoundingClientRect();
+    if (first < 0 && rect.bottom > box.top + 1) first = i;
+    // 与视口相交才算可见：滚出视口上方（bottom <= top）或下方（top >= bottom）的页不计入
+    if (rect.top < box.bottom - 1 && rect.bottom > box.top + 1) {
+      last = i;
+      visible.push(i);
+    }
+  }
+  fsVisible.value = visible;
+  if (first < 0) return;
+  fsPage.value = fsPendingPage ?? first;
+  activateFs(first - 1, last + pageStep.value);
+}
+
+let fsRafId = 0;
+
+function onFsScroll(): void {
+  if (!verticalOn.value || fsRafId) return;
+  fsRafId = requestAnimationFrame(() => {
+    fsRafId = 0;
+    syncFsFromScroll();
+  });
+}
+
+// ----- 竖屏宽度比例：会话内记忆（viewerPrefs），与详情页缩放设置键相互独立 -----
+
+const FS_SCALE_MIN = 0.5;
+const FS_SCALE_MAX = 1;
+const FS_SCALE_STEP = 0.1;
+
+const verticalScaleValue = computed(() =>
+  Math.min(FS_SCALE_MAX, Math.max(FS_SCALE_MIN, verticalScale.value))
+);
+
+function stepVerticalScale(delta: number): void {
+  const next = Math.round((verticalScaleValue.value + delta * FS_SCALE_STEP) * 100) / 100;
+  verticalScale.value = Math.min(FS_SCALE_MAX, Math.max(FS_SCALE_MIN, next));
+}
+
+function resetVerticalScale(): void {
+  verticalScale.value = 1;
+}
 
 const canPrev = computed(() => multi.value && fsPage.value > 0);
 const canNext = computed(
@@ -381,10 +534,15 @@ function closeFullscreen(): void {
   scrollEl.value?.focus({ preventScroll: true });
 }
 
-/** 双图模式按「跨页对」对齐（1-2 / 3-4 …）：点胶卷任意一页都落到所属跨页。 */
+/** 双图模式按「跨页对」对齐（1-2 / 3-4 …）：点胶卷任意一页都落到所属跨页。
+ *  竖屏下不改 fsPage 而是滚动到该页所在行（行首对齐）。 */
 function stepTo(index: number): void {
   let next = Math.min(Math.max(index, 0), Math.max(props.pages.length - 1, 0));
   if (spreadOn.value && next % 2 === 1) next -= 1;
+  if (verticalOn.value) {
+    scrollToFsRow(next);
+    return;
+  }
   fsPage.value = next;
 }
 
@@ -392,10 +550,11 @@ function stepPage(delta: number): void {
   stepTo(fsPage.value + delta * pageStep.value);
 }
 
-/** 一次滚轮手势限速，防止触控板惯性或密集滚轮事件连续跳过多页。胶卷仍原生滚动。 */
+/** 一次滚轮手势限速，防止触控板惯性或密集滚轮事件连续跳过多页。胶卷仍原生滚动。
+ *  竖屏模式下不拦截：滚轮交给原生连续滚动（条漫自由浏览，无整页翻页）。 */
 let lastWheelPageAt = -Infinity;
 function onFullscreenWheel(e: WheelEvent): void {
-  if (!multi.value || e.ctrlKey || e.metaKey || !e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  if (verticalOn.value || !multi.value || e.ctrlKey || e.metaKey || !e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
   if (e.composedPath().some(node => node instanceof HTMLElement && node.classList.contains("fs-filmstrip"))) return;
   e.preventDefault();
   const now = performance.now();
@@ -406,11 +565,30 @@ function onFullscreenWheel(e: WheelEvent): void {
 
 function toggleSpread(): void {
   spread.value = !spread.value;
+  if (verticalOn.value) {
+    // 竖屏下列数变化会重组行模型（DOM 高度重排）：等 DOM 重建后瞬时对齐回当前页行首
+    void nextTick(() => scrollToFsRow(fsPage.value, "auto"));
+    return;
+  }
   if (spreadOn.value) stepTo(fsPage.value);
 }
 
 function toggleRtl(): void {
   rtl.value = !rtl.value;
+}
+
+/** 竖屏开关：进出都保持当前页——回 paged 时跨页对齐行首；进竖屏时滚动定位到该页行首
+ *  （DOM 切换是异步的，须等 nextTick 后再滚动与聚焦，焦点给滚动容器让 ↑/↓ 立即可用）。 */
+function toggleVertical(): void {
+  vertical.value = !vertical.value;
+  if (!verticalOn.value && spreadOn.value) stepTo(fsPage.value);
+  void nextTick(() => {
+    if (!verticalOn.value) return;
+    activateFs(fsPage.value, fsPage.value + pageStep.value);
+    scrollToFsRow(fsPage.value, "auto");
+    syncFsFromScroll();
+    fsStageEl.value?.focus({ preventScroll: true });
+  });
 }
 
 /** 翻页时把当前缩略图滚入胶卷视野（block: nearest 不惊动已可见的项）。 */
@@ -435,7 +613,9 @@ function isTypingEvent(e: KeyboardEvent): boolean {
 /**
  * 浮层键盘：Esc 关闭、PgUp/PgDn 前后翻页、←/→ 翻页（从右往左时 ← 为前进）。capture 阶段监听并
  * stopImmediatePropagation，阻止 BrowseWorkView 的 bubble 监听把同一次 Esc 变成路由返回。
- * 纵向模式下 ←/→ 为「跳上一页/下一页」（滚动对齐页顶），同样在此拦截。
+ * 纵向舞台（非浮层）的 ←/→ 为「跳上一页/下一页」（滚动对齐页顶），同样在此拦截；
+ * 竖屏浮层内 ←/→ 对齐上下页行首（不做 rtl 镜像），↑/↓ 与 PgUp/PgDn 交给原生滚动与
+ * 全局按屏滚动（usePageScroll 会把本浮层舞台识别为模态内滚动容器），不在此拦截。
  */
 function onKeydown(e: KeyboardEvent): void {
   if (isTypingEvent(e) || document.querySelector("dialog[open]")) return;
@@ -444,6 +624,12 @@ function onKeydown(e: KeyboardEvent): void {
       e.preventDefault();
       e.stopImmediatePropagation();
       closeFullscreen();
+    } else if (verticalOn.value) {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        stepPage(e.key === "ArrowLeft" ? -1 : 1);
+      }
     } else if ((e.key === "PageUp" || e.key === "PageDown") && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
       // 鼠标或焦点落在胶卷滚动区时，交给公共一屏滚动，避免切换作品页。
       if (pageScrollTarget(e)?.classList.contains("fs-filmstrip")) return;
@@ -472,7 +658,15 @@ watch(fullscreen, async (open) => {
   if (open) {
     lastWheelPageAt = -Infinity;
     await nextTick();
-    overlayEl.value?.focus();
+    if (verticalOn.value) {
+      // 竖屏：定位到进入前停留的页（行首对齐），焦点给滚动容器让 ↑/↓ 立即可用
+      activateFs(fsPage.value, fsPage.value + pageStep.value);
+      scrollToFsRow(fsPage.value, "auto");
+      syncFsFromScroll();
+      fsStageEl.value?.focus({ preventScroll: true });
+    } else {
+      overlayEl.value?.focus();
+    }
   }
 });
 
@@ -514,6 +708,8 @@ onBeforeUnmount(() => {
   detachWindowListeners();
   if (rafId) cancelAnimationFrame(rafId);
   if (pendingTimer) clearTimeout(pendingTimer);
+  if (fsRafId) cancelAnimationFrame(fsRafId);
+  if (fsPendingTimer) clearTimeout(fsPendingTimer);
 });
 
 /** 遮罩解除（设置里打开 show_r18）后补一次窗口同步：滚动容器回到多页布局时无需等滚动。 */
@@ -525,11 +721,12 @@ watch(
   }
 );
 
-/** 预加载相邻页：浮层翻页时立即可见（fire-and-forget），与浮层同一档位。 */
+/** 预加载相邻页：浮层翻页时立即可见（fire-and-forget），与浮层同一档位。
+ *  竖屏的加载窗口由 activateFs 随滚动推进，不走这条相邻页预载。 */
 watch(
   () => [fullscreen.value, fsPage.value, pageStep.value, fullscreenTier.value] as const,
   () => {
-    if (!fullscreen.value) return;
+    if (!fullscreen.value || verticalOn.value) return;
     const shown = new Set(visiblePages.value);
     const next = fsPage.value + pageStep.value;
     for (const i of [fsPage.value - 1, next, next + 1]) {
@@ -546,11 +743,13 @@ watch(
 <template>
   <div class="viewer">
     <div class="stage">
-      <!-- 纵向舞台：滚动渐进加载；遮罩期间仅保留首页（其余 v-show 收起） -->
+      <!-- 纵向舞台：滚动渐进加载；遮罩期间仅保留首页（其余 v-show 收起）；
+           --viewer-scale = 页框宽度占比（1 = 撑满 = 既有观感，见 .shot 宽度计算） -->
       <div
         ref="scrollEl"
         class="stage-scroll"
         :class="{ 'is-locked': restricted, 'is-single': restricted || pages.length < 2 }"
+        :style="{ '--viewer-scale': String(stageScaleValue) }"
         tabindex="0"
         role="group"
         :aria-label="
@@ -644,31 +843,89 @@ watch(
       @click.self="closeFullscreen"
       @wheel="onFullscreenWheel"
     >
-      <div class="fs-stage" :class="{ 'is-spread': spreadOn }" @click.self="closeFullscreen">
-        <!-- 一屏一页或并排两页：页框按可用高度与页面纵横比定尺寸，图片撑满该框 -->
-        <div v-for="slot in fsSlots" :key="slot.index" class="fs-slot" :style="shotStyle(slot.index)">
-          <img
-            v-if="slot.low && slot.state !== 'ok'"
-            class="fs-img low"
-            :src="slot.low"
-            alt=""
-            aria-hidden="true"
-            decoding="async"
-          />
-          <img
-            v-show="slot.state === 'ok'"
-            class="fs-img"
-            :src="slot.src"
-            :alt="altOf(slot.index)"
-            decoding="async"
-            @load="onFsLoad(slot.index, $event)"
-            @error="onFsError(slot.index, $event)"
-          />
-          <div v-if="slot.state === 'error'" class="fs-state">
-            <p class="stage-text">{{ t("common.browseLoadFailed") }}</p>
+      <div
+        class="fs-stage"
+        :class="{ 'is-spread': spreadOn, 'is-vertical': verticalOn }"
+        :style="{ '--fs-scale': String(verticalScaleValue) }"
+        @click.self="closeFullscreen"
+      >
+        <!-- paged：一屏一页或并排两页（页框按可用高度与页面纵横比定尺寸，图片撑满该框）。
+             此分支结构与样式是既有行为基线，竖屏走 v-else 独立行模型，互不影响 -->
+        <template v-if="!verticalOn">
+          <div v-for="slot in fsSlots" :key="slot.index" class="fs-slot" :style="shotStyle(slot.index)">
+            <img
+              v-if="slot.low && slot.state !== 'ok'"
+              class="fs-img low"
+              :src="slot.low"
+              alt=""
+              aria-hidden="true"
+              decoding="async"
+            />
+            <img
+              v-show="slot.state === 'ok'"
+              class="fs-img"
+              :src="slot.src"
+              :alt="altOf(slot.index)"
+              decoding="async"
+              @load="onFsLoad(slot.index, $event)"
+              @error="onFsError(slot.index, $event)"
+            />
+            <div v-if="slot.state === 'error'" class="fs-state">
+              <p class="stage-text">{{ t("common.browseLoadFailed") }}</p>
+            </div>
+            <div v-else-if="slot.state === 'loading' && !slot.low" class="fs-state">
+              <div class="loading-block" aria-hidden="true"></div>
+            </div>
           </div>
-          <div v-else-if="slot.state === 'loading' && !slot.low" class="fs-state">
-            <div class="loading-block" aria-hidden="true"></div>
+        </template>
+
+        <!-- 竖屏：连续纵向滚动（条漫友好），滚动由内层 .fs-scroll 承担；行内并列单双页
+             仍由双图开关控制；页框宽度 = 舞台宽 × 比例（--fs-scale），高度随纵横比自适应 -->
+        <div
+          v-else
+          ref="fsStageEl"
+          class="fs-scroll"
+          tabindex="0"
+          role="group"
+          :aria-label="t('browse.work.stageLabelMulti', { total: pages.length })"
+          @click.self="closeFullscreen"
+          @scroll.passive="onFsScroll"
+        >
+          <div v-for="(row, ri) in fsRows" :key="ri" class="fs-row">
+            <div
+              v-for="slot in row"
+              :key="slot.index"
+              :ref="(el) => setFsSlotRef(slot.index, el)"
+              class="fs-slot"
+              :style="shotStyle(slot.index)"
+            >
+              <!-- 未进入加载窗口的页只留纵横比占位盒（高度预留，滚动不跳动） -->
+              <template v-if="slot.live">
+                <img
+                  v-if="slot.low && slot.state !== 'ok'"
+                  class="fs-img low"
+                  :src="slot.low"
+                  alt=""
+                  aria-hidden="true"
+                  decoding="async"
+                />
+                <img
+                  v-show="slot.state === 'ok'"
+                  class="fs-img"
+                  :src="slot.src"
+                  :alt="altOf(slot.index)"
+                  decoding="async"
+                  @load="onFsLoad(slot.index, $event)"
+                  @error="onFsError(slot.index, $event)"
+                />
+                <div v-if="slot.state === 'error'" class="fs-state">
+                  <p class="stage-text">{{ t("common.browseLoadFailed") }}</p>
+                </div>
+                <div v-else-if="slot.state === 'loading' && !slot.low" class="fs-state">
+                  <div class="loading-block" aria-hidden="true"></div>
+                </div>
+              </template>
+            </div>
           </div>
         </div>
 
@@ -701,9 +958,25 @@ watch(
                 <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z" />
               </svg>
             </md-icon-button>
-            <!-- 阅读方向：从右往左 / 从左往右（仅双图模式） -->
+            <!-- 竖屏模式（连续纵向滚动）：并列单双页仍由双图开关控制；竖屏固定从上
+                 到下，不提供方向切换（方向开关随之隐藏、翻页组不镜像） -->
             <md-icon-button
-              v-if="spreadOn"
+              toggle
+              :selected="verticalOn"
+              :aria-label="t('browse.work.verticalMode')"
+              :title="t('browse.work.verticalMode')"
+              @click="toggleVertical"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <!-- lucide move-vertical：竖屏（连续纵向滚动） -->
+                <path d="M12 2v20" />
+                <path d="m8 18 4 4 4-4" />
+                <path d="m8 6 4-4 4 4" />
+              </svg>
+            </md-icon-button>
+            <!-- 阅读方向：从右往左 / 从左往右（仅 paged + 双图模式；竖屏固定从上到下） -->
+            <md-icon-button
+              v-if="spreadOn && !verticalOn"
               :aria-label="t('browse.work.readDir', { dir: rtl ? t('browse.work.dirRtl') : t('browse.work.dirLtr') })"
               :title="t('browse.work.readDir', { dir: rtl ? t('browse.work.dirRtl') : t('browse.work.dirLtr') })"
               @click="toggleRtl"
@@ -714,6 +987,35 @@ watch(
                 <template v-else><path d="M17 12H3" /><path d="m11 18 6-6-6-6" /><path d="M21 5v14" /></template>
               </svg>
             </md-icon-button>
+            <!-- 竖屏宽度比例（会话内记忆，独立于详情页缩放设置键）：[−] 值 [+] 重置 -->
+            <div v-if="verticalOn" class="fs-scale" role="group" :aria-label="t('browse.work.imageZoomLabel')">
+              <span class="fs-divider" aria-hidden="true"></span>
+              <md-icon-button
+                :disabled="verticalScaleValue <= FS_SCALE_MIN"
+                :aria-label="t('browse.work.imageZoomOut')"
+                :title="t('browse.work.imageZoomOut')"
+                @click="stepVerticalScale(-1)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /></svg>
+              </md-icon-button>
+              <span class="fs-scale-value" aria-live="polite">{{ Math.round(verticalScaleValue * 100) }}%</span>
+              <md-icon-button
+                :disabled="verticalScaleValue >= FS_SCALE_MAX"
+                :aria-label="t('browse.work.imageZoomIn')"
+                :title="t('browse.work.imageZoomIn')"
+                @click="stepVerticalScale(1)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /><path d="M12 8v8" /></svg>
+              </md-icon-button>
+              <md-icon-button
+                :disabled="verticalScaleValue === 1"
+                :aria-label="t('browse.work.imageZoomReset')"
+                :title="t('browse.work.imageZoomReset')"
+                @click="resetVerticalScale"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /></svg>
+              </md-icon-button>
+            </div>
           </div>
         </div>
 
@@ -741,7 +1043,7 @@ watch(
           :ref="(el) => setThumbRef(i, el)"
           type="button"
           class="fs-thumb"
-          :class="{ active: visiblePages.includes(i) }"
+          :class="{ active: verticalOn ? fsVisible.includes(i) : visiblePages.includes(i) }"
           :aria-label="t('browse.work.gotoPage', { page: i + 1 })"
           :aria-current="i === fsPage ? 'true' : undefined"
           @click="stepTo(i)"
@@ -840,7 +1142,9 @@ watch(
  * 未就绪时铺骨架色占位块（与全应用骨架配方一致，浅底可见） */
 .shot {
   position: relative;
-  width: 100%;
+  /* 宽度占比由 --viewer-scale 控制（详情页顶栏缩放控件写入；缺省 1 = 撑满 = 既有观感），
+   * 居中由 .page-item 的 flex + justify-content: center 承担 */
+  width: calc(100% * var(--viewer-scale, 1));
   aspect-ratio: var(--ar-w, 2) / var(--ar-h, 3);
   border-radius: 0;
   background: var(--md-sys-color-surface-container);
@@ -999,6 +1303,86 @@ watch(
 
 .fs-stage.is-spread .fs-slot {
   width: min(calc(50% - var(--space-sm) / 2), calc(var(--fs-h) * var(--ar-w, 2) / var(--ar-h, 3)));
+}
+
+/* ===== 竖屏（连续纵向滚动）：以下规则全部挂在 .fs-stage.is-vertical 作用域下，
+   paged 分支在结构与样式上都拿不到它们 ===== */
+
+/* 舞台转块布局，滚动由内层 .fs-scroll 承担——控制条 / 关闭按钮仍以 .fs-stage 为
+ * 定位包含块，钉在舞台边缘不随内容滚走（触屏设备没有 Esc，关闭按钮不可被滚没） */
+.fs-stage.is-vertical {
+  display: block;
+}
+
+.fs-stage.is-vertical .fs-scroll {
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: var(--space-xs);
+  outline: none;
+}
+
+/* 键盘焦点环：近黑底上的既定白 2px 环（与 .fs-thumb.active 同配方） */
+.fs-stage.is-vertical .fs-scroll:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -2px;
+}
+
+/* 滚动条与胶卷同 recipe（6px 白半透明，常显） */
+.fs-stage.is-vertical .fs-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.fs-stage.is-vertical .fs-scroll::-webkit-scrollbar-track {
+  background: rgb(255 255 255 / 0.06);
+  border-radius: 999px;
+}
+
+.fs-stage.is-vertical .fs-scroll::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.4);
+  border-radius: 999px;
+}
+
+.fs-stage.is-vertical .fs-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.6);
+}
+
+/* 行模型：行内并列单双页（双列由 is-spread 表达），行间距 16px */
+.fs-stage.is-vertical .fs-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--space-sm);
+}
+
+.fs-stage.is-vertical .fs-row + .fs-row {
+  margin-top: var(--space-lg);
+}
+
+/* 页框宽度 = 舞台宽 × 比例（--fs-scale 由控制条宽度组写入）；高度随纵横比自适应，
+ * 不设 max-height——条漫长图不压扁（覆盖 .fs-slot 的高度封顶与可用宽取小） */
+.fs-stage.is-vertical .fs-slot {
+  width: calc(var(--fs-scale, 1) * 100%);
+  max-height: none;
+}
+
+.fs-stage.is-vertical.is-spread .fs-slot {
+  width: calc(var(--fs-scale, 1) * (50% - var(--space-sm) / 2));
+}
+
+/* 竖屏宽度比例组（与详情页顶栏缩放组同规格；浮层内为白系配色） */
+.fs-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.fs-scale-value {
+  min-width: calc(2 * var(--space-xl));
+  color: rgb(255 255 255 / 0.85);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
 }
 
 /* 允许放大：小图也铺满页框（否则「撑满」受原始像素限制） */

@@ -549,15 +549,16 @@ pub async fn browse_user_profile_impl(state: &AppState, id: i64) -> Result<Value
         .map_err(|err| err.to_string())
 }
 
-/// 作者作品（后端按 id 全集降序切片 60/批）。
+/// 作者作品（后端按 id 全集排序后切片 60/批；`order` = asc|desc，缺省/非法 → desc）。
 #[tauri::command]
 pub async fn browse_user_works(
     state: State<'_, AppState>,
     id: i64,
     kind: String,
     page: i64,
+    order: Option<String>,
 ) -> Result<Value, String> {
-    browse_user_works_impl(&state, id, &kind, page).await
+    browse_user_works_impl(&state, id, &kind, page, order.as_deref()).await
 }
 
 pub async fn browse_user_works_impl(
@@ -565,12 +566,13 @@ pub async fn browse_user_works_impl(
     id: i64,
     kind: &str,
     page: i64,
+    order: Option<&str>,
 ) -> Result<Value, String> {
     validate_id(id, "用户")?;
     validate_user_works_kind(kind)?;
     validate_page(page)?;
     build_browse_api(state)?
-        .get_user_works(id, kind, page)
+        .get_user_works(id, kind, page, order)
         .await
         .map_err(|err| err.to_string())
 }
