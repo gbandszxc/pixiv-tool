@@ -122,7 +122,7 @@ pixiv-tool/
 │     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、pixiv-img 协议、关闭确认）
 │     ├─ state.rs               # AppState：paths/settings/db/cookies/tasks/accounts
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
-│     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter
+│     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
 │     ├─ commands/              # 与 translation.rs 共 64 个 #[tauri::command]（auth 6 / browse_api 21 / tasks 9 / settings 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 4 / translation 4）
 │     ├─ translation.rs         # 小说单页两轮翻译、共享设定集、凭据与本机译文存储（ADR 0017）
@@ -351,7 +351,7 @@ x-csrf-token。网络错误只回传类别及去 query/fragment 的地址，不�
 | 行内 `[rb:A>B]` | `A(B)`（注音转换**已修正生效**——旧 Python 版赋值后未使用） |
 | 其余行 | 原样 |
 
-**文件命名（`make_filename`）**：
+**默认文件命名（`make_filename`，即下述默认模板的产物）**：
 
 | 来源 | 文件名 |
 |---|---|
@@ -364,6 +364,45 @@ x-csrf-token。网络错误只回传类别及去 query/fragment 的地址，不�
 兜底（`safe_title_or_id`）。
 插画 URL 扩展名仅接受 1–8 位 ASCII 字母数字，其余用 `bin`，防止路径分隔符或
 Windows ADS 注入；正常 jpg/png/gif/zip 等后缀保持不变。
+
+**自定义文件名模板**：settings 三键（见 §5.2），任务创建与失败项重试均在创建
+时刻从设置快照取值、随任务参数固定，运行中改设置不影响进行中任务。
+
+| settings.json 键 | 默认模板 | 作用于 |
+|---|---|---|
+| `illust_filename_template` | `{title}_{pid}_p{page}` | 插画普通页与 ugoira 词干 |
+| `novel_filename_template` | `{title}_{nid}` | 小说单篇 |
+| `novel_series_filename_template` | `{order}_{title}` | 系列各话（`series_order` 非空时） |
+
+默认模板产物与现行命名 byte 级一致。模板 = 字面文本 + `{占位符}`：
+
+| 占位符 | 含义 | 取值兜底 |
+|---|---|---|
+| `{user}` | 作者名 | 空 → `user_{uid}` |
+| `{uid}` | 作者 ID | 总有值 |
+| `{title}` | 作品名（渲染时统一净化） | 净化后空 → 插画用 pid、小说用 nid |
+| `{pid}` | 插画 ID（仅插画模板可用） | — |
+| `{page}` / `{page1}` | 页序 0 起 / 1 起（仅插画模板可用） | — |
+| `{nid}` | 小说 ID（仅小说 / 系列模板可用） | — |
+| `{order}` | 系列话序，零填充宽度沿用现行规则（≤ 99 → 2 位，否则 3 位） | 非系列为空值 |
+| `{sid}` | 系列 ID | 非系列为空值 |
+
+渲染规则：占位符替换后整体过 `sanitize_filename` 净化（无额外全局 strip 或连续
+`_` 收敛）；空值占位符删除该 token 并从紧邻前导字面段末尾吸收 1 个分隔符
+（`_` / `-`），避免悬挂分隔符；ugoira 渲染先删除全部 `{page}` / `{page1}` 及其
+前导字面段末尾的分隔符（`_p` 整体删、`_` / `-` 各删 1 字符），净化后固定追加
+`_ugoira` 词干（`.zip` 扩展名不变）；渲染结果净化后为空 → 回落现行默认命名。
+**有意分歧**：模板路径下小说空标题以 nid 兜底（默认模板产 `12345_12345.md`），
+现行 `make_filename` 无兜底产 `_12345.md`——默认模板仅在空标题场景与现行命名不同。
+
+校验（前后端一致，前端保存前预校验、后端保存时拒绝）：非空；≤ 200 字符；禁含
+`< > : " / \ | ? *` 与 ASCII 控制字符（即不支持借模板建子目录，目录布局仍按
+下文）；`{}` 必须配对；占位符必须在对应用途白名单内（插画与小说两套互不可用）；
+插画模板必须含 `{page}` 或 `{page1}`（否则多页 p0..pN-1 同名互相覆盖）、系列
+模板必须含 `{order}`（同理防各话同名覆盖）。保存时非法模板拒绝且不落盘；手改
+settings.json 写入非法模板在加载期回落对应用途的默认并记日志。设置弹窗
+「通用」分组输出格式之后为三个文本框（supporting text 列占位符清单，非法时该
+字段 error 态红字并阻止整表保存）；无新增 IPC 命令（模板随 `settings_save` 写入）。
 
 **目录布局**：小说统一平铺在输出目录 `novel/` 子目录（系列归属由文件名序号
 表达）；插画在 `pic/` 子目录，用户全集再套一层
@@ -468,6 +507,9 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "detail_image_scale": 1.0,
   "novel_font_scale": 1.0,
   "novel_bg_color": "",
+  "illust_filename_template": "{title}_{pid}_p{page}",
+  "novel_filename_template": "{title}_{nid}",
+  "novel_series_filename_template": "{order}_{title}",
   "saucenao_api_key": "",
   "translation_api_url": "",
   "translation_api_format": "chat_completions",
@@ -528,6 +570,10 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   **设置弹窗不提供该项**，仅由小说阅读器底栏色块按钮经 `settings_save` 写入
   （在白名单内）。保存时非字符串 / 白名单外的值一律拒绝（"阅读背景色无效"）；
   手改 settings.json 写入白名单外的值时，加载期回落到空串（不强制回写文件）。
+- `illust_filename_template` / `novel_filename_template` / `novel_series_filename_template`：
+  下载文件名模板（默认 `{title}_{pid}_p{page}` / `{title}_{nid}` / `{order}_{title}`），
+  占位符、渲染与校验规则见 §4.4「自定义文件名模板」。保存时非法模板拒绝（不落盘）；
+  手改 settings.json 写入非法值时加载期回落对应用途的默认模板（不强制回写文件）。
 - `saucenao_api_key`：SauceNAO API Key（默认 `""`），「以图识图」（§7
   `saucenao_search`）的**必填前置**：trim 后为空一律拒绝发起搜索。在
   saucenao.com 免费注册后于 `user.php?page=search-api` 页面获取；仅保存在本机
@@ -539,7 +585,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   一页通常请求两次，超时按每次请求计算；超时可用的错误文案跟随该值报出实际秒数。
   「检测可用」按草稿里的同名字段（缺省 600）计时，「获取模型列表」固定 30 秒。
   手改 settings.json 写入区间外的值（含 0/负数）时加载期回落默认。见 ADR 0023。
-- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 23 个键，
+- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 26 个键，
   含兼容保留的 `backend_port`；`saucenao_api_key` 为用户凭据，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
@@ -939,7 +985,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 23 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 详情页图片缩放；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 26 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 详情页图片缩放 / 三个下载文件名模板；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_get(novel)` | 读取本机小说设定集和已译页；novel=`{novel_id,title,tags,description,content}`；返回 `{bible:{style,terms},pages:{页码:[{line,text}]}}`，原文和元信息 SHA256 区分版本 |
 | `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 queued/prepare/translate 字符串 Channel（供后端与测试使用，界面只回显统一「翻译中」）；返回 `{status,lines,target_language}`，status=`translated` 时 lines 为 `[{line,text}]`（line 为该页原始文本的零起行号，可能来自本机缓存），status=`already_target_language` 时未调用模型、lines 为空；目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言，见 ADR 0018 |
 | `translation_models(probe)` | 用未保存草稿探测模型列表端点（按 `format` 协议从同一基址推导 `/models`；OpenAI 系 Bearer，Anthropic `x-api-key` + 版本头，opencode 主机附会话标识头），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
