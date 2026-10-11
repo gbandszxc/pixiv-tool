@@ -6,6 +6,24 @@
         <md-outlined-select id="startup-page" :value="form.startup_page" @change="form.startup_page = ($event.target as HTMLSelectElement).value"><md-select-option v-for="option in startupPageOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
       </div>
       <div class="m3-field">
+        <label for="language">{{ t("settings.language") }}</label>
+        <md-outlined-select id="language" :value="form.language" @change="changeLang(($event.target as HTMLSelectElement).value)"><md-select-option v-for="option in langOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
+      </div>
+    </template>
+
+    <template v-else-if="section === 'appearance'">
+      <div class="m3-field">
+        <div class="field-label"><label for="theme">{{ t('settings.theme') }}</label><HelpTooltip :label="t('settings.theme')" :text="t('settings.appearanceHint')" /></div>
+        <md-outlined-select id="theme" :value="form.theme" @change="form.theme = ($event.target as HTMLSelectElement).value"><md-select-option v-for="option in themeOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
+      </div>
+      <fieldset class="m3-field settings-fieldset">
+        <legend>{{ t("settings.palette") }}</legend>
+        <div class="palette-options"><label v-for="option in paletteOptions" :key="option.value" class="palette-option"><md-radio name="theme-color" :value="option.value" :checked="form.theme_color === option.value" @change="form.theme_color = option.value" /><span class="palette-swatch" :class="`palette-${option.value}`" aria-hidden="true"></span>{{ option.label }}</label></div>
+      </fieldset>
+    </template>
+
+    <template v-else-if="section === 'download'">
+      <div class="m3-field">
         <label for="output-dir">{{ t("settings.outputDir") }}</label>
         <div class="settings-path-row">
           <md-outlined-text-field id="output-dir" class="settings-path-input" :value="form.output_dir" :placeholder="t('settings.outputDirPlaceholder')" @input="form.output_dir = ($event.target as HTMLInputElement).value" />
@@ -29,20 +47,9 @@
         <md-outlined-text-field id="novel-series-filename-template" :value="form.novel_series_filename_template" :supporting-text="seriesTemplateHint" :error="Boolean(templateErrors.series)" :error-text="templateErrors.series" @input="form.novel_series_filename_template = ($event.target as HTMLInputElement).value; templateErrors.series = ''" />
       </div>
       <div class="m3-field">
-        <label for="language">{{ t("settings.language") }}</label>
-        <md-outlined-select id="language" :value="form.language" @change="changeLang(($event.target as HTMLSelectElement).value)"><md-select-option v-for="option in langOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
+        <div class="field-label"><label for="max-wait">{{ t('settings.maxWait') }}</label><HelpTooltip :label="t('settings.maxWait')" :text="t('settings.maxWaitHint')" /></div>
+        <div class="m3-row"><md-outlined-text-field id="max-wait" class="settings-number-input" type="number" min="30" max="86400" step="30" :value="String(form.max_wait_seconds)" @input="form.max_wait_seconds = Number(($event.target as HTMLInputElement).value)" /></div>
       </div>
-    </template>
-
-    <template v-else-if="section === 'appearance'">
-      <div class="m3-field">
-        <div class="field-label"><label for="theme">{{ t('settings.theme') }}</label><HelpTooltip :label="t('settings.theme')" :text="t('settings.appearanceHint')" /></div>
-        <md-outlined-select id="theme" :value="form.theme" @change="form.theme = ($event.target as HTMLSelectElement).value"><md-select-option v-for="option in themeOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
-      </div>
-      <fieldset class="m3-field settings-fieldset">
-        <legend>{{ t("settings.palette") }}</legend>
-        <div class="palette-options"><label v-for="option in paletteOptions" :key="option.value" class="palette-option"><md-radio name="theme-color" :value="option.value" :checked="form.theme_color === option.value" @change="form.theme_color = option.value" /><span class="palette-swatch" :class="`palette-${option.value}`" aria-hidden="true"></span>{{ option.label }}</label></div>
-      </fieldset>
     </template>
 
     <template v-else-if="section === 'images'">
@@ -79,6 +86,10 @@
         <legend><span class="field-label">{{ t("settings.contentDisplay") }}<HelpTooltip :label="t('settings.contentDisplay')" :text="t('settings.showR18Hint')" /></span></legend>
         <div class="m3-row"><label class="m3-choice"><md-checkbox :checked="form.show_r18" @change="form.show_r18 = ($event.target as HTMLInputElement).checked" />{{ t("settings.showR18") }}</label></div>
       </fieldset>
+      <div class="m3-field">
+        <div class="field-label"><label for="saucenao-api-key">{{ t('settings.saucenaoApiKey') }}</label><HelpTooltip :label="t('settings.saucenaoApiKey')" :text="t('settings.saucenaoApiKeyHint')" /></div>
+        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" type="password" autocomplete="new-password" class="settings-api-key-input" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /></div>
+      </div>
     </template>
 
     <template v-else-if="section === 'translation'">
@@ -147,17 +158,6 @@
           <span v-else-if="testResult" class="field-hint" :class="testFailed ? 'state-error' : 'state-success'" :role="testFailed ? 'alert' : 'status'">{{ testResult }}</span>
         </div>
       </fieldset>
-    </template>
-
-    <template v-else-if="section === 'advanced'">
-      <div class="m3-field">
-        <div class="field-label"><label for="saucenao-api-key">{{ t('settings.saucenaoApiKey') }}</label><HelpTooltip :label="t('settings.saucenaoApiKey')" :text="t('settings.saucenaoApiKeyHint')" /></div>
-        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" type="password" autocomplete="new-password" class="settings-api-key-input" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /></div>
-      </div>
-      <div class="m3-field">
-        <div class="field-label"><label for="max-wait">{{ t('settings.maxWait') }}</label><HelpTooltip :label="t('settings.maxWait')" :text="t('settings.maxWaitHint')" /></div>
-        <div class="m3-row"><md-outlined-text-field id="max-wait" class="settings-number-input" type="number" min="30" max="86400" step="30" :value="String(form.max_wait_seconds)" @input="form.max_wait_seconds = Number(($event.target as HTMLInputElement).value)" /></div>
-      </div>
     </template>
 
     <template v-else>

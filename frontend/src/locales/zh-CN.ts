@@ -336,9 +336,9 @@ export default {
     groups: {
       general: "通用",
       appearance: "外观",
-      images: "图片与内容",
+      download: "下载",
+      images: "浏览与图片",
       translation: "小说翻译",
-      advanced: "高级",
       maintenance: "维护",
     },
     outputDir: "输出目录",
@@ -412,7 +412,7 @@ export default {
     cacheCleared: "缓存已清理",
     authLabel: "登录态",
     clearAuthHint: "从系统凭据存储中移除登录信息，之后需重新登录。",
-    maxWait: "最大等待时间（秒）",
+    maxWait: "下载等待上限",
     maxWaitHint: "任务运行超过该时长自动标记失败，暂停时间不计入。默认 180s。",
     maxWaitInvalid: "最大等待时间必须 ≥ 30 秒",
     // 缩略图档位与内容显示（取值集合见 src-tauri/src/settings.rs 的 THUMB_*_TIERS）

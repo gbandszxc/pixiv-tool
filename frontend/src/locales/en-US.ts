@@ -335,9 +335,9 @@ export default {
     groups: {
       general: "General",
       appearance: "Appearance",
-      images: "Images & Content",
+      download: "Downloads",
+      images: "Browsing & images",
       translation: "Novel translation",
-      advanced: "Advanced",
       maintenance: "Maintenance",
     },
     outputDir: "Output Directory",
@@ -411,7 +411,7 @@ export default {
     cacheCleared: "Cache cleared",
     authLabel: "Login state",
     clearAuthHint: "Remove the login from the system credential store; you will need to sign in again.",
-    maxWait: "Max wait time (s)",
+    maxWait: "Download wait limit",
     maxWaitHint: "Tasks auto-fail after running longer than this (pause time excluded). Default 180s.",
     maxWaitInvalid: "Max wait time must be at least 30 seconds",
     // Thumbnail tiers and content display (value sets mirror THUMB_*_TIERS in src-tauri/src/settings.rs)
