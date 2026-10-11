@@ -10,6 +10,8 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::core::filename_template::{NovelNameInfo, render_novel};
+
 /// 文件名非法字符（对齐 Python `re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)`）。
 fn is_illegal_filename_char(c: char) -> bool {
     matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || (c as u32) <= 0x1f
@@ -64,6 +66,12 @@ pub struct ExportMeta {
     pub title: String,
     pub page_count: i64,
     pub series_order: Option<i64>,
+    /// 作者名（模板 `{user}`；拿不到为空串，渲染回落 `user_{uid}`）。
+    pub user_name: String,
+    /// 作者 ID（模板 `{uid}`）。
+    pub user_id: i64,
+    /// 系列 ID（模板 `{sid}`）；散篇 / 单篇为 `None`。
+    pub series_id: Option<i64>,
 }
 
 /// 生成输出文件名（SPEC §4.4）：
@@ -80,15 +88,38 @@ pub fn make_filename(meta: &ExportMeta, ext: &str) -> String {
     }
 }
 
+/// 按模板生成输出文件名：渲染成功返回 `{词干}.{ext}`；模板为空串或
+/// 渲染结果为空 → `None`（调用方回落 [`make_filename`]）。
+pub fn make_filename_with_template(meta: &ExportMeta, ext: &str, template: &str) -> Option<String> {
+    if template.is_empty() {
+        return None;
+    }
+    let info = NovelNameInfo {
+        user_name: meta.user_name.clone(),
+        user_id: meta.user_id,
+        title: meta.title.clone(),
+        id: meta.novel_id,
+        series_id: meta.series_id,
+        series_order: meta.series_order,
+        page_count: meta.page_count,
+    };
+    render_novel(&info, template).map(|stem| format!("{stem}.{ext}"))
+}
+
 /// 写单文件：目标目录不存在则创建，UTF-8 输出，返回生成路径。
+/// `template = Some` 且渲染成功用模板命名，否则回落 [`make_filename`]。
 fn write_export(
     content: &str,
     meta: &ExportMeta,
     ext: &str,
     target_dir: &Path,
+    template: Option<&str>,
 ) -> io::Result<Vec<PathBuf>> {
     std::fs::create_dir_all(target_dir)?;
-    let filepath = target_dir.join(make_filename(meta, ext));
+    let filename = template
+        .and_then(|t| make_filename_with_template(meta, ext, t))
+        .unwrap_or_else(|| make_filename(meta, ext));
+    let filepath = target_dir.join(filename);
     std::fs::write(&filepath, content)?;
     Ok(vec![filepath])
 }
@@ -97,14 +128,16 @@ fn write_export(
 pub struct TxtExporter;
 
 impl TxtExporter {
-    /// 导出并返回生成的文件路径列表（target_dir 不存在则创建）。
+    /// 导出并返回生成的文件路径列表（target_dir 不存在则创建；
+    /// `template = Some` 且渲染成功用模板命名，None / 渲染为空回落现行命名）。
     pub fn export(
         &self,
         content: &str,
         meta: &ExportMeta,
         target_dir: &Path,
+        template: Option<&str>,
     ) -> io::Result<Vec<PathBuf>> {
-        write_export(content, meta, "txt", target_dir)
+        write_export(content, meta, "txt", target_dir, template)
     }
 }
 
@@ -118,14 +151,16 @@ impl TxtExporter {
 pub struct MarkdownExporter;
 
 impl MarkdownExporter {
-    /// 导出并返回生成的文件路径列表（target_dir 不存在则创建）。
+    /// 导出并返回生成的文件路径列表（target_dir 不存在则创建；
+    /// `template = Some` 且渲染成功用模板命名，None / 渲染为空回落现行命名）。
     pub fn export(
         &self,
         content: &str,
         meta: &ExportMeta,
         target_dir: &Path,
+        template: Option<&str>,
     ) -> io::Result<Vec<PathBuf>> {
-        write_export(&render_markdown(content), meta, "md", target_dir)
+        write_export(&render_markdown(content), meta, "md", target_dir, template)
     }
 }
 
@@ -141,10 +176,11 @@ impl Exporter {
         content: &str,
         meta: &ExportMeta,
         target_dir: &Path,
+        template: Option<&str>,
     ) -> io::Result<Vec<PathBuf>> {
         match self {
-            Exporter::Txt(e) => e.export(content, meta, target_dir),
-            Exporter::Markdown(e) => e.export(content, meta, target_dir),
+            Exporter::Txt(e) => e.export(content, meta, target_dir, template),
+            Exporter::Markdown(e) => e.export(content, meta, target_dir, template),
         }
     }
 }
@@ -175,6 +211,9 @@ mod tests {
             title: title.into(),
             page_count,
             series_order,
+            user_name: String::new(),
+            user_id: 0,
+            series_id: None,
         }
     }
 
@@ -227,6 +266,74 @@ mod tests {
             make_filename(&meta("话", 5, Some(123)), "txt"),
             "123_话.txt"
         );
+    }
+
+    #[test]
+    fn template_filename_uses_user_and_series_fields() {
+        // 单篇模板含 {user}：作者名参与命名；空作者名回落 user_{uid}
+        let mut m = meta("小说", 1, None);
+        m.user_name = "作者名".into();
+        m.user_id = 11;
+        assert_eq!(
+            make_filename_with_template(&m, "txt", "{user}_{nid}").unwrap(),
+            "作者名_12345.txt"
+        );
+        m.user_name = String::new();
+        assert_eq!(
+            make_filename_with_template(&m, "txt", "{user}_{nid}").unwrap(),
+            "user_11_12345.txt"
+        );
+        // 系列模板含 {order} + {sid}
+        let mut s = meta("话名", 10, Some(5));
+        s.series_id = Some(999);
+        assert_eq!(
+            make_filename_with_template(&s, "txt", "{order}_{sid}_{title}").unwrap(),
+            "05_999_话名.txt"
+        );
+        // 非系列（sid/order 为 None）→ 空值吸收分隔符，无悬挂 `_`
+        assert_eq!(
+            make_filename_with_template(&meta("小说", 1, None), "txt", "{title}_{sid}_{nid}")
+                .unwrap(),
+            "小说_12345.txt"
+        );
+    }
+
+    #[test]
+    fn template_filename_empty_or_blank_template_returns_none() {
+        // 模板为空串 / 渲染结果为空 → None，调用方据此回落现行命名
+        assert_eq!(
+            make_filename_with_template(&meta("小说", 1, None), "txt", ""),
+            None
+        );
+        assert_eq!(
+            make_filename_with_template(&meta("小说", 1, None), "txt", "___"),
+            None
+        );
+    }
+
+    #[test]
+    fn txt_export_template_naming_and_fallback() {
+        // 返回路径即爬虫回写 DB txt_path 的值：模板命名下回写的是模板文件名
+        let dir =
+            std::env::temp_dir().join(format!("pixiv-tool-export-tpl-{}", uuid::Uuid::new_v4()));
+        // None 模板 → 现行命名
+        let paths = TxtExporter
+            .export("内容", &meta("标题", 1, None), &dir, None)
+            .unwrap();
+        assert_eq!(paths[0], dir.join("标题_12345.txt"));
+        // 自定义模板 → 模板文件名落盘
+        let mut m = meta("标题", 1, None);
+        m.user_name = "作者".into();
+        m.user_id = 7;
+        let paths = TxtExporter
+            .export("内容", &m, &dir, Some("{user}_{nid}"))
+            .unwrap();
+        assert_eq!(paths[0], dir.join("作者_12345.txt"));
+        assert_eq!(std::fs::read_to_string(&paths[0]).unwrap(), "内容");
+        // 渲染为空 → 回落现行命名
+        let paths = TxtExporter.export("内容", &m, &dir, Some("___")).unwrap();
+        assert_eq!(paths[0], dir.join("标题_12345.txt"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -287,7 +394,7 @@ mod tests {
             std::env::temp_dir().join(format!("pixiv-tool-export-test-{}", uuid::Uuid::new_v4()));
         let sub = dir.join("deep/nested"); // 不存在，应自动创建
         let paths = TxtExporter
-            .export("中文内容", &meta("标题", 1, None), &sub)
+            .export("中文内容", &meta("标题", 1, None), &sub, None)
             .unwrap();
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], sub.join("标题_12345.txt"));
@@ -300,7 +407,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("pixiv-tool-export-test-{}", uuid::Uuid::new_v4()));
         let paths = MarkdownExporter
-            .export("[chapter:T]\n[rb:a>b]", &meta("M", 2, Some(1)), &dir)
+            .export("[chapter:T]\n[rb:a>b]", &meta("M", 2, Some(1)), &dir, None)
             .unwrap();
         assert_eq!(paths[0], dir.join("01_M.md"));
         assert_eq!(

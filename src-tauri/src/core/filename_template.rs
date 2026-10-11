@@ -492,6 +492,10 @@ mod tests {
             title: title.into(),
             page_count,
             series_order,
+            // make_filename 不消费作者/系列字段，取中性值即可
+            user_name: String::new(),
+            user_id: 0,
+            series_id: None,
         }
     }
 

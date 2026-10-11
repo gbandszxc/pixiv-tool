@@ -203,6 +203,8 @@ impl TaskManager {
                         formats,
                         output_dir: settings.output_dir,
                         data_dir,
+                        novel_filename_template: settings.novel_filename_template,
+                        novel_series_filename_template: settings.novel_series_filename_template,
                         max_wait_seconds: settings.max_wait_seconds,
                         controls,
                         sink,
@@ -227,6 +229,7 @@ impl TaskManager {
                         output_dir: settings.output_dir,
                         data_dir,
                         user_id,
+                        illust_filename_template: settings.illust_filename_template,
                         max_wait_seconds: settings.max_wait_seconds,
                         controls,
                         sink,
@@ -316,6 +319,10 @@ impl TaskManager {
         let output_dir = settings.output_dir.clone();
         let formats = settings.output_formats.clone();
         let max_wait_seconds = settings.max_wait_seconds;
+        // 下载文件名模板随任务透传（重试与新建共用同一套命名来源 settings）
+        let novel_filename_template = settings.novel_filename_template.clone();
+        let novel_series_filename_template = settings.novel_series_filename_template.clone();
+        let illust_filename_template = settings.illust_filename_template.clone();
         let retry_task_id = new_task_id.clone();
 
         tokio::spawn(async move {
@@ -345,6 +352,8 @@ impl TaskManager {
                         formats,
                         output_dir,
                         data_dir,
+                        novel_filename_template,
+                        novel_series_filename_template,
                         max_wait_seconds,
                         controls,
                         sink,
@@ -364,6 +373,7 @@ impl TaskManager {
                         output_dir,
                         data_dir,
                         user_id: None,
+                        illust_filename_template,
                         max_wait_seconds,
                         controls,
                         sink,

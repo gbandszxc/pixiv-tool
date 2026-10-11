@@ -18,8 +18,10 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::core::exporter::{ExportMeta, Exporter, create_exporters};
+use crate::core::filename_template::IllustNameInfo;
 use crate::core::illust_crawler::{
-    UGOIRA_TYPE, collect_page_urls, page_filename, safe_title_or_id, ugoira_filename, user_dir_name,
+    UGOIRA_TYPE, collect_page_urls, page_filename_with_template, ugoira_filename_with_template,
+    user_dir_name,
 };
 use crate::core::sources::{IllustSource, NovelSource};
 use crate::core::task_manager::TaskControls;
@@ -41,6 +43,12 @@ pub struct NovelCrawlArgs {
     pub output_dir: String,
     /// 锚定根（= AppPaths.data_dir）。
     pub data_dir: PathBuf,
+    /// 小说单篇文件名模板（settings.novel_filename_template 透传）；
+    /// 渲染为空回落现行命名。
+    pub novel_filename_template: String,
+    /// 系列各话文件名模板（settings.novel_series_filename_template 透传），
+    /// 仅 series_order 为 Some 的条目使用。
+    pub novel_series_filename_template: String,
     pub max_wait_seconds: i64,
     pub controls: TaskControls,
     pub sink: EventSink,
@@ -59,6 +67,9 @@ pub struct IllustCrawlArgs {
     pub data_dir: PathBuf,
     /// 用户全集目录布局时为 Some(uid)；单作品为 None。
     pub user_id: Option<i64>,
+    /// 插画文件名模板（settings.illust_filename_template 透传）；
+    /// 渲染为空回落现行命名。
+    pub illust_filename_template: String,
     pub max_wait_seconds: i64,
     pub controls: TaskControls,
     pub sink: EventSink,
@@ -259,7 +270,10 @@ fn finish_task(
 ///   error = "任务超过最大等待时间（{N}s）"）
 /// - 终态：正常跑完 → done；取消 → **canceled**（修正 Python 版 bug）；
 ///   超时 / 外层异常 → failed
-/// - 导出路径回写：.txt → novels.txt_path，.md → novels.md_path
+/// - 导出文件名按模板渲染（`NovelCrawlArgs.novel_filename_template` /
+///   `novel_series_filename_template`：series_order 为 Some 用系列模板；
+///   渲染为空回落现行 make_filename）；回写：.txt → novels.txt_path，
+///   .md → novels.md_path
 /// - 输出目录：`<output_dir>/novel/`（相对 output_dir 锚定 data_dir）
 pub async fn run_novel_crawler(args: NovelCrawlArgs) {
     run_novel_items(args, None).await;
@@ -279,6 +293,8 @@ pub(crate) async fn run_novel_items(
         formats,
         output_dir,
         data_dir,
+        novel_filename_template,
+        novel_series_filename_template,
         max_wait_seconds,
         controls,
         sink,
@@ -290,6 +306,10 @@ pub(crate) async fn run_novel_items(
     };
     let exporters = create_exporters(&formats);
     let target_dir = anchor_output_dir(&output_dir, &data_dir).join("novel");
+    let templates = NovelTemplates {
+        novel: &novel_filename_template,
+        series: &novel_series_filename_template,
+    };
 
     let mut counters = TaskCounters::default();
     let started = Instant::now();
@@ -325,7 +345,17 @@ pub(crate) async fn run_novel_items(
                 timed_out = true;
                 break;
             }
-            match crawl_one_novel(&api, &db, novel_id, order, &target_dir, &exporters).await {
+            match crawl_one_novel(
+                &api,
+                &db,
+                novel_id,
+                order,
+                &target_dir,
+                &exporters,
+                templates,
+            )
+            .await
+            {
                 Ok(title) => {
                     counters.done += 1;
                     update_task_progress(&db, &task_id, &counters);
@@ -360,7 +390,16 @@ pub(crate) async fn run_novel_items(
     );
 }
 
-/// 抓取单篇小说：get_novel → 写库 → 按格式导出 → 回写 txt/md 路径。
+/// 小说文件名模板对（单篇 / 系列各话；settings 透传，渲染为空回落现行命名）。
+#[derive(Clone, Copy)]
+struct NovelTemplates<'a> {
+    novel: &'a str,
+    series: &'a str,
+}
+
+/// 抓取单篇小说：get_novel → 写库 → 按格式导出（文件名按模板渲染：
+/// series_order 为 Some 用系列模板，否则用单篇模板；渲染为空回落现行
+/// `make_filename`）→ 回写 txt/md 路径。
 async fn crawl_one_novel(
     api: &PixivApi,
     db: &Db,
@@ -368,6 +407,7 @@ async fn crawl_one_novel(
     order: Option<i64>,
     target_dir: &Path,
     exporters: &[Exporter],
+    templates: NovelTemplates<'_>,
 ) -> Result<String, ItemError> {
     let data: NovelData = api
         .get_novel(novel_id)
@@ -398,10 +438,18 @@ async fn crawl_one_novel(
         title: title.clone(),
         page_count: data.page_count,
         series_order: order,
+        user_name: data.user_name.clone(),
+        user_id: data.user_id,
+        series_id: data.series_id,
+    };
+    let template = if order.is_some() {
+        templates.series
+    } else {
+        templates.novel
     };
     for exporter in exporters {
         let paths = exporter
-            .export(&data.content, &meta, target_dir)
+            .export(&data.content, &meta, target_dir, Some(template))
             .map_err(|err| fail(&err))?;
         for path in paths {
             let path_str = path.to_string_lossy();
@@ -427,9 +475,11 @@ async fn crawl_one_novel(
 ///   `pic/users/{sanitize(作者名)}_{uid}/`（拿不到作者名退回 `user_{uid}`）
 /// - 单作品：每保存一页 done+1（1 页作品即 1/1）；用户全集：每完成一个作品 done+1
 /// - ugoira（illust_type=2）下载原图 zip（originalSrc 优先，zip_urls.original 兜底）
-/// - 文件名：`{safe_title}_{artwork_id}_p{N}.{ext}`（ext 从 URL 取）/
-///   `{safe_title}_{artwork_id}_ugoira.zip`；多页 meta 缺失时从 p0 直链
-///   `_p0.{ext} → _p{N}.{ext}` 推导
+/// - 文件名按模板渲染（`IllustCrawlArgs.illust_filename_template`，占位符见
+///   `filename_template`）：普通页渲染词干 + `.{url_ext}`，ugoira 渲染词干
+///   （内部追加 `_ugoira`）+ `.zip`；渲染为空回落现行
+///   `{safe_title}_{artwork_id}_p{N}.{ext}` / `{safe_title}_{artwork_id}_ugoira.zip`；
+///   多页 meta 缺失时从 p0 直链 `_p0.{ext} → _p{N}.{ext}` 推导
 /// - 已下载（is_illust_downloaded）→ skipped+1；saved_paths JSON 数组回写库
 /// - 超时/取消/终态语义与 run_novel_crawler 相同（取消写 canceled，含修正）
 /// - 输出目录：单作品 `<output_dir>/pic/`
@@ -449,6 +499,7 @@ pub(crate) async fn run_illust_items(args: IllustCrawlArgs, preset_ids: Option<V
         output_dir,
         data_dir,
         user_id,
+        illust_filename_template,
         max_wait_seconds,
         controls,
         sink,
@@ -556,6 +607,7 @@ pub(crate) async fn run_illust_items(args: IllustCrawlArgs, preset_ids: Option<V
                     artwork_id,
                     &base_dir,
                     &mut illust_cache,
+                    &illust_filename_template,
                     progress_cb,
                 )
                 .await
@@ -605,7 +657,8 @@ fn notify_progress(callback: &mut Option<&mut (dyn FnMut() + Send)>) {
     }
 }
 
-/// 抓取单幅插画：get_illust（缓存优先）→ 逐页下载 / ugoira zip → 写库。
+/// 抓取单幅插画：get_illust（缓存优先）→ 逐页下载 / ugoira zip（文件名按
+/// `template` 模板渲染，渲染为空回落现行命名）→ 写库。
 /// `on_page_saved` 每保存一页（或 ugoira zip）回调一次（None 时不回调）。
 async fn crawl_one_illust(
     api: &PixivApi,
@@ -613,6 +666,7 @@ async fn crawl_one_illust(
     artwork_id: i64,
     base_dir: &Path,
     cache: &mut HashMap<i64, IllustData>,
+    template: &str,
     mut on_page_saved: Option<&mut (dyn FnMut() + Send)>,
 ) -> Result<String, ItemError> {
     let data = match cache.remove(&artwork_id) {
@@ -627,7 +681,12 @@ async fn crawl_one_illust(
     } else {
         data.title.clone()
     };
-    let safe = safe_title_or_id(&data.title, artwork_id);
+    let name_info = IllustNameInfo {
+        user_name: data.user_name.clone(),
+        user_id: data.user_id,
+        title: data.title.clone(),
+        id: artwork_id,
+    };
     let fail = |err: &dyn std::fmt::Display| ItemError::new(Some(&title), err);
 
     std::fs::create_dir_all(base_dir).map_err(|err| fail(&err))?;
@@ -644,7 +703,7 @@ async fn crawl_one_illust(
             .download_bytes(&meta.zip_url)
             .await
             .map_err(|err| fail(&err))?;
-        let path = base_dir.join(ugoira_filename(&safe, artwork_id));
+        let path = base_dir.join(ugoira_filename_with_template(&name_info, template));
         std::fs::write(&path, &bytes).map_err(|err| fail(&err))?;
         saved.push(path.to_string_lossy().into_owned());
         notify_progress(&mut on_page_saved);
@@ -665,7 +724,7 @@ async fn crawl_one_illust(
                 .download_bytes(url)
                 .await
                 .map_err(|err| fail(&err))?;
-            let path = base_dir.join(page_filename(&safe, artwork_id, idx, url));
+            let path = base_dir.join(page_filename_with_template(&name_info, template, idx, url));
             std::fs::write(&path, &bytes).map_err(|err| fail(&err))?;
             saved.push(path.to_string_lossy().into_owned());
             notify_progress(&mut on_page_saved);

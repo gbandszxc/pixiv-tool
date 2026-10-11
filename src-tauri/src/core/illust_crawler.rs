@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use regex::Regex;
 
 use crate::core::exporter::sanitize_filename;
+use crate::core::filename_template::{IllustNameInfo, render_illust};
 use crate::pixiv::api::{IllustData, PixivApi};
 
 /// ugoira（动图）的 illustType。
@@ -79,6 +80,29 @@ pub(crate) fn ugoira_filename(safe_title: &str, artwork_id: i64) -> String {
     format!("{safe_title}_{artwork_id}_ugoira.zip")
 }
 
+/// 模板渲染普通页文件名（含 `.{url_ext}` 扩展名）；渲染结果为空 →
+/// 回落现行 [`page_filename`]。
+pub(crate) fn page_filename_with_template(
+    info: &IllustNameInfo,
+    template: &str,
+    idx: usize,
+    url: &str,
+) -> String {
+    match render_illust(info, template, idx, false) {
+        Some(stem) => format!("{stem}.{}", url_ext(url)),
+        None => page_filename(&safe_title_or_id(&info.title, info.id), info.id, idx, url),
+    }
+}
+
+/// 模板渲染 ugoira zip 文件名（含 `.zip` 扩展名）；渲染结果为空 →
+/// 回落现行 [`ugoira_filename`]。
+pub(crate) fn ugoira_filename_with_template(info: &IllustNameInfo, template: &str) -> String {
+    match render_illust(info, template, 0, true) {
+        Some(stem) => format!("{stem}.zip"),
+        None => ugoira_filename(&safe_title_or_id(&info.title, info.id), info.id),
+    }
+}
+
 /// 用户全集目录名：`{sanitize(作者名)}_{uid}`；作者名取 name||account，
 /// 拿不到（接口失败 / 两者为空）退回 `user_{uid}`（对齐 Python `_user_dir_name`）。
 pub(crate) async fn user_dir_name(api: &PixivApi, user_id: i64) -> String {
@@ -103,6 +127,7 @@ pub(crate) async fn user_dir_name(api: &PixivApi, user_id: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::filename_template::ILLUST_FILENAME_TEMPLATE_DEFAULT;
 
     fn illust(p0: &str, meta_pages: Vec<&str>, page_count: i64) -> IllustData {
         IllustData {
@@ -196,5 +221,58 @@ mod tests {
             "safe_1001_p0.jpg"
         );
         assert_eq!(ugoira_filename("safe", 1001), "safe_1001_ugoira.zip");
+    }
+
+    // ------------------------------------------------------------------
+    // 模板命名（供 crawler.rs 接线：模板串经 IllustCrawlArgs 透传后走这里）
+    // ------------------------------------------------------------------
+
+    fn name_info(title: &str) -> IllustNameInfo {
+        IllustNameInfo {
+            user_name: "作者名".into(),
+            user_id: 11,
+            title: title.into(),
+            id: 2001,
+        }
+    }
+
+    #[test]
+    fn template_page_filename_custom_and_fallback() {
+        let info = name_info("作品");
+        let url = "https://i.pximg.net/a/x_p0.jpg?x=1";
+        // 自定义模板含 {user} / {page1}：实际改变输出文件名
+        assert_eq!(
+            page_filename_with_template(&info, "{user}_{pid}_p{page1}", 2, url),
+            "作者名_2001_p3.jpg"
+        );
+        // 默认模板与现行命名 byte 级一致（含扩展名拼接）
+        assert_eq!(
+            page_filename_with_template(&info, ILLUST_FILENAME_TEMPLATE_DEFAULT, 3, url),
+            page_filename(&safe_title_or_id("作品", 2001), 2001, 3, url)
+        );
+        // 渲染结果为空（纯净化后为空的字面模板）→ 回落现行命名
+        assert_eq!(
+            page_filename_with_template(&info, "___", 0, url),
+            page_filename(&safe_title_or_id("作品", 2001), 2001, 0, url)
+        );
+    }
+
+    #[test]
+    fn template_ugoira_filename_custom_and_fallback() {
+        let info = name_info("作品");
+        // 自定义模板：page token 删除后追加 _ugoira 词干 + .zip
+        assert_eq!(
+            ugoira_filename_with_template(&info, "{user}_{pid}_p{page}"),
+            "作者名_2001_ugoira.zip"
+        );
+        // 默认模板与现行命名一致；渲染为空 → 回落现行命名
+        assert_eq!(
+            ugoira_filename_with_template(&info, ILLUST_FILENAME_TEMPLATE_DEFAULT),
+            ugoira_filename(&safe_title_or_id("作品", 2001), 2001)
+        );
+        assert_eq!(
+            ugoira_filename_with_template(&info, "___"),
+            ugoira_filename(&safe_title_or_id("作品", 2001), 2001)
+        );
     }
 }
