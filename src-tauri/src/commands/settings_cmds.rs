@@ -8,7 +8,8 @@
 //!   image_cache_max_mib 非法 → Err("图片缓存上限必须是 256~2048 MiB 之间的整数")；
 //!   detail_image_scale 非法 → Err("详情页图片缩放必须是 0.5~1.0 之间的数字")；
 //!   novel_font_scale 非法 → Err("小说字号缩放必须是 0.75~2.0 之间的数字")；
-//!   novel_bg_color 非法 → Err("阅读背景色无效")
+//!   novel_bg_color 非法 → Err("阅读背景色无效")；
+//!   文件名模板非法 → Err（模板校验的中文消息，如「未知占位符：…」「模板不能为空」）
 //! - clear_logs → {"status":"success"}（清空 <data_dir>/logs 下当前及轮转 .log 文件）
 
 use std::path::Path;
@@ -16,17 +17,19 @@ use std::path::Path;
 use serde_json::{Value, json};
 use tauri::State;
 
+use crate::core::filename_template::TemplateKind;
 use crate::settings::{
     STARTUP_PAGES, Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
-    validate_detail_image_scale_value, validate_image_cache_max_value, validate_max_wait_value,
-    validate_novel_bg_color_value, validate_novel_font_scale_value, validate_output_dir_value,
-    validate_thumb_tier, validate_translation_timeout_value,
+    validate_detail_image_scale_value, validate_filename_template_value,
+    validate_image_cache_max_value, validate_max_wait_value, validate_novel_bg_color_value,
+    validate_novel_font_scale_value, validate_output_dir_value, validate_thumb_tier,
+    validate_translation_timeout_value,
 };
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 23] = [
+const WRITABLE_KEYS: [&str; 26] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
@@ -49,6 +52,9 @@ const WRITABLE_KEYS: [&str; 23] = [
     "detail_image_scale",
     "novel_font_scale",
     "novel_bg_color",
+    "illust_filename_template",
+    "novel_filename_template",
+    "novel_series_filename_template",
     "saucenao_api_key",
 ];
 
@@ -107,7 +113,8 @@ pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Resul
 /// partial JSON → 新 Settings（纯函数，离线可测）：
 /// 1. output_dir / max_wait_seconds / translation_timeout_seconds / theme_color /
 ///    缩略图档位 / image_cache_max_mib / show_r18 / detail_image_scale /
-///    novel_font_scale / novel_bg_color 先做中文校验（失败即 Err，旧 400 文案）
+///    novel_font_scale / novel_bg_color / 三个下载文件名模板先做中文校验
+///    （失败即 Err，旧 400 文案）
 /// 2. 白名单键覆盖到当前配置序列化结果上，再反解回 Settings
 ///    （类型不合法的值在反解时以中文错误拒绝）
 pub fn apply_settings_patch(
@@ -162,6 +169,15 @@ pub fn apply_settings_patch(
     }
     if let Some(value) = patch_obj.get("novel_bg_color") {
         validate_novel_bg_color_value(value)?;
+    }
+    if let Some(value) = patch_obj.get("illust_filename_template") {
+        validate_filename_template_value(value, TemplateKind::Illust)?;
+    }
+    if let Some(value) = patch_obj.get("novel_filename_template") {
+        validate_filename_template_value(value, TemplateKind::Novel)?;
+    }
+    if let Some(value) = patch_obj.get("novel_series_filename_template") {
+        validate_filename_template_value(value, TemplateKind::NovelSeries)?;
     }
     let mut merged = serde_json::to_value(current)
         .map_err(|err| format!("序列化设置失败: {err}"))?
@@ -681,6 +697,99 @@ mod tests {
             );
         }
         cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_updates_and_validates_filename_templates() {
+        let data_dir = temp_data_dir("filename-template");
+        // 合法模板 patch 覆盖生效
+        let updated = apply_settings_patch(
+            &Settings::default(),
+            &json!({
+                "illust_filename_template": "{user}_{title}_{pid}_p{page1}",
+                "novel_filename_template": "{nid}_{title}",
+                "novel_series_filename_template": "{sid}_{order}_{title}"
+            }),
+            &data_dir,
+        )
+        .unwrap();
+        assert_eq!(
+            updated.illust_filename_template,
+            "{user}_{title}_{pid}_p{page1}"
+        );
+        assert_eq!(updated.novel_filename_template, "{nid}_{title}");
+        assert_eq!(
+            updated.novel_series_filename_template,
+            "{sid}_{order}_{title}"
+        );
+        // 缺键时保持原值不变
+        let untouched =
+            apply_settings_patch(&updated, &json!({"language": "en-US"}), &data_dir).unwrap();
+        assert_eq!(
+            untouched.illust_filename_template,
+            "{user}_{title}_{pid}_p{page1}"
+        );
+        assert_eq!(untouched.novel_filename_template, "{nid}_{title}");
+        // 非法模板按键对应的用途校验拒绝（文案来自 validate_template）；
+        // apply 返回 Err 时 settings_save 在落盘前中止，磁盘保持旧值。
+        let cases: [(&str, Value, &str); 6] = [
+            (
+                "illust_filename_template",
+                json!("{foo}_{pid}_p{page}"),
+                "未知占位符",
+            ),
+            (
+                "illust_filename_template",
+                json!("{title}_{pid}_p{page}/x"),
+                "不允许的字符",
+            ),
+            (
+                "illust_filename_template",
+                json!("{title}_{pid}"),
+                "必须包含 {page}",
+            ),
+            (
+                "novel_series_filename_template",
+                json!("{title}_{nid}"),
+                "必须包含 {order}",
+            ),
+            ("novel_filename_template", json!(""), "模板不能为空"),
+            (
+                "novel_filename_template",
+                json!(42),
+                "文件名模板必须是字符串",
+            ),
+        ];
+        for (key, bad, message_part) in cases {
+            let mut patch = serde_json::Map::new();
+            patch.insert(key.to_string(), bad);
+            let err = apply_settings_patch(&Settings::default(), &Value::Object(patch), &data_dir)
+                .unwrap_err();
+            assert!(err.contains(message_part), "key={key} err={err}");
+        }
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn filename_template_patch_save_roundtrip() {
+        let dir = temp_data_dir("filename-roundtrip");
+        // 合法 patch → 落盘 → 重载，模板值 byte 级保留
+        // （load_or_init 的加载期校验不得误伤合法自定义模板）。
+        let updated = apply_settings_patch(
+            &Settings::default(),
+            &json!({"illust_filename_template": "{uid}_{pid}_{page}"}),
+            &dir,
+        )
+        .unwrap();
+        updated.save(&dir).unwrap();
+        let loaded = Settings::load_or_init(&dir);
+        assert_eq!(loaded.illust_filename_template, "{uid}_{pid}_{page}");
+        // 默认值往返一致
+        assert_eq!(
+            loaded.novel_filename_template,
+            Settings::default().novel_filename_template
+        );
+        cleanup(&dir);
     }
 
     #[test]

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::core::filename_template::{self, TemplateKind};
 use crate::paths::default_output_dir;
 
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -52,6 +53,19 @@ pub struct Settings {
     /// 小说阅读背景色（小说阅读器底栏色块按钮写入），语义键，默认空串 = 跟随主题，
     /// 合法值见 [`NOVEL_BG_COLORS`]；非法值（含手改 settings.json）在加载期回落空串。
     pub novel_bg_color: String,
+    /// 插画（多页）下载文件名模板（占位符白名单与校验规则见
+    /// [`filename_template`]），默认 [`filename_template::ILLUST_FILENAME_TEMPLATE_DEFAULT`]；
+    /// 非法值（含手改 settings.json）在加载期回落默认。
+    #[serde(default = "default_illust_filename_template")]
+    pub illust_filename_template: String,
+    /// 小说（单篇）下载文件名模板，默认
+    /// [`filename_template::NOVEL_FILENAME_TEMPLATE_DEFAULT`]；非法值在加载期回落默认。
+    #[serde(default = "default_novel_filename_template")]
+    pub novel_filename_template: String,
+    /// 系列各话下载文件名模板，默认
+    /// [`filename_template::NOVEL_SERIES_FILENAME_TEMPLATE_DEFAULT`]；非法值在加载期回落默认。
+    #[serde(default = "default_novel_series_filename_template")]
+    pub novel_series_filename_template: String,
     /// SauceNAO API Key（以图识图必需，saucenao.com 注册后获取；仅保存在本机
     /// 配置文件——不入库、不写日志、不进报错原文）。
     pub saucenao_api_key: String,
@@ -88,6 +102,9 @@ impl Default for Settings {
             detail_image_scale: 1.0,
             novel_font_scale: 1.0,
             novel_bg_color: String::new(),
+            illust_filename_template: default_illust_filename_template(),
+            novel_filename_template: default_novel_filename_template(),
+            novel_series_filename_template: default_novel_series_filename_template(),
             saucenao_api_key: String::new(),
             translation_api_url: String::new(),
             translation_api_format: "chat_completions".into(),
@@ -97,6 +114,21 @@ impl Default for Settings {
             translation_extra: serde_json::json!({}),
         }
     }
+}
+
+/// serde default：插画文件名模板返回模块默认常量。
+fn default_illust_filename_template() -> String {
+    filename_template::ILLUST_FILENAME_TEMPLATE_DEFAULT.into()
+}
+
+/// serde default：小说文件名模板返回模块默认常量。
+fn default_novel_filename_template() -> String {
+    filename_template::NOVEL_FILENAME_TEMPLATE_DEFAULT.into()
+}
+
+/// serde default：系列文件名模板返回模块默认常量。
+fn default_novel_series_filename_template() -> String {
+    filename_template::NOVEL_SERIES_FILENAME_TEMPLATE_DEFAULT.into()
 }
 
 /// 列表/网格封面可选档位。
@@ -143,12 +175,26 @@ pub fn settings_path(config_dir: &Path) -> PathBuf {
     config_dir.join(SETTINGS_FILE_NAME)
 }
 
+/// 单个下载文件名模板的加载期归一：非法值记日志并回落对应用途的默认模板
+/// （对齐缩略图档位等「非法值回落」做法，不强制回写文件）。
+fn normalize_filename_template(value: &mut String, kind: TemplateKind, key: &str) {
+    if let Err(err) = filename_template::validate_template(value, kind) {
+        eprintln!("settings.json 的 {key} 非法（{err}），回落默认模板");
+        *value = match kind {
+            TemplateKind::Illust => default_illust_filename_template(),
+            TemplateKind::Novel => default_novel_filename_template(),
+            TemplateKind::NovelSeries => default_novel_series_filename_template(),
+        };
+    }
+}
+
 impl Settings {
     /// 从 `config_dir/settings.json` 加载：
     /// - 文件不存在 → 写入默认值并返回
     /// - JSON 损坏 / 读失败 → 备份为 `settings.json.corrupt-{mtime_ns}` 后重建默认
     /// - 旧值迁移：`output_dir == "downloads"`（早期默认相对路径）→ 系统下载目录/pixiv-tool
-    /// - 加载期归一：非法启动页、缩略图档位、小说字号缩放、阅读背景色重置为默认（不强制回写文件）
+    /// - 加载期归一：非法启动页、缩略图档位、小说字号缩放、阅读背景色、
+    ///   下载文件名模板重置为默认（不强制回写文件）
     /// - 缺键填默认（serde default）；未知键忽略（serde 默认行为）
     pub fn load_or_init(config_dir: &Path) -> Settings {
         let path = settings_path(config_dir);
@@ -223,6 +269,23 @@ impl Settings {
                 {
                     settings.translation_timeout_seconds = DEFAULT_TRANSLATION_TIMEOUT_SECONDS;
                 }
+                // 下载文件名模板：手改 settings.json 写入非法模板（未知占位符 /
+                // 非法字符 / 缺必含项等）回落默认，否则每次下载都会渲染出异常文件名。
+                normalize_filename_template(
+                    &mut settings.illust_filename_template,
+                    TemplateKind::Illust,
+                    "illust_filename_template",
+                );
+                normalize_filename_template(
+                    &mut settings.novel_filename_template,
+                    TemplateKind::Novel,
+                    "novel_filename_template",
+                );
+                normalize_filename_template(
+                    &mut settings.novel_series_filename_template,
+                    TemplateKind::NovelSeries,
+                    "novel_series_filename_template",
+                );
                 settings
             }
             Err(_) => {
@@ -404,6 +467,15 @@ pub fn validate_novel_bg_color_value(v: &Value) -> Result<(), String> {
     }
 }
 
+/// JSON 值形式的下载文件名模板校验：非字符串拒绝；内容按用途经
+/// [`filename_template::validate_template`] 校验（错误文案可直接展示给用户）。
+pub fn validate_filename_template_value(v: &Value, kind: TemplateKind) -> Result<(), String> {
+    match v.as_str() {
+        Some(template) => filename_template::validate_template(template, kind),
+        None => Err("文件名模板必须是字符串".to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +510,18 @@ mod tests {
         assert_eq!(s.detail_image_scale, 1.0);
         assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.novel_bg_color, "");
+        assert_eq!(
+            s.illust_filename_template,
+            filename_template::ILLUST_FILENAME_TEMPLATE_DEFAULT
+        );
+        assert_eq!(
+            s.novel_filename_template,
+            filename_template::NOVEL_FILENAME_TEMPLATE_DEFAULT
+        );
+        assert_eq!(
+            s.novel_series_filename_template,
+            filename_template::NOVEL_SERIES_FILENAME_TEMPLATE_DEFAULT
+        );
         assert_eq!(s.saucenao_api_key, "");
         assert_eq!(s.translation_api_format, "chat_completions");
         assert_eq!(
@@ -486,6 +570,18 @@ mod tests {
         assert_eq!(s.detail_image_scale, 1.0);
         assert_eq!(s.novel_font_scale, 1.0);
         assert_eq!(s.novel_bg_color, "");
+        assert_eq!(
+            s.illust_filename_template,
+            filename_template::ILLUST_FILENAME_TEMPLATE_DEFAULT
+        );
+        assert_eq!(
+            s.novel_filename_template,
+            filename_template::NOVEL_FILENAME_TEMPLATE_DEFAULT
+        );
+        assert_eq!(
+            s.novel_series_filename_template,
+            filename_template::NOVEL_SERIES_FILENAME_TEMPLATE_DEFAULT
+        );
         assert_eq!(s.saucenao_api_key, "");
         assert_eq!(s.translation_api_format, "chat_completions");
         assert_eq!(
@@ -661,6 +757,101 @@ mod tests {
                 validate_novel_bg_color_value(&bad).unwrap_err(),
                 message,
                 "bad={bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn filename_template_roundtrip_and_invalid_fallback_on_load() {
+        use serde_json::json;
+        let dir = temp_config_dir("filename-template");
+        // 合法自定义模板（各用途各一）原样保留
+        std::fs::write(
+            settings_path(&dir),
+            r#"{"illust_filename_template":"{user}_{pid}_p{page1}","novel_filename_template":"{nid}_{title}","novel_series_filename_template":"{sid}_{order}_{title}"}"#,
+        )
+        .unwrap();
+        let s = Settings::load_or_init(&dir);
+        assert_eq!(s.illust_filename_template, "{user}_{pid}_p{page1}");
+        assert_eq!(s.novel_filename_template, "{nid}_{title}");
+        assert_eq!(s.novel_series_filename_template, "{sid}_{order}_{title}");
+        // 手改 settings.json 写入非法模板 → 加载期回落默认。键与用途一一对应：
+        // 系列模板缺 {order} 判非法，即使同一串对小说单篇合法。
+        let bad = json!({
+            "illust_filename_template": "{foo}_{pid}_p{page}",
+            "novel_filename_template": "",
+            "novel_series_filename_template": "{title}_{nid}"
+        });
+        std::fs::write(settings_path(&dir), bad.to_string()).unwrap();
+        let s = Settings::load_or_init(&dir);
+        assert_eq!(
+            s.illust_filename_template,
+            filename_template::ILLUST_FILENAME_TEMPLATE_DEFAULT
+        );
+        assert_eq!(
+            s.novel_filename_template,
+            filename_template::NOVEL_FILENAME_TEMPLATE_DEFAULT
+        );
+        assert_eq!(
+            s.novel_series_filename_template,
+            filename_template::NOVEL_SERIES_FILENAME_TEMPLATE_DEFAULT
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn validate_filename_template_rules() {
+        use serde_json::json;
+        // 默认模板各自用途全部通过
+        assert!(
+            validate_filename_template_value(
+                &json!(filename_template::ILLUST_FILENAME_TEMPLATE_DEFAULT),
+                TemplateKind::Illust
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_filename_template_value(
+                &json!(filename_template::NOVEL_FILENAME_TEMPLATE_DEFAULT),
+                TemplateKind::Novel
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_filename_template_value(
+                &json!(filename_template::NOVEL_SERIES_FILENAME_TEMPLATE_DEFAULT),
+                TemplateKind::NovelSeries
+            )
+            .is_ok()
+        );
+        // 非字符串拒绝（文案统一）
+        for bad in [json!(42), json!(true), json!(null)] {
+            assert_eq!(
+                validate_filename_template_value(&bad, TemplateKind::Illust).unwrap_err(),
+                "文件名模板必须是字符串",
+                "bad={bad}"
+            );
+        }
+        // 各类非法内容：未知占位符 / 非法字符 / 缺必含项 / 空串
+        for (template, kind, message_part) in [
+            ("{foo}_{pid}_p{page}", TemplateKind::Illust, "未知占位符"),
+            (
+                "{title}_{pid}_p{page}/x",
+                TemplateKind::Illust,
+                "不允许的字符",
+            ),
+            ("{title}_{pid}", TemplateKind::Illust, "必须包含 {page}"),
+            (
+                "{title}_{nid}",
+                TemplateKind::NovelSeries,
+                "必须包含 {order}",
+            ),
+            ("", TemplateKind::Novel, "模板不能为空"),
+        ] {
+            let err = validate_filename_template_value(&json!(template), kind).unwrap_err();
+            assert!(
+                err.contains(message_part),
+                "template={template:?} kind={kind:?} err={err}"
             );
         }
     }
