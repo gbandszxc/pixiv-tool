@@ -98,6 +98,11 @@ export interface TaskMutationResult {
 export interface Settings {
   output_dir: string;
   output_formats: string[];
+  /** 下载文件名模板（占位符语法，白名单与校验规则见 utils/filenameTemplate.ts） */
+  illust_filename_template: string;
+  novel_filename_template: string;
+  /** 系列小说模板必须含 {order}；老配置缺键时由视图层回落默认值 */
+  novel_series_filename_template: string;
   language: string;
   theme: string;
   theme_color: string;

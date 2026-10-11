@@ -48,6 +48,10 @@ function ensureSettings(): Settings {
     mockSettings = {
       output_dir: "C:\\Users\\demo\\Downloads\\pixiv-tool",
       output_formats: ["txt", "markdown"],
+      // 下载文件名模板（与 stores/settings.ts 初值、后端 Settings::default 保持一致）
+      illust_filename_template: "{title}_{pid}_p{page}",
+      novel_filename_template: "{title}_{nid}",
+      novel_series_filename_template: "{order}_{title}",
       // 初始语言跟随 localStorage（与启动期语言选择一致，避免 mock 回切语言）
       language: localStorage.getItem("pixiv-tool-lang") || "zh-CN",
       theme: "auto",

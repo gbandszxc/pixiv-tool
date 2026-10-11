@@ -11,6 +11,10 @@ export const useSettingsStore = defineStore("settings", () => {
   const settings = ref<Settings>({
     output_dir: "",  // 实际值由后端 settings_get 提供（系统下载目录/pixiv-tool）
     output_formats: ["txt", "markdown"],
+    // 下载文件名模板（占位符语法），默认值与后端 Settings::default 一致；校验见 utils/filenameTemplate.ts
+    illust_filename_template: "{title}_{pid}_p{page}",
+    novel_filename_template: "{title}_{nid}",
+    novel_series_filename_template: "{order}_{title}",
     language: "zh-CN",
     theme: "auto",
     theme_color: "pixiv",

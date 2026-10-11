@@ -17,6 +17,18 @@
         <div class="m3-row"><label v-for="format in formats" :key="format" class="m3-choice"><md-checkbox :checked="form.output_formats.includes(format)" @change="toggleFormat(format, ($event.target as HTMLInputElement).checked)" />{{ format === "txt" ? "TXT" : "Markdown" }}</label></div>
       </fieldset>
       <div class="m3-field">
+        <label for="illust-filename-template">{{ t("settings.filenameTemplateIllust") }}</label>
+        <md-outlined-text-field id="illust-filename-template" :value="form.illust_filename_template" :supporting-text="illustTemplateHint" :error="Boolean(templateErrors.illust)" :error-text="templateErrors.illust" @input="form.illust_filename_template = ($event.target as HTMLInputElement).value; templateErrors.illust = ''" />
+      </div>
+      <div class="m3-field">
+        <label for="novel-filename-template">{{ t("settings.filenameTemplateNovel") }}</label>
+        <md-outlined-text-field id="novel-filename-template" :value="form.novel_filename_template" :supporting-text="novelTemplateHint" :error="Boolean(templateErrors.novel)" :error-text="templateErrors.novel" @input="form.novel_filename_template = ($event.target as HTMLInputElement).value; templateErrors.novel = ''" />
+      </div>
+      <div class="m3-field">
+        <label for="novel-series-filename-template">{{ t("settings.filenameTemplateSeries") }}</label>
+        <md-outlined-text-field id="novel-series-filename-template" :value="form.novel_series_filename_template" :supporting-text="seriesTemplateHint" :error="Boolean(templateErrors.series)" :error-text="templateErrors.series" @input="form.novel_series_filename_template = ($event.target as HTMLInputElement).value; templateErrors.series = ''" />
+      </div>
+      <div class="m3-field">
         <label for="language">{{ t("settings.language") }}</label>
         <md-outlined-select id="language" :value="form.language" @change="changeLang(($event.target as HTMLSelectElement).value)"><md-select-option v-for="option in langOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
       </div>
@@ -184,6 +196,7 @@ import { useSettingsStore } from "../../stores/settings";
 import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
 import { errorMessage, setWindowTheme, type Settings } from "../../api/tauri";
+import { formatTemplatePlaceholders, ILLUST_TEMPLATE_PLACEHOLDERS, NOVEL_TEMPLATE_PLACEHOLDERS, validateFilenameTemplate, type FilenameTemplateKind } from "../../utils/filenameTemplate";
 import { notify } from "../../ui/notify";
 import type { SettingsSection } from "./sections";
 
@@ -309,17 +322,28 @@ function changeCacheMax(value: string) {
 }
 
 function toggleFormat(format: string, checked: boolean) { form.value.output_formats = checked ? [...form.value.output_formats, format] : form.value.output_formats.filter((item) => item !== format); }
+/** 下载文件名模板的保存前校验错误（字段内 error-text 展示，输入即清；键对应三个模板输入框）。 */
+const templateErrors = ref({ illust: "", novel: "", series: "" });
+/** supporting text 列出可用占位符：清单与校验白名单同源（utils/filenameTemplate.ts），不会漂移。 */
+const illustTemplateHint = computed(() => t("settings.filenameTemplateHint", { list: formatTemplatePlaceholders(ILLUST_TEMPLATE_PLACEHOLDERS) }));
+const novelTemplateHint = computed(() => t("settings.filenameTemplateHint", { list: formatTemplatePlaceholders(NOVEL_TEMPLATE_PLACEHOLDERS) }));
+const seriesTemplateHint = computed(() => t("settings.filenameTemplateSeriesHint", { list: formatTemplatePlaceholders(NOVEL_TEMPLATE_PLACEHOLDERS), required: "{order}" }));
 /** 语言与主题同理是即时预览：立即切 i18n / 写 localStorage，落盘仍等保存。 */
 function applyLanguage(lang: string) { locale.value = lang; localStorage.setItem("pixiv-tool-lang", lang); }
 function changeLang(lang: string) { applyLanguage(lang); form.value.language = lang; }
 function snapshot() { return JSON.stringify([form.value, translationJson.value]); }
 function applyPreview() { const dark = form.value.theme === "dark" || (form.value.theme === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches); document.documentElement.classList.toggle("dark", dark); document.documentElement.dataset.palette = form.value.theme_color || "pixiv"; setWindowTheme(dark ? "dark" : "light").catch(() => {}); }
 watch(() => [form.value.theme, form.value.theme_color], applyPreview);
-onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180; if (typeof settingsStore.settings.translation_timeout_seconds !== "number") settingsStore.settings.translation_timeout_seconds = 600; form.value = { ...settingsStore.settings }; resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); });
+onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180; if (typeof settingsStore.settings.translation_timeout_seconds !== "number") settingsStore.settings.translation_timeout_seconds = 600; form.value = { ...settingsStore.settings };
+  // 老配置缺模板键时回落默认值（与 stores/settings.ts 初值一致），避免空值卡住保存校验
+  if (!form.value.illust_filename_template) form.value.illust_filename_template = "{title}_{pid}_p{page}";
+  if (!form.value.novel_filename_template) form.value.novel_filename_template = "{title}_{nid}";
+  if (!form.value.novel_series_filename_template) form.value.novel_series_filename_template = "{order}_{title}";
+  resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); });
 /** 有未保存改动：弹窗据此决定关闭前是否提示。 */
 function hasUnsaved() { return Boolean(translationKey.value) || clearTranslationKey.value || Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
 /** 回滚到上次保存值（取消 / 确认放弃修改）。主题预览随表单回到已保存值。 */
-function reset() { form.value = { ...settingsStore.settings }; resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); }
+function reset() { form.value = { ...settingsStore.settings }; templateErrors.value = { illust: "", novel: "", series: "" }; resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); }
 defineExpose({ save, reset, hasUnsaved });
 async function save(): Promise<boolean> {
   if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) { notify(t("settings.maxWaitInvalid")); return false; }
@@ -327,6 +351,19 @@ async function save(): Promise<boolean> {
   if (!Number.isInteger(cacheMax) || cacheMax < 256 || cacheMax > 2048) { notify(t("settings.imageCacheMaxInvalid")); return false; }
   const timeout = form.value.translation_timeout_seconds;
   if (!timeout || timeout < 30 || timeout > 3600) { notify(t("translation.timeoutInvalid")); return false; }
+  // 文件名模板保存前预校验：非法字段标红（error-text 替换 supporting text）并阻止整表写入
+  const templateChecks: Array<["illust" | "novel" | "series", FilenameTemplateKind, string]> = [
+    ["illust", "illust", form.value.illust_filename_template],
+    ["novel", "novel", form.value.novel_filename_template],
+    ["series", "novelSeries", form.value.novel_series_filename_template],
+  ];
+  let templateInvalid = false;
+  for (const [field, kind, value] of templateChecks) {
+    const issue = validateFilenameTemplate(kind, value);
+    templateErrors.value[field] = issue ? t(issue.key, issue.params) : "";
+    templateInvalid = templateInvalid || issue !== null;
+  }
+  if (templateInvalid) return false;
   let extra: Record<string, unknown>;
   try { extra = parseTranslationJson(); }
   catch { notify(translationJsonError.value); return false; }
