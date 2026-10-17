@@ -78,20 +78,19 @@ onBeforeUnmount(() => {
       <span class="progress-sep" aria-hidden="true">·</span>
       <span class="progress-received">{{ t("translation.progressReceived", { size: receivedText }) }}</span>
     </div>
-    <!-- 思考行：有思考输出才渲染；颜色弱于摘要行（ink-subtle < ink-muted）区分两条流，
-         单行静态 ellipsis 不做 marquee（思考逐帧刷新，滚动动画会被不断重置）；
-         整行 aria-hidden，全文经 title 悬停查看 -->
+    <!-- 预览行（思考与摘要共用同一行位置）：思考期显示思考尾窗（ink-subtle，静态 ellipsis——
+         思考逐帧刷新，滚动动画会被不断重置反而抖动）；正文摘要一旦到达即取代思考的显示位置
+         （ink-muted，溢出走马灯），思考的最后一句不驻留。两态整行 aria-hidden，全文经 title 悬停查看 -->
     <code
-      v-if="active.reasoning"
+      v-if="active.reasoning && !active.summary"
       class="progress-reasoning"
       aria-hidden="true"
       :title="active.reasoning"
     >
       <span class="progress-reasoning-label">{{ t("translation.progressReasoning") }}</span>{{ active.reasoning }}
     </code>
-    <!-- 摘要行：单行 nowrap；JS 判定溢出才挂双份内容无缝滚动（mq-scroll），不溢出静态全显；
-         reduced-motion 下降级 animation:none + 静态 ellipsis；整行 aria-hidden，全文经 title 悬停查看 -->
     <code
+      v-else
       ref="summaryEl"
       class="progress-summary"
       :class="{ 'is-overflow': overflow }"
