@@ -117,6 +117,12 @@ async function run() {
   assert(router.currentRoute.value.path === "/browse/work/novel/2", "选择条目进入该小说页");
   assert(!host.querySelector(".translation-picker"), "跳转后菜单关闭");
 
+  // ===== 单任务：长标题不挤坏左侧下载区 =====
+  const downloadLink = host.querySelector<HTMLElement>(".status-link")!;
+  assert(downloadLink.getBoundingClientRect().height <= 32, "左侧下载区保持单行，不被长标题挤换行");
+  const downloadLabels = [...downloadLink.querySelectorAll<HTMLElement>(":scope > span:not(.task-summary)")];
+  assert(downloadLabels.length > 0 && downloadLabels.every(el => el.getBoundingClientRect().height <= 20), "下载区固定文案不换行");
+
   // ===== 完成与失败按任务记账 =====
   pending[1].resolve(result("乙小说译文"));
   await settle();
@@ -152,7 +158,21 @@ async function run() {
   await settle();
   assert(store.active.length === 0, "完成任务全部退场");
 
-  document.querySelector<HTMLOutputElement>("#translation-tasks-result")!.textContent = "PASS：不同小说并行、同小说排队与同页 join、进度按任务隔离、底栏单/多任务形态、选择菜单焦点与跳转、完成与失败按小说记账";
+  // ===== 单任务长标题：宽度受限、左侧下载区不换行 =====
+  const longTitle = "『催眠術で家に遊びに来た妹の友人たちの常識を捻じ曲げてパコハメしまくりのドスケベお泊り会をエンジョイする話』";
+  store.begin(novel(5, longTitle), longTitle, 1);
+  await settle();
+  const single = statusButton()!;
+  const bar = host.querySelector<HTMLElement>(".download-status")!;
+  assert(single.getBoundingClientRect().width <= bar.getBoundingClientRect().width * 0.56, "单任务标题限制在底栏宽度的 55% 内");
+  const link = host.querySelector<HTMLElement>(".status-link")!;
+  assert(link.getBoundingClientRect().height <= 32, "左侧下载区保持单行，不被长标题挤换行");
+  assert([...link.querySelectorAll<HTMLElement>("span")].every(el => el.getBoundingClientRect().height <= 20), "下载区文案不换行");
+  pending[5].resolve(result("长标题译文"));
+  await settle();
+  assert(store.active.length === 0, "长标题任务结束");
+
+  document.querySelector<HTMLOutputElement>("#translation-tasks-result")!.textContent = "PASS：不同小说并行、同小说排队与同页 join、进度按任务隔离、底栏单/多任务形态、长标题不挤坏下载区、选择菜单焦点与跳转、完成与失败按小说记账";
 }
 run().catch(error => {
   document.querySelector<HTMLOutputElement>("#translation-tasks-result")!.textContent = `FAIL: ${error.message}`;

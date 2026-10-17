@@ -98,8 +98,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 button { color:var(--ink-muted); font:inherit; border:0; background:transparent; cursor:pointer; border-radius:var(--radius-control); height:100%; }
 button:hover { background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent); }
 button:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-offset:-2px; }
-.status-link { flex:1; min-width:0; display:flex; align-items:center; gap:var(--space-md); text-align:left; }
+.status-link { flex:1; min-width:0; display:flex; align-items:center; gap:var(--space-md); text-align:left; white-space:nowrap; }
+/* 左侧固定短文案不换行、不收缩：长小说标题只能在右侧翻译入口内省略 */
+.status-link > span:not(.task-summary) { flex:none; }
 .status-translation { flex:0 1 auto; min-width:0; display:flex; align-items:center; color:var(--md-sys-color-primary); padding:0 var(--space-sm); }
+/* 单任务标题上限按底栏宽度计（该按钮是底栏直接子元素，百分比基准正确）：
+   长标题在 55% 处省略，剩余空间留给下载进度区，避免「下载 / 无进行中任务」被挤换行 */
+.download-status > .status-translation { max-width:55%; }
 /* 计数文案是固定短句，不参与收缩：flex:none 保证整句完整显示，由左侧下载区让位
    （百分比 max-width 在宽度由内容决定的 flex 容器上会互相牵制，把文案压成省略号） */
 .translation-menu { position:relative; display:flex; flex:none; height:100%; }
