@@ -335,6 +335,7 @@ export default {
     progressBackgroundHint: "翻译在后台继续进行，离开页面不会中断",
     statusBarTranslating: "翻译中：《{title}》第 {page} 页",
     statusBarBackTo: "回到小说页",
+    statusBarTranslatingShort: "翻译中…",
   },
   settings: {
     startupPage: "应用打开默认进入",

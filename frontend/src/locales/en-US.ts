@@ -334,6 +334,7 @@ export default {
     progressBackgroundHint: "Translation continues in the background; leaving this page will not stop it.",
     statusBarTranslating: "Translating: “{title}”, page {page}",
     statusBarBackTo: "Back to novel",
+    statusBarTranslatingShort: "Translating…",
   },
   settings: {
     startupPage: "Default startup page",

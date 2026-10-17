@@ -3,9 +3,11 @@ import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { taskFailedCount, taskProgress, useTaskStore } from "../../stores/tasks";
 import { useDownloadPanelStore } from "../../stores/downloadPanel";
-const tasks = useTaskStore(); const panel = useDownloadPanelStore();
+import { useTranslationStore } from "../../stores/translation";
+const tasks = useTaskStore(); const panel = useDownloadPanelStore(); const translation = useTranslationStore();
 const router = useRouter(); const route = useRoute(); const { t } = useI18n();
 function openTasks() { if (route.path !== '/tools/tasks') void router.push('/tools/tasks'); }
+function backToNovel() { const id = translation.active?.novelId; if (id != null && route.path !== `/browse/work/novel/${id}`) void router.push(`/browse/work/novel/${id}`); }
 </script>
 
 <template>
@@ -20,6 +22,10 @@ function openTasks() { if (route.path !== '/tools/tasks') void router.push('/too
       </template>
       <span v-else>{{ t('workspace.idle') }}</span>
     </button>
+    <button v-if="translation.active" class="status-translation" :aria-label="t('translation.statusBarBackTo') + '：' + t('translation.statusBarTranslating', { title: translation.active.title, page: translation.active.page })" :title="t('translation.statusBarTranslating', { title: translation.active.title, page: translation.active.page })" @click="backToNovel">
+      <span class="translation-full">{{ t('translation.statusBarTranslating', { title: translation.active.title, page: translation.active.page }) }}</span>
+      <span class="translation-short">{{ t('translation.statusBarTranslatingShort') }}</span>
+    </button>
     <button class="new-download" @click="panel.open()">{{ t('workspace.newDownload') }}</button>
   </footer>
 </template>
@@ -30,8 +36,11 @@ button { color:var(--ink-muted); font:inherit; border:0; background:transparent;
 button:hover { background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent); }
 button:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-offset:-2px; }
 .status-link { flex:1; min-width:0; display:flex; align-items:center; gap:var(--space-md); text-align:left; }
+.status-translation { flex:0 1 auto; min-width:0; display:flex; align-items:center; color:var(--md-sys-color-primary); padding:0 var(--space-sm); }
+.translation-full { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.translation-short { display:none; white-space:nowrap; }
 .mini-progress { width:calc(var(--space-xl) * 5); flex:none; --md-linear-progress-track-height:4px; }
 .task-summary { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .new-download { flex:none; color:var(--md-sys-color-primary); padding:0 var(--space-sm); }
-@media (max-width:640px) { .task-summary { display:none; } .mini-progress { width:calc(var(--space-xl) * 2); } .download-status,.status-link { gap:var(--space-sm); } }
+@media (max-width:640px) { .task-summary { display:none; } .mini-progress { width:calc(var(--space-xl) * 2); } .download-status,.status-link { gap:var(--space-sm); } .translation-full { display:none; } .translation-short { display:inline; } }
 </style>
