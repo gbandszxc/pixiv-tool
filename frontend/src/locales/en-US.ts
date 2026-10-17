@@ -330,7 +330,6 @@ export default {
     progressTranslate: "Translating…",
     progressElapsed: "Elapsed {time}",
     progressReceived: "Received {size}",
-    progressSummary: "Latest output",
     progressBackgroundHint: "Translation continues in the background; leaving this page will not stop it.",
     statusBarTranslating: "Translating: “{title}”, page {page}",
     statusBarBackTo: "Back to novel",

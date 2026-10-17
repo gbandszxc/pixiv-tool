@@ -331,7 +331,6 @@ export default {
     progressTranslate: "翻译正文…",
     progressElapsed: "已用 {time}",
     progressReceived: "已接收 {size}",
-    progressSummary: "最近输出",
     progressBackgroundHint: "翻译在后台继续进行，离开页面不会中断",
     statusBarTranslating: "翻译中：《{title}》第 {page} 页",
     statusBarBackTo: "回到小说页",
