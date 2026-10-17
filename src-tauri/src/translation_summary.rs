@@ -2,7 +2,7 @@
 //!
 //! 模型译文是流式下发的 JSON（`{"lines":[{"line":0,"text":"…"},…]}`），增量可以把
 //! 键名、字符串、转义序列任意切断。完整 JSON 解析由 [`crate::translation::parse_model_json`]
-//! 收尾；这里只做一个跨增量保留状态的轻量扫描——只认识 `line` 与 `text` 两个键，
+//! 收尾；这里只做一个跨增量保留状态的轻量扫描——只认识 `text` 一个键，
 //! 见到完整的 text 值就记下（后出现的覆盖先出现的），取不到完整值就不出摘要，
 //! 由前端降级显示已接收字节数。
 
@@ -11,32 +11,18 @@ pub const SUMMARY_CHAR_LIMIT: usize = 60;
 /// 单个字符串值的累积上限：只需要前缀，超限即停止累积，但继续扫到收尾引号，
 /// 保证扫描状态不错位。
 const STRING_ACCUMULATE_LIMIT: usize = 4096;
-/// 对象栈深度上限：防御病态输入把栈撑爆（正常译文 JSON 只有两层）。
-const FRAME_DEPTH_LIMIT: usize = 32;
 
-/// 一行流式摘要：译文文本 + 所属行号（取不到行号就没有 `L{n}: ` 前缀）。
+/// 一行流式摘要：最近一个完整的译文 text 值。
 #[derive(Debug, PartialEq, Eq)]
 pub struct StreamSummary {
-    pub line: Option<i64>,
     pub text: String,
 }
 
 impl StreamSummary {
-    /// 展示形态：`L{n}: 摘要`；无行号时只有摘要；文本按 60 字符截断。
+    /// 展示形态：只输出摘要文本，按 60 字符 char 边界截断（不追加省略号）。
     pub fn display(&self) -> String {
-        let text: String = self.text.chars().take(SUMMARY_CHAR_LIMIT).collect();
-        match self.line {
-            Some(line) => format!("L{line}: {text}"),
-            None => text,
-        }
+        self.text.chars().take(SUMMARY_CHAR_LIMIT).collect()
     }
-}
-
-/// 一个 JSON 对象里收集到的字段（`line` / `text` 都在译文行对象里）。
-#[derive(Default)]
-struct ObjectFields {
-    line: Option<i64>,
-    text: Option<String>,
 }
 
 /// 字符串内转义的中间态：`\uXXXX` 要跨 4 个字符，代理对要跨 12 个。
@@ -54,10 +40,6 @@ enum Escape {
 /// 跨增量 JSON 摘要扫描器：喂入译文增量，随时可取出最近一个完整的 text 值。
 #[derive(Default)]
 pub struct SummaryExtractor {
-    /// 对象栈：每个 `{` 一帧，`}` 出栈时结算该对象的行号与文本。
-    frames: Vec<ObjectFields>,
-    /// 超出深度上限而没入栈的 `{` 数量，`}` 按同样的数抵消，保持括号配对。
-    skipped_open: usize,
     /// 最近一个完整 text 值（后出现的覆盖先出现的）。
     latest: Option<StreamSummary>,
     /// 正在读的字符串（转义已还原）。
@@ -74,8 +56,6 @@ pub struct SummaryExtractor {
     finished: Option<String>,
     /// 已确认的键名，等它的值。
     key: Option<String>,
-    /// 正在累积的数字（`line` 的值）。
-    number: Option<String>,
 }
 
 impl SummaryExtractor {
@@ -90,7 +70,7 @@ impl SummaryExtractor {
         }
     }
 
-    /// 展示用摘要（60 字符截断 + 行号前缀）；提取不到为空串。
+    /// 展示用摘要（60 字符截断）；提取不到为空串。
     pub fn summary(&self) -> String {
         self.latest
             .as_ref()
@@ -102,14 +82,6 @@ impl SummaryExtractor {
         if self.in_string {
             self.read_string(character);
             return;
-        }
-        // 数字进行中：非数字即收尾（`,` `}` `]` 空白都算分隔符）。
-        if self.number.is_some() {
-            if character.is_ascii_digit() {
-                self.number.as_mut().unwrap().push(character);
-                return;
-            }
-            self.finish_number();
         }
         if character.is_whitespace() {
             // 空白不终结正在等待判定的字符串（`"text" : "…"` 合法）。
@@ -130,36 +102,8 @@ impl SummaryExtractor {
                 self.overflow = false;
                 self.escape = Escape::None;
             }
-            '{' => {
-                self.key = None;
-                if self.frames.len() < FRAME_DEPTH_LIMIT {
-                    self.frames.push(ObjectFields::default());
-                } else {
-                    self.skipped_open += 1;
-                }
-            }
-            '}' => {
-                self.key = None;
-                if self.skipped_open > 0 {
-                    self.skipped_open -= 1;
-                } else if let Some(fields) = self.frames.pop() {
-                    // 行号可能在 text 之后才到，出栈时用最终行号再结算一次。
-                    if let Some(text) = fields.text {
-                        self.latest = Some(StreamSummary {
-                            line: fields.line,
-                            text,
-                        });
-                    }
-                }
-            }
-            // 结构符：值之间清掉键名，避免把键名误当成下一个值的键。
-            '[' | ']' | ',' => self.key = None,
-            character if character.is_ascii_digit() || character == '-' => {
-                if self.key.as_deref() == Some("line") {
-                    self.number = Some(character.to_string());
-                }
-            }
-            // 冒号只可能在 finished 分支里消费；true/false/null 等字面量直接丢掉键名。
+            // 结构符、数字与 true/false/null 等字面量都不是字符串值：清掉键名，
+            // 避免把上一个键名误配给后面的值（冒号只可能在 finished 分支里消费）。
             _ => self.key = None,
         }
     }
@@ -244,29 +188,13 @@ impl SummaryExtractor {
         self.finished = Some(text);
     }
 
-    fn finish_number(&mut self) {
-        let digits = self.number.take().unwrap_or_default();
-        self.key = None;
-        // 数字只在 `line` 键后开始累积（见 step），解析失败就当作没有行号。
-        if let (Ok(line), Some(fields)) = (digits.parse::<i64>(), self.frames.last_mut()) {
-            fields.line = Some(line);
-        }
-    }
-
     /// 结算一个作为值的字符串：只有 `text` 键的值进摘要。
     fn apply_string_value(&mut self, value: String) {
-        let key = self.key.take();
-        if key.as_deref() != Some("text") {
+        if self.key.take().as_deref() != Some("text") {
             return;
         }
-        if let Some(fields) = self.frames.last_mut() {
-            // 值完整即入摘要（对象还没闭合也算），行号出栈时再补。
-            self.latest = Some(StreamSummary {
-                line: fields.line,
-                text: value.clone(),
-            });
-            fields.text = Some(value);
-        }
+        // 值完整即入摘要（流可能恰好结束在这里，等不到下一个字符）。
+        self.latest = Some(StreamSummary { text: value });
     }
 
     /// 累积字符串内容；超过上限只保留前缀（展示只需要前 60 字符）。
@@ -297,9 +225,9 @@ mod tests {
     }
 
     #[test]
-    fn extracts_last_complete_text_with_line_prefix() {
+    fn extracts_last_complete_text() {
         let json = r#"{"lines":[{"line":0,"text":"第一行。"},{"line":1,"text":"第二行。"}]}"#;
-        assert_eq!(summary_of(&[json]), "L1: 第二行。");
+        assert_eq!(summary_of(&[json]), "第二行。");
     }
 
     #[test]
@@ -310,14 +238,14 @@ mod tests {
         for character in json.chars() {
             extractor.push(&character.to_string());
         }
-        assert_eq!(extractor.summary(), "L7: 他说\"走吧\"。");
+        assert_eq!(extractor.summary(), "他说\"走吧\"。");
     }
 
     #[test]
     fn survives_chunk_boundaries_inside_escapes_and_keys() {
         // 任意两段切分都能续上：键名中间、`\uXXXX` 中间、收尾引号前后、多字节字符边界。
         let json = "{\"line\":12,\"text\":\"于是他低下头，避开那道追过来的视线\\u2026\"}";
-        let expected = "L12: 于是他低下头，避开那道追过来的视线…";
+        let expected = "于是他低下头，避开那道追过来的视线…";
         for (index, _) in json.char_indices() {
             let (head, tail) = json.split_at(index);
             assert_eq!(summary_of(&[head, tail]), expected, "切点 {index}");
@@ -342,7 +270,7 @@ mod tests {
         extractor.push("{\"lines\":[{\"line\":0,\"text\":\"半");
         assert_eq!(extractor.summary(), "", "字符串没收尾不算完整值");
         extractor.push("句话\"");
-        assert_eq!(extractor.summary(), "L0: 半句话", "收尾引号出现即完整");
+        assert_eq!(extractor.summary(), "半句话", "收尾引号出现即完整");
         // 只有键名、连冒号后的值都没有：同样不出摘要。
         let mut partial = SummaryExtractor::new();
         partial.push("{\"line\":3,\"te");
@@ -354,12 +282,8 @@ mod tests {
         let long = "长".repeat(200);
         let json = format!("{{\"line\":0,\"text\":\"{long}\"}}");
         let summary = summary_of(&[&json]);
-        assert_eq!(summary, format!("L0: {}", "长".repeat(60)));
-        assert_eq!(
-            summary.chars().count(),
-            64,
-            "L0: 前缀 4 字符 + 正文 60 字符"
-        );
+        assert_eq!(summary, "长".repeat(60));
+        assert_eq!(summary.chars().count(), 60, "正文按 60 字符截断");
         // 超长值也逐字节喂得动：扫描状态不错位。
         let mut extractor = SummaryExtractor::new();
         for character in json.chars() {
@@ -383,30 +307,22 @@ mod tests {
     }
 
     #[test]
-    fn pairs_line_when_it_arrives_after_text() {
-        // 行号在 text 之后：值完整时先出无前缀摘要，对象闭合后补上行号。
-        let mut extractor = SummaryExtractor::new();
-        extractor.push("{\"text\":\"晚到的行号\",\"line\":9}");
-        assert_eq!(extractor.summary(), "L9: 晚到的行号");
-    }
-
-    #[test]
     fn keeps_last_complete_value_when_trailing_text_is_incomplete() {
         let mut extractor = SummaryExtractor::new();
         extractor.push("{\"lines\":[{\"line\":0,\"text\":\"完整的一行\"},");
-        assert_eq!(extractor.summary(), "L0: 完整的一行");
+        assert_eq!(extractor.summary(), "完整的一行");
         extractor.push("{\"line\":1,\"text\":\"没收尾");
-        assert_eq!(extractor.summary(), "L0: 完整的一行", "半行不覆盖完整行");
+        assert_eq!(extractor.summary(), "完整的一行", "半行不覆盖完整行");
     }
 
     #[test]
-    fn ignores_deeply_nested_open_braces_without_losing_pairing() {
-        // 病态输入：大量 `{` 不会把对象栈撑爆，括号配对仍然正确。
+    fn ignores_stray_braces_without_losing_extraction() {
+        // 病态输入：大量不成对的 `{` `}` 只是结构符，不影响后续提取。
         let mut extractor = SummaryExtractor::new();
         extractor.push(&"{".repeat(500));
         extractor.push(&"}".repeat(500));
         assert_eq!(extractor.summary(), "");
-        extractor.push("{\"text\":\"括号配平后仍能提取\"}");
-        assert_eq!(extractor.summary(), "括号配平后仍能提取");
+        extractor.push("{\"text\":\"括号之后仍能提取\"}");
+        assert_eq!(extractor.summary(), "括号之后仍能提取");
     }
 }

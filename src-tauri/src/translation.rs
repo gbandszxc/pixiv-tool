@@ -3210,11 +3210,11 @@ mod tests {
             assert_eq!(event["phase"], phase);
         }
         let event: Value =
-            serde_json::from_str(&progress_event("translate", 38211, "L12: 于是他低下头")).unwrap();
+            serde_json::from_str(&progress_event("translate", 38211, "于是他低下头")).unwrap();
         assert_eq!(event["type"], "progress");
         assert_eq!(event["phase"], "translate");
         assert_eq!(event["received"], json!(38211));
-        assert_eq!(event["summary"], "L12: 于是他低下头");
+        assert_eq!(event["summary"], "于是他低下头");
         // 摘要提取不到时字段仍在（空串），前端据此降级显示已接收字节。
         let empty: Value = serde_json::from_str(&progress_event("prepare", 8200, "")).unwrap();
         assert_eq!(empty["type"], "progress");
@@ -3341,7 +3341,7 @@ mod tests {
         );
         assert_eq!(
             parsed[2],
-            json!({"type":"progress","phase":"translate","received":render.len(),"summary":"L1: 第二行。"})
+            json!({"type":"progress","phase":"translate","received":render.len(),"summary":"第二行。"})
         );
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();
@@ -3440,9 +3440,9 @@ mod tests {
             event["received"].as_u64().unwrap() >= 2048,
             "累计到 2048B 即放行，不等 300ms"
         );
-        // 摘要：60 字符截断 + 行号前缀。TCP 可能把这一段再切开，切在 text 收尾之前
+        // 摘要：60 字符截断。TCP 可能把这一段再切开，切在 text 收尾之前
         // 则摘要为空（前端降级显示字节数），两种形态都合法。
-        let expected = format!("L0: {}", "长".repeat(60));
+        let expected = "长".repeat(60);
         let summary = event["summary"].as_str().unwrap();
         assert!(summary.is_empty() || summary == expected, "{summary}");
         if dir.exists() {
