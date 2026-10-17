@@ -16,6 +16,7 @@ import NovelContent from "../../components/browse/NovelContent.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
 import NovelBgPicker from "../../components/browse/NovelBgPicker.vue";
 import NovelTranslationMenu from "../../components/browse/NovelTranslationMenu.vue";
+import TranslationProgressBanner from "../../components/browse/TranslationProgressBanner.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import {
@@ -30,16 +31,18 @@ import {
 } from "../../api/browse";
 import { notify } from "../../ui/notify";
 import { useSettingsStore } from "../../stores/settings";
+import { useTranslationStore } from "../../stores/translation";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
 import { descriptionText } from "../../utils/descriptionText";
-import { getNovelTranslation, translateNovelPage, type NovelTranslationInput, type TranslatedLine, type TranslationMode } from "../../api/translation";
+import { getNovelTranslation, type NovelTranslationInput, type TranslatedLine, type TranslationMode } from "../../api/translation";
 
 const props = defineProps<{ kind: "illust" | "manga" | "novel"; id: number }>();
 
 const { t } = useI18n();
 const router = useRouter();
 const settings = useSettingsStore();
+const translationStore = useTranslationStore();
 
 // ===== 正文字号缩放 =====
 
@@ -137,7 +140,9 @@ async function translatePage(): Promise<void> {
   try {
     // 本页已提示「无需翻译」时再次点击即强制翻译，避免语言判定误判后无法覆盖。
     const force = Boolean(translations.value[targetPage]) || Boolean(skippedPages.value[targetPage]);
-    const result = await translateNovelPage(translationInput.value, targetPage, force);
+    // 任务交全局 translation store：由 store 持有 invoke 与计时器，离开页面不中断，
+    // progress 事件驱动页内进度带；失败由 store 记录后原样 rethrow，页内 catch 照旧展示。
+    const result = await translationStore.begin(translationInput.value, item.value?.title ?? "", targetPage, force);
     if (generation === translationGeneration && cacheVersion === cacheGeneration) {
       if (result.status === "already_target_language") {
         skippedPages.value = { ...skippedPages.value, [targetPage]: result.target_language };
@@ -223,6 +228,13 @@ async function load(): Promise<void> {
     detail.value = data;
     bookmarkState.value = data.bookmarkState ?? null;
     void restoreTranslations(generation);
+    // 翻译失败记录由 store 跨页保留（退出页面不再被吞）：只消费当前页匹配的记录，
+    // 翻页导致的页不匹配保留现场，留给用户回到目标页时展示。
+    const failed = translationStore.consumeError(props.id, page.value);
+    if (failed) {
+      translationError.value = failed;
+      translationErrorPage.value = page.value;
+    }
     // 加载成功后上报浏览历史（失败静默）
     void browseHistoryRecord({
       workId: data.item.id,
@@ -527,6 +539,12 @@ function openInPixiv(): void {
           <p v-if="metaText" class="work-meta">{{ metaText }}</p>
           <p v-if="plainDescription" class="description">{{ plainDescription }}</p>
         </div>
+
+        <!-- 翻译进度带：store 持有全局翻译任务，当前小说有任务时常驻（阶段/已用时间/已接收/流式摘要） -->
+        <TranslationProgressBanner
+          v-if="translationStore.active && translationStore.active.novelId === id"
+          :active="translationStore.active"
+        />
 
         <!-- 正文（NovelContent 分页渲染，内嵌图经 images 取 URL）；空内容容错 -->
         <NovelContent
