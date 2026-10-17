@@ -337,6 +337,10 @@ export default {
     statusBarTranslating: "翻译中：《{title}》第 {page} 页",
     statusBarBackTo: "回到小说页",
     statusBarTranslatingShort: "翻译中…",
+    statusBarTranslatingCount: "后台 {count} 个翻译任务正在进行",
+    statusBarTranslatingCountShort: "{count} 个翻译中",
+    statusBarTasks: "选择要查看的翻译任务",
+    statusBarTaskMeta: "第 {page} 页 · {phase} · 已用 {time}",
   },
   settings: {
     startupPage: "应用打开默认进入",

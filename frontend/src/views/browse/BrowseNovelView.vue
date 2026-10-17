@@ -119,16 +119,15 @@ const translationInput = computed<NovelTranslationInput>(() => ({
 const currentTranslation = computed(() => translations.value[page.value] ?? []);
 const currentSkipped = computed(() => skippedPages.value[page.value] ?? "");
 // 浮窗进度区数据与「翻译中」状态：仅当前小说的进行中任务（翻译在后台跨页执行，
-// 别的小说页面不显示他人进度；跳转返回后 store 是唯一真相源）。
-const activeTranslation = computed(() =>
-  translationStore.active && translationStore.active.novelId === props.id ? translationStore.active : null
-);
+// 别的小说页面不显示他人进度；跳转返回后 store 是唯一真相源）。多小说并行时
+// 每本小说各自一条，store.activeFor 按小说取。
+const activeTranslation = computed(() => translationStore.activeFor(props.id));
 // 设定集整理/精翻等内部阶段不面向用户，只回显统一的进行中状态与最终成败。
 // 进行中以全局 store 的在途任务为准（跳转返回后旧实例的页内态已丢，store 才是唯一真相源）。
 // 完成态 token 用量只对「当前页刚由任务跑完」回显（缓存恢复或别的页完成不冒充）。
 const doneUsageTotal = computed(() => {
-  const done = translationStore.lastDone;
-  return done && done.novelId === props.id && done.page === page.value ? done.usage?.total : undefined;
+  const done = translationStore.doneFor(props.id);
+  return done && done.page === page.value ? done.usage?.total : undefined;
 });
 const translationStatus = computed(() => {
   if (activeTranslation.value) return t("translation.translating", { page: activeTranslation.value.page });
@@ -142,7 +141,7 @@ const translationStatus = computed(() => {
   return t("translation.noTranslation");
 });
 
-/** 应用单页翻译结果到页内状态（translatePage 即时路径与 store.lastDone 跨页路径共用）。 */
+/** 应用单页翻译结果到页内状态（translatePage 即时路径与 store 完成快照跨页路径共用）。 */
 function applyTranslationResult(result: PageTranslation, targetPage: number): void {
   if (result.status === "already_target_language") {
     skippedPages.value = { ...skippedPages.value, [targetPage]: result.target_language };
@@ -198,14 +197,18 @@ function onTranslationCacheCleared(): void {
   skippedPages.value = {};
   translationError.value = "";
 }
-// 跨页完成同步：翻译在后台跑完时 store 写入 lastDone（新引用即信号），本页 watch 到匹配的
-// 小说/页码就把译文应用进页内状态——修复「离开页面后翻译完成、返回正文不刷新」。
-// immediate 覆盖「返回前一刻刚好完成」：挂载即消费一次已有结果。
+// 跨页完成同步：翻译在后台跑完时 store 追加完成快照（多小说并行，每本各自一条），
+// 本页 watch 到属于本小说的新快照就把译文应用进页内状态——修复「离开页面后翻译完成、
+// 返回正文不刷新」。immediate 覆盖「返回前一刻刚好完成」：挂载即消费一次已有结果。
+const appliedDones = new WeakSet<object>();
 watch(
-  () => translationStore.lastDone,
-  (done) => {
-    if (!done || done.novelId !== props.id) return;
-    applyTranslationResult({ status: done.status, lines: done.lines, target_language: done.target_language }, done.page);
+  () => translationStore.dones,
+  (dones) => {
+    for (const done of dones) {
+      if (done.novelId !== props.id || appliedDones.has(done)) continue;
+      appliedDones.add(done);
+      applyTranslationResult({ status: done.status, lines: done.lines, target_language: done.target_language }, done.page);
+    }
   },
   { immediate: true }
 );

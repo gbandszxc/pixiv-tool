@@ -336,6 +336,10 @@ export default {
     statusBarTranslating: "Translating: “{title}”, page {page}",
     statusBarBackTo: "Back to novel",
     statusBarTranslatingShort: "Translating…",
+    statusBarTranslatingCount: "{count} translation tasks running in background",
+    statusBarTranslatingCountShort: "{count} translating",
+    statusBarTasks: "Choose a translation task to open",
+    statusBarTaskMeta: "Page {page} · {phase} · {time} elapsed",
   },
   settings: {
     startupPage: "Default startup page",
