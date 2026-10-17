@@ -7,9 +7,11 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{State, ipc::Channel};
+
+use crate::translation_summary::SummaryExtractor;
 
 const PREPARE_PROMPT: &str = include_str!("translation_prepare.txt");
 const TRANSLATE_PROMPT: &str = include_str!("translation_render.txt");
@@ -767,14 +769,93 @@ impl StreamReader {
     }
 }
 
+/// 进度事件的最小间隔：连续小增量在此窗口内合并成一条。
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(300);
+/// 进度事件的字节阈值：累计新增到此即使时间未到也立即放行（二者取或）。
+const PROGRESS_BYTES: usize = 2048;
+
+/// 进度事件节流：距上次事件 ≥300ms，或本次累计新增 ≥2048B，即放行。
+/// 首次事件前没有「上次」，以流的起始时间锚定，避免每个增量都触发一条。
+struct ProgressThrottle {
+    last_sent: Instant,
+    pending_bytes: usize,
+}
+
+impl ProgressThrottle {
+    fn new() -> Self {
+        Self {
+            last_sent: Instant::now(),
+            pending_bytes: 0,
+        }
+    }
+
+    /// 记录一段译文增量；到达发送条件时放行并重置计时与累计。
+    fn ready(&mut self, bytes: usize) -> bool {
+        self.pending_bytes += bytes;
+        if self.last_sent.elapsed() >= PROGRESS_INTERVAL || self.pending_bytes >= PROGRESS_BYTES {
+            self.last_sent = Instant::now();
+            self.pending_bytes = 0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// 阶段事件（`queued` / `prepare` / `translate`）：命令入口即发，不节流。
+fn phase_event(phase: &str) -> String {
+    json!({"type": "phase", "phase": phase}).to_string()
+}
+
+/// 进度事件：节流后发，只统计译文增量（推理/思考增量不计入）。
+fn progress_event(phase: &str, received: usize, summary: &str) -> String {
+    json!({"type": "progress", "phase": phase, "received": received, "summary": summary})
+        .to_string()
+}
+
+/// 一次生成请求的进度上报目标：阶段标签（写进 progress 事件）+ 前端 Channel。
+/// 连接检测、模型列表等没有小说上下文的调用传 `None`，完全静默。
+struct StreamProgress<'a> {
+    phase: &'static str,
+    channel: &'a Channel<String>,
+}
+
+/// 一条流的进度上报状态：累计字节、节流器与摘要扫描器。
+struct ProgressReporter<'a> {
+    target: StreamProgress<'a>,
+    received: usize,
+    throttle: ProgressThrottle,
+    summary: SummaryExtractor,
+}
+
+impl ProgressReporter<'_> {
+    /// 喂入一段译文增量；返回是否到达发送条件。
+    fn feed(&mut self, bytes: usize, text: &str) -> bool {
+        self.received += bytes;
+        // Pass 1 产出的是设定集 JSON，没有译文行，摘要恒为空串。
+        if self.target.phase == "translate" {
+            self.summary.push(text);
+        }
+        self.throttle.ready(bytes)
+    }
+}
+
 /// 读完整条流并取回模型文本；中途断流单独给文案，好让用户知道重试即可。
+/// `progress` 为 Some 时按节流上报阶段进度（事件协议见 [`phase_event`]）。
 async fn read_stream_text(
     response: wreq::Response,
     format: ApiFormat,
     key: &str,
+    progress: Option<StreamProgress<'_>>,
 ) -> Result<String, String> {
     let mut reader = StreamReader::new(format);
     reader.diagnostic_key = key.to_owned();
+    let mut reporter = progress.map(|target| ProgressReporter {
+        target,
+        received: 0,
+        throttle: ProgressThrottle::new(),
+        summary: SummaryExtractor::new(),
+    });
     let mut raw = 0usize;
     let mut stream = std::pin::pin!(response.bytes_stream());
     while let Some(chunk) = stream.next().await {
@@ -789,7 +870,19 @@ async fn read_stream_text(
         if raw > MAX_TRANSLATION_STREAM_BYTES {
             return Err("翻译响应过大".into());
         }
+        let before = reader.text.len();
         reader.push(&chunk)?;
+        // 只统计译文增量：stream_event_text 已过滤掉推理/思考增量，text 只增译文。
+        if let Some(reporter) = reporter.as_mut() {
+            let added = reader.text.len() - before;
+            if added > 0 && reporter.feed(added, &reader.text[before..]) {
+                let _ = reporter.target.channel.send(progress_event(
+                    reporter.target.phase,
+                    reporter.received,
+                    &reporter.summary.summary(),
+                ));
+            }
+        }
     }
     reader.finish()
 }
@@ -837,6 +930,8 @@ struct TranslationClient<'a> {
     /// 本次会话标识（见 [`SESSION_HEADER`]）。
     session: String,
     settings: &'a Settings,
+    /// 实时进度上报目标；`None` 表示这次请求不报进度（连接检测、模型列表）。
+    progress: Option<&'a Channel<String>>,
 }
 
 impl TranslationClient<'_> {
@@ -855,7 +950,18 @@ impl TranslationClient<'_> {
         }
     }
 
-    async fn complete(&self, prompt: &str, input: Value) -> Result<Value, String> {
+    /// 本次生成请求的进度上报目标；没有 Channel 的调用（探测）传 `None`。
+    fn stream_progress(&self, phase: &'static str) -> Option<StreamProgress<'_>> {
+        self.progress
+            .map(|channel| StreamProgress { phase, channel })
+    }
+
+    async fn complete(
+        &self,
+        prompt: &str,
+        input: Value,
+        progress: Option<StreamProgress<'_>>,
+    ) -> Result<Value, String> {
         let response = self
             .authorized(self.http.post(self.url.as_str()))
             .header("Content-Type", "application/json")
@@ -895,7 +1001,7 @@ impl TranslationClient<'_> {
             ));
         }
         log::info!("翻译服务生成请求 → HTTP {}", response.status().as_u16());
-        parse_model_json(&read_stream_text(response, self.format, &self.key).await?)
+        parse_model_json(&read_stream_text(response, self.format, &self.key, progress).await?)
     }
 }
 
@@ -1062,6 +1168,7 @@ pub async fn translation_models(probe: TranslationProbe) -> Result<Vec<String>, 
         key,
         session: session_id(PROBE_SESSION_SEED),
         settings: &settings,
+        progress: None,
     };
     let response = client
         .authorized(client.http.get(client.url.as_str()))
@@ -1096,11 +1203,13 @@ pub async fn translation_test(probe: TranslationProbe) -> Result<(), String> {
         key,
         session: session_id(PROBE_SESSION_SEED),
         settings: &settings,
+        progress: None,
     };
     let result = client
         .complete(
             "这是连接检测。仅返回 JSON 对象 {\"ok\":true}，不输出其他文字。",
             json!("请确认服务可用。"),
+            None,
         )
         .await?;
     if result.get("ok").and_then(Value::as_bool) != Some(true) {
@@ -1165,7 +1274,7 @@ async fn translate_page_flow(
     if source_lines(current).is_empty() {
         return Err("本页没有可翻译文字".into());
     }
-    let _ = progress.send("queued".into());
+    let _ = progress.send(phase_event("queued"));
     let settings = state.settings_snapshot();
     let (target_code, target_name) = resolve_target_language(&settings)?;
     // 原文已是目标语言：只回提示不进入两轮流程；显式重译（force）仍执行。
@@ -1214,6 +1323,7 @@ async fn translate_page_flow(
         key,
         session: novel_session(novel.novel_id),
         settings: &settings,
+        progress: Some(progress),
     };
     let lines = translate_book(
         &client,
@@ -1302,7 +1412,7 @@ async fn translate_book(
     let mut input = json!({ "metadata": { "title":novel.title, "tags":novel.tags, "description":novel.description },
         "page":page, "page_count":all_pages.len(), "previous_context":prev, "next_context":next,
         "locked_bible":book.bible, "source_lines":source });
-    let _ = progress.send("prepare".into());
+    let _ = progress.send(phase_event("prepare"));
     log::info!(
         "小说 {} 第 {} 页：Pass 1 准备设定集（{} 行原文，已锁定 {} 词条）",
         novel.novel_id,
@@ -1315,6 +1425,7 @@ async fn translate_book(
             .complete(
                 &with_target_language(PREPARE_PROMPT, target_language),
                 input.clone(),
+                client.stream_progress("prepare"),
             )
             .await?,
     )
@@ -1323,7 +1434,7 @@ async fn translate_book(
     // Pass 1 先落盘；Pass 2 失败仍能沿用术语，不写半页译文。
     save_book(path, book)?;
     input["locked_bible"] = json!(book.bible);
-    let _ = progress.send("translate".into());
+    let _ = progress.send(phase_event("translate"));
     log::info!(
         "小说 {} 第 {} 页：Pass 2 翻译 {} 行",
         novel.novel_id,
@@ -1345,6 +1456,7 @@ async fn translate_book(
             .complete(
                 &with_target_language(TRANSLATE_PROMPT, target_language),
                 input,
+                client.stream_progress("translate"),
             )
             .await?,
     )
@@ -1399,6 +1511,7 @@ mod tests {
             key: read_api_key().unwrap().expect("未配置翻译 Key"),
             session: novel_session(id),
             settings: &settings,
+            progress: None,
         };
         let input = if sample {
             NovelInput {
@@ -1469,6 +1582,101 @@ mod tests {
         format!("data: {chunk}\n\ndata: {terminal}\n\n")
     }
 
+    /// 把模型文本切成多个 SSE data 帧逐段下发（末帧是协议完成信号），模拟增量切分。
+    fn sse_frames(format: ApiFormat, chunks: &[&str]) -> Vec<String> {
+        let mut frames: Vec<String> = chunks
+            .iter()
+            .map(|chunk| {
+                let payload = match format {
+                    ApiFormat::ChatCompletions => {
+                        json!({"choices":[{"delta":{"content":chunk}}]})
+                    }
+                    ApiFormat::Responses => {
+                        json!({"type":"response.output_text.delta","delta":chunk})
+                    }
+                    ApiFormat::Anthropic => {
+                        json!({"type":"content_block_delta","delta":{"type":"text_delta","text":chunk}})
+                    }
+                };
+                format!("data: {payload}\n\n")
+            })
+            .collect();
+        let terminal = match format {
+            ApiFormat::ChatCompletions => "[DONE]".to_string(),
+            ApiFormat::Responses => json!({"type":"response.completed"}).to_string(),
+            ApiFormat::Anthropic => json!({"type":"message_stop"}).to_string(),
+        };
+        frames.push(format!("data: {terminal}\n\n"));
+        frames
+    }
+
+    /// 解出 progress Channel 收集到的事件：`Channel<String>` 的载荷会被再编码一层
+    /// JSON 字符串，先解回事件文本，再解成 JSON 对象（等价于前端的 `JSON.parse(raw)`）。
+    fn parse_channel_events(events: &[String]) -> Vec<Value> {
+        events
+            .iter()
+            .map(|payload| {
+                let raw = serde_json::from_str::<String>(payload).expect("事件应为 JSON 字符串");
+                serde_json::from_str::<Value>(&raw).expect("事件应为单行 JSON 对象")
+            })
+            .collect()
+    }
+
+    /// mock 服务端：读掉一个完整 HTTP 请求并解出 JSON 体。
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) -> Value {
+        use tokio::io::AsyncReadExt;
+        let mut raw = Vec::new();
+        let header_end;
+        let content_length;
+        loop {
+            let mut bytes = [0u8; 4096];
+            let size = socket.read(&mut bytes).await.unwrap();
+            assert!(size > 0);
+            raw.extend_from_slice(&bytes[..size]);
+            if let Some(end) = raw.windows(4).position(|part| part == b"\r\n\r\n") {
+                header_end = end + 4;
+                let headers = String::from_utf8_lossy(&raw[..end]).to_ascii_lowercase();
+                content_length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap();
+                break;
+            }
+        }
+        while raw.len() < header_end + content_length {
+            let mut bytes = [0u8; 4096];
+            let size = socket.read(&mut bytes).await.unwrap();
+            assert!(size > 0);
+            raw.extend_from_slice(&bytes[..size]);
+        }
+        serde_json::from_slice::<Value>(&raw[header_end..header_end + content_length]).unwrap()
+    }
+
+    /// mock 服务端：按给定节拍逐段写 SSE 响应体（每段前可单独延时，控制增量到达节奏）。
+    async fn write_sse_reply(socket: &mut tokio::net::TcpStream, frames: &[(String, u64)]) {
+        use tokio::io::AsyncWriteExt;
+        let body: String = frames.iter().map(|(frame, _)| frame.as_str()).collect();
+        socket
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        for (frame, delay) in frames {
+            if *delay > 0 {
+                tokio::time::sleep(Duration::from_millis(*delay)).await;
+            }
+            socket.write_all(frame.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+        }
+    }
+
     /// 连接失败的文案要报出成因类别（此处用本机必然拒绝的端口），且不回显原始报错与凭据。
     #[tokio::test]
     async fn connection_failure_reports_transport_cause() {
@@ -1487,8 +1695,9 @@ mod tests {
             key: "test-key".into(),
             session: novel_session(42),
             settings: &settings,
+            progress: None,
         };
-        let error = client.complete("检测", json!("x")).await.unwrap_err();
+        let error = client.complete("检测", json!("x"), None).await.unwrap_err();
         assert_eq!(
             error,
             "无法连接翻译服务（无法建立连接），请检查 URL 与网络/代理设置"
@@ -1520,6 +1729,7 @@ mod tests {
             key: key.clone(),
             session: novel_session(42),
             settings: &settings,
+            progress: None,
         };
         let novel = NovelInput {
             novel_id: 42,
@@ -1632,6 +1842,7 @@ mod tests {
             key: key.clone(),
             session: session_id("pixiv-tool-live-real"),
             settings: &settings,
+            progress: None,
         };
 
         // 模型列表：验收服务应支持 /models，且列表包含配置的模型（对应设置页「获取模型」）。
@@ -1793,6 +2004,7 @@ mod tests {
             key: key.clone(),
             session: session_id("pixiv-tool-live-real"),
             settings: &bad_settings,
+            progress: None,
         };
         let bad_dir = std::env::temp_dir().join(format!(
             "pixiv-translation-live-bad-{}",
@@ -1989,6 +2201,7 @@ mod tests {
             key,
             session: novel_session(43),
             settings: &settings,
+            progress: None,
         };
         let novel = NovelInput {
             novel_id: 43,
@@ -2282,8 +2495,9 @@ mod tests {
             key: "test-key".into(),
             session: novel_session(42),
             settings: &settings,
+            progress: None,
         };
-        let error = client.complete("检测", json!("x")).await.unwrap_err();
+        let error = client.complete("检测", json!("x"), None).await.unwrap_err();
         server.abort();
         assert_eq!(
             error,
@@ -2332,6 +2546,7 @@ mod tests {
             key: "test-key".into(),
             session: probe.clone(),
             settings: &settings,
+            progress: None,
         };
         let opencode = build("https://opencode.ai/zen/go/v1")
             .authorized(wreq::post("https://opencode.ai/zen/go/v1/chat/completions"))
@@ -2792,6 +3007,7 @@ mod tests {
             key: "test-key".into(),
             session: novel_session(42),
             settings: &settings,
+            progress: None,
         };
         let progress = Channel::<String>::new(|_| Ok(()));
         let target = resolve_target_language(&settings).unwrap().1;
@@ -2927,9 +3143,13 @@ mod tests {
             key: "test-key".into(),
             session: session_id(PROBE_SESSION_SEED),
             settings: &settings,
+            progress: None,
         };
         assert_eq!(
-            responses.complete("SYS", payload.clone()).await.unwrap(),
+            responses
+                .complete("SYS", payload.clone(), None)
+                .await
+                .unwrap(),
             json!({"ok": true})
         );
         // Anthropic：x-api-key + 版本头、system/messages/max_tokens，且不带 store。
@@ -2940,9 +3160,13 @@ mod tests {
             key: "test-key".into(),
             session: session_id(PROBE_SESSION_SEED),
             settings: &settings,
+            progress: None,
         };
         assert_eq!(
-            anthropic.complete("SYS", payload.clone()).await.unwrap(),
+            anthropic
+                .complete("SYS", payload.clone(), None)
+                .await
+                .unwrap(),
             json!({"ok": true})
         );
         let captured = server.await.unwrap();
@@ -2975,5 +3199,254 @@ mod tests {
         // 会话标识头只发给 opencode 域名：本机模拟服务（127.0.0.1）不带。
         assert!(!captured[0].0.contains("x-opencode-session"));
         assert!(!captured[1].0.contains("x-opencode-session"));
+    }
+
+    /// 事件协议：阶段与进度都是单行 JSON 对象，字段名与前端契约一致。
+    #[test]
+    fn progress_events_are_json_objects() {
+        for phase in ["queued", "prepare", "translate"] {
+            let event: Value = serde_json::from_str(&phase_event(phase)).unwrap();
+            assert_eq!(event["type"], "phase");
+            assert_eq!(event["phase"], phase);
+        }
+        let event: Value =
+            serde_json::from_str(&progress_event("translate", 38211, "L12: 于是他低下头")).unwrap();
+        assert_eq!(event["type"], "progress");
+        assert_eq!(event["phase"], "translate");
+        assert_eq!(event["received"], json!(38211));
+        assert_eq!(event["summary"], "L12: 于是他低下头");
+        // 摘要提取不到时字段仍在（空串），前端据此降级显示已接收字节。
+        let empty: Value = serde_json::from_str(&progress_event("prepare", 8200, "")).unwrap();
+        assert_eq!(empty["type"], "progress");
+        assert_eq!(empty["summary"], "");
+        assert_eq!(empty["received"], json!(8200));
+    }
+
+    /// 节流边界：300ms 内的小增量合并；累计 2048B 或时间到点即放行（二者取或）。
+    #[test]
+    fn progress_throttle_fires_on_elapsed_or_bytes() {
+        let mut throttle = ProgressThrottle::new();
+        // 连续小增量在 300ms 内合并，不逐条发送。
+        for _ in 0..5 {
+            assert!(!throttle.ready(100));
+        }
+        // 累计到 2048B 立即放行，不等时间。
+        assert!(throttle.ready(1548));
+        // 放行后重新计时与累计。
+        assert!(!throttle.ready(10));
+        // 时间到点即发，字节不足也发。
+        std::thread::sleep(PROGRESS_INTERVAL + Duration::from_millis(20));
+        assert!(throttle.ready(1));
+        assert!(!throttle.ready(1));
+    }
+
+    /// 实时进度端到端：阶段事件立即发；译文小增量在 300ms 内合并成一条，
+    /// 末段跨越时间线时放行，且带上最后一个完整 text 值的摘要。
+    /// 节拍设计：前 6 段在 200ms 内到齐（不足以放行），第 7 段延后到 400ms 放行一条，
+    /// 整条流不足 600ms 因此不可能有第二条。
+    #[tokio::test]
+    async fn progress_events_report_phase_and_throttled_summary() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let render =
+            "{\"lines\":[{\"line\":0,\"text\":\"第一行。\"},{\"line\":1,\"text\":\"第二行。\"}]}";
+        let chunks: [&str; 8] = [
+            "{\"lines\":[",
+            "{\"line\":0,",
+            "\"text\":\"第一",
+            "行。\"},",
+            "{\"line\":1,",
+            "\"text\":\"第二",
+            "行。\"}",
+            "]}",
+        ];
+        let paced: Vec<(String, u64)> = sse_frames(ApiFormat::ChatCompletions, &chunks)
+            .into_iter()
+            .zip([0, 40, 40, 40, 40, 40, 200, 0, 0])
+            .map(|(frame, delay)| (frame, delay))
+            .collect();
+        let server = tokio::spawn(async move {
+            // Pass 1：设定集一次增量到齐（300ms 内且不足 2048B，不触发进度事件）。
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            let bible = json!({"style":"克制、保留人物敬语距离","terms":[]}).to_string();
+            let reply: Vec<(String, u64)> = sse_frames(ApiFormat::ChatCompletions, &[&bible])
+                .into_iter()
+                .map(|frame| (frame, 0))
+                .collect();
+            write_sse_reply(&mut socket, &reply).await;
+            drop(socket);
+            // Pass 2：译文 JSON 切段下发。
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            write_sse_reply(&mut socket, &paced).await;
+            drop(socket);
+        });
+        let novel = NovelInput {
+            novel_id: 42,
+            title: "星の帰り道".into(),
+            tags: vec!["同人".into()],
+            description: "星空下重逢".into(),
+            content: "一行目。\n二行目。".into(),
+        };
+        let all_pages = pages(&novel).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "pixiv-translation-progress-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = book_path(&dir, &novel);
+        let settings = Settings {
+            translation_model: "mock-model".into(),
+            ..Settings::default()
+        };
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let captured = events.clone();
+        let progress = Channel::<String>::new(move |message| {
+            if let tauri::ipc::InvokeResponseBody::Json(payload) = message {
+                captured.lock().unwrap().push(payload);
+            }
+            Ok(())
+        });
+        let client = TranslationClient {
+            http: wreq::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap(),
+            url: completion_url(&format!("http://{address}/v1"), ApiFormat::ChatCompletions)
+                .unwrap(),
+            format: ApiFormat::ChatCompletions,
+            key: "test-key".into(),
+            session: novel_session(42),
+            settings: &settings,
+            progress: Some(&progress),
+        };
+        let target = resolve_target_language(&settings).unwrap().1;
+        let mut book = TranslationBook::default();
+        let lines = translate_book(
+            &client, &novel, &all_pages, 1, &path, &mut book, &progress, target,
+        )
+        .await
+        .unwrap();
+        assert_eq!(lines.len(), 2, "两行原文两行译文");
+        server.await.unwrap();
+        let events = events.lock().unwrap();
+        let parsed = parse_channel_events(&events);
+        assert_eq!(parsed[0], json!({"type":"phase","phase":"prepare"}));
+        assert_eq!(parsed[1], json!({"type":"phase","phase":"translate"}));
+        assert_eq!(
+            parsed.len(),
+            3,
+            "阶段两条 + 进度一条：小增量在 300ms 内合并，跨越时间线只放行一条"
+        );
+        assert_eq!(
+            parsed[2],
+            json!({"type":"progress","phase":"translate","received":render.len(),"summary":"L1: 第二行。"})
+        );
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    /// 字节阈值：单段增量累计到 2048B 立即放行（本条流远不足 300ms），摘要按 60 字符截断。
+    #[tokio::test]
+    async fn progress_event_fires_on_byte_threshold_and_truncates_summary() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        // 两段：前段很小（不触发），后段单独就超过 2048B。
+        let long = "长".repeat(2100);
+        let head = "{\"lines\":[{\"line\":0,\"text\":\"";
+        let server = tokio::spawn(async move {
+            let tail = format!("{long}\"}}]}}");
+            let chunks = [head, tail.as_str()];
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            let bible = json!({"style":"克制","terms":[]}).to_string();
+            let reply: Vec<(String, u64)> = sse_frames(ApiFormat::ChatCompletions, &[&bible])
+                .into_iter()
+                .map(|frame| (frame, 0))
+                .collect();
+            write_sse_reply(&mut socket, &reply).await;
+            drop(socket);
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_http_request(&mut socket).await;
+            let reply: Vec<(String, u64)> = sse_frames(ApiFormat::ChatCompletions, &chunks)
+                .into_iter()
+                .map(|frame| (frame, 0))
+                .collect();
+            write_sse_reply(&mut socket, &reply).await;
+            drop(socket);
+        });
+        let novel = NovelInput {
+            novel_id: 42,
+            title: "长文页".into(),
+            tags: vec![],
+            description: String::new(),
+            content: "一行目。".into(),
+        };
+        let all_pages = pages(&novel).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "pixiv-translation-progress-bytes-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = book_path(&dir, &novel);
+        let settings = Settings {
+            translation_model: "mock-model".into(),
+            ..Settings::default()
+        };
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let captured = events.clone();
+        let progress = Channel::<String>::new(move |message| {
+            if let tauri::ipc::InvokeResponseBody::Json(payload) = message {
+                captured.lock().unwrap().push(payload);
+            }
+            Ok(())
+        });
+        let client = TranslationClient {
+            http: wreq::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap(),
+            url: completion_url(&format!("http://{address}/v1"), ApiFormat::ChatCompletions)
+                .unwrap(),
+            format: ApiFormat::ChatCompletions,
+            key: "test-key".into(),
+            session: novel_session(42),
+            settings: &settings,
+            progress: Some(&progress),
+        };
+        let target = resolve_target_language(&settings).unwrap().1;
+        let mut book = TranslationBook::default();
+        translate_book(
+            &client, &novel, &all_pages, 1, &path, &mut book, &progress, target,
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+        let events = events.lock().unwrap();
+        let parsed = parse_channel_events(&events);
+        assert_eq!(parsed[0], json!({"type":"phase","phase":"prepare"}));
+        assert_eq!(parsed[1], json!({"type":"phase","phase":"translate"}));
+        assert_eq!(
+            parsed.len(),
+            3,
+            "阶段两条 + 进度一条：字节阈值放行后剩余字节不足以再放行"
+        );
+        let event = &parsed[2];
+        assert_eq!(event["type"], "progress");
+        assert_eq!(event["phase"], "translate");
+        assert!(
+            event["received"].as_u64().unwrap() >= 2048,
+            "累计到 2048B 即放行，不等 300ms"
+        );
+        // 摘要：60 字符截断 + 行号前缀。TCP 可能把这一段再切开，切在 text 收尾之前
+        // 则摘要为空（前端降级显示字节数），两种形态都合法。
+        let expected = format!("L0: {}", "长".repeat(60));
+        let summary = event["summary"].as_str().unwrap();
+        assert!(summary.is_empty() || summary == expected, "{summary}");
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
     }
 }

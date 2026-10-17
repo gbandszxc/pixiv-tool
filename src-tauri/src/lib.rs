@@ -25,6 +25,7 @@ pub mod settings;
 pub mod state;
 pub mod translation;
 mod translation_diagnostics;
+mod translation_summary;
 
 use tauri::{Emitter, Manager};
 
