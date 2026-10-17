@@ -108,8 +108,6 @@ const translationMode = ref<TranslationMode>("bilingual");
 const translations = ref<Record<string, TranslatedLine[]>>({});
 /** 页 → 目标语言 code：该页原文已是目标语言，未请求模型（再次点击可强制翻译）。 */
 const skippedPages = ref<Record<number, string>>({});
-const translating = ref(false);
-const translatingPage = ref(0);
 const translationError = ref("");
 const translationErrorPage = ref(0);
 let translationGeneration = 0;
@@ -120,18 +118,19 @@ const translationInput = computed<NovelTranslationInput>(() => ({
 }));
 const currentTranslation = computed(() => translations.value[page.value] ?? []);
 const currentSkipped = computed(() => skippedPages.value[page.value] ?? "");
+// 浮窗进度区数据与「翻译中」状态：仅当前小说的进行中任务（翻译在后台跨页执行，
+// 别的小说页面不显示他人进度；跳转返回后 store 是唯一真相源）。
+const activeTranslation = computed(() =>
+  translationStore.active && translationStore.active.novelId === props.id ? translationStore.active : null
+);
 // 设定集整理/精翻等内部阶段不面向用户，只回显统一的进行中状态与最终成败。
+// 进行中以全局 store 的在途任务为准（跳转返回后旧实例的页内态已丢，store 才是唯一真相源）。
 const translationStatus = computed(() => {
-  if (translating.value) return t("translation.translating", { page: translatingPage.value });
+  if (activeTranslation.value) return t("translation.translating", { page: activeTranslation.value.page });
   if (translationErrorPage.value === page.value && translationError.value) return translationError.value;
   if (currentSkipped.value) return t("translation.sameLanguage", { language: t(`translation.targetLanguages.${currentSkipped.value}`) });
   return currentTranslation.value.length ? t("translation.completed") : t("translation.noTranslation");
 });
-
-// 浮窗进度区数据：仅当前小说的进行中任务（翻译在后台跨页执行，别的小说页面不显示他人进度）。
-const activeTranslation = computed(() =>
-  translationStore.active && translationStore.active.novelId === props.id ? translationStore.active : null
-);
 
 /** 应用单页翻译结果到页内状态（translatePage 即时路径与 store.lastDone 跨页路径共用）。 */
 function applyTranslationResult(result: PageTranslation, targetPage: number): void {
@@ -146,12 +145,10 @@ function applyTranslationResult(result: PageTranslation, targetPage: number): vo
 }
 
 async function translatePage(): Promise<void> {
-  if (translating.value || !hasContent.value) return;
+  if (activeTranslation.value || !hasContent.value) return;
   const generation = translationGeneration;
   const cacheVersion = cacheGeneration;
   const targetPage = page.value;
-  translating.value = true;
-  translatingPage.value = targetPage;
   translationError.value = "";
   try {
     // 本页已提示「无需翻译」时再次点击即强制翻译，避免语言判定误判后无法覆盖。
@@ -168,7 +165,7 @@ async function translatePage(): Promise<void> {
       translationErrorPage.value = targetPage;
     }
   } finally {
-    if (generation === translationGeneration && cacheVersion === cacheGeneration) translating.value = false;
+    // 进行中状态由 store.active 驱动（finally 无需页内清理）；错误已由 store 跨页记录。
   }
 }
 
@@ -189,7 +186,6 @@ function onTranslationCacheCleared(): void {
   cacheGeneration++;
   translations.value = {};
   skippedPages.value = {};
-  translating.value = false;
   translationError.value = "";
 }
 // 跨页完成同步：翻译在后台跑完时 store 写入 lastDone（新引用即信号），本页 watch 到匹配的
@@ -231,7 +227,6 @@ async function load(): Promise<void> {
   const generation = ++translationGeneration;
   translations.value = {};
   skippedPages.value = {};
-  translating.value = false;
   translationError.value = "";
   translationMode.value = "bilingual";
   loading.value = true;
@@ -642,8 +637,8 @@ function openInPixiv(): void {
           <NovelTranslationMenu
             v-model="translationMode"
             :status="translationStatus"
-            :error="Boolean(!translating && translationErrorPage === page && translationError)"
-            :busy="translating"
+            :error="Boolean(!activeTranslation && translationErrorPage === page && translationError)"
+            :busy="Boolean(activeTranslation)"
             :disabled="loading"
             :translated="currentTranslation.length > 0"
             :skipped="Boolean(currentSkipped)"

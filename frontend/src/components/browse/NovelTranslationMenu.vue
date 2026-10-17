@@ -36,15 +36,34 @@ const state = computed(() => (props.error ? "error" : props.busy ? "busy" : prop
 const triggerTitle = computed(() => (props.status ? `${t("translation.menu")}：${props.status}` : t("translation.menu")));
 
 function close() { open.value = false; }
+/**
+ * 左缘钳制：384px 浮窗右缘对齐触发器，左缘可能伸进侧栏区（触发器位于底栏左侧控件组）。
+ * 打开时（及窗口变化时）测量侧栏右缘，左缘不足则把浮窗整体右推，保证完整落在主工作区；
+ * 层级上浮窗 z-index 恒高于侧栏，此处只解决「横跨边界」的视觉错误。
+ */
+function clampPanel(): void {
+  const el = panel.value;
+  if (!el) return;
+  const gap = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-sm")) || 8;
+  const sidebar = document.querySelector(".sidebar");
+  const minLeft = (sidebar?.getBoundingClientRect().right ?? 0) + gap;
+  const rect = el.getBoundingClientRect();
+  el.style.right = rect.left < minLeft ? `${Math.round(rect.left - minLeft)}px` : "";
+}
 function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape" && !document.querySelector("dialog[open]")) close();
 }
 watch(open, (value) => {
   if (value) {
     window.addEventListener("keydown", onKeydown);
-    void nextTick(() => panel.value?.focus());
+    window.addEventListener("resize", clampPanel);
+    void nextTick(() => {
+      clampPanel();
+      panel.value?.focus();
+    });
   } else {
     window.removeEventListener("keydown", onKeydown);
+    window.removeEventListener("resize", clampPanel);
     trigger.value?.focus();
   }
 });
