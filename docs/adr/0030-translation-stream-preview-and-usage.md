@@ -68,6 +68,17 @@ ADR 0029 把翻译进度做成了浮窗内的实时进度区，但两处仍然�
   当前小说与页码且有 usage 才显示；缓存恢复不冒充）。状态行 `role=status aria-live=polite`
   播报一次完成与用量，可接受。
 
+## 修订（2026-10-17）：空 `content` 曾整段吞掉思考增量
+
+DeepSeek 系网关（实测 `opencode-go/deepseek-v4.1-flash`）的思考帧形如
+`{"delta":{"role":"assistant","content":"","reasoning_content":"我们需要"}}`——空字符串
+也是 `content` 键。原解析先取 `content` 再回落 `reasoning_content`，`""` 也命中，于是
+整段思考被当成「空正文」丢弃：浮窗一直空白，直到正文开始才突然出现，表现为「有时很快、
+有时快翻译完才出来」。
+
+修正为两路并行取值：**空字符串不算增量**（`non_empty_str`），同一帧同时带正文与思考时
+两路都收（`StreamDeltaView`）。单测 `empty_content_does_not_shadow_reasoning` 锁死该形态。
+
 ## 影响
 
 - **IPC 契约变化**：progress 事件增加 `reasoning` 字段（旧事件流无此字段，前后端同批升级，

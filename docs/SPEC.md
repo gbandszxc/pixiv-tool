@@ -105,7 +105,7 @@
   字符串值（Pass 1 为设定集字段值、Pass 2 为译文 `text` 值）、按 60 字符（char 边界）
   截断、不带行号前缀，取不到完整值时为空串（前端降级显示已接收字节数）；`reasoning`
   为思考链最新尾窗（尾部 60 字符，无思考输出为空串）。增量来源为 ADR 0025 的流式
-  传输，思考增量与正文增量的分类见 ADR 0030。
+  传输，思考增量与正文增量的分类见 ADR 0030（空字符串不算增量，两路互不遮蔽）。
 - **安全边界**：无网络监听面；IPC 仅限本 webview。
   主窗生产 CSP 限制脚本为自身资源（Tauri 注入脚本由构建阶段补充 hash），
   禁止 object 与表单提交；开发 CSP 仅额外允许本机 Vite HMR WebSocket。
@@ -980,7 +980,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ## 7. IPC 命令设计（invoke）
 
-小说翻译流式响应必须收到对应协议的完成信号（Chat Completions 的 `stop` / `[DONE]`、Responses 的 `response.completed`、Anthropic 的 `end_turn` / `message_stop`）才交给 JSON 解析；流内增量按正文/思考二分类外供进度（ADR 0030）：思考增量（Chat `reasoning_content`/`reasoning`、Responses `reasoning_summary_text.delta`/`reasoning_text.delta`、Anthropic `thinking_delta`）不进译文，只进浮窗思考行；token 用量按协议落点解析（Chat 末帧 `usage`、Responses `response.usage`、Anthropic `message_start`/`message_delta` 分帧合并，prompt 含缓存读/写 token），两轮合计经返回体 `usage` 外供，拿不到则缺省；仅 HTTP 200 或正常 EOF 不代表生成成功。兼容服务在 SSE 末尾直接追加的 JSON 错误体（没有 `data:` 前缀）同样识别：智谱 `1301` 明确提示内容审核拒绝，不回显服务原始 message、原文或凭据，不保存残缺译文；其它服务错误沿用通用文案。已有成功译文与 Pass 1 已保存设定仍保留。不自动重试审核拒绝。
+小说翻译流式响应必须收到对应协议的完成信号（Chat Completions 的 `stop` / `[DONE]`、Responses 的 `response.completed`、Anthropic 的 `end_turn` / `message_stop`）才交给 JSON 解析；流内增量按正文/思考二分类外供进度（ADR 0030）：思考增量（Chat `reasoning_content`/`reasoning`、Responses `reasoning_summary_text.delta`/`reasoning_text.delta`、Anthropic `thinking_delta`）不进译文，只进浮窗思考行；两路增量**互不遮蔽**——空字符串不算增量（部分网关在思考帧里带 `"content":""`，若把空串当正文命中，思考增量就整段丢失、浮窗空白到收尾），同一帧同时带正文与思考时两路都要收；token 用量按协议落点解析（Chat 末帧 `usage`、Responses `response.usage`、Anthropic `message_start`/`message_delta` 分帧合并，prompt 含缓存读/写 token），两轮合计经返回体 `usage` 外供，拿不到则缺省；仅 HTTP 200 或正常 EOF 不代表生成成功。兼容服务在 SSE 末尾直接追加的 JSON 错误体（没有 `data:` 前缀）同样识别：智谱 `1301` 明确提示内容审核拒绝，不回显服务原始 message、原文或凭据，不保存残缺译文；其它服务错误沿用通用文案。已有成功译文与 Pass 1 已保存设定仍保留。不自动重试审核拒绝。
 
 本机配置复测入口：忽略测试 `translation::tests::live_configured_novel_translation` 仅在用户授权后读取当前设置与系统翻译凭据。`PIXIV_TRANSLATION_SAMPLE=1` 使用两行普通日文样章验证生产两轮翻译；否则必须提供 `PIXIV_TRANSLATION_NOVEL_ID`，只读登录态抓取指定小说。`PIXIV_TRANSLATION_EXPECT_REJECTION=1` 断言审核拒绝文案与未保存残缺译文。全程不打印正文或 Key，不修改应用设置，临时译文记录结束后清理。离线回归覆盖合法 JSON 但缺完成信号的 EOF、流末尾裸 JSON / SSE 错误体、字符串 / 数字 `1301` 与服务 message 不回显。
 

@@ -579,63 +579,61 @@ const MAX_TRANSLATION_STREAM_BYTES: usize = 16_000_000;
 
 /// 各协议流事件里的增量分类：正文（译文/设定集 JSON）与思考（推理链）落点不同，
 /// 思考只进浮窗思考行（ADR 0030），不混入译文文本。
-enum StreamDeltaKind<'a> {
-    Text(&'a str),
-    Reasoning(&'a str),
+/// 两个字段可以同时出现，所以不用互斥的 enum，避免丢掉其中一路。
+#[derive(Default)]
+struct StreamDeltaView<'a> {
+    text: Option<&'a str>,
+    reasoning: Option<&'a str>,
 }
 
-fn stream_event_delta(format: ApiFormat, event: &Value) -> Option<StreamDeltaKind<'_>> {
+/// 只认非空字符串：部分网关在思考帧里带上 `"content": ""`，
+/// 若把空串当有效正文，`reasoning_content` 就永远取不到（浮窗一路空白到收尾）。
+fn non_empty_str<'a>(value: Option<&'a Value>) -> Option<&'a str> {
+    value.and_then(Value::as_str).filter(|text| !text.is_empty())
+}
+
+fn stream_event_delta<'a>(format: ApiFormat, event: &'a Value) -> StreamDeltaView<'a> {
     match format {
         ApiFormat::ChatCompletions => {
-            let delta = event.pointer("/choices/0/delta")?;
-            delta
-                .get("content")
-                .and_then(Value::as_str)
-                .map(StreamDeltaKind::Text)
-                .or_else(|| {
-                    // DeepSeek 系 reasoning_content、OpenRouter 系 reasoning。
-                    delta
-                        .get("reasoning_content")
-                        .and_then(Value::as_str)
-                        .map(StreamDeltaKind::Reasoning)
-                        .or_else(|| {
-                            delta
-                                .get("reasoning")
-                                .and_then(Value::as_str)
-                                .map(StreamDeltaKind::Reasoning)
-                        })
-                })
-        }
-        ApiFormat::Responses => {
-            let kind = event.get("type").and_then(Value::as_str)?;
-            match kind {
-                "response.output_text.delta" => event
-                    .get("delta")
-                    .and_then(Value::as_str)
-                    .map(StreamDeltaKind::Text),
-                // 推理摘要与原始思考链都只进思考行。
-                "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => event
-                    .get("delta")
-                    .and_then(Value::as_str)
-                    .map(StreamDeltaKind::Reasoning),
-                _ => None,
+            let Some(delta) = event.pointer("/choices/0/delta") else {
+                return StreamDeltaView::default();
+            };
+            StreamDeltaView {
+                text: non_empty_str(delta.get("content")),
+                // DeepSeek 系 reasoning_content、OpenRouter 系 reasoning。
+                reasoning: non_empty_str(delta.get("reasoning_content"))
+                    .or_else(|| non_empty_str(delta.get("reasoning"))),
             }
         }
+        ApiFormat::Responses => match event.get("type").and_then(Value::as_str) {
+            Some("response.output_text.delta") => StreamDeltaView {
+                text: non_empty_str(event.get("delta")),
+                ..StreamDeltaView::default()
+            },
+            // 推理摘要与原始思考链都只进思考行。
+            Some("response.reasoning_summary_text.delta" | "response.reasoning_text.delta") => {
+                StreamDeltaView {
+                    reasoning: non_empty_str(event.get("delta")),
+                    ..StreamDeltaView::default()
+                }
+            }
+            _ => StreamDeltaView::default(),
+        },
         ApiFormat::Anthropic => {
             if event.get("type").and_then(Value::as_str) != Some("content_block_delta") {
-                return None;
+                return StreamDeltaView::default();
             }
-            match event.pointer("/delta/type").and_then(Value::as_str)? {
-                "text_delta" => event
-                    .pointer("/delta/text")
-                    .and_then(Value::as_str)
-                    .map(StreamDeltaKind::Text),
+            match event.pointer("/delta/type").and_then(Value::as_str) {
+                Some("text_delta") => StreamDeltaView {
+                    text: non_empty_str(event.pointer("/delta/text")),
+                    ..StreamDeltaView::default()
+                },
                 // thinking_delta 的文本在 delta.thinking。
-                "thinking_delta" => event
-                    .pointer("/delta/thinking")
-                    .and_then(Value::as_str)
-                    .map(StreamDeltaKind::Reasoning),
-                _ => None,
+                Some("thinking_delta") => StreamDeltaView {
+                    reasoning: non_empty_str(event.pointer("/delta/thinking")),
+                    ..StreamDeltaView::default()
+                },
+                _ => StreamDeltaView::default(),
             }
         }
     }
@@ -896,13 +894,15 @@ impl StreamReader {
         if let Some(usage) = stream_event_usage(self.format, &event) {
             self.usage.get_or_insert_with(TokenUsage::default).merge(usage);
         }
-        match stream_event_delta(self.format, &event) {
-            Some(StreamDeltaKind::Text(text)) => {
-                delta.text.push_str(text);
-                self.text.push_str(text);
-            }
-            Some(StreamDeltaKind::Reasoning(text)) => delta.reasoning.push_str(text),
-            None => {}
+        // 同一帧可能同时带正文与思考（网关常发 `"content":""` + `reasoning_content`），
+        // 两路都要收，不能只保留其中一路。
+        let view = stream_event_delta(self.format, &event);
+        if let Some(text) = view.text {
+            delta.text.push_str(text);
+            self.text.push_str(text);
+        }
+        if let Some(reasoning) = view.reasoning {
+            delta.reasoning.push_str(reasoning);
         }
     }
 
@@ -3040,6 +3040,55 @@ mod tests {
                 total: 12
             })
         );
+    }
+
+    /// 网关常把思考帧写成 `{"content":"","reasoning_content":"…"}`：空的 content
+    /// 不能当成正文命中，否则 reasoning 永远取不到，浮窗一路空白到收尾。
+    /// 同一帧同时带正文与思考时两路都要收。
+    #[test]
+    fn empty_content_does_not_shadow_reasoning() {
+        use ApiFormat::*;
+        fn stream(format: ApiFormat, raw: &str) -> (String, String) {
+            let mut reader = StreamReader::new(format);
+            let mut reasoning = String::new();
+            for byte in raw.as_bytes() {
+                let delta = reader.push(&[*byte]).unwrap();
+                reasoning.push_str(&delta.reasoning);
+            }
+            (reader.finish().unwrap().0, reasoning)
+        }
+        // DeepSeek 系网关的真实帧形：思考增量搭着空 content 一起来。
+        let (text, reasoning) = stream(
+            ChatCompletions,
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"我们需要\"}}]}\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"\",\"reasoning_content\":\"先通读全文\"}}]}\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"lines\\\":[]}\"},\"finish_reason\":\"stop\"}]}\n\
+             data: [DONE]\n",
+        );
+        assert_eq!(reasoning, "我们需要先通读全文", "空 content 不得吞掉思考增量");
+        assert_eq!(text, "{\"lines\":[]}", "空 content 也不得混进正文");
+        // 同一帧同时带非空正文与思考：两路都要保留。
+        let (text, reasoning) = stream(
+            ChatCompletions,
+            "data: {\"choices\":[{\"delta\":{\"content\":\"译\",\"reasoning_content\":\"想\"}}]}\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\
+             data: [DONE]\n",
+        );
+        assert_eq!(text, "译");
+        assert_eq!(reasoning, "想");
+        // 三协议的空白增量同样不产生正文（收尾时按「未返回文本」报错）。
+        for format in [Responses, Anthropic] {
+            let empty = if format == Responses {
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"\"}\n\
+                 data: {\"type\":\"response.completed\"}\n"
+            } else {
+                "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"\"}}\n\
+                 data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}\n"
+            };
+            let mut reader = StreamReader::new(format);
+            assert!(reader.push(empty.as_bytes()).unwrap().text.is_empty(), "空增量不得变成正文");
+            assert!(reader.finish().is_err(), "全程空增量按未返回文本报错");
+        }
     }
 
     #[test]
