@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { TranslationActive } from "../../stores/translation";
 
@@ -32,92 +32,134 @@ const receivedText = computed(() => {
 
 /** 摘要行：有流式摘要显示摘要；排队 / Pass 1 阶段恒空串，降级显示后台安抚文案。 */
 const summaryLine = computed(() => props.active.summary || t("translation.progressBackgroundHint"));
+
+// ===== 摘要 marquee：仅单行溢出时滚动 =====
+
+/** clip 盒（<code>）：clientWidth 即浮窗内容区可用宽度，溢出内容由其裁掉。 */
+const summaryEl = ref<HTMLElement | null>(null);
+/** 首份摘要文本：offsetWidth 即摘要自然宽度，与 clip 盒宽度比较判定是否溢出。 */
+const textEl = ref<HTMLElement | null>(null);
+const overflow = ref(false);
+
+function measureOverflow() {
+  const box = summaryEl.value;
+  const text = textEl.value;
+  if (!box || !text) return;
+  overflow.value = text.offsetWidth > box.clientWidth;
+}
+
+// 摘要文案逐行刷新、面板宽度变化（窗口 resize / 窄窗 max-width）或减少动态效果偏好切换后重新判定。
+function onResize() { measureOverflow(); }
+const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+function onMotionChange() { void nextTick(measureOverflow); }
+
+watch(summaryLine, () => void nextTick(measureOverflow));
+onMounted(() => {
+  measureOverflow();
+  window.addEventListener("resize", onResize);
+  motionQuery.addEventListener("change", onMotionChange);
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", onResize);
+  motionQuery.removeEventListener("change", onMotionChange);
+});
 </script>
 
 <template>
-  <!-- 页内进度带：阶段 + 已用时间 + 已接收 + 一行流式摘要；store.active 由全局翻译任务驱动，卸载不中断 -->
+  <!-- 浮窗内嵌紧凑进度区（NovelTranslationMenu 状态行下方、模式组上方）：不定进度条 + 阶段/已用/已接收 + 一行流式摘要。
+       无自有容器边框/背景/内外边距——浮窗自身即 surface-container；播报由浮窗状态行负责，本区整体不进 aria-live。 -->
   <div class="translation-progress">
-    <!-- 状态行：组件内唯一播报区（role=status，沿用 NovelTranslationMenu 配方）。
-         只挂阶段驱动的文案；秒级 elapsed 与字节数不进入播报区，避免朗读刷屏。 -->
-    <div class="progress-status-line">
-      <span class="progress-indicator" aria-hidden="true"></span>
-      <span class="progress-status-text" role="status" aria-live="polite">
-        {{ t("translation.translating", { page: active.page }) }} · {{ phaseText }}
-      </span>
-      <span class="progress-meta">
-        <span class="progress-elapsed">{{ t("translation.progressElapsed", { time: elapsedText }) }}</span>
-        <span class="progress-sep" aria-hidden="true">·</span>
-        <span class="progress-received">{{ t("translation.progressReceived", { size: receivedText }) }}</span>
-      </span>
-    </div>
     <md-linear-progress class="progress-bar" :indeterminate="true" aria-hidden="true" />
-    <!-- 摘要行：定宽 ellipsis（禁跑马灯/自动滚动），等宽字体沿用 CopyPathButton 的 <code> 先例；aria-hidden 不参与播报 -->
-    <code class="progress-summary" aria-hidden="true" :title="active.summary || undefined">{{ summaryLine }}</code>
+    <!-- meta 行：阶段 + 已用 + 已接收，12px ink-muted；窄窗允许换行，不横向溢出 -->
+    <div class="progress-meta">
+      <span class="progress-phase">{{ phaseText }}</span>
+      <span class="progress-sep" aria-hidden="true">·</span>
+      <span class="progress-elapsed">{{ t("translation.progressElapsed", { time: elapsedText }) }}</span>
+      <span class="progress-sep" aria-hidden="true">·</span>
+      <span class="progress-received">{{ t("translation.progressReceived", { size: receivedText }) }}</span>
+    </div>
+    <!-- 摘要行：单行 nowrap；JS 判定溢出才挂双份内容无缝滚动（mq-scroll），不溢出静态全显；
+         reduced-motion 下降级 animation:none + 静态 ellipsis；整行 aria-hidden，全文经 title 悬停查看 -->
+    <code
+      ref="summaryEl"
+      class="progress-summary"
+      :class="{ 'is-overflow': overflow }"
+      aria-hidden="true"
+      :title="summaryLine"
+    >
+      <span class="progress-summary-track">
+        <span ref="textEl" class="progress-summary-text">{{ summaryLine }}</span>
+        <span v-if="overflow" class="progress-summary-text progress-summary-clone" aria-hidden="true">{{ summaryLine }}</span>
+      </span>
+    </code>
   </div>
 </template>
 
 <style scoped>
+/* 内嵌进度区：只管排布与间距，无容器边框/背景/内外边距（浮窗自身即 surface-container + 合法轻阴影） */
 .translation-progress {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
-  box-sizing: border-box;
-  margin-bottom: var(--space-lg);
-  padding: var(--space-md) var(--space-lg);
-  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent);
-  border-radius: var(--radius-control);
-  background: var(--md-sys-color-surface-container);
-  color: var(--ink);
-  text-align: left;
-}
-
-/* 状态行：窄窗允许换行（flex-wrap），不横向溢出 */
-.progress-status-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-xs);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-/* 状态点：进行中 primary，配方同 NovelTranslationMenu 的 translation-indicator busy */
-.progress-indicator {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--md-sys-color-primary);
-}
-
-.progress-status-text {
-  color: var(--ink);
-}
-
-.progress-meta {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-xs);
-  color: var(--ink-muted);
-}
-
-.progress-sep {
-  color: var(--ink-subtle);
+  min-width: 0;
 }
 
 .progress-bar {
   width: 100%;
 }
 
-/* 摘要行：<code> 取浏览器默认等宽字体（CopyPathButton 先例），12px ink-muted + ellipsis */
+/* meta 行：12px ink-muted，窄窗换行不溢出 */
+.progress-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.progress-sep {
+  color: var(--ink-subtle);
+}
+
+/* 摘要行：clip 盒，单行 nowrap；静态态（未溢出 / reduced-motion）由 ellipsis 收尾 */
 .progress-summary {
   display: block;
+  min-width: 0;
   overflow: hidden;
   color: var(--ink-muted);
   font-size: 12px;
   line-height: 1.5;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* 轨道：首份 + 溢出时的克隆份等宽并排，flex gap 即循环间隔；溢出时整体左移一份实现无缝循环 */
+.progress-summary-track {
+  display: flex;
+  width: max-content;
+  gap: var(--space-xl);
+}
+
+.progress-summary-text {
+  flex: none;
+  white-space: nowrap;
+}
+
+.progress-summary.is-overflow .progress-summary-track {
+  animation: mq-scroll 12s linear infinite;
+}
+
+@keyframes mq-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-50% - var(--space-xl) / 2)); }
+}
+
+/* reduced-motion：停止滚动，克隆份退场，单份静态 ellipsis */
+@media (prefers-reduced-motion: reduce) {
+  .progress-summary-track { display: block; width: auto; animation: none; }
+  .progress-summary-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progress-summary-clone { display: none; }
 }
 </style>

@@ -16,7 +16,6 @@ import NovelContent from "../../components/browse/NovelContent.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
 import NovelBgPicker from "../../components/browse/NovelBgPicker.vue";
 import NovelTranslationMenu from "../../components/browse/NovelTranslationMenu.vue";
-import TranslationProgressBanner from "../../components/browse/TranslationProgressBanner.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import {
@@ -128,6 +127,11 @@ const translationStatus = computed(() => {
   if (currentSkipped.value) return t("translation.sameLanguage", { language: t(`translation.targetLanguages.${currentSkipped.value}`) });
   return currentTranslation.value.length ? t("translation.completed") : t("translation.noTranslation");
 });
+
+// 浮窗进度区数据：仅当前小说的进行中任务（翻译在后台跨页执行，别的小说页面不显示他人进度）。
+const activeTranslation = computed(() =>
+  translationStore.active && translationStore.active.novelId === props.id ? translationStore.active : null
+);
 
 async function translatePage(): Promise<void> {
   if (translating.value || !hasContent.value) return;
@@ -540,12 +544,6 @@ function openInPixiv(): void {
           <p v-if="plainDescription" class="description">{{ plainDescription }}</p>
         </div>
 
-        <!-- 翻译进度带：store 持有全局翻译任务，当前小说有任务时常驻（阶段/已用时间/已接收/流式摘要） -->
-        <TranslationProgressBanner
-          v-if="translationStore.active && translationStore.active.novelId === id"
-          :active="translationStore.active"
-        />
-
         <!-- 正文（NovelContent 分页渲染，内嵌图经 images 取 URL）；空内容容错 -->
         <NovelContent
           v-if="hasContent"
@@ -631,6 +629,7 @@ function openInPixiv(): void {
             :disabled="loading"
             :translated="currentTranslation.length > 0"
             :skipped="Boolean(currentSkipped)"
+            :active="activeTranslation"
             @translate="translatePage"
           />
         </div>

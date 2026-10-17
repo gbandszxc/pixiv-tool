@@ -121,11 +121,11 @@ const MOCK_TRANSLATION_EVENTS: TranslationProgressEvent[] = [
   { type: "progress", phase: "prepare", received: 5120, summary: "" },
   { type: "progress", phase: "prepare", received: 9216, summary: "" },
   { type: "phase", phase: "translate" },
-  { type: "progress", phase: "translate", received: 14336, summary: "L0: 星光洒落在回家的路上，她的脚步很轻。" },
-  { type: "progress", phase: "translate", received: 22016, summary: "L3: 于是他低下头，避开那道追过来的视线…" },
-  { type: "progress", phase: "translate", received: 31232, summary: "L7: 「我们还会再见吗？」她对着夜空轻声问道。" },
-  { type: "progress", phase: "translate", received: 40960, summary: "L12: 风穿过树梢，把未说完的话带向了远方。" },
-  { type: "progress", phase: "translate", received: 49664, summary: "L18: 黎明之前，所有的等待都有了名字。" },
+  { type: "progress", phase: "translate", received: 14336, summary: "星光洒落在回家的路上，她的脚步很轻。" },
+  { type: "progress", phase: "translate", received: 22016, summary: "于是他低下头，避开那道追过来的视线…" },
+  { type: "progress", phase: "translate", received: 31232, summary: "「我们还会再见吗？」她对着夜空轻声问道。" },
+  { type: "progress", phase: "translate", received: 40960, summary: "风穿过树梢，把未说完的话带向了远方。" },
+  { type: "progress", phase: "translate", received: 49664, summary: "黎明之前，所有的等待都有了名字。" },
 ];
 
 /** devMock：有界序列（11 步 × 300~800ms，约 5s 内必然 resolve），不会无限挂起。 */

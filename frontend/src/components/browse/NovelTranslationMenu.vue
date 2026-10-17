@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { TranslationMode } from "../../api/translation";
+import type { TranslationActive } from "../../stores/translation";
+import TranslationProgressBanner from "./TranslationProgressBanner.vue";
 
 const props = defineProps<{
   modelValue: TranslationMode;
@@ -12,6 +14,8 @@ const props = defineProps<{
   translated: boolean;
   /** 原文已是目标语言、本次未请求模型：只提示，不视为成功或失败。 */
   skipped: boolean;
+  /** 当前小说的进行中翻译任务快照；null = 无任务，浮窗内不渲染进度区。 */
+  active: TranslationActive | null;
 }>();
 const emit = defineEmits<{
   "update:modelValue": [mode: TranslationMode];
@@ -73,6 +77,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
         <span class="translation-indicator" :class="`is-${state}`" :title="props.status" aria-hidden="true"></span>
         <span class="translation-status" :class="{ 'is-error': error }" role="status" aria-live="polite">{{ status }}</span>
       </span>
+      <!-- 进度区：当前小说有翻译任务时，在状态行下方内嵌紧凑进度（阶段/已用/已接收 + 摘要 marquee） -->
+      <TranslationProgressBanner v-if="active" :active="active" />
       <div class="translation-modes" role="group" :aria-label="t('translation.displayMode')">
         <button v-for="mode in (['original', 'translated', 'bilingual'] as const)" :key="mode" type="button" class="translation-mode" :aria-pressed="modelValue === mode" :class="{ selected: modelValue === mode }" @click="emit('update:modelValue', mode)">{{ t(`translation.${mode}`) }}</button>
       </div>
