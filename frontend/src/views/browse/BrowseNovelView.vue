@@ -125,11 +125,21 @@ const activeTranslation = computed(() =>
 );
 // 设定集整理/精翻等内部阶段不面向用户，只回显统一的进行中状态与最终成败。
 // 进行中以全局 store 的在途任务为准（跳转返回后旧实例的页内态已丢，store 才是唯一真相源）。
+// 完成态 token 用量只对「当前页刚由任务跑完」回显（缓存恢复或别的页完成不冒充）。
+const doneUsageTotal = computed(() => {
+  const done = translationStore.lastDone;
+  return done && done.novelId === props.id && done.page === page.value ? done.usage?.total : undefined;
+});
 const translationStatus = computed(() => {
   if (activeTranslation.value) return t("translation.translating", { page: activeTranslation.value.page });
   if (translationErrorPage.value === page.value && translationError.value) return translationError.value;
   if (currentSkipped.value) return t("translation.sameLanguage", { language: t(`translation.targetLanguages.${currentSkipped.value}`) });
-  return currentTranslation.value.length ? t("translation.completed") : t("translation.noTranslation");
+  if (currentTranslation.value.length) {
+    return doneUsageTotal.value != null
+      ? t("translation.completedWithUsage", { tokens: doneUsageTotal.value.toLocaleString() })
+      : t("translation.completed");
+  }
+  return t("translation.noTranslation");
 });
 
 /** 应用单页翻译结果到页内状态（translatePage 即时路径与 store.lastDone 跨页路径共用）。 */

@@ -17,12 +17,19 @@ export type TranslationPhase = "queued" | "prepare" | "translate";
 /**
  * 翻译实时进度事件：novel_translate_page 的 progress Channel 每行推送一个 JSON 对象。
  * - phase：阶段切换（queued=命令入口 / prepare=Pass 1 / translate=Pass 2），不节流；
- * - progress：距上次 ≥300ms 且累计新增 ≥2048B 时推送，received 为译文累计字节数，
- *   summary 为最近一行译文摘要（Pass 1 恒空串，提取不到亦为空串）。
+ * - progress：距上次 ≥300ms 或累计新增 ≥2048B 时推送，received 为正文累计字节数
+ *   （思考增量不计入），summary 为最近一个完整字符串值摘要（Pass 1 为设定集字段、
+ *   Pass 2 为译文行），reasoning 为思考链最新尾窗（无思考输出为空串）。
  */
 export type TranslationProgressEvent =
   | { type: "phase"; phase: TranslationPhase }
-  | { type: "progress"; phase: "prepare" | "translate"; received: number; summary: string };
+  | {
+      type: "progress";
+      phase: "prepare" | "translate";
+      received: number;
+      summary: string;
+      reasoning: string;
+    };
 
 export interface TranslationBook {
   bible: { style: string; terms: { source: string; translation: string; kind: string; aliases: string[]; notes: string }[] };
@@ -49,11 +56,22 @@ export function canonicalLanguage(value: string): string {
   return base;
 }
 
-/** 单页翻译结果：already_target_language = 原文已是目标语言，未调用模型。 */
+/** 单次生成请求的 token 用量（服务流内 usage 事件，能拿到才上报）；total = 输入 + 输出。 */
+export interface TokenUsage {
+  prompt: number;
+  completion: number;
+  total: number;
+}
+
+/**
+ * 单页翻译结果：already_target_language = 原文已是目标语言，未调用模型。
+ * usage 为本次两轮请求的 token 用量合计；未调用模型或服务未下发时缺省。
+ */
 export interface PageTranslation {
   status: "translated" | "already_target_language";
   lines: TranslatedLine[];
   target_language: string;
+  usage?: TokenUsage;
 }
 
 export interface TranslationProbe {
@@ -101,8 +119,13 @@ function parseTranslationProgressEvent(raw: string): TranslationProgressEvent | 
   }
   if (evt.type === "progress") {
     const phase = evt.phase;
-    if ((phase !== "prepare" && phase !== "translate") || typeof evt.received !== "number" || typeof evt.summary !== "string") return null;
-    return { type: "progress", phase, received: evt.received, summary: evt.summary };
+    if (
+      (phase !== "prepare" && phase !== "translate")
+      || typeof evt.received !== "number"
+      || typeof evt.summary !== "string"
+      || typeof evt.reasoning !== "string"
+    ) return null;
+    return { type: "progress", phase, received: evt.received, summary: evt.summary, reasoning: evt.reasoning };
   }
   return null;
 }
@@ -112,20 +135,21 @@ const MOCK_TRANSLATION_STEP_MS = [400, 600, 300, 700, 500, 800, 450, 550, 650, 3
 
 /**
  * devMock 模拟事件流：与后端协议同构的确定性序列（queued → prepare → prepare 进度 →
- * translate → translate 进度），received 单调递增，Pass 1 summary 恒空串。
+ * translate → translate 进度），received 单调递增；Pass 1 摘要为设定集字段值，
+ * 思考样本覆盖「只有思考在动、正文未开始」的窗口。
  */
 const MOCK_TRANSLATION_EVENTS: TranslationProgressEvent[] = [
   { type: "phase", phase: "queued" },
   { type: "phase", phase: "prepare" },
-  { type: "progress", phase: "prepare", received: 2048, summary: "" },
-  { type: "progress", phase: "prepare", received: 5120, summary: "" },
-  { type: "progress", phase: "prepare", received: 9216, summary: "" },
+  { type: "progress", phase: "prepare", received: 0, summary: "", reasoning: "先通读全文，判断文风与叙事视角…" },
+  { type: "progress", phase: "prepare", received: 2048, summary: "克制、留白的叙事文风", reasoning: "「星の帰り道」是全书题眼，人名アリス需要锁定…" },
+  { type: "progress", phase: "prepare", received: 5120, summary: "アリス", reasoning: "" },
   { type: "phase", phase: "translate" },
-  { type: "progress", phase: "translate", received: 14336, summary: "星光洒落在回家的路上，她的脚步很轻。" },
-  { type: "progress", phase: "translate", received: 22016, summary: "于是他低下头，避开那道追过来的视线…" },
-  { type: "progress", phase: "translate", received: 31232, summary: "「我们还会再见吗？」她对着夜空轻声问道。" },
-  { type: "progress", phase: "translate", received: 40960, summary: "风穿过树梢，把未说完的话带向了远方。" },
-  { type: "progress", phase: "translate", received: 49664, summary: "黎明之前，所有的等待都有了名字。" },
+  { type: "progress", phase: "translate", received: 14336, summary: "星光洒落在回家的路上，她的脚步很轻。", reasoning: "第一句保留原文的句读节奏，不合并短句…" },
+  { type: "progress", phase: "translate", received: 22016, summary: "于是他低下头，避开那道追过来的视线…", reasoning: "" },
+  { type: "progress", phase: "translate", received: 31232, summary: "「我们还会再见吗？」她对着夜空轻声问道。", reasoning: "" },
+  { type: "progress", phase: "translate", received: 40960, summary: "风穿过树梢，把未说完的话带向了远方。", reasoning: "" },
+  { type: "progress", phase: "translate", received: 49664, summary: "黎明之前，所有的等待都有了名字。", reasoning: "" },
 ];
 
 /** devMock：有界序列（11 步 × 300~800ms，约 5s 内必然 resolve），不会无限挂起。 */
@@ -146,6 +170,7 @@ async function mockTranslateNovelPage(onEvent?: (evt: TranslationProgressEvent) 
       { line: 3, text: "第二段的译文：注音与内嵌图标记同样走译文渲染。" },
     ],
     target_language: "zh-CN",
+    usage: { prompt: 8213, completion: 1764, total: 9977 },
   };
 }
 

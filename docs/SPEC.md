@@ -96,14 +96,16 @@
 - **进度推送**：Tauri 事件 `task://progress`、`task://done`。
 - **更新下载进度**：`download_app_update` 的 IPC Channel（独立于抓取任务事件，见 §7.2）。
 - **小说翻译进度**：`novel_translate_page` 的 IPC Channel 每行推送一个 JSON 事件
-  （协议与界面规则见 ADR 0029、DESIGN.md「小说翻译」条目的浮窗进度区）：阶段事件
+  （协议与界面规则见 ADR 0029、0030、DESIGN.md「小说翻译」条目的浮窗进度区）：阶段事件
   `{"type":"phase","phase":"queued|prepare|translate"}` 在命令入口与两轮生成开始时
   立即发、不节流；进度事件
-  `{"type":"progress","phase":"prepare|translate","received":N,"summary":"…"}`
-  按「距上次 ≥300ms 或累计新增 ≥2048B」节流（任一满足即发）——`received`
-  只累计译文增量（推理/思考增量不计），`summary` 取译文流中最后一个完整 `text`
-  值、按 60 字符（char 边界）截断、不带行号前缀，取不到完整值时为空串（前端降级
-  显示已接收字节数）。增量来源为 ADR 0025 的流式传输。
+  `{"type":"progress","phase":"prepare|translate","received":N,"summary":"…","reasoning":"…"}`
+  按「距上次 ≥300ms 或累计新增 ≥2048B」节流（任一满足即发；思考增量计入节流窗口、
+  不计入 `received`）——`received` 只累计正文增量，`summary` 取正文流中最后一个完整
+  字符串值（Pass 1 为设定集字段值、Pass 2 为译文 `text` 值）、按 60 字符（char 边界）
+  截断、不带行号前缀，取不到完整值时为空串（前端降级显示已接收字节数）；`reasoning`
+  为思考链最新尾窗（尾部 60 字符，无思考输出为空串）。增量来源为 ADR 0025 的流式
+  传输，思考增量与正文增量的分类见 ADR 0030。
 - **安全边界**：无网络监听面；IPC 仅限本 webview。
   主窗生产 CSP 限制脚本为自身资源（Tauri 注入脚本由构建阶段补充 hash），
   禁止 object 与表单提交；开发 CSP 仅额外允许本机 Vite HMR WebSocket。
@@ -310,14 +312,15 @@ pending → running ⇄ paused
 
 ### 4.3 限速与容错（`pixiv/client.rs`）
 
-小说翻译直连用户模型服务，独立于 Pixiv 限速：全局串行、单请求超时可配置（默认 600s，ADR 0023）、生成请求固定流式（ADR 0025：非流式在网关整段生成期间零字节回传，长请求会被链路按空闲切断；译文文本上限 4MB、原始 SSE 上限 16MB）、不自动重试（避免重复费用）。支持 Chat Completions（默认）/ Responses / Anthropic Messages 三种协议（ADR 0020）；URL 主机名含 `opencode` 时（zen Go 档等网关的硬性要求）为生成与 `/models` 请求附加稳定会话头 `x-opencode-session`，取值为 SHA-256 派生的 UUID 形态——小说翻译按 `pixiv-tool-novel-<novel_id>` 以小说为会话单位、探测用固定 seed，跨重启恒定，其它供应商不加此头（ADR 0021）。两轮处理与持久化见 ADR 0017；正文输入上限 8MB、单页 120KB、设定集 160KB，超限明确拒绝。
+小说翻译直连用户模型服务，独立于 Pixiv 限速：全局串行、单请求超时可配置（默认 600s，ADR 0023）、生成请求固定流式（ADR 0025：非流式在网关整段生成期间零字节回传，长请求会被链路按空闲切断；译文文本上限 4MB、原始 SSE 上限 16MB；Chat Completions 默认注入 `stream_options.include_usage` 上报用量，高级 JSON 可覆盖关闭，ADR 0030）、不自动重试（避免重复费用）。支持 Chat Completions（默认）/ Responses / Anthropic Messages 三种协议（ADR 0020）；URL 主机名含 `opencode` 时（zen Go 档等网关的硬性要求）为生成与 `/models` 请求附加稳定会话头 `x-opencode-session`，取值为 SHA-256 派生的 UUID 形态——小说翻译按 `pixiv-tool-novel-<novel_id>` 以小说为会话单位、探测用固定 seed，跨重启恒定，其它供应商不加此头（ADR 0021）。两轮处理与持久化见 ADR 0017；正文输入上限 8MB、单页 120KB、设定集 160KB，超限明确拒绝。
 翻译进入串行队列前的空正文检查即时释放临时行数组，避免在排队及两轮请求期间
 同时保留同一页的重复文本副本。
 
 翻译进度由 `novel_translate_page` 的 progress Channel 事件驱动（协议见 §3.2 与
-ADR 0029）：前端全局 store 持有 invoke 与计时器，离开小说页不取消任务，浮窗内嵌
-进度区（状态行下方：不定进度条 + 阶段/已用/已接收 meta 行 + 一行流式摘要
-marquee，仅当前小说有在途任务时渲染，规则见 DESIGN.md「小说翻译」条目的浮窗进度
+ADR 0029、0030）：前端全局 store 持有 invoke 与计时器，离开小说页不取消任务，浮窗内嵌
+进度区（状态行下方：不定进度条 + 阶段/已用/已接收 meta 行 + 思考行（ink-subtle，
+静态 ellipsis）+ 一行流式摘要 marquee（ink-muted），思考期间零正文也持续有内容在动，
+仅当前小说有在途任务时渲染，规则见 DESIGN.md「小说翻译」条目的浮窗进度
 区）与底部状态栏的后台指示随事件持续刷新；翻译失败写入跨页保留的失败记录，重进
 目标页时消费并回显，不再因页面卸载被吞。串行锁仍只在后端（`translation_lock`），
 前端不排队。
@@ -596,7 +599,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   saucenao.com 免费注册后于 `user.php?page=search-api` 页面获取；仅保存在本机
   settings.json——不入库、不写日志、不进报错原文。接口行为与错误形态见
   `docs/research/saucenao-api.md`。
-- `translation_api_url` / `translation_api_format` / `translation_model` / `translation_target_language` / `translation_extra`：小说翻译 API 基址或当前协议的完整端点、接口协议（`chat_completions` 默认 / `responses` / `anthropic`，白名单外加载期回落默认）、模型 ID、目标语言 code（白名单见 §7 `novel_translate_page`；空串 = 跟随界面语言 `language`）、自定义请求体 JSON 对象，默认空字符串/`chat_completions`/空字符串/空字符串/空对象。URL 按协议推导端点后缀（`/chat/completions`、`/responses`、`/messages`），`/models` 同源推导；OpenAI 系凭据走 Bearer，Anthropic 走 `x-api-key` + `anthropic-version: 2023-06-01`，请求体与响应解析随协议装配（Anthropic 的 `max_tokens` 默认 8192，可用高级 JSON 覆盖）。高级 JSON 支持 reasoning_effort、max_completion_tokens、供应商 thinking 等扩展；保留字段按协议追加（responses 禁 `input`/`instructions`，anthropic 禁 `system`），不允许覆盖。见 ADR 0017、ADR 0018、ADR 0020。JSON 上限 16KB，模型 ID 上限 256 字节。HTTP 仅允许本机模型，其他须 HTTPS；禁重定向、URL 凭据/query/fragment。
+- `translation_api_url` / `translation_api_format` / `translation_model` / `translation_target_language` / `translation_extra`：小说翻译 API 基址或当前协议的完整端点、接口协议（`chat_completions` 默认 / `responses` / `anthropic`，白名单外加载期回落默认）、模型 ID、目标语言 code（白名单见 §7 `novel_translate_page`；空串 = 跟随界面语言 `language`）、自定义请求体 JSON 对象，默认空字符串/`chat_completions`/空字符串/空字符串/空对象。URL 按协议推导端点后缀（`/chat/completions`、`/responses`、`/messages`），`/models` 同源推导；OpenAI 系凭据走 Bearer，Anthropic 走 `x-api-key` + `anthropic-version: 2023-06-01`，请求体与响应解析随协议装配（Anthropic 的 `max_tokens` 默认 8192，可用高级 JSON 覆盖）。高级 JSON 支持 reasoning_effort、max_completion_tokens、供应商 thinking 等扩展；保留字段按协议追加（responses 禁 `input`/`instructions`，anthropic 禁 `system`），不允许覆盖；`stream_options` 允许覆盖（个别不兼容网关关闭 Chat Completions 的默认用量上报注入，ADR 0030）。见 ADR 0017、ADR 0018、ADR 0020。JSON 上限 16KB，模型 ID 上限 256 字节。HTTP 仅允许本机模型，其他须 HTTPS；禁重定向、URL 凭据/query/fragment。
 - `translation_timeout_seconds`：小说翻译**单次模型请求**超时（秒），默认 `600`（10 分钟，
   取代旧的写死 180s），合法区间 30~3600，设置弹窗「小说翻译 · 服务连接」可配。
   一页通常请求两次，超时按每次请求计算；超时可用的错误文案跟随该值报出实际秒数。
@@ -757,7 +760,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 维护组按缓存与日志直排分区，显示分类/总大小、确认后清理动作和最近日志；分类冗长说明收进分类旁帮助图标（HelpTooltip），路径不直接回显——由 `components/settings/CopyPathButton.vue` 复制图标承载，悬停/聚焦 tooltip 显示完整路径，点击写入剪贴板并以 Snackbar 提示、图标短暂切换为对勾。14px 标题与 12px 辅助文字沿用既有 token；日志为可聚焦的等宽纯文本滚动区，最多 240px 高，不对轮询使用 aria-live。位于末尾时跟随新日志，手动向上阅读时保留位置；空缓存/日志禁用清理，读取失败保留快照与重试；维护页关闭即停止轮询，语义及安全边界见 §9 / ADR 0027。视觉细节见 DESIGN.md / .impeccable/design.json。
 
-小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式经 `--translation-ink` 与纸面墨色混色——浅色主题 primary 75%、深色主题 25%，保 4.5:1 对比度且与原文异色），原分页底栏的 SVG 翻译图标点击弹出状态、翻译/重译和三种显示选项，默认不额外占用正文高度；模式切换 secondary-container/on-secondary-container，入口与弹层共用 8px 状态指示点（翻译中 primary、本页已译绿、失败 error），失败原因经指示点/入口 title 悬停可读，状态文字始终可读。设定集整理与两轮精翻的两轮阶段经 progress 事件驱动浮窗进度区实时回显（浮窗状态行下方：不定进度条 + 阶段/已用/已接收 meta 行 + 摘要 marquee，仅当前小说有在途任务时渲染，规则见 DESIGN.md「小说翻译」条目的浮窗进度区）与底部状态栏后台指示，离开页面不中断、失败跨页保留（ADR 0029）。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；设置页模型 ID 在「获取模型」成功后原位变为下拉（选项含获取结果与当前值，可切回手动输入），「检测可用」以绿色/红色文字区分成败；目标语言默认「跟随界面语言」（选项回显当前界面语言名），可手动指定白名单内的语言；设置页「小说翻译」按服务连接（接口协议 / API URL / API Key）/ 模型与语言（模型 ID / 目标语言）/ 高级（JSON 与探测动作）三组分区，组标题 12px/600、组间用既有 35% outline 分隔线分段；接口协议默认 Chat Completions，切换后 URL 帮助与占位、模型列表和探测草稿同步换协议，已存凭据在 Key 标签行以中性胶囊回显「已保存」/「保存时清除」，清除动作与 Key 字段同行、窄窗换行；原文语言与目标语言一致时只回显「无需翻译」提示（灰色指示点、不算失败），按钮变为「仍然翻译」可强制走完整流程；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠；弹层外部点击/Esc 关闭与焦点返回，详见 DESIGN.md 与结构化伴随视图。
+小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式经 `--translation-ink` 与纸面墨色混色——浅色主题 primary 75%、深色主题 25%，保 4.5:1 对比度且与原文异色），原分页底栏的 SVG 翻译图标点击弹出状态、翻译/重译和三种显示选项，默认不额外占用正文高度；模式切换 secondary-container/on-secondary-container，入口与弹层共用 8px 状态指示点（翻译中 primary、本页已译绿、失败 error），失败原因经指示点/入口 title 悬停可读，状态文字始终可读。设定集整理与两轮精翻的两轮阶段经 progress 事件驱动浮窗进度区实时回显（浮窗状态行下方：不定进度条 + 阶段/已用/已接收 meta 行 + 思考行（ink-subtle，静态 ellipsis）+ 摘要 marquee（ink-muted），思考与正文两流分色、思考期间亦持续有内容在动（ADR 0030），仅当前小说有在途任务时渲染，规则见 DESIGN.md「小说翻译」条目的浮窗进度区）与底部状态栏后台指示，离开页面不中断、失败跨页保留（ADR 0029）；完成态状态行回显本次两轮 token 用量合计（服务下发才显示）。使用原生文本切换按钮提供 aria-pressed、8% hover 与 2px primary focus-visible，翻译按钮和设置字段沿用 Material Web；设置页模型 ID 在「获取模型」成功后原位变为下拉（选项含获取结果与当前值，可切回手动输入），「检测可用」以绿色/红色文字区分成败；目标语言默认「跟随界面语言」（选项回显当前界面语言名），可手动指定白名单内的语言；设置页「小说翻译」按服务连接（接口协议 / API URL / API Key）/ 模型与语言（模型 ID / 目标语言）/ 高级（JSON 与探测动作）三组分区，组标题 12px/600、组间用既有 35% outline 分隔线分段；接口协议默认 Chat Completions，切换后 URL 帮助与占位、模型列表和探测草稿同步换协议，已存凭据在 Key 标签行以中性胶囊回显「已保存」/「保存时清除」，清除动作与 Key 字段同行、窄窗换行；原文语言与目标语言一致时只回显「无需翻译」提示（灰色指示点、不算失败），按钮变为「仍然翻译」可强制走完整流程；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠；弹层外部点击/Esc 关闭与焦点返回，详见 DESIGN.md 与结构化伴随视图。
 
 所有纵向数据滚动区共用 PgUp/PgDn 输入规则（§6.1.1），优先鼠标区域、回退键盘焦点，保留控件原生按键与模态隔离；全屏胶卷与图片区分别滚屏 / 切作品页。样式及交互规则与 DESIGN.md / .impeccable/design.json 保持一致。
 
@@ -973,13 +976,13 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ## 7. IPC 命令设计（invoke）
 
-小说翻译流式响应必须收到对应协议的完成信号（Chat Completions 的 `stop` / `[DONE]`、Responses 的 `response.completed`、Anthropic 的 `end_turn` / `message_stop`）才交给 JSON 解析；仅 HTTP 200 或正常 EOF 不代表生成成功。兼容服务在 SSE 末尾直接追加的 JSON 错误体（没有 `data:` 前缀）同样识别：智谱 `1301` 明确提示内容审核拒绝，不回显服务原始 message、原文或凭据，不保存残缺译文；其它服务错误沿用通用文案。已有成功译文与 Pass 1 已保存设定仍保留。不自动重试审核拒绝。
+小说翻译流式响应必须收到对应协议的完成信号（Chat Completions 的 `stop` / `[DONE]`、Responses 的 `response.completed`、Anthropic 的 `end_turn` / `message_stop`）才交给 JSON 解析；流内增量按正文/思考二分类外供进度（ADR 0030）：思考增量（Chat `reasoning_content`/`reasoning`、Responses `reasoning_summary_text.delta`/`reasoning_text.delta`、Anthropic `thinking_delta`）不进译文，只进浮窗思考行；token 用量按协议落点解析（Chat 末帧 `usage`、Responses `response.usage`、Anthropic `message_start`/`message_delta` 分帧合并，prompt 含缓存读/写 token），两轮合计经返回体 `usage` 外供，拿不到则缺省；仅 HTTP 200 或正常 EOF 不代表生成成功。兼容服务在 SSE 末尾直接追加的 JSON 错误体（没有 `data:` 前缀）同样识别：智谱 `1301` 明确提示内容审核拒绝，不回显服务原始 message、原文或凭据，不保存残缺译文；其它服务错误沿用通用文案。已有成功译文与 Pass 1 已保存设定仍保留。不自动重试审核拒绝。
 
 本机配置复测入口：忽略测试 `translation::tests::live_configured_novel_translation` 仅在用户授权后读取当前设置与系统翻译凭据。`PIXIV_TRANSLATION_SAMPLE=1` 使用两行普通日文样章验证生产两轮翻译；否则必须提供 `PIXIV_TRANSLATION_NOVEL_ID`，只读登录态抓取指定小说。`PIXIV_TRANSLATION_EXPECT_REJECTION=1` 断言审核拒绝文案与未保存残缺译文。全程不打印正文或 Key，不修改应用设置，临时译文记录结束后清理。离线回归覆盖合法 JSON 但缺完成信号的 EOF、流末尾裸 JSON / SSE 错误体、字符串 / 数字 `1301` 与服务 message 不回显。
 
 小说翻译设置的高级 JSON 示例在中英文文案中使用 vue-i18n 字面量插值转义花括号，保证生产构建不会因非法占位符抛出异常而使整组设置空白。运行 `node frontend/tests/production-settings.mjs` 可用生产编译与 `tauri.conf.json` 的生产 CSP 执行真实组件离线验收，断言中英文下五个翻译字段正常渲染、JSON 示例完整显示，并继续验证保存、凭据草稿及模型探测。需本机 Chrome；默认使用 Windows 标准安装路径，可用 `CHROME_PATH` 指定。测试产物与独立浏览器配置均存临时目录，结束后清理。
 
-小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/协议/高级参数校验（三种协议的端点推导与跨协议完整端点改写、按协议追加的保留字段、协议白名单与非法值拒绝）、目标语言解析（跟随界面语言、别名归一化、非法值拒绝）、原文语言判定与一致匹配（日/韩/中简繁/俄/拉丁，简繁互转不跳过）、提示词目标语言注入无残留占位符、锁定译名与重复别名的先到者优先合并（ADR 0024）、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用（第二页共享设定、模型改写锁定译名仍照常出译、Pass 2 失败保留 Pass 1/旧译文）与 Responses/Anthropic 的路径、凭据头、请求体装配（含三协议 `stream:true`）与三种协议的流式增量解析（逐字节切分、跨块断行、推理增量必须排除、截断事件必须报错）；模型输出容错覆盖省略可选字段与多余字段仍通过、缺 terms/缺 source 仍拒绝；语言一致的快速返回在命令流程层验证（中文原文 + zh-CN 不发请求直接返回提示，force 与不同语言照常进入流程）；探测命令单测覆盖 `/models` 路径推导（三种协议）与列表解析（去重排序、空列表/缺 id/超量报错）与 probe 空 Key/坏 URL/空模型/非法协议的发请求前拒绝；连接失败与超时的报错文案分别报出成因类别（解析 / 代理 / TLS / 连接被拒或被重置）与生效秒数，不回显原始报错、URL 与凭据。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖 SVG 入口默认收起、弹层焦点/Esc/外部关闭、三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、统一「翻译中」不暴露内部阶段、入口/弹层状态点与 hover 报错、目标语言一致提示与「仍然翻译」强制重译、设置三组分区与凭据状态胶囊、JSON 校验、Key 保存/清除/取消后的草稿清理，以及获取模型后原位变下拉（保留当前值、可切回手动输入）、检测可用绿/红状态、目标语言默认跟随界面语言并可手动指定、接口协议默认值与切换（URL 占位、模型列表重置、探测草稿带协议）、URL 为空禁用探测，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
+小说翻译离线验收：`src-tauri/src/translation.rs` 单测覆盖 URL/协议/高级参数校验（三种协议的端点推导与跨协议完整端点改写、按协议追加的保留字段、协议白名单与非法值拒绝）、目标语言解析（跟随界面语言、别名归一化、非法值拒绝）、原文语言判定与一致匹配（日/韩/中简繁/俄/拉丁，简繁互转不跳过）、提示词目标语言注入无残留占位符、锁定译名与重复别名的先到者优先合并（ADR 0024）、原始行对齐/截断、凭据不序列化、跨页持久化与原文版本隔离，以及本机临时模拟 HTTP 的两轮调用（第二页共享设定、模型改写锁定译名仍照常出译、Pass 2 失败保留 Pass 1/旧译文）与 Responses/Anthropic 的路径、凭据头、请求体装配（含三协议 `stream:true`）与三种协议的流式增量解析（逐字节切分、跨块断行、截断事件必须报错）、思考增量与 token 用量的按协议捕获（思考不进正文、Anthropic 分帧合并与缓存 token 口径、服务未下发 usage 不虚构）、`stream_options` 默认注入与高级 JSON 覆盖；模型输出容错覆盖省略可选字段与多余字段仍通过、缺 terms/缺 source 仍拒绝；语言一致的快速返回在命令流程层验证（中文原文 + zh-CN 不发请求直接返回提示，force 与不同语言照常进入流程）；探测命令单测覆盖 `/models` 路径推导（三种协议）与列表解析（去重排序、空列表/缺 id/超量报错）与 probe 空 Key/坏 URL/空模型/非法协议的发请求前拒绝；连接失败与超时的报错文案分别报出成因类别（解析 / 代理 / TLS / 连接被拒或被重置）与生效秒数，不回显原始报错、URL 与凭据。`/tests/translation.html` 挂载真实小说阅读器与设置面板，覆盖 SVG 入口默认收起、弹层焦点/Esc/外部关闭、三种模式、图片单次渲染、缓存恢复、跨页异步不串页、失败重试、统一「翻译中」不暴露内部阶段、入口/弹层状态点与 hover 报错、目标语言一致提示与「仍然翻译」强制重译、设置三组分区与凭据状态胶囊、JSON 校验、Key 保存/清除/取消后的草稿清理，以及获取模型后原位变下拉（保留当前值、可切回手动输入）、检测可用绿/红状态、目标语言默认跟随界面语言并可手动指定、接口协议默认值与切换（URL 占位、模型列表重置、探测草稿带协议）、URL 为空禁用探测，翻译期间浮窗思考行与摘要行双行同显（ADR 0030）、完成态回显 token 用量且进度区退场，并提供宽窄/深浅主题预览；只用模拟数据，不读写真实 Key 或访问 Pixiv/付费模型。
 
 全局帮助离线验收：`/tests/help-tooltips.html` 使用真实 SettingsDialog、SettingsPanel、LoginDialog、搜索/以图识图页面，覆盖六组设置、两种登录、默认收起、悬停/焦点/点击、可悬停阅读、Esc 不误关设置与外部关闭，提供宽窄/深浅主题/中英文预览；浏览器 mock，不读取真实凭据。
 
@@ -1004,7 +1007,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
 | `settings_get` / `settings_save(settings)` | 配置读写（白名单 26 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 详情页图片缩放 / 三个下载文件名模板；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_get(novel)` | 读取本机小说设定集和已译页；novel=`{novel_id,title,tags,description,content}`；返回 `{bible:{style,terms},pages:{页码:[{line,text}]}}`，原文和元信息 SHA256 区分版本 |
-| `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 IPC Channel，每行推送一个 JSON 进度事件——阶段事件 `{"type":"phase","phase":"queued|prepare|translate"}` 立即发，进度事件 `{"type":"progress","phase":"prepare|translate","received":N,"summary":"…"}` 按 ≥300ms 或 ≥2048B 节流（received 只计译文增量，summary = 最后一个完整 text 值按 60 字符（char 边界）截断、无行号前缀、取不到为空串，前端降级显示字节数；协议见 §3.2，界面规则见 ADR 0029 与 DESIGN.md「小说翻译」条目的浮窗进度区）；返回 `{status,lines,target_language}`，status=`translated` 时 lines 为 `[{line,text}]`（line 为该页原始文本的零起行号，可能来自本机缓存），status=`already_target_language` 时未调用模型、lines 为空；目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言，见 ADR 0018 |
+| `novel_translate_page(novel,page,force,progress)` | 单页两轮翻译，page 从 1 起，force 显式重译；progress 为 IPC Channel，每行推送一个 JSON 进度事件——阶段事件 `{"type":"phase","phase":"queued|prepare|translate"}` 立即发，进度事件 `{"type":"progress","phase":"prepare|translate","received":N,"summary":"…","reasoning":"…"}` 按 ≥300ms 或 ≥2048B 节流（received 只计正文增量，summary = 最后一个完整字符串值按 60 字符（char 边界）截断、无行号前缀、取不到为空串，前端降级显示字节数；reasoning = 思考链尾部 60 字符、无思考输出为空串；协议见 §3.2，界面规则见 ADR 0029、0030 与 DESIGN.md「小说翻译」条目的浮窗进度区）；返回 `{status,lines,target_language,usage?}`，usage 为本次两轮 token 用量合计 `{prompt,completion,total}`（服务未下发或缺省轮次按 0 计入、两轮全缺则整体缺省；缓存命中与 already_target_language 未调用模型时缺省，ADR 0030），status=`translated` 时 lines 为 `[{line,text}]`（line 为该页原始文本的零起行号，可能来自本机缓存），status=`already_target_language` 时未调用模型、lines 为空；目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言，见 ADR 0018 |
 | `translation_models(probe)` | 用未保存草稿探测模型列表端点（按 `format` 协议从同一基址推导 `/models`；OpenAI 系 Bearer，Anthropic `x-api-key` + 版本头，opencode 主机附会话标识头），返回排序去重后的模型 ID 列表（≤2000 项）；Key 省略时沿用已保存凭据，仅本次请求使用，不写配置或凭据库 |
 | `translation_test(probe)` | 用未保存草稿按所选协议发起一次简短生成请求验证端点+Key+模型+高级 JSON 可用性（模型必填）；须返回 `{"ok":true}` 语义 JSON 才算通过，同 probe 凭据规则；超时用草稿里的 `timeout_seconds`（缺省 600 秒）——「获取模型列表」固定 30 秒 |
 | `clear_logs` | 截断 logs 下当前及遗留轮转的普通 .log 文件；保留活动 logger 句柄，后续继续记录 |
@@ -1297,6 +1300,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0027 | 缓存与日志维护及模型错误诊断 | [adr/0027-storage-maintenance-diagnostics.md](adr/0027-storage-maintenance-diagnostics.md) |
 | 0028 | 图片缓存上限可配置 + 三档分区淘汰 | [adr/0028-image-cache-limit-and-partitioned-eviction.md](adr/0028-image-cache-limit-and-partitioned-eviction.md) |
 | 0029 | 小说翻译实时进度：progress Channel JSON 事件流与后台续跑 | [adr/0029-translation-progress-events.md](adr/0029-translation-progress-events.md) |
+| 0030 | 翻译浮窗流式展示思考过程与 token 用量 | [adr/0030-translation-stream-preview-and-usage.md](adr/0030-translation-stream-preview-and-usage.md) |
 
 ADR 按需追加，不强制一次性写完。
 

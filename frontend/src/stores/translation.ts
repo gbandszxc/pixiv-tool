@@ -4,7 +4,7 @@ import { errorMessage } from "../api/tauri";
 import { translateNovelPage } from "../api/translation";
 import type { NovelTranslationInput, PageTranslation, TranslatedLine, TranslationPhase, TranslationProgressEvent } from "../api/translation";
 
-/** 进行中的翻译任务快照；phase/received/summary 由后端 progress 事件驱动刷新。 */
+/** 进行中的翻译任务快照；phase/received/summary/reasoning 由后端 progress 事件驱动刷新。 */
 export interface TranslationActive {
   novelId: number;
   title: string;
@@ -12,6 +12,7 @@ export interface TranslationActive {
   phase: TranslationPhase;
   received: number;
   summary: string;
+  reasoning: string;
   startedAt: number;
   elapsed: number;
 }
@@ -34,6 +35,8 @@ export interface TranslationDone {
   status: PageTranslation["status"];
   lines: TranslatedLine[];
   target_language: string;
+  /** 本次两轮请求的 token 用量合计；未调用模型或服务未下发时缺省。 */
+  usage?: PageTranslation["usage"];
 }
 
 /**
@@ -59,6 +62,7 @@ export const useTranslationStore = defineStore("translation", () => {
     task.phase = evt.phase;
     task.received = evt.received;
     task.summary = evt.summary;
+    task.reasoning = evt.reasoning;
   }
 
   /**
@@ -74,6 +78,7 @@ export const useTranslationStore = defineStore("translation", () => {
       phase: "queued",
       received: 0,
       summary: "",
+      reasoning: "",
       startedAt: Date.now(),
       elapsed: 0,
     };
@@ -90,6 +95,7 @@ export const useTranslationStore = defineStore("translation", () => {
           status: result.status,
           lines: result.lines,
           target_language: result.target_language,
+          usage: result.usage,
         };
         return result;
       } catch (err) {

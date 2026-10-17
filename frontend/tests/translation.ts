@@ -46,9 +46,10 @@ window.__TAURI_INTERNALS__ = {
     if (command === "novel_translate_page") {
       calls++; requestedPage = args.page; requestedForce = args.force;
       assert(args.novel.tags.includes("同人") && args.novel.description === "星空下的重逢。", "请求包含标签和纯文本简介");
-      // 后端仍会推进内部阶段；界面应忽略它，只显示统一的「翻译中」。
-      args.progress.onmessage("prepare");
-      args.progress.onmessage("translate");
+      // 与后端协议同构的 JSON 事件流：阶段 + 思考行 + 摘要行；内部阶段名仍不出现在状态文案。
+      args.progress.onmessage(JSON.stringify({ type: "phase", phase: "prepare" }));
+      args.progress.onmessage(JSON.stringify({ type: "progress", phase: "prepare", received: 0, summary: "", reasoning: "先通读全文，判断文风与叙事视角…" }));
+      args.progress.onmessage(JSON.stringify({ type: "progress", phase: "translate", received: 2048, summary: "她微笑了。", reasoning: "第一句保留原文的句读节奏…" }));
       return new Promise<PageTranslation>((resolve, reject) => { resolvePage = resolve; rejectPage = reject; });
     }
     return {};
@@ -92,10 +93,14 @@ async function run() {
   const busyStatus = host.querySelector(".translation-status")?.textContent ?? "";
   assert(busyStatus.includes("翻译中") && !busyStatus.includes("设定集"), "只回显统一翻译中，不暴露内部阶段");
   assert(host.querySelector(".translation-trigger-wrap > .translation-indicator.is-busy"), "翻译中入口显示进行中状态点");
+  assert(host.querySelector(".progress-reasoning")?.textContent?.includes("第一句保留原文"), "思考行显示模型思考尾窗且与摘要行分色");
+  assert(host.querySelector(".progress-summary")?.textContent?.includes("她微笑了。"), "摘要行显示流式摘要");
   await selectPage(1);
-  resolvePage({ status: "translated", lines: [{ line: 0, text: "她微笑了。" }], target_language: "zh-CN" }); await settle();
+  resolvePage({ status: "translated", lines: [{ line: 0, text: "她微笑了。" }], target_language: "zh-CN", usage: { prompt: 100, completion: 20, total: 120 } }); await settle();
   assert(!host.querySelector(".novel-content")?.textContent?.includes("她微笑了。"), "异步结果不串到另一页");
+  assert(!host.querySelector(".translation-progress"), "完成后进度区退场");
   await selectPage(2); assert(host.querySelector(".translated-text")?.textContent === "她微笑了。", "目标页获得译文");
+  assert(host.querySelector(".translation-status")?.textContent?.includes("用量 120 tokens"), "完成态回显本次 token 用量");
   await click("重新翻译本页"); assert(requestedForce, "重译显式 force");
   rejectPage("模拟服务失败，请重试"); await settle();
   assert(host.querySelector(".translation-status.is-error") && host.querySelector(".translated-text")?.textContent === "她微笑了。", "失败可见且保留旧译文");

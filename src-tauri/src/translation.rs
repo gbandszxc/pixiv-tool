@@ -11,7 +11,7 @@ use std::{
 };
 use tauri::{State, ipc::Channel};
 
-use crate::translation_summary::SummaryExtractor;
+use crate::translation_summary::{ReasoningTail, SummaryExtractor};
 
 const PREPARE_PROMPT: &str = include_str!("translation_prepare.txt");
 const TRANSLATE_PROMPT: &str = include_str!("translation_render.txt");
@@ -166,11 +166,11 @@ fn completion_url(value: &str, format: ApiFormat) -> Result<tauri::Url, String> 
 fn validate_options(value: &Value, format: ApiFormat) -> Result<(), String> {
     let object = value.as_object().ok_or("翻译高级 JSON 必须是对象")?;
     // 请求的边界由应用控制；其余供应商扩展（包括嵌套 thinking）原样传递。
+    // stream_options（用量上报开关）允许覆盖：个别不兼容网关需要显式关闭注入。
     const RESERVED: &[&str] = &[
         "model",
         "messages",
         "stream",
-        "stream_options",
         "n",
         "tools",
         "tool_choice",
@@ -519,6 +519,10 @@ fn request_body(settings: &Settings, format: ApiFormat, prompt: &str, input: Val
                 ]),
             );
             body.insert("store".into(), json!(false));
+            // 流式用量上报（ADR 0030）：include_usage 让服务在末帧下发 usage；
+            // 个别不兼容的网关可在高级 JSON 里显式覆盖关闭（如 "stream_options": false）。
+            body.entry("stream_options".to_string())
+                .or_insert_with(|| json!({"include_usage": true}));
         }
         // Responses：instructions 承载系统提示，input 直接给用户文本。
         ApiFormat::Responses => {
@@ -573,23 +577,152 @@ const MAX_TRANSLATION_TEXT_BYTES: usize = 4_000_000;
 /// 原始 SSE 上限：上游可能把推理增量也发下来，留足余量后再掐。
 const MAX_TRANSLATION_STREAM_BYTES: usize = 16_000_000;
 
-/// 各协议文本增量的落点不同（Chat Completions / Responses / Anthropic）。
-fn stream_event_text(format: ApiFormat, event: &Value) -> Option<&str> {
+/// 各协议流事件里的增量分类：正文（译文/设定集 JSON）与思考（推理链）落点不同，
+/// 思考只进浮窗思考行（ADR 0030），不混入译文文本。
+enum StreamDeltaKind<'a> {
+    Text(&'a str),
+    Reasoning(&'a str),
+}
+
+fn stream_event_delta(format: ApiFormat, event: &Value) -> Option<StreamDeltaKind<'_>> {
     match format {
-        ApiFormat::ChatCompletions => event
-            .pointer("/choices/0/delta/content")
-            .and_then(Value::as_str),
-        ApiFormat::Responses => (event.get("type").and_then(Value::as_str)
-            == Some("response.output_text.delta"))
-        .then(|| event.get("delta").and_then(Value::as_str))
-        .flatten(),
-        ApiFormat::Anthropic => (event.get("type").and_then(Value::as_str)
-            == Some("content_block_delta")
-            // thinking_delta 等推理增量不属于译文，只收 text_delta。
-            && event.pointer("/delta/type").and_then(Value::as_str) == Some("text_delta"))
-        .then(|| event.pointer("/delta/text").and_then(Value::as_str))
-        .flatten(),
+        ApiFormat::ChatCompletions => {
+            let delta = event.pointer("/choices/0/delta")?;
+            delta
+                .get("content")
+                .and_then(Value::as_str)
+                .map(StreamDeltaKind::Text)
+                .or_else(|| {
+                    // DeepSeek 系 reasoning_content、OpenRouter 系 reasoning。
+                    delta
+                        .get("reasoning_content")
+                        .and_then(Value::as_str)
+                        .map(StreamDeltaKind::Reasoning)
+                        .or_else(|| {
+                            delta
+                                .get("reasoning")
+                                .and_then(Value::as_str)
+                                .map(StreamDeltaKind::Reasoning)
+                        })
+                })
+        }
+        ApiFormat::Responses => {
+            let kind = event.get("type").and_then(Value::as_str)?;
+            match kind {
+                "response.output_text.delta" => event
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .map(StreamDeltaKind::Text),
+                // 推理摘要与原始思考链都只进思考行。
+                "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => event
+                    .get("delta")
+                    .and_then(Value::as_str)
+                    .map(StreamDeltaKind::Reasoning),
+                _ => None,
+            }
+        }
+        ApiFormat::Anthropic => {
+            if event.get("type").and_then(Value::as_str) != Some("content_block_delta") {
+                return None;
+            }
+            match event.pointer("/delta/type").and_then(Value::as_str)? {
+                "text_delta" => event
+                    .pointer("/delta/text")
+                    .and_then(Value::as_str)
+                    .map(StreamDeltaKind::Text),
+                // thinking_delta 的文本在 delta.thinking。
+                "thinking_delta" => event
+                    .pointer("/delta/thinking")
+                    .and_then(Value::as_str)
+                    .map(StreamDeltaKind::Reasoning),
+                _ => None,
+            }
+        }
     }
+}
+
+/// 单次生成请求的 token 用量：流内 usage 事件能解析到才上报（ADR 0030）。
+/// prompt / completion 为协议字段归一后的输入与输出计数，total = 二者之和。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct TokenUsage {
+    pub prompt: u64,
+    pub completion: u64,
+    pub total: u64,
+}
+
+impl TokenUsage {
+    /// 流内合并：Anthropic 的输入在 message_start、输出在 message_delta 分帧到达，
+    /// 输出计数逐帧递增，取最大即最终值；OpenAI 系整帧下发，max 合并等价覆盖。
+    /// total 不参与合并，收尾时由 [`TokenUsage::with_total`] 统一计算。
+    fn merge(&mut self, other: Self) {
+        self.prompt = self.prompt.max(other.prompt);
+        self.completion = self.completion.max(other.completion);
+    }
+
+    /// 跨轮合计（Pass 1 + Pass 2）：不同请求的用量相加。
+    fn add(&mut self, other: Self) {
+        self.prompt = self.prompt.saturating_add(other.prompt);
+        self.completion = self.completion.saturating_add(other.completion);
+    }
+
+    fn with_total(self) -> Self {
+        Self {
+            total: self.prompt.saturating_add(self.completion),
+            ..self
+        }
+    }
+}
+
+/// 宽松读 u64：个别兼容服务把 token 计数发成字符串。
+fn loose_u64(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+}
+
+/// 流内事件的 token 用量：三协议的落点与字段名不同。
+fn stream_event_usage(format: ApiFormat, event: &Value) -> Option<TokenUsage> {
+    let (prompt, completion) = match format {
+        // 通常在末帧单独下发（stream_options.include_usage 开启时，choices 为空数组）。
+        ApiFormat::ChatCompletions => {
+            let usage = event.get("usage")?;
+            (
+                loose_u64(usage.get("prompt_tokens")?)?,
+                loose_u64(usage.get("completion_tokens")?)?,
+            )
+        }
+        ApiFormat::Responses => {
+            let usage = event.pointer("/response/usage")?;
+            (
+                loose_u64(usage.get("input_tokens")?)?,
+                loose_u64(usage.get("output_tokens")?)?,
+            )
+        }
+        ApiFormat::Anthropic => {
+            // message_start 带输入侧（含缓存读写的账单口径），message_delta 带累计输出；
+            // 两帧字段互补，缺哪个字段都只当 0，但不能一个字段都没有（否则不是 usage 帧）。
+            let usage = event
+                .pointer("/message/usage")
+                .or_else(|| event.pointer("/usage"))?;
+            let field = |key: &str| usage.get(key).and_then(loose_u64);
+            if field("input_tokens").is_none()
+                && field("cache_creation_input_tokens").is_none()
+                && field("cache_read_input_tokens").is_none()
+                && field("output_tokens").is_none()
+            {
+                return None;
+            }
+            let input = field("input_tokens").unwrap_or(0)
+                + field("cache_creation_input_tokens").unwrap_or(0)
+                + field("cache_read_input_tokens").unwrap_or(0);
+            (input, field("output_tokens").unwrap_or(0))
+        }
+    };
+    Some(TokenUsage {
+        prompt,
+        completion,
+        total: prompt.saturating_add(completion),
+    })
 }
 
 /// 流内事件里的截断/失败信号，语义与旧的非流式 `finish_reason`/`status` 判断一致。
@@ -615,11 +748,27 @@ fn stream_event_error(format: ApiFormat, event: &Value) -> Option<String> {
     }
 }
 
-/// 增量 SSE 解析：累积协议文本，识别流内错误与完成信号。
+/// 一次 push 消化出的增量（正文与思考可能同时到达，也可能都为空）。
+struct StreamDelta {
+    text: String,
+    reasoning: String,
+}
+
+impl StreamDelta {
+    fn empty() -> Self {
+        Self {
+            text: String::new(),
+            reasoning: String::new(),
+        }
+    }
+}
+
+/// 增量 SSE 解析：累积协议文本，识别流内错误、完成信号与 token 用量。
 struct StreamReader {
     format: ApiFormat,
     pending: Vec<u8>,
     text: String,
+    usage: Option<TokenUsage>,
     failure: Option<String>,
     completed: bool,
     diagnostic_key: String,
@@ -631,6 +780,7 @@ impl StreamReader {
             format,
             pending: Vec::new(),
             text: String::new(),
+            usage: None,
             failure: None,
             completed: false,
             diagnostic_key: String::new(),
@@ -638,22 +788,24 @@ impl StreamReader {
     }
 
     /// 灌入一段原始字节；行可能被切块，只在收到换行后才解析。
-    fn push(&mut self, chunk: &[u8]) -> Result<(), String> {
+    /// 返回本段消化出的正文与思考增量，供进度上报差量喂入。
+    fn push(&mut self, chunk: &[u8]) -> Result<StreamDelta, String> {
+        let mut delta = StreamDelta::empty();
         self.pending.extend_from_slice(chunk);
         while let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
             let line = String::from_utf8_lossy(&self.pending[..end])
                 .trim()
                 .to_string();
             self.pending.drain(..=end);
-            self.line(&line);
+            self.line(&line, &mut delta);
         }
         if self.text.len() > MAX_TRANSLATION_TEXT_BYTES {
             return Err("翻译响应过大".into());
         }
-        Ok(())
+        Ok(delta)
     }
 
-    fn line(&mut self, line: &str) {
+    fn line(&mut self, line: &str, delta: &mut StreamDelta) {
         // 有些兼容服务在 SSE 中途失败时直接追加 JSON 错误体，没有 data: 前缀。
         let payload = match line.strip_prefix("data:") {
             Some(payload) => payload,
@@ -741,16 +893,25 @@ impl StreamReader {
             );
             self.failure = Some(message);
         }
-        if let Some(text) = stream_event_text(self.format, &event) {
-            self.text.push_str(text);
+        if let Some(usage) = stream_event_usage(self.format, &event) {
+            self.usage.get_or_insert_with(TokenUsage::default).merge(usage);
+        }
+        match stream_event_delta(self.format, &event) {
+            Some(StreamDeltaKind::Text(text)) => {
+                delta.text.push_str(text);
+                self.text.push_str(text);
+            }
+            Some(StreamDeltaKind::Reasoning(text)) => delta.reasoning.push_str(text),
+            None => {}
         }
     }
 
-    /// 收尾：最后一行可能没有换行；失败信号优先于文本。
-    fn finish(mut self) -> Result<String, String> {
+    /// 收尾：最后一行可能没有换行；失败信号优先于文本与用量。
+    fn finish(mut self) -> Result<(String, Option<TokenUsage>), String> {
         if !self.pending.is_empty() {
             let line = String::from_utf8_lossy(&self.pending).trim().to_string();
-            self.line(&line);
+            let mut delta = StreamDelta::empty();
+            self.line(&line, &mut delta);
         }
         if let Some(failure) = self.failure {
             return Err(failure);
@@ -765,7 +926,7 @@ impl StreamReader {
         if self.text.trim().is_empty() {
             return Err("模型未返回文本译文".into());
         }
-        Ok(self.text)
+        Ok((self.text, self.usage.map(TokenUsage::with_total)))
     }
 }
 
@@ -807,9 +968,10 @@ fn phase_event(phase: &str) -> String {
     json!({"type": "phase", "phase": phase}).to_string()
 }
 
-/// 进度事件：节流后发，只统计译文增量（推理/思考增量不计入）。
-fn progress_event(phase: &str, received: usize, summary: &str) -> String {
-    json!({"type": "progress", "phase": phase, "received": received, "summary": summary})
+/// 进度事件：节流后发。received 只统计正文增量（推理/思考增量不计入），
+/// summary 与 reasoning 分别是正文摘要与思考尾窗（均为 60 字符截断，取不到为空串）。
+fn progress_event(phase: &str, received: usize, summary: &str, reasoning: &str) -> String {
+    json!({"type": "progress", "phase": phase, "received": received, "summary": summary, "reasoning": reasoning})
         .to_string()
 }
 
@@ -820,34 +982,40 @@ struct StreamProgress<'a> {
     channel: &'a Channel<String>,
 }
 
-/// 一条流的进度上报状态：累计字节、节流器与摘要扫描器。
+/// 一条流的进度上报状态：累计字节、节流器、正文摘要扫描器与思考尾窗。
 struct ProgressReporter<'a> {
     target: StreamProgress<'a>,
     received: usize,
     throttle: ProgressThrottle,
     summary: SummaryExtractor,
+    reasoning: ReasoningTail,
 }
 
 impl ProgressReporter<'_> {
-    /// 喂入一段译文增量；返回是否到达发送条件。
-    fn feed(&mut self, bytes: usize, text: &str) -> bool {
+    /// 喂入一段正文增量；返回是否到达发送条件。两个阶段都提取摘要：
+    /// Pass 2 取译文 text 值，Pass 1 取设定集 JSON 的最近完整字符串值。
+    fn feed_text(&mut self, bytes: usize, text: &str) -> bool {
         self.received += bytes;
-        // Pass 1 产出的是设定集 JSON，没有译文行，摘要恒为空串。
-        if self.target.phase == "translate" {
-            self.summary.push(text);
-        }
+        self.summary.push(text);
         self.throttle.ready(bytes)
+    }
+
+    /// 喂入一段思考增量：只更新思考行、不占用 received；
+    /// 思考期间零正文也持续触发节流放行，浮窗因此始终有内容在动（ADR 0030）。
+    fn feed_reasoning(&mut self, text: &str) -> bool {
+        self.reasoning.push(text);
+        self.throttle.ready(0)
     }
 }
 
-/// 读完整条流并取回模型文本；中途断流单独给文案，好让用户知道重试即可。
+/// 读完整条流并取回模型文本与 token 用量；中途断流单独给文案，好让用户知道重试即可。
 /// `progress` 为 Some 时按节流上报阶段进度（事件协议见 [`phase_event`]）。
 async fn read_stream_text(
     response: wreq::Response,
     format: ApiFormat,
     key: &str,
     progress: Option<StreamProgress<'_>>,
-) -> Result<String, String> {
+) -> Result<(String, Option<TokenUsage>), String> {
     let mut reader = StreamReader::new(format);
     reader.diagnostic_key = key.to_owned();
     let mut reporter = progress.map(|target| ProgressReporter {
@@ -855,6 +1023,7 @@ async fn read_stream_text(
         received: 0,
         throttle: ProgressThrottle::new(),
         summary: SummaryExtractor::new(),
+        reasoning: ReasoningTail::default(),
     });
     let mut raw = 0usize;
     let mut stream = std::pin::pin!(response.bytes_stream());
@@ -870,16 +1039,21 @@ async fn read_stream_text(
         if raw > MAX_TRANSLATION_STREAM_BYTES {
             return Err("翻译响应过大".into());
         }
-        let before = reader.text.len();
-        reader.push(&chunk)?;
-        // 只统计译文增量：stream_event_text 已过滤掉推理/思考增量，text 只增译文。
+        let delta = reader.push(&chunk)?;
         if let Some(reporter) = reporter.as_mut() {
-            let added = reader.text.len() - before;
-            if added > 0 && reporter.feed(added, &reader.text[before..]) {
+            let mut fire = false;
+            if !delta.text.is_empty() {
+                fire |= reporter.feed_text(delta.text.len(), &delta.text);
+            }
+            if !delta.reasoning.is_empty() {
+                fire |= reporter.feed_reasoning(&delta.reasoning);
+            }
+            if fire {
                 let _ = reporter.target.channel.send(progress_event(
                     reporter.target.phase,
                     reporter.received,
                     &reporter.summary.summary(),
+                    &reporter.reasoning.display(),
                 ));
             }
         }
@@ -961,7 +1135,7 @@ impl TranslationClient<'_> {
         prompt: &str,
         input: Value,
         progress: Option<StreamProgress<'_>>,
-    ) -> Result<Value, String> {
+    ) -> Result<(Value, Option<TokenUsage>), String> {
         let response = self
             .authorized(self.http.post(self.url.as_str()))
             .header("Content-Type", "application/json")
@@ -1001,7 +1175,8 @@ impl TranslationClient<'_> {
             ));
         }
         log::info!("翻译服务生成请求 → HTTP {}", response.status().as_u16());
-        parse_model_json(&read_stream_text(response, self.format, &self.key, progress).await?)
+        let (text, usage) = read_stream_text(response, self.format, &self.key, progress).await?;
+        Ok((parse_model_json(&text)?, usage))
     }
 }
 
@@ -1205,13 +1380,21 @@ pub async fn translation_test(probe: TranslationProbe) -> Result<(), String> {
         settings: &settings,
         progress: None,
     };
-    let result = client
+    let (result, usage) = client
         .complete(
             "这是连接检测。仅返回 JSON 对象 {\"ok\":true}，不输出其他文字。",
             json!("请确认服务可用。"),
             None,
         )
         .await?;
+    if let Some(usage) = usage {
+        log::info!(
+            "连接检测 token 用量：输入 {} + 输出 {} = {}",
+            usage.prompt,
+            usage.completion,
+            usage.total
+        );
+    }
     if result.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err("服务已响应，但未返回预期 JSON，请调整高级配置或更换模型".into());
     }
@@ -1227,12 +1410,15 @@ pub async fn novel_translation_get(
     read_book(&book_path(&state.paths.data_dir, &novel))
 }
 
-/// 单页翻译结果：状态 + 译文 + 本次生效的目标语言 code。
+/// 单页翻译结果：状态 + 译文 + 本次生效的目标语言 code + 两轮 token 用量合计。
 #[derive(Serialize)]
 pub struct PageTranslation {
     pub status: PageTranslationStatus,
     pub lines: Vec<TranslatedLine>,
     pub target_language: String,
+    /// 本次运行调用模型的 token 用量合计（两轮相加）；未调用模型或服务未下发时缺省。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TokenUsage>,
 }
 
 #[derive(Serialize)]
@@ -1283,6 +1469,7 @@ async fn translate_page_flow(
             status: PageTranslationStatus::AlreadyTargetLanguage,
             lines: Vec::new(),
             target_language: target_code.to_string(),
+            usage: None,
         });
     }
     // ponytail: 全局串行，防止设定集覆盖与重复扣费；需要并行多小说时改为按小说加锁。
@@ -1295,6 +1482,7 @@ async fn translate_page_flow(
                 status: PageTranslationStatus::Translated,
                 lines: cached.clone(),
                 target_language: target_code.to_string(),
+                usage: None,
             });
         }
     }
@@ -1325,7 +1513,7 @@ async fn translate_page_flow(
         settings: &settings,
         progress: Some(progress),
     };
-    let lines = translate_book(
+    let (lines, usage) = translate_book(
         &client,
         novel,
         &all_pages,
@@ -1340,6 +1528,7 @@ async fn translate_page_flow(
         status: PageTranslationStatus::Translated,
         lines,
         target_language: target_code.to_string(),
+        usage,
     })
 }
 
@@ -1391,7 +1580,7 @@ async fn translate_book(
     book: &mut TranslationBook,
     progress: &Channel<String>,
     target_language: &str,
-) -> Result<Vec<TranslatedLine>, String> {
+) -> Result<(Vec<TranslatedLine>, Option<TokenUsage>), String> {
     let source = source_lines(&all_pages[page - 1]);
     let prev = if page > 1 {
         all_pages[page - 2]
@@ -1420,16 +1609,15 @@ async fn translate_book(
         source.len(),
         book.bible.terms.len()
     );
-    let candidate: CandidateBible = serde_json::from_value(
-        client
-            .complete(
-                &with_target_language(PREPARE_PROMPT, target_language),
-                input.clone(),
-                client.stream_progress("prepare"),
-            )
-            .await?,
-    )
-    .map_err(|_| "模型设定集结构无效")?;
+    let (candidate_value, prepare_usage) = client
+        .complete(
+            &with_target_language(PREPARE_PROMPT, target_language),
+            input.clone(),
+            client.stream_progress("prepare"),
+        )
+        .await?;
+    let candidate: CandidateBible =
+        serde_json::from_value(candidate_value).map_err(|_| "模型设定集结构无效")?;
     book.bible = merge_bible(&book.bible, candidate.into())?;
     // Pass 1 先落盘；Pass 2 失败仍能沿用术语，不写半页译文。
     save_book(path, book)?;
@@ -1451,16 +1639,14 @@ async fn translate_book(
         line: usize,
         text: String,
     }
-    let output: Output = serde_json::from_value(
-        client
-            .complete(
-                &with_target_language(TRANSLATE_PROMPT, target_language),
-                input,
-                client.stream_progress("translate"),
-            )
-            .await?,
-    )
-    .map_err(|_| "模型译文结构无效")?;
+    let (output_value, translate_usage) = client
+        .complete(
+            &with_target_language(TRANSLATE_PROMPT, target_language),
+            input,
+            client.stream_progress("translate"),
+        )
+        .await?;
+    let output: Output = serde_json::from_value(output_value).map_err(|_| "模型译文结构无效")?;
     let lines = validate_translation(
         output
             .lines
@@ -1474,7 +1660,21 @@ async fn translate_book(
     )?;
     book.pages.insert(page, lines.clone());
     save_book(path, book)?;
-    Ok(lines)
+    // 两轮用量合计；服务都不下发时整体缺省（拿到几轮算几轮，缺的轮次按 0 计入）。
+    let usage = match (prepare_usage, translate_usage) {
+        (None, None) => None,
+        (prepare, translate) => {
+            let mut total = TokenUsage::default();
+            if let Some(prepare) = prepare {
+                total.add(prepare);
+            }
+            if let Some(translate) = translate {
+                total.add(translate);
+            }
+            Some(total.with_total())
+        }
+    };
+    Ok((lines, usage))
 }
 
 #[cfg(test)]
@@ -1559,7 +1759,7 @@ mod tests {
             println!("小说 {id}：内容审核拒绝识别正确，未保存残缺译文");
             return;
         }
-        let lines = result.expect("当前配置小说翻译失败");
+        let (lines, _) = result.expect("当前配置小说翻译失败");
         assert_eq!(lines.len(), source_lines(&all_pages[0]).len());
         println!("小说 {id}：{} 行译文，对齐验证通过", lines.len());
     }
@@ -1753,14 +1953,16 @@ mod tests {
             translate_book(
                 &client, &novel, &all_pages, 1, &path, &mut book, &progress, target,
             )
-            .await?;
+            .await?
+            .0;
             let first_bible = book.bible.clone();
             // 第二页从落盘记录恢复，验证跨页以及重新打开小说后的设定沿用。
             book = read_book(&path)?;
             translate_book(
                 &client, &novel, &all_pages, 2, &path, &mut book, &progress, target,
             )
-            .await?;
+            .await?
+            .0;
             assert_eq!(book.bible.style, first_bible.style);
             for term in &first_bible.terms {
                 let saved = book
@@ -1949,7 +2151,7 @@ mod tests {
         let target = resolve_target_language(&settings).unwrap().1;
         let result: Result<(), String> = async {
             let mut book = TranslationBook::default();
-            let lines = translate_book(
+            let (lines, _) = translate_book(
                 &client, &input, &all_pages, 1, &path, &mut book, &progress, target,
             )
             .await?;
@@ -2222,7 +2424,7 @@ mod tests {
         let started = std::time::Instant::now();
         let result: Result<(), String> = async {
             let mut book = TranslationBook::default();
-            let lines = translate_book(
+            let (lines, _) = translate_book(
                 &client, &novel, &all_pages, 1, &path, &mut book, &progress, target,
             )
             .await?;
@@ -2334,6 +2536,12 @@ mod tests {
         assert!(validate_options(&json!({"system":"x"}), Anthropic).is_err());
         assert!(validate_options(&json!({"max_tokens":4096}), Anthropic).is_ok());
         assert!(validate_options(&json!({"max_output_tokens":4096}), Responses).is_ok());
+        // stream_options 只是流式元信息开关，允许覆盖（不兼容网关的用量上报关闭出口）。
+        assert!(validate_options(
+            &json!({"stream_options":{"include_usage":true}}),
+            ChatCompletions
+        )
+        .is_ok());
         for value in [
             json!([]),
             json!({"messages":[]}),
@@ -2589,7 +2797,21 @@ mod tests {
         assert_eq!(chat["messages"][0]["content"], "SYS");
         assert_eq!(chat["messages"][1]["content"], payload.to_string());
         assert_eq!(chat["store"], false);
+        // 流式用量上报默认开启（ADR 0030）；Responses / Anthropic 不注入。
+        assert_eq!(chat["stream_options"]["include_usage"], true);
         assert!(chat.get("instructions").is_none() && chat.get("system").is_none());
+
+        // 高级 JSON 显式给出 stream_options 时不覆盖（不兼容网关的关闭出口）。
+        let opted_out = request_body(
+            &Settings {
+                translation_extra: json!({"stream_options": false}),
+                ..settings.clone()
+            },
+            ApiFormat::ChatCompletions,
+            "SYS",
+            payload.clone(),
+        );
+        assert_eq!(opted_out["stream_options"], false);
 
         let responses = request_body(&settings, ApiFormat::Responses, "SYS", payload.clone());
         assert_eq!(responses["instructions"], "SYS");
@@ -2597,6 +2819,7 @@ mod tests {
         assert_eq!(responses["store"], false);
         assert_eq!(responses["reasoning_effort"], "low");
         assert!(responses.get("messages").is_none());
+        assert!(responses.get("stream_options").is_none());
 
         let anthropic = request_body(&settings, ApiFormat::Anthropic, "SYS", payload.clone());
         assert_eq!(anthropic["system"], "SYS");
@@ -2673,7 +2896,7 @@ mod tests {
             for byte in raw.as_bytes() {
                 reader.push(&[*byte])?;
             }
-            reader.finish()
+            reader.finish().map(|(text, _)| text)
         }
         // Chat Completions：只取 delta.content，推理增量与事件行忽略。
         let chat = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"想\"}}]}\n\
@@ -2740,6 +2963,81 @@ mod tests {
             )
             .unwrap(),
             "ok"
+        );
+    }
+
+    /// 思考增量与 token 用量按协议捕获（ADR 0030）：思考只进思考行不进正文，
+    /// usage 按各协议落点解析并合并（Anthropic 输入/输出分帧到达）。
+    #[test]
+    fn captures_reasoning_and_usage_per_api_format() {
+        use ApiFormat::*;
+        /// 逐字节灌入，返回（正文, 思考, 用量）。
+        fn stream(format: ApiFormat, raw: &str) -> (String, String, Option<TokenUsage>) {
+            let mut reader = StreamReader::new(format);
+            let mut reasoning = String::new();
+            for byte in raw.as_bytes() {
+                let delta = reader.push(&[*byte]).unwrap();
+                reasoning.push_str(&delta.reasoning);
+            }
+            let (text, usage) = reader.finish().unwrap();
+            (text, reasoning, usage)
+        }
+        // Chat Completions：reasoning_content / reasoning 都进思考行；usage 由末帧单独下发。
+        let (text, reasoning, usage) = stream(
+            ChatCompletions,
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"想\"}}]}\n\
+             data: {\"choices\":[{\"delta\":{\"reasoning\":\"接着想\"}}]}\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"lines\\\":\"}}]}\n\
+             data: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":22,\"total_tokens\":33}}\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\
+             data: [DONE]\n",
+        );
+        assert_eq!(text, "{\"lines\":");
+        assert_eq!(reasoning, "想接着想");
+        assert_eq!(
+            usage,
+            Some(TokenUsage {
+                prompt: 11,
+                completion: 22,
+                total: 33
+            })
+        );
+        // Responses：推理摘要与思考链都进思考行；usage 随 response.completed 下发。
+        let (text, reasoning, usage) = stream(
+            Responses,
+            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"推理\"}\n\
+             data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"链\"}\n\
+             data: {\"type\":\"response.output_text.delta\",\"delta\":\"好\"}\n\
+             data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":7,\"output_tokens\":9,\"total_tokens\":16}}}\n",
+        );
+        assert_eq!(text, "好");
+        assert_eq!(reasoning, "推理链");
+        assert_eq!(
+            usage,
+            Some(TokenUsage {
+                prompt: 7,
+                completion: 9,
+                total: 16
+            })
+        );
+        // Anthropic：thinking_delta 文本在 delta.thinking；输入随 message_start、输出随 message_delta 合并。
+        let (text, reasoning, usage) = stream(
+            Anthropic,
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"cache_read_input_tokens\":3}}}\n\
+             data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"思考\"}}\n\
+             data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"译\"}}\n\
+             data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n",
+        );
+        assert_eq!(text, "译");
+        assert_eq!(reasoning, "思考");
+        // prompt = input + cache_read（账单口径）；total = prompt + completion。
+        assert_eq!(
+            usage,
+            Some(TokenUsage {
+                prompt: 8,
+                completion: 4,
+                total: 12
+            })
         );
     }
 
@@ -3145,13 +3443,11 @@ mod tests {
             settings: &settings,
             progress: None,
         };
-        assert_eq!(
-            responses
-                .complete("SYS", payload.clone(), None)
-                .await
-                .unwrap(),
-            json!({"ok": true})
-        );
+        let (value, _) = responses
+            .complete("SYS", payload.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(value, json!({"ok": true}));
         // Anthropic：x-api-key + 版本头、system/messages/max_tokens，且不带 store。
         let anthropic = TranslationClient {
             http,
@@ -3162,13 +3458,11 @@ mod tests {
             settings: &settings,
             progress: None,
         };
-        assert_eq!(
-            anthropic
-                .complete("SYS", payload.clone(), None)
-                .await
-                .unwrap(),
-            json!({"ok": true})
-        );
+        let (value, _) = anthropic
+            .complete("SYS", payload.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(value, json!({"ok": true}));
         let captured = server.await.unwrap();
         assert_eq!(captured.len(), 2);
         assert!(
@@ -3209,16 +3503,23 @@ mod tests {
             assert_eq!(event["type"], "phase");
             assert_eq!(event["phase"], phase);
         }
-        let event: Value =
-            serde_json::from_str(&progress_event("translate", 38211, "于是他低下头")).unwrap();
+        let event: Value = serde_json::from_str(&progress_event(
+            "translate",
+            38211,
+            "于是他低下头",
+            "先通读全文",
+        ))
+        .unwrap();
         assert_eq!(event["type"], "progress");
         assert_eq!(event["phase"], "translate");
         assert_eq!(event["received"], json!(38211));
         assert_eq!(event["summary"], "于是他低下头");
-        // 摘要提取不到时字段仍在（空串），前端据此降级显示已接收字节。
-        let empty: Value = serde_json::from_str(&progress_event("prepare", 8200, "")).unwrap();
+        assert_eq!(event["reasoning"], "先通读全文");
+        // 摘要与思考提取不到时字段仍在（空串），前端据此降级显示已接收字节。
+        let empty: Value = serde_json::from_str(&progress_event("prepare", 8200, "", "")).unwrap();
         assert_eq!(empty["type"], "progress");
         assert_eq!(empty["summary"], "");
+        assert_eq!(empty["reasoning"], "");
         assert_eq!(empty["received"], json!(8200));
     }
 
@@ -3323,12 +3624,13 @@ mod tests {
         };
         let target = resolve_target_language(&settings).unwrap().1;
         let mut book = TranslationBook::default();
-        let lines = translate_book(
+        let (lines, usage) = translate_book(
             &client, &novel, &all_pages, 1, &path, &mut book, &progress, target,
         )
         .await
         .unwrap();
         assert_eq!(lines.len(), 2, "两行原文两行译文");
+        assert_eq!(usage, None, "模拟服务未下发 usage 时不虚构用量");
         server.await.unwrap();
         let events = events.lock().unwrap();
         let parsed = parse_channel_events(&events);
@@ -3341,7 +3643,7 @@ mod tests {
         );
         assert_eq!(
             parsed[2],
-            json!({"type":"progress","phase":"translate","received":render.len(),"summary":"第二行。"})
+            json!({"type":"progress","phase":"translate","received":render.len(),"summary":"第二行。","reasoning":""})
         );
         if dir.exists() {
             std::fs::remove_dir_all(&dir).unwrap();

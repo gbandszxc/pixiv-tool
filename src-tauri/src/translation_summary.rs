@@ -1,10 +1,12 @@
-//! 翻译流式进度的摘要行：从 Pass 2 的译文增量里扫出「最后一个完整的 text 值」。
+//! 翻译流式进度的两行摘要：正文行扫「最后一个完整的字符串值」，思考行取思考增量尾窗。
 //!
-//! 模型译文是流式下发的 JSON（`{"lines":[{"line":0,"text":"…"},…]}`），增量可以把
-//! 键名、字符串、转义序列任意切断。完整 JSON 解析由 [`crate::translation::parse_model_json`]
-//! 收尾；这里只做一个跨增量保留状态的轻量扫描——只认识 `text` 一个键，
-//! 见到完整的 text 值就记下（后出现的覆盖先出现的），取不到完整值就不出摘要，
+//! 模型正文是流式下发的 JSON（Pass 1 设定集 `{"style":"…","terms":[…]}`、Pass 2 译文
+//! `{"lines":[{"line":0,"text":"…"},…]}`），增量可以把键名、字符串、转义序列任意切断。
+//! 完整 JSON 解析由 [`crate::translation::parse_model_json`] 收尾；这里只做一个跨增量
+//! 保留状态的轻量扫描——不区分键名，见到完整的字符串值就记下（后出现的覆盖先出现的），
+//! 两轮阶段的 JSON 都有可读的字符串值，浮窗因此全程有内容可显。取不到完整值就不出摘要，
 //! 由前端降级显示已接收字节数。
+//! 思考增量（推理/思考链）是纯文本流，无需解析，只保留最近一段尾窗供展示。
 
 /// 摘要文本的字符上限（char 边界截断，超出部分交给前端 ellipsis）。
 pub const SUMMARY_CHAR_LIMIT: usize = 60;
@@ -12,7 +14,7 @@ pub const SUMMARY_CHAR_LIMIT: usize = 60;
 /// 保证扫描状态不错位。
 const STRING_ACCUMULATE_LIMIT: usize = 4096;
 
-/// 一行流式摘要：最近一个完整的译文 text 值。
+/// 一行流式摘要：最近一个完整的字符串值（Pass 1 为设定集字段，Pass 2 为译文 text 值）。
 #[derive(Debug, PartialEq, Eq)]
 pub struct StreamSummary {
     pub text: String,
@@ -37,10 +39,10 @@ enum Escape {
     },
 }
 
-/// 跨增量 JSON 摘要扫描器：喂入译文增量，随时可取出最近一个完整的 text 值。
+/// 跨增量 JSON 摘要扫描器：喂入正文增量，随时可取出最近一个完整的字符串值。
 #[derive(Default)]
 pub struct SummaryExtractor {
-    /// 最近一个完整 text 值（后出现的覆盖先出现的）。
+    /// 最近一个完整字符串值（后出现的覆盖先出现的）。
     latest: Option<StreamSummary>,
     /// 正在读的字符串（转义已还原）。
     text: String,
@@ -54,8 +56,6 @@ pub struct SummaryExtractor {
     in_string: bool,
     /// 刚读完的字符串，还要看下一个非空白字符是不是冒号（决定键名还是值）。
     finished: Option<String>,
-    /// 已确认的键名，等它的值。
-    key: Option<String>,
 }
 
 impl SummaryExtractor {
@@ -84,27 +84,22 @@ impl SummaryExtractor {
             return;
         }
         if character.is_whitespace() {
-            // 空白不终结正在等待判定的字符串（`"text" : "…"` 合法）。
+            // 空白不终结正在等待判定的字符串（`"style" : "…"` 合法）。
             return;
         }
         if let Some(finished) = self.finished.take() {
+            // 冒号：刚读完的字符串是键名，不入摘要。
             if character == ':' {
-                self.key = Some(finished);
                 return;
             }
-            // 不是冒号：刚读完的字符串是某个值，按当前键名结算后继续处理本字符。
+            // 其余结构符：刚读完的字符串是一个值，结算后继续处理本字符。
             self.apply_string_value(finished);
         }
-        match character {
-            '"' => {
-                self.in_string = true;
-                self.text.clear();
-                self.overflow = false;
-                self.escape = Escape::None;
-            }
-            // 结构符、数字与 true/false/null 等字面量都不是字符串值：清掉键名，
-            // 避免把上一个键名误配给后面的值（冒号只可能在 finished 分支里消费）。
-            _ => self.key = None,
+        if character == '"' {
+            self.in_string = true;
+            self.text.clear();
+            self.overflow = false;
+            self.escape = Escape::None;
         }
     }
 
@@ -178,22 +173,12 @@ impl SummaryExtractor {
         self.surrogate_high = None;
         let text = std::mem::take(&mut self.text);
         self.overflow = false;
-        // 已确认这是 `text` 键的值：收尾引号出现即完整，立即入摘要
-        // （流可能恰好结束在这里，等不到下一个字符）。
-        if self.key.as_deref() == Some("text") {
-            self.apply_string_value(text);
-            return;
-        }
-        // 否则还要看下一个非空白字符是不是冒号，才能判定键名还是值。
+        // 还要看下一个非空白字符是不是冒号，才能判定键名还是值。
         self.finished = Some(text);
     }
 
-    /// 结算一个作为值的字符串：只有 `text` 键的值进摘要。
+    /// 结算一个作为值的字符串：入摘要（值完整即收，流可能恰好结束在这里）。
     fn apply_string_value(&mut self, value: String) {
-        if self.key.take().as_deref() != Some("text") {
-            return;
-        }
-        // 值完整即入摘要（流可能恰好结束在这里，等不到下一个字符）。
         self.latest = Some(StreamSummary { text: value });
     }
 
@@ -209,6 +194,34 @@ impl SummaryExtractor {
             self.text = self.text.chars().take(SUMMARY_CHAR_LIMIT).collect();
             self.overflow = true;
         }
+    }
+}
+
+/// 思考保留窗口：尾窗裁剪的放大倍数（超过 4×60 字符才裁剪一次，摊薄裁剪成本）。
+const REASONING_TAIL_FACTOR: usize = 4;
+
+/// 思考增量的滚动尾窗：推理链可能远长于摘要行，全量累积无意义，
+/// 只保留最近一段（约 4×60 字符）供展示取尾部 60 字符。
+#[derive(Default)]
+pub struct ReasoningTail {
+    text: String,
+}
+
+impl ReasoningTail {
+    /// 灌入一段思考增量；超过保留窗口即从头部裁剪（char 边界）。
+    pub fn push(&mut self, chunk: &str) {
+        self.text.push_str(chunk);
+        let keep = SUMMARY_CHAR_LIMIT * REASONING_TAIL_FACTOR;
+        let count = self.text.chars().count();
+        if count > keep {
+            self.text = self.text.chars().skip(count - keep).collect();
+        }
+    }
+
+    /// 展示用尾部摘要（60 字符截断，不追加省略号）；恒显示最新内容。
+    pub fn display(&self) -> String {
+        let start = self.text.chars().count().saturating_sub(SUMMARY_CHAR_LIMIT);
+        self.text.chars().skip(start).take(SUMMARY_CHAR_LIMIT).collect()
     }
 }
 
@@ -228,6 +241,10 @@ mod tests {
     fn extracts_last_complete_text() {
         let json = r#"{"lines":[{"line":0,"text":"第一行。"},{"line":1,"text":"第二行。"}]}"#;
         assert_eq!(summary_of(&[json]), "第二行。");
+        // 设定集（Pass 1）形状：没有 text 键也出摘要——任意字符串值都算，
+        // 词条内容随流式生成滚动可见（最后一个是 aliases 前的 notes/别名等）。
+        let bible = r#"{"style":"克制","terms":[{"source":"アリス","translation":"爱丽丝"}]}"#;
+        assert_eq!(summary_of(&[bible]), "爱丽丝");
     }
 
     #[test]
@@ -270,7 +287,9 @@ mod tests {
         extractor.push("{\"lines\":[{\"line\":0,\"text\":\"半");
         assert_eq!(extractor.summary(), "", "字符串没收尾不算完整值");
         extractor.push("句话\"");
-        assert_eq!(extractor.summary(), "半句话", "收尾引号出现即完整");
+        assert_eq!(extractor.summary(), "", "收尾引号后要等下一个字符才判定为值");
+        extractor.push("}");
+        assert_eq!(extractor.summary(), "半句话");
         // 只有键名、连冒号后的值都没有：同样不出摘要。
         let mut partial = SummaryExtractor::new();
         partial.push("{\"line\":3,\"te");
@@ -293,17 +312,28 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unknown_keys_and_non_json_streams() {
-        // 设定集（Pass 1）形状：没有 text 键，恒空。
-        let bible = r#"{"style":"克制","terms":[{"source":"アリス","translation":"爱丽丝"}]}"#;
-        assert_eq!(summary_of(&[bible]), "");
+    fn ignores_non_json_streams_and_non_string_values() {
         // 普通文本/保活内容：没有 JSON 结构，也空。
         assert_eq!(summary_of(&["keep-alive", ": ping", "[DONE]"]), "");
-        // 键名像 text 但不是（值里的字符串、别的键）都不算。
-        assert_eq!(
-            summary_of(&[r#"{"note":"text","texts":"x","sub":{"text":1}}"#]),
-            ""
-        );
+        // 数字与字面量不是字符串值，不出摘要。
+        assert_eq!(summary_of(&[r#"{"line":3,"ok":true,"none":null}"#]), "");
+    }
+
+    #[test]
+    fn reasoning_tail_keeps_latest_window() {
+        let mut tail = ReasoningTail::default();
+        tail.push("先通读全文，");
+        tail.push("人名需要统一。");
+        assert_eq!(tail.display(), "先通读全文，人名需要统一。");
+        // 超长思考只保留最近 60 字符（char 边界），尾部恒为最新内容。
+        let mut tail = ReasoningTail::default();
+        for _ in 0..300 {
+            tail.push("思");
+        }
+        assert_eq!(tail.display(), "思".repeat(60));
+        // 尾窗裁剪后继续追加不丢字。
+        tail.push("，结尾");
+        assert_eq!(tail.display(), format!("{}，结尾", "思".repeat(57)));
     }
 
     #[test]

@@ -30,7 +30,7 @@ const receivedText = computed(() => {
   return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${Math.round(bytes)} B`;
 });
 
-/** 摘要行：有流式摘要显示摘要；排队 / Pass 1 阶段恒空串，降级显示后台安抚文案。 */
+/** 摘要行：有流式摘要显示摘要（Pass 1 为设定集字段值、Pass 2 为译文行）；取不到时降级显示后台安抚文案。 */
 const summaryLine = computed(() => props.active.summary || t("translation.progressBackgroundHint"));
 
 // ===== 摘要 marquee：仅单行溢出时滚动 =====
@@ -78,6 +78,17 @@ onBeforeUnmount(() => {
       <span class="progress-sep" aria-hidden="true">·</span>
       <span class="progress-received">{{ t("translation.progressReceived", { size: receivedText }) }}</span>
     </div>
+    <!-- 思考行：有思考输出才渲染；颜色弱于摘要行（ink-subtle < ink-muted）区分两条流，
+         单行静态 ellipsis 不做 marquee（思考逐帧刷新，滚动动画会被不断重置）；
+         整行 aria-hidden，全文经 title 悬停查看 -->
+    <code
+      v-if="active.reasoning"
+      class="progress-reasoning"
+      aria-hidden="true"
+      :title="active.reasoning"
+    >
+      <span class="progress-reasoning-label">{{ t("translation.progressReasoning") }}</span>{{ active.reasoning }}
+    </code>
     <!-- 摘要行：单行 nowrap；JS 判定溢出才挂双份内容无缝滚动（mq-scroll），不溢出静态全显；
          reduced-motion 下降级 animation:none + 静态 ellipsis；整行 aria-hidden，全文经 title 悬停查看 -->
     <code
@@ -117,6 +128,24 @@ onBeforeUnmount(() => {
   color: var(--ink-muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* 思考行：12px ink-subtle（比摘要行的 ink-muted 弱一档），「思考」前缀加重；
+   单行静态 ellipsis——思考逐帧刷新，marquee 的循环动画会被不断重置反而抖动 */
+.progress-reasoning {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-subtle);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.progress-reasoning-label {
+  font-weight: 600;
+  margin-right: var(--space-xs);
 }
 
 .progress-sep {
