@@ -1472,8 +1472,9 @@ async fn translate_page_flow(
             usage: None,
         });
     }
-    // ponytail: 全局串行，防止设定集覆盖与重复扣费；需要并行多小说时改为按小说加锁。
-    let _guard = state.translation_lock.lock().await;
+    // 按小说串行（ADR 0031）：同一小说共享设定集与页译文文件，必须串行；不同小说
+    // 各自独立，可同时后台翻译。缓存命中检查也在锁内，避免读到另一个任务写一半的页。
+    let _guard = state.translation_locks.acquire(novel.novel_id).await;
     let path = book_path(&state.paths.data_dir, novel);
     let mut book = read_book(&path)?;
     if !force {

@@ -186,11 +186,13 @@ pub async fn read_logs(state: State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 pub async fn clear_cache(state: State<'_, AppState>, kind: String) -> Result<Value, String> {
     let path = cache_path(&state.paths, &kind)?;
+    // 翻译缓存清理与在途翻译互斥（ADR 0031）：多小说可并行翻译，所以用读写门——
+    // 任一翻译在读，写锁就取不到；任务本身按小说串行的锁不参与这里。
     let _guard = if kind == "translation" {
         Some(
             state
-                .translation_lock
-                .try_lock()
+                .translation_locks
+                .try_block_maintenance()
                 .map_err(|_| "小说翻译正在进行，请完成后再清理")?,
         )
     } else {
