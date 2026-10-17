@@ -2,7 +2,7 @@
 use crate::{settings::Settings, state::AppState};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -95,6 +95,9 @@ pub const TRANSLATION_API_FORMATS: [&str; 3] = ["chat_completions", "responses",
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// Anthropic 未在高级 JSON 给 `max_tokens` 时的默认输出上限（该协议必填）。
 const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 8192;
+/// 开启思考后的 Anthropic 默认输出上限：思考 token 与正文共享 `max_tokens`，
+/// 沿用 8192 会让长页面在思考耗尽预算后截断（见 ADR 0032）。
+const ANTHROPIC_THINKING_MAX_TOKENS: u64 = 16384;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ApiFormat {
@@ -498,6 +501,125 @@ fn validate_translation(
     Ok(result)
 }
 
+/// 按协议改写高级 JSON 里的「Chat Completions 习惯字段」：
+/// `reasoning_effort`、`max_completion_tokens` 与 `stream_options` 只有 Chat Completions
+/// 认，原样发给 Responses / Anthropic 会被 400 或静默忽略（思考因此不生效）。
+/// 用户显式给出的目标协议字段永远优先，这里只补缺。
+fn normalize_extra(body: &mut Map<String, Value>, format: ApiFormat) {
+    match format {
+        ApiFormat::ChatCompletions => {}
+        ApiFormat::Responses => {
+            body.remove("stream_options");
+            if let Some(max) = body
+                .remove("max_completion_tokens")
+                .or_else(|| body.remove("max_tokens"))
+            {
+                body.entry("max_output_tokens").or_insert(max);
+            }
+            // Responses 的思考开关是嵌套的 reasoning.effort（顶层 reasoning_effort 会 400），
+            // 且只有显式要求 summary 时服务才下发思考摘要（否则浮窗拿不到思考增量）。
+            let effort = body.remove("reasoning_effort");
+            match body.get_mut("reasoning") {
+                Some(Value::Object(reasoning)) => {
+                    if let Some(effort) = effort {
+                        reasoning.entry("effort").or_insert(effort);
+                    }
+                    if reasoning
+                        .get("effort")
+                        .and_then(Value::as_str)
+                        .is_some_and(|effort| effort != "none")
+                    {
+                        reasoning.entry("summary").or_insert(json!("auto"));
+                    }
+                }
+                // 非对象形态交给服务判定，不擅自改写。
+                Some(_) => {}
+                None => {
+                    if let Some(effort) = effort {
+                        let mut reasoning = Map::new();
+                        if effort.as_str().is_some_and(|effort| effort != "none") {
+                            reasoning.insert("summary".into(), json!("auto"));
+                        }
+                        reasoning.insert("effort".into(), effort);
+                        body.insert("reasoning".into(), Value::Object(reasoning));
+                    }
+                }
+            }
+        }
+        ApiFormat::Anthropic => {
+            body.remove("stream_options");
+            // 输出上限在三种协议里名字不同，切协议后沿用原值，避免落到默认 8192 被截断。
+            if let Some(max) = body
+                .remove("max_completion_tokens")
+                .or_else(|| body.remove("max_output_tokens"))
+            {
+                body.entry("max_tokens").or_insert(max);
+            }
+            // Anthropic 的思考开关是顶层 thinking；`reasoning` 对象是 OpenAI 的形状，
+            // 这里只取其中的 effort，避免把整块 OpenAI 字段发给该协议。
+            let reasoning = body.remove("reasoning");
+            let effort = body.remove("reasoning_effort").or_else(|| {
+                reasoning
+                    .as_ref()
+                    .and_then(|reasoning| reasoning.get("effort"))
+                    .cloned()
+            });
+            // 显式给了 thinking（如自定义 budget_tokens）就完全尊重用户的写法，
+            // 但采样参数仍要满足该协议对开启思考的硬约束。
+            if body.contains_key("thinking") {
+                pin_anthropic_sampling(body);
+                return;
+            }
+            let Some(level) = effort
+                .as_ref()
+                .and_then(Value::as_str)
+                .filter(|level| !matches!(*level, "none" | "disabled" | "minimal"))
+            else {
+                return;
+            };
+            // 用 manual thinking 而不是 adaptive：后者只在 Claude 4.6+ 可用，4.5 及更早
+            // 会直接报错。budget 是「目标值」，仍受 max_tokens 硬上限约束，按等级给一档
+            // 并按实际上限夹取（max_tokens 必须严格大于 budget_tokens）。
+            let max = body
+                .get("max_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(ANTHROPIC_THINKING_MAX_TOKENS);
+            // 上限不足以容纳最小思考预算（1024）时不开思考，否则服务端直接拒绝。
+            if max <= 1_024 {
+                return;
+            }
+            let budget = match level {
+                "low" => 2_048,
+                "medium" => 4_096,
+                _ => 8_192,
+            }
+            .min(max - 1_024)
+            .max(1_024);
+            body.insert(
+                "thinking".into(),
+                json!({"type": "enabled", "budget_tokens": budget}),
+            );
+            pin_anthropic_sampling(body);
+        }
+    }
+}
+
+/// Anthropic 开启思考时的采样约束：`temperature` 只能是 1，`top_p` 必须 ≥0.95
+/// 或不传，否则 Messages API 直接 400。自动注入 thinking 会撞上用户手写的
+/// `temperature: 0.7` 之类配置，这里按官方契约归一化（ADR 0032）。
+fn pin_anthropic_sampling(body: &mut Map<String, Value>) {
+    if body.contains_key("temperature") {
+        body.insert("temperature".into(), json!(1));
+    }
+    let keep_top_p = body
+        .get("top_p")
+        .and_then(Value::as_f64)
+        .is_some_and(|top_p| top_p >= 0.95);
+    if !keep_top_p {
+        body.remove("top_p");
+    }
+}
+
 /// 按协议装配请求体：模型、系统提示与用户输入由应用写入，其余扩展原样传递。
 fn request_body(settings: &Settings, format: ApiFormat, prompt: &str, input: Value) -> Value {
     let mut body = settings
@@ -505,6 +627,7 @@ fn request_body(settings: &Settings, format: ApiFormat, prompt: &str, input: Val
         .as_object()
         .cloned()
         .unwrap_or_default();
+    normalize_extra(&mut body, format);
     body.insert("model".into(), json!(settings.translation_model.trim()));
     // 流式固定开启（ADR 0025）：非流式在网关整段生成期间零字节回传，实测长请求会被
     // 链路按空闲切断（BrokenPipe），流式让字节从头流到尾。
@@ -537,8 +660,15 @@ fn request_body(settings: &Settings, format: ApiFormat, prompt: &str, input: Val
                 "messages".into(),
                 json!([{"role":"user","content": input.to_string()}]),
             );
+            // 思考开启时与正文共享 max_tokens，默认值抬高到 16384，否则长页会在
+            // 思考阶段就耗尽预算。用户显式给了 max_tokens 就尊重原值。
+            let default_max = if body.get("thinking").is_some() {
+                ANTHROPIC_THINKING_MAX_TOKENS
+            } else {
+                ANTHROPIC_DEFAULT_MAX_TOKENS
+            };
             body.entry("max_tokens".to_string())
-                .or_insert_with(|| json!(ANTHROPIC_DEFAULT_MAX_TOKENS));
+                .or_insert_with(|| json!(default_max));
         }
     }
     // 不强制 response_format：许多兼容端点只支持普通文本，提示词明确要求 JSON。
@@ -2818,14 +2948,25 @@ mod tests {
         assert_eq!(responses["instructions"], "SYS");
         assert_eq!(responses["input"], payload.to_string());
         assert_eq!(responses["store"], false);
-        assert_eq!(responses["reasoning_effort"], "low");
+        // 顶层 reasoning_effort 会被 Responses 拒绝或静默忽略：改写成嵌套的
+        // reasoning.effort，并补 summary 让服务下发思考摘要（ADR 0032）。
+        assert!(responses.get("reasoning_effort").is_none());
+        assert_eq!(responses["reasoning"]["effort"], "low");
+        assert_eq!(responses["reasoning"]["summary"], "auto");
         assert!(responses.get("messages").is_none());
         assert!(responses.get("stream_options").is_none());
 
         let anthropic = request_body(&settings, ApiFormat::Anthropic, "SYS", payload.clone());
         assert_eq!(anthropic["system"], "SYS");
         assert_eq!(anthropic["messages"][0]["content"], payload.to_string());
-        assert_eq!(anthropic["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
+        assert_eq!(
+            anthropic["max_tokens"], ANTHROPIC_THINKING_MAX_TOKENS,
+            "开启思考时抬高默认输出上限，思考与正文共享 max_tokens"
+        );
+        // Anthropic 只认 thinking：reasoning_effort 原样发过去会被静默忽略（ADR 0032）。
+        assert!(anthropic.get("reasoning_effort").is_none());
+        assert_eq!(anthropic["thinking"]["type"], "enabled");
+        assert_eq!(anthropic["thinking"]["budget_tokens"], 2_048);
         assert!(
             anthropic.get("store").is_none(),
             "Anthropic 不接受 store 参数"
@@ -2838,9 +2979,113 @@ mod tests {
             },
             ApiFormat::Anthropic,
             "SYS",
-            payload,
+            payload.clone(),
         );
         assert_eq!(capped["max_tokens"], 1024);
+        assert!(
+            capped.get("thinking").is_none(),
+            "上限放不下最小思考预算时不开思考"
+        );
+        // 用户显式给出的 thinking 一律优先，不再按 effort 改写。
+        let manual = request_body(
+            &Settings {
+                translation_extra: json!({"thinking":{"type":"enabled","budget_tokens":3000}}),
+                ..settings.clone()
+            },
+            ApiFormat::Anthropic,
+            "SYS",
+            payload.clone(),
+        );
+        assert_eq!(manual["thinking"]["budget_tokens"], 3000);
+        // 开启思考时采样参数必须满足 Anthropic 的硬约束，否则直接 400：
+        // temperature 只能是 1，top_p 必须 ≥0.95 或不传。
+        let sampled = request_body(
+            &Settings {
+                translation_extra: json!({
+                    "reasoning_effort": "high",
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                }),
+                ..settings.clone()
+            },
+            ApiFormat::Anthropic,
+            "SYS",
+            payload.clone(),
+        );
+        assert_eq!(sampled["temperature"], 1);
+        assert!(sampled.get("top_p").is_none());
+        let kept_top_p = request_body(
+            &Settings {
+                translation_extra: json!({"reasoning_effort":"low","top_p":0.98}),
+                ..settings.clone()
+            },
+            ApiFormat::Anthropic,
+            "SYS",
+            payload.clone(),
+        );
+        assert_eq!(kept_top_p["top_p"], 0.98);
+        // 没开思考时不碰采样参数。
+        let plain = request_body(
+            &Settings {
+                translation_extra: json!({"temperature":0.7,"top_p":0.9}),
+                ..settings.clone()
+            },
+            ApiFormat::Anthropic,
+            "SYS",
+            payload.clone(),
+        );
+        assert_eq!(plain["temperature"], 0.7);
+        assert_eq!(plain["top_p"], 0.9);
+        // 关闭思考（none / disabled）不注入 thinking。
+        for off in ["none", "disabled"] {
+            let disabled = request_body(
+                &Settings {
+                    translation_extra: json!({"reasoning_effort": off}),
+                    ..settings.clone()
+                },
+                ApiFormat::Anthropic,
+                "SYS",
+                payload.clone(),
+            );
+            assert!(
+                disabled.get("thinking").is_none(),
+                "{off} 不应开启思考"
+            );
+            assert_eq!(disabled["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
+        }
+    }
+
+    /// 高级 JSON 的跨协议字段归一化：Chat 习惯字段进错协议会被 400 或静默忽略。
+    #[test]
+    fn normalizes_extra_fields_per_api_format() {
+        let settings = Settings {
+            translation_model: "mock-model".into(),
+            translation_extra: json!({
+                "max_completion_tokens": 4096,
+                "stream_options": {"include_usage": true},
+                "reasoning": {"effort": "medium"},
+            }),
+            ..Settings::default()
+        };
+        let payload = json!({"page": 1});
+        // Responses：上限改名、stream_options 剔除、只补 summary 不改用户给的 effort。
+        let responses = request_body(&settings, ApiFormat::Responses, "SYS", payload.clone());
+        assert_eq!(responses["max_output_tokens"], 4096);
+        assert!(responses.get("max_completion_tokens").is_none());
+        assert!(responses.get("stream_options").is_none());
+        assert_eq!(responses["reasoning"]["effort"], "medium");
+        assert_eq!(responses["reasoning"]["summary"], "auto");
+        // Anthropic：OpenAI 的 reasoning 对象整块剔除，只按 effort 生成 thinking。
+        let anthropic = request_body(&settings, ApiFormat::Anthropic, "SYS", payload.clone());
+        assert_eq!(anthropic["max_tokens"], 4096);
+        assert!(anthropic.get("reasoning").is_none());
+        assert_eq!(anthropic["thinking"]["type"], "enabled");
+        assert_eq!(anthropic["thinking"]["budget_tokens"], 3_072);
+        // Chat：高级 JSON 原样透传，不做协议专属归一化之外的任何改写。
+        let chat = request_body(&settings, ApiFormat::ChatCompletions, "SYS", payload);
+        assert_eq!(chat["max_completion_tokens"], 4096);
+        assert_eq!(chat["reasoning"]["effort"], "medium");
+        assert_eq!(chat["stream_options"]["include_usage"], true);
     }
 
     /// 三种协议的流式增量解析：文本位置、完成信号与跨块切分。
@@ -3537,7 +3782,10 @@ mod tests {
         assert!(!captured[1].0.contains("authorization:"));
         assert_eq!(captured[1].1["system"], "SYS");
         assert_eq!(captured[1].1["messages"][0]["content"], payload.to_string());
-        assert_eq!(captured[1].1["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
+        // 高级 JSON 的 max_output_tokens 是 Responses 写法，切到 Anthropic 时改名为
+        // max_tokens 沿用，不再落回默认上限（ADR 0032）。
+        assert_eq!(captured[1].1["max_tokens"], 1024);
+        assert!(captured[1].1.get("max_output_tokens").is_none());
         assert_eq!(captured[1].1["stream"], true);
         assert!(captured[1].1.get("store").is_none());
         // 会话标识头只发给 opencode 域名：本机模拟服务（127.0.0.1）不带。
