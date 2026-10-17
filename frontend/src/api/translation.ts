@@ -10,6 +10,20 @@ export interface NovelTranslationInput {
 }
 export interface TranslatedLine { line: number; text: string }
 export type TranslationMode = "original" | "translated" | "bilingual";
+
+/** 翻译内部阶段（novel_translate_page progress 事件流的 phase 值）。 */
+export type TranslationPhase = "queued" | "prepare" | "translate";
+
+/**
+ * 翻译实时进度事件：novel_translate_page 的 progress Channel 每行推送一个 JSON 对象。
+ * - phase：阶段切换（queued=命令入口 / prepare=Pass 1 / translate=Pass 2），不节流；
+ * - progress：距上次 ≥300ms 且累计新增 ≥2048B 时推送，received 为译文累计字节数，
+ *   summary 为最近一行译文摘要（Pass 1 恒空串，提取不到亦为空串）。
+ */
+export type TranslationProgressEvent =
+  | { type: "phase"; phase: TranslationPhase }
+  | { type: "progress"; phase: "prepare" | "translate"; received: number; summary: string };
+
 export interface TranslationBook {
   bible: { style: string; terms: { source: string; translation: string; kind: string; aliases: string[]; notes: string }[] };
   pages: Record<string, TranslatedLine[]>;
@@ -69,11 +83,77 @@ export function getNovelTranslation(novel: NovelTranslationInput): Promise<Trans
 }
 
 /**
- * 单页翻译。后端仍经 progress 上报内部阶段（queued/prepare/translate），
- * 但设定集整理属于实现细节，界面只呈现统一的「翻译中」。
- * 原文已是目标语言时后端直接返回 already_target_language，不请求模型。
+ * progress Channel 单行解析：非法 JSON 或形状不符 → null（该行忽略，不影响其他行）。
  */
-export function translateNovelPage(novel: NovelTranslationInput, page: number, force: boolean): Promise<PageTranslation> {
-  if (!isTauri()) return Promise.resolve({ status: "translated", lines: [], target_language: "zh-CN" });
-  return invoke("novel_translate_page", { novel, page, force, progress: new Channel<string>() });
+function parseTranslationProgressEvent(raw: string): TranslationProgressEvent | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) return null;
+  const evt = value as Record<string, unknown>;
+  if (evt.type === "phase") {
+    return evt.phase === "queued" || evt.phase === "prepare" || evt.phase === "translate"
+      ? { type: "phase", phase: evt.phase }
+      : null;
+  }
+  if (evt.type === "progress") {
+    const phase = evt.phase;
+    if ((phase !== "prepare" && phase !== "translate") || typeof evt.received !== "number" || typeof evt.summary !== "string") return null;
+    return { type: "progress", phase, received: evt.received, summary: evt.summary };
+  }
+  return null;
+}
+
+/** devMock 事件流步间隔（ms）：确定性循环，全部落在契约要求的 300~800ms 区间，便于反复验收。 */
+const MOCK_TRANSLATION_STEP_MS = [400, 600, 300, 700, 500, 800, 450, 550, 650, 350];
+
+/**
+ * devMock 模拟事件流：与后端协议同构的确定性序列（queued → prepare → prepare 进度 →
+ * translate → translate 进度），received 单调递增，Pass 1 summary 恒空串。
+ */
+const MOCK_TRANSLATION_EVENTS: TranslationProgressEvent[] = [
+  { type: "phase", phase: "queued" },
+  { type: "phase", phase: "prepare" },
+  { type: "progress", phase: "prepare", received: 2048, summary: "" },
+  { type: "progress", phase: "prepare", received: 5120, summary: "" },
+  { type: "progress", phase: "prepare", received: 9216, summary: "" },
+  { type: "phase", phase: "translate" },
+  { type: "progress", phase: "translate", received: 14336, summary: "L0: 星光洒落在回家的路上，她的脚步很轻。" },
+  { type: "progress", phase: "translate", received: 22016, summary: "L3: 于是他低下头，避开那道追过来的视线…" },
+  { type: "progress", phase: "translate", received: 31232, summary: "L7: 「我们还会再见吗？」她对着夜空轻声问道。" },
+  { type: "progress", phase: "translate", received: 40960, summary: "L12: 风穿过树梢，把未说完的话带向了远方。" },
+  { type: "progress", phase: "translate", received: 49664, summary: "L18: 黎明之前，所有的等待都有了名字。" },
+];
+
+/** devMock：有界序列（11 步 × 300~800ms，约 5s 内必然 resolve），不会无限挂起。 */
+async function mockTranslateNovelPage(onEvent?: (evt: TranslationProgressEvent) => void): Promise<PageTranslation> {
+  for (const [index, evt] of MOCK_TRANSLATION_EVENTS.entries()) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, MOCK_TRANSLATION_STEP_MS[index % MOCK_TRANSLATION_STEP_MS.length]);
+    });
+    onEvent?.(evt);
+  }
+  return { status: "translated", lines: [], target_language: "zh-CN" };
+}
+
+/**
+ * 单页翻译。progress Channel 逐行上报 JSON 事件（见 TranslationProgressEvent），
+ * onEvent 可订阅实时进度；原文已是目标语言时后端直接返回 already_target_language，不请求模型。
+ */
+export function translateNovelPage(
+  novel: NovelTranslationInput,
+  page: number,
+  force: boolean,
+  onEvent?: (evt: TranslationProgressEvent) => void
+): Promise<PageTranslation> {
+  if (!isTauri()) return mockTranslateNovelPage(onEvent);
+  const progress = new Channel<string>();
+  progress.onmessage = (raw: string) => {
+    const evt = parseTranslationProgressEvent(raw);
+    if (evt) onEvent?.(evt);
+  };
+  return invoke("novel_translate_page", { novel, page, force, progress });
 }
