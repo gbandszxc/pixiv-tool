@@ -136,7 +136,17 @@ async function mockTranslateNovelPage(onEvent?: (evt: TranslationProgressEvent) 
     });
     onEvent?.(evt);
   }
-  return { status: "translated", lines: [], target_language: "zh-CN" };
+  return {
+    status: "translated",
+    // 与 mock 正文首页（browse.ts mockNovelDetail）行号对应的非空译文，让「完成即刷新」链路
+    // 可在浏览器验收：行 0 = [chapter:序]，行 1 / 行 3 = 两段正文（行 2 为空行）。
+    lines: [
+      { line: 0, text: "序章" },
+      { line: 1, text: "这是 mock 正文第一段的译文，用于视觉验收。" },
+      { line: 3, text: "第二段的译文：注音与内嵌图标记同样走译文渲染。" },
+    ],
+    target_language: "zh-CN",
+  };
 }
 
 /**

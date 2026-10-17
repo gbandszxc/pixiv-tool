@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { ref } from "vue";
 import { errorMessage } from "../api/tauri";
 import { translateNovelPage } from "../api/translation";
-import type { NovelTranslationInput, PageTranslation, TranslationPhase, TranslationProgressEvent } from "../api/translation";
+import type { NovelTranslationInput, PageTranslation, TranslatedLine, TranslationPhase, TranslationProgressEvent } from "../api/translation";
 
 /** 进行中的翻译任务快照；phase/received/summary 由后端 progress 事件驱动刷新。 */
 export interface TranslationActive {
@@ -24,12 +24,26 @@ export interface TranslationFailure {
 }
 
 /**
+ * 完成结果快照：begin 成功时写入（新对象引用即变更信号）。
+ * 修复「翻译完成后页面不刷新」：发起页卸载后，结果写入被旧实例守卫拦截，
+ * 返回的新实例靠 watch 本快照把译文同步进页内状态。
+ */
+export interface TranslationDone {
+  novelId: number;
+  page: number;
+  status: PageTranslation["status"];
+  lines: TranslatedLine[];
+  target_language: string;
+}
+
+/**
  * 全局翻译任务状态（C 轻量版）：store 自身持有 invoke promise 与计时器，
  * 调用方组件卸载不取消任务，active/elapsed 继续刷新，失败写入 error 后原样 rethrow。
  */
 export const useTranslationStore = defineStore("translation", () => {
   const active = ref<TranslationActive | null>(null);
   const error = ref<TranslationFailure | null>(null);
+  const lastDone = ref<TranslationDone | null>(null);
 
   /** 串行 in-flight promise：重入时直接 join 同一任务，不重复调用后端（后端另有 translation_lock）。 */
   let running: Promise<PageTranslation> | null = null;
@@ -69,7 +83,15 @@ export const useTranslationStore = defineStore("translation", () => {
     }, 1000);
     running = (async () => {
       try {
-        return await translateNovelPage(novel, page, force, applyEvent);
+        const result = await translateNovelPage(novel, page, force, applyEvent);
+        lastDone.value = {
+          novelId: novel.novel_id,
+          page,
+          status: result.status,
+          lines: result.lines,
+          target_language: result.target_language,
+        };
+        return result;
       } catch (err) {
         error.value = { novelId: novel.novel_id, page, message: errorMessage(err) };
         throw err;
@@ -95,5 +117,5 @@ export const useTranslationStore = defineStore("translation", () => {
     return failure.message;
   }
 
-  return { active, error, begin, applyEvent, consumeError };
+  return { active, error, lastDone, begin, applyEvent, consumeError };
 });

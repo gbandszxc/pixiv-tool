@@ -34,7 +34,7 @@ import { useTranslationStore } from "../../stores/translation";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
 import { descriptionText } from "../../utils/descriptionText";
-import { getNovelTranslation, type NovelTranslationInput, type TranslatedLine, type TranslationMode } from "../../api/translation";
+import { getNovelTranslation, type NovelTranslationInput, type PageTranslation, type TranslatedLine, type TranslationMode } from "../../api/translation";
 
 const props = defineProps<{ kind: "illust" | "manga" | "novel"; id: number }>();
 
@@ -133,6 +133,18 @@ const activeTranslation = computed(() =>
   translationStore.active && translationStore.active.novelId === props.id ? translationStore.active : null
 );
 
+/** 应用单页翻译结果到页内状态（translatePage 即时路径与 store.lastDone 跨页路径共用）。 */
+function applyTranslationResult(result: PageTranslation, targetPage: number): void {
+  if (result.status === "already_target_language") {
+    skippedPages.value = { ...skippedPages.value, [targetPage]: result.target_language };
+  } else {
+    const skipped = { ...skippedPages.value };
+    delete skipped[targetPage];
+    skippedPages.value = skipped;
+    translations.value[targetPage] = result.lines;
+  }
+}
+
 async function translatePage(): Promise<void> {
   if (translating.value || !hasContent.value) return;
   const generation = translationGeneration;
@@ -145,17 +157,10 @@ async function translatePage(): Promise<void> {
     // 本页已提示「无需翻译」时再次点击即强制翻译，避免语言判定误判后无法覆盖。
     const force = Boolean(translations.value[targetPage]) || Boolean(skippedPages.value[targetPage]);
     // 任务交全局 translation store：由 store 持有 invoke 与计时器，离开页面不中断，
-    // progress 事件驱动页内进度带；失败由 store 记录后原样 rethrow，页内 catch 照旧展示。
+    // progress 事件驱动浮窗进度区；失败由 store 记录后原样 rethrow，页内 catch 照旧展示。
     const result = await translationStore.begin(translationInput.value, item.value?.title ?? "", targetPage, force);
     if (generation === translationGeneration && cacheVersion === cacheGeneration) {
-      if (result.status === "already_target_language") {
-        skippedPages.value = { ...skippedPages.value, [targetPage]: result.target_language };
-      } else {
-        const skipped = { ...skippedPages.value };
-        delete skipped[targetPage];
-        skippedPages.value = skipped;
-        translations.value[targetPage] = result.lines;
-      }
+      applyTranslationResult(result, targetPage);
     }
   } catch (err) {
     if (generation === translationGeneration && cacheVersion === cacheGeneration) {
@@ -187,8 +192,21 @@ function onTranslationCacheCleared(): void {
   translating.value = false;
   translationError.value = "";
 }
-onMounted(() => window.addEventListener("pixiv-tool:translation-cache-cleared", onTranslationCacheCleared));
-onBeforeUnmount(() => window.removeEventListener("pixiv-tool:translation-cache-cleared", onTranslationCacheCleared));
+// 跨页完成同步：翻译在后台跑完时 store 写入 lastDone（新引用即信号），本页 watch 到匹配的
+// 小说/页码就把译文应用进页内状态——修复「离开页面后翻译完成、返回正文不刷新」。
+// immediate 覆盖「返回前一刻刚好完成」：挂载即消费一次已有结果。
+watch(
+  () => translationStore.lastDone,
+  (done) => {
+    if (!done || done.novelId !== props.id) return;
+    applyTranslationResult({ status: done.status, lines: done.lines, target_language: done.target_language }, done.page);
+  },
+  { immediate: true }
+);
+
+onMounted(() => {
+  window.addEventListener("pixiv-tool:translation-cache-cleared", onTranslationCacheCleared);
+});
 
 const restricted = computed(() => item.value?.x_restrict === 1 || item.value?.x_restrict === 2);
 const restrictedLabel = computed(() =>

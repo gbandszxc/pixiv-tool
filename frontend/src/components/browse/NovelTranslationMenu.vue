@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import type { TranslationMode } from "../../api/translation";
 import type { TranslationActive } from "../../stores/translation";
@@ -48,7 +48,14 @@ watch(open, (value) => {
     trigger.value?.focus();
   }
 });
-onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
+// 挂载即有在途任务（典型：从底栏「翻译中」或侧栏回到该小说）→ 自动展开浮窗展示进度。
+// 同页内手动关闭不触发重挂，不会被强制重开；任务已结束（active 为空）不展开。
+onMounted(() => {
+  if (props.active) open.value = true;
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onKeydown);
+});
 </script>
 
 <template>
@@ -79,6 +86,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       </span>
       <!-- 进度区：当前小说有翻译任务时，在状态行下方内嵌紧凑进度（阶段/已用/已接收 + 摘要 marquee） -->
       <TranslationProgressBanner v-if="active" :active="active" />
+      <!-- 状态/进度与操作分区分隔（既有 outline 35% 1px 配方），仅进度区出现时渲染 -->
+      <div v-if="active" class="translation-divider" aria-hidden="true"></div>
       <div class="translation-modes" role="group" :aria-label="t('translation.displayMode')">
         <button v-for="mode in (['original', 'translated', 'bilingual'] as const)" :key="mode" type="button" class="translation-mode" :aria-pressed="modelValue === mode" :class="{ selected: modelValue === mode }" @click="emit('update:modelValue', mode)">{{ t(`translation.${mode}`) }}</button>
       </div>
@@ -108,7 +117,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
   flex-direction: column;
   gap: var(--space-sm);
   box-sizing: border-box;
-  width: calc(var(--space-lg) * 16);
+  width: calc(var(--space-lg) * 24);
   max-width: calc(100vw - var(--space-lg) * 2);
   padding: var(--space-lg);
   border-radius: var(--radius-control);
@@ -122,12 +131,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 .translation-status-row .translation-indicator { margin-top: 5px; }
 .translation-status { color: var(--ink-muted); font-size: 12px; overflow-wrap: anywhere; }
 .translation-status.is-error { color: var(--md-sys-color-error); }
+/* 状态/进度区与操作区分隔：1px outline 35%（与下载面板/设置分组同配方） */
+.translation-divider { height: 1px; margin: var(--space-xxs) 0; background: color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
 .translation-modes { display: flex; gap: var(--space-xxs); }
 .translation-mode {
   flex: 1;
   min-width: 0;
   min-height: 40px;
-  padding: var(--space-sm) var(--space-xs);
+  padding: var(--space-sm) var(--space-sm);
   border: 0;
   border-radius: var(--radius-control);
   background: transparent;
