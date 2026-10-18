@@ -379,6 +379,7 @@ export default {
     languages: {
       "zh-CN": "Simplified Chinese",
       "en-US": "English",
+      "ja-JP": "日本語",
     },
     themes: {
       light: "Light",

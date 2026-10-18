@@ -7,6 +7,7 @@ import "./styles/main.css";
 import "./material";
 import zhCN from "./locales/zh-CN";
 import enUS from "./locales/en-US";
+import jaJP from "./locales/ja-JP";
 import { useSettingsStore } from "./stores/settings";
 
 // 从 localStorage 读取上次选择（前端独立持久化，不依赖后端 settings）
@@ -19,6 +20,7 @@ const i18n = createI18n({
   messages: {
     "zh-CN": zhCN,
     "en-US": enUS,
+    "ja-JP": jaJP,
   },
 });
 

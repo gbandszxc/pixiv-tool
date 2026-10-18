@@ -19,7 +19,7 @@ pub struct Settings {
     pub output_dir: String,
     /// 启用的导出格式（"txt" / "markdown"）。
     pub output_formats: Vec<String>,
-    /// 界面语言（"zh-CN" / "en-US"）。
+    /// 界面语言（"zh-CN" / "en-US" / "ja-JP"）。
     pub language: String,
     /// 主题（"auto" / "light" / "dark"）。
     pub theme: String,

@@ -299,7 +299,7 @@ function resetTranslationDraft() {
 }
 const startupPageOptions = computed(() => Object.entries(groupRoots).map(([group, value]) => ({ value, label: t(`workspace.${group}`) })));
 const savedSnapshot = ref("");
-const langOptions = computed(() => [{ label: t("settings.languages.zh-CN"), value: "zh-CN" }, { label: t("settings.languages.en-US"), value: "en-US" }]);
+const langOptions = computed(() => ["zh-CN", "en-US", "ja-JP"].map((value) => ({ label: t(`settings.languages.${value}`), value })));
 const themeOptions = computed(() => [{ label: t("settings.themes.light"), value: "light" }, { label: t("settings.themes.dark"), value: "dark" }, { label: t("settings.themes.auto"), value: "auto" }]);
 const paletteOptions = computed(() => ["pixiv", "indigo", "jade", "violet", "amber"].map(value => ({ value, label: t(`settings.palettes.${value}`) })));
 // 缩略图档位取值集合与后端白名单一致（src-tauri/src/settings.rs 的 THUMB_*_TIERS）。

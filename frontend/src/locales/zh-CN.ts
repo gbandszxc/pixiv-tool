@@ -380,6 +380,7 @@ export default {
     languages: {
       "zh-CN": "简体中文",
       "en-US": "English",
+      "ja-JP": "日本語",
     },
     themes: {
       light: "浅色",

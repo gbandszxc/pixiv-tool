@@ -158,7 +158,7 @@ pixiv-tool/
 │  │  ├─ api/devMock.ts         # auth/settings 的浏览器视觉验收 mock（仅 !isTauri() 生效）
 │  │  ├─ utils/thumb.ts         # 缩略图 URL 档位改写（§6.4）
 │  │  ├─ composables/useThumbTier.ts # 设置档位 → 合法 ThumbTier 的响应式读取
-│  │  ├─ locales/               # zh-CN.ts / en-US.ts
+│  │  ├─ locales/               # zh-CN.ts / en-US.ts / ja-JP.ts
 │  │  ├─ styles/                # 全局 CSS Variables（--md-sys-color-* 等）
 │  │  └─ router/                # hash 模式
 │  └─ vite.config.ts            # port 9961 + strictPort（无 proxy）
@@ -753,8 +753,10 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 ### 6.2 i18n
 
 - 框架：**vue-i18n**
-- 语言：**简体中文（默认）+ 英文**
-- 文件：`src/locales/zh-CN.ts` / `en-US.ts`
+- 语言：**简体中文（默认，`zh-CN`）+ 英文（`en-US`）+ 日语（`ja-JP`）**
+- 文件：`frontend/src/locales/zh-CN.ts` / `en-US.ts` / `ja-JP.ts`；三份词库的键与插值保持一致，日语以中文词库的递归类型约束结构，完整提供帮助、确认与状态文案。
+- 日语遵循日本 Pixiv 用户常用表达：イラスト / マンガ / 小説 / うごイラ / ブックマーク / フォロー / 全年齢 / マイピク；共享设定集称「設定資料・用語集」。语言选项均显示「日本語」。
+- 原生应用菜单的退出项与编辑菜单标题按已保存语言在启动时初始化，切换后重启生效；系统预定义编辑项沿用系统语言。小说翻译目标选择「跟随界面语言」时，`ja-JP` 归一为 `ja`，原文已是日语时沿用无需翻译与强制翻译规则。
 - 设置弹窗可切；启动期以 `localStorage["pixiv-tool-lang"]` 为准，settings.json 的
   `language` 加载后回填并向 localStorage 同步（两处同写，避免首屏语言闪变）
 

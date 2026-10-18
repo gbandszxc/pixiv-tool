@@ -259,19 +259,15 @@ fn setup_app_menu(app: &tauri::App) {
         .try_state::<AppState>()
         .and_then(|state| state.settings.lock().ok().map(|s| s.language.clone()))
         .unwrap_or_else(|| "zh-CN".to_string());
-    let zh = language != "en-US";
-    let quit = MenuItemBuilder::with_id(
-        "app-quit",
-        if zh {
-            "退出 Pixiv Tool"
-        } else {
-            "Quit Pixiv Tool"
-        },
-    )
-    .accelerator("CmdOrCtrl+Q")
-    .build(app)
-    .expect("菜单项构建不会失败");
-    let edit_title = if zh { "编辑" } else { "Edit" };
+    let (quit_title, edit_title) = match language.as_str() {
+        "en-US" => ("Quit Pixiv Tool", "Edit"),
+        "ja-JP" => ("Pixiv Tool を終了", "編集"),
+        _ => ("退出 Pixiv Tool", "编辑"),
+    };
+    let quit = MenuItemBuilder::with_id("app-quit", quit_title)
+        .accelerator("CmdOrCtrl+Q")
+        .build(app)
+        .expect("菜单项构建不会失败");
     let result = (|| -> Result<(), tauri::Error> {
         let app_submenu = SubmenuBuilder::new(app, "Pixiv Tool").item(&quit).build()?;
         let edit_submenu = SubmenuBuilder::new(app, edit_title)
