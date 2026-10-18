@@ -41,7 +41,9 @@ Anthropic 用 `max_tokens`）与 `stream_options`（只有 Chat Completions 有�
   `max_tokens`）；`max_tokens ≤ 1024` 放不下最小预算时不开思考。
 - **Anthropic 默认输出上限**：开思考时从 8192 抬到 16384。思考 token 与正文
   共享 `max_tokens`，沿用 8192 会让长页在思考阶段耗尽预算、正文被截断。用户
-  显式给了 `max_tokens` 就尊重原值。
+  显式给了 `max_tokens` 就尊重原值。长页仍截断时在高级 JSON 调大 `max_tokens`
+  （如 32768，需模型支持）；三协议的「输出达到上限」截断单独报可执行文案
+  （附实际上限值），不再与「被服务拒绝」混在一条笼统提示里。
 - **Anthropic 采样参数**：开启思考（自动注入或用户显式写了 `thinking`）后，
   `temperature` 固定为 1、`top_p` 低于 0.95 时直接剔除。这是该协议对 thinking
   的硬约束（「`temperature` may only be set to 1 when thinking is enabled」），

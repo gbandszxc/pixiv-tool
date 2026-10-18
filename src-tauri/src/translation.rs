@@ -679,6 +679,19 @@ fn incomplete_output_error() -> String {
     "模型未完整输出（可能达到 token 上限或被服务拒绝），请调整高级 JSON 后重试".into()
 }
 
+/// 输出达到上限被截断（Anthropic `max_tokens`、Chat `length`、Responses 的
+/// `max_output_tokens`）：与「被服务拒绝」不同，重试没有意义，直接给出可执行动作。
+/// `output_cap` 是本次请求实际生效的上限（应用默认值或高级 JSON 覆盖值），
+/// Chat Completions 不设上限时取不到，退回笼统文案。
+fn truncated_output_error(output_cap: Option<u64>) -> String {
+    match output_cap {
+        Some(cap) => format!(
+            "译文输出达到 {cap} token 上限被截断，请在高级 JSON 调大 max_tokens 后重试本页"
+        ),
+        None => "译文输出达到 token 上限被截断，请在高级 JSON 调大输出上限后重试本页".into(),
+    }
+}
+
 /// 去掉可选的 JSON 代码块围栏后解析模型输出。
 fn parse_model_json(text: &str) -> Result<Value, String> {
     let text = text.trim();
@@ -854,25 +867,40 @@ fn stream_event_usage(format: ApiFormat, event: &Value) -> Option<TokenUsage> {
 }
 
 /// 流内事件里的截断/失败信号，语义与旧的非流式 `finish_reason`/`status` 判断一致。
-fn stream_event_error(format: ApiFormat, event: &Value) -> Option<String> {
+/// 输出上限截断单独给文案（附实际上限值），其余未正常完成沿用笼统提示。
+fn stream_event_error(format: ApiFormat, event: &Value, output_cap: Option<u64>) -> Option<String> {
     match format {
-        ApiFormat::ChatCompletions => event
-            .pointer("/choices/0/finish_reason")
-            .and_then(Value::as_str)
-            .is_some_and(|reason| reason != "stop")
-            .then(incomplete_output_error),
+        ApiFormat::ChatCompletions => match event.pointer("/choices/0/finish_reason") {
+            Some(Value::String(reason)) if reason == "length" => {
+                Some(truncated_output_error(output_cap))
+            }
+            Some(Value::String(reason)) if reason != "stop" => Some(incomplete_output_error()),
+            _ => None,
+        },
         ApiFormat::Responses => match event.get("type").and_then(Value::as_str) {
-            Some("response.incomplete") => Some(incomplete_output_error()),
-            Some("response.failed") | Some("response.cancelled") => {
+            Some("response.incomplete") => {
+                let truncated = event.pointer("/response/incomplete_details/reason")
+                    == Some(&json!("max_output_tokens"))
+                    || event.pointer("/incomplete_details/reason")
+                        == Some(&json!("max_output_tokens"));
+                if truncated {
+                    Some(truncated_output_error(output_cap))
+                } else {
+                    Some(incomplete_output_error())
+                }
+            }
+            Some("response.failed" | "response.cancelled") => {
                 Some("模型请求失败，请检查模型 ID 与高级 JSON 后重试".into())
             }
             _ => None,
         },
-        ApiFormat::Anthropic => event
-            .pointer("/delta/stop_reason")
-            .and_then(Value::as_str)
-            .is_some_and(|reason| !matches!(reason, "end_turn" | "stop_sequence"))
-            .then(incomplete_output_error),
+        ApiFormat::Anthropic => match event.pointer("/delta/stop_reason").and_then(Value::as_str) {
+            Some("max_tokens") => Some(truncated_output_error(output_cap)),
+            Some(reason) if !matches!(reason, "end_turn" | "stop_sequence") => {
+                Some(incomplete_output_error())
+            }
+            _ => None,
+        },
     }
 }
 
@@ -900,10 +928,18 @@ struct StreamReader {
     failure: Option<String>,
     completed: bool,
     diagnostic_key: String,
+    /// 本次请求实际生效的输出上限（应用默认或高级 JSON 覆盖），用于截断文案。
+    output_cap: Option<u64>,
 }
 
 impl StreamReader {
+    /// 无上限信息的最小构造，仅测试使用；生产路径经 [`Self::with_output_cap`]。
+    #[cfg(test)]
     fn new(format: ApiFormat) -> Self {
+        Self::with_output_cap(format, None)
+    }
+
+    fn with_output_cap(format: ApiFormat, output_cap: Option<u64>) -> Self {
         Self {
             format,
             pending: Vec::new(),
@@ -912,6 +948,7 @@ impl StreamReader {
             failure: None,
             completed: false,
             diagnostic_key: String::new(),
+            output_cap,
         }
     }
 
@@ -991,7 +1028,7 @@ impl StreamReader {
                 ) || event.get("type").and_then(Value::as_str) == Some("message_stop")
             }
         };
-        if let Some(message) = stream_event_error(self.format, &event) {
+        if let Some(message) = stream_event_error(self.format, &event, self.output_cap) {
             let details = event
                 .pointer("/response/error")
                 .map(|error| {
@@ -1140,13 +1177,15 @@ impl ProgressReporter<'_> {
 
 /// 读完整条流并取回模型文本与 token 用量；中途断流单独给文案，好让用户知道重试即可。
 /// `progress` 为 Some 时按节流上报阶段进度（事件协议见 [`phase_event`]）。
+/// `output_cap` 是本次请求实际生效的输出上限，截断报错时展示给用户。
 async fn read_stream_text(
     response: wreq::Response,
     format: ApiFormat,
     key: &str,
     progress: Option<StreamProgress<'_>>,
+    output_cap: Option<u64>,
 ) -> Result<(String, Option<TokenUsage>), String> {
-    let mut reader = StreamReader::new(format);
+    let mut reader = StreamReader::with_output_cap(format, output_cap);
     reader.diagnostic_key = key.to_owned();
     let mut reporter = progress.map(|target| ProgressReporter {
         target,
@@ -1266,10 +1305,16 @@ impl TranslationClient<'_> {
         input: Value,
         progress: Option<StreamProgress<'_>>,
     ) -> Result<(Value, Option<TokenUsage>), String> {
+        let body = request_body(self.settings, self.format, prompt, input);
+        // 截断报错要展示实际生效的输出上限（应用默认或高级 JSON 覆盖值）。
+        let output_cap = body
+            .get("max_tokens")
+            .or_else(|| body.get("max_output_tokens"))
+            .and_then(Value::as_u64);
         let response = self
             .authorized(self.http.post(self.url.as_str()))
             .header("Content-Type", "application/json")
-            .body(request_body(self.settings, self.format, prompt, input).to_string())
+            .body(body.to_string())
             .send()
             .await
             .map_err(|error| {
@@ -1305,7 +1350,8 @@ impl TranslationClient<'_> {
             ));
         }
         log::info!("翻译服务生成请求 → HTTP {}", response.status().as_u16());
-        let (text, usage) = read_stream_text(response, self.format, &self.key, progress).await?;
+        let (text, usage) =
+            read_stream_text(response, self.format, &self.key, progress, output_cap).await?;
         Ok((parse_model_json(&text)?, usage))
     }
 }
@@ -3130,6 +3176,63 @@ mod tests {
                 assert!(error.contains("内容审核") && error.contains("1301"));
                 assert!(!error.contains("secret-provider-message"));
             }
+        }
+    }
+
+    /// 输出上限截断（max_tokens / length / max_output_tokens）单独给可执行文案，
+    /// 附上实际生效的上限值；其余未正常完成（如内容过滤）沿用笼统提示。
+    #[test]
+    fn distinguishes_output_cap_truncation_from_other_incomplete() {
+        fn stream(format: ApiFormat, cap: Option<u64>, event: Value) -> String {
+            let mut reader = StreamReader::with_output_cap(format, cap);
+            reader
+                .push(format!("data: {event}\n\n").as_bytes())
+                .unwrap();
+            reader.finish().unwrap_err()
+        }
+        // 三协议的「达到输出上限」形状都指到调大 max_tokens，并带生效数值。
+        let truncated = stream(
+            ApiFormat::Anthropic,
+            Some(16384),
+            json!({"type":"message_delta","delta":{"stop_reason":"max_tokens"}}),
+        );
+        assert!(truncated.contains("16384") && truncated.contains("max_tokens"), "{truncated}");
+        let truncated = stream(
+            ApiFormat::ChatCompletions,
+            Some(8192),
+            json!({"choices":[{"delta":{},"finish_reason":"length"}]}),
+        );
+        assert!(truncated.contains("8192"), "{truncated}");
+        let truncated = stream(
+            ApiFormat::Responses,
+            Some(4096),
+            json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}),
+        );
+        assert!(truncated.contains("4096"), "{truncated}");
+        // 上限取不到（Chat 不发 max_tokens）时仍给可执行方向，只是不带数值。
+        let truncated = stream(
+            ApiFormat::ChatCompletions,
+            None,
+            json!({"choices":[{"delta":{},"finish_reason":"length"}]}),
+        );
+        assert!(truncated.contains("token 上限"), "{truncated}");
+        // 其它未正常完成不冒充截断：保持笼统文案。
+        for (format, event) in [
+            (
+                ApiFormat::Anthropic,
+                json!({"type":"message_delta","delta":{"stop_reason":"refusal"}}),
+            ),
+            (
+                ApiFormat::ChatCompletions,
+                json!({"choices":[{"delta":{},"finish_reason":"content_filter"}]}),
+            ),
+            (
+                ApiFormat::Responses,
+                json!({"type":"response.incomplete","response":{"incomplete_details":{"reason":"content_filter"}}}),
+            ),
+        ] {
+            let error = stream(format, Some(16384), event);
+            assert!(error.contains("模型未完整输出"), "{error}");
         }
     }
 
