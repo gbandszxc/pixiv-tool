@@ -138,7 +138,7 @@ async function run() {
       assert(panelHost.querySelector(`#${id}`), `小说翻译设置字段 ${id} 在 ${locale} 下可见`);
     }
     assert(panelHost.querySelectorAll("fieldset.translation-group").length === 3, `小说翻译表单分为三组（${locale}）`);
-    assert(panelHost.querySelector('[for="translation-json"]')?.parentElement?.textContent?.includes('{"reasoning_effort":"high","max_completion_tokens":8192}'), `JSON 示例在 ${locale} 下完整显示`);
+    assert(panelHost.querySelector('[for="translation-json"]')?.parentElement?.textContent?.includes('{"reasoning_effort":"none"}'), `JSON 示例在 ${locale} 下完整显示`);
   }
   i18n.global.locale.value = "zh-CN"; await settle();
   assert([...panelHost.querySelectorAll("fieldset.translation-group > .translation-legend")].map(el => el.textContent?.trim()).join("/") === "服务连接/模型与语言/高级", "子分区标题为服务连接 / 模型与语言 / 高级");

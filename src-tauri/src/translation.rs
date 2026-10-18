@@ -93,11 +93,6 @@ pub const TRANSLATION_API_FORMATS: [&str; 3] = ["chat_completions", "responses",
 
 /// Anthropic Messages API 要求的版本头（当前稳定值）。
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Anthropic 未在高级 JSON 给 `max_tokens` 时的默认输出上限（该协议必填）。
-const ANTHROPIC_DEFAULT_MAX_TOKENS: u64 = 8192;
-/// 开启思考后的 Anthropic 默认输出上限：思考 token 与正文共享 `max_tokens`，
-/// 沿用 8192 会让长页面在思考耗尽预算后截断（见 ADR 0032）。
-const ANTHROPIC_THINKING_MAX_TOKENS: u64 = 16384;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ApiFormat {
@@ -501,13 +496,54 @@ fn validate_translation(
     Ok(result)
 }
 
-/// 按协议改写高级 JSON 里的「Chat Completions 习惯字段」：
-/// `reasoning_effort`、`max_completion_tokens` 与 `stream_options` 只有 Chat Completions
-/// 认，原样发给 Responses / Anthropic 会被 400 或静默忽略（思考因此不生效）。
-/// 用户显式给出的目标协议字段永远优先，这里只补缺。
-fn normalize_extra(body: &mut Map<String, Value>, format: ApiFormat) {
+/// 默认思考档：现代翻译模型先思考再出译文，长文本质量明显更好，因此三种协议
+/// 都默认按 medium 开启；用户在高级 JSON 里显式给出的思考字段（任一形状）优先，
+/// 显式给 `none` / `disabled` 即关闭。`low` / `medium` / 其余值也决定
+/// Anthropic 的 thinking 预算档（2k / 4k / 8k）。
+const DEFAULT_REASONING_EFFORT: &str = "medium";
+
+/// 按输入字符数分档的输出上限（token）：思考与译文 JSON 共享输出预算，现代模型
+/// 普遍「长思考」，档位向主流模型支持的输出上限取足余量，长页不再截断（ADR 0033）。
+/// 高级 JSON 显式给出的上限字段永远优先；模型不支持该上限时按 400 提示覆盖。
+fn dynamic_output_cap(input_chars: usize) -> u64 {
+    match input_chars {
+        0..=6_000 => 16_384,
+        6_001..=24_000 => 32_768,
+        _ => 65_536,
+    }
+}
+
+/// 本次请求的输入规模：提示词与用户 JSON（含原文行）的字符数。
+fn input_chars(prompt: &str, input: &Value) -> usize {
+    prompt.chars().count() + input.to_string().chars().count()
+}
+
+/// 按协议装配扩展字段（ADR 0032 / 0033）：
+/// 1. 改写「Chat Completions 习惯字段」——`reasoning_effort`、`max_completion_tokens`
+///    与 `stream_options` 只有 Chat Completions 认，原样发给 Responses / Anthropic
+///    会被 400 或静默忽略（思考因此不生效）；
+/// 2. 补默认值——输出上限按输入分档、思考默认 medium，用户显式给出的同义字段
+///    （任一协议形状）永远优先，这里只补缺；高级 JSON 与后台参数是逐字段合并，
+///    不是整块替换。
+fn normalize_extra(body: &mut Map<String, Value>, format: ApiFormat, chars: usize) {
     match format {
-        ApiFormat::ChatCompletions => {}
+        // Chat：统一上限字段名并补默认值与默认思考；其余原样透传（含 OpenRouter 形状的 reasoning）。
+        ApiFormat::ChatCompletions => {
+            if let Some(max) = body
+                .remove("max_tokens")
+                .or_else(|| body.remove("max_output_tokens"))
+            {
+                body.entry("max_completion_tokens").or_insert(max);
+            }
+            body.entry("max_completion_tokens".to_string())
+                .or_insert_with(|| json!(dynamic_output_cap(chars)));
+            if !body.contains_key("reasoning_effort")
+                && !body.contains_key("thinking")
+                && !body.contains_key("reasoning")
+            {
+                body.insert("reasoning_effort".into(), json!(DEFAULT_REASONING_EFFORT));
+            }
+        }
         ApiFormat::Responses => {
             body.remove("stream_options");
             if let Some(max) = body
@@ -516,14 +552,16 @@ fn normalize_extra(body: &mut Map<String, Value>, format: ApiFormat) {
             {
                 body.entry("max_output_tokens").or_insert(max);
             }
+            body.entry("max_output_tokens".to_string())
+                .or_insert_with(|| json!(dynamic_output_cap(chars)));
             // Responses 的思考开关是嵌套的 reasoning.effort（顶层 reasoning_effort 会 400），
             // 且只有显式要求 summary 时服务才下发思考摘要（否则浮窗拿不到思考增量）。
-            let effort = body.remove("reasoning_effort");
+            let effort = body
+                .remove("reasoning_effort")
+                .unwrap_or_else(|| json!(DEFAULT_REASONING_EFFORT));
             match body.get_mut("reasoning") {
                 Some(Value::Object(reasoning)) => {
-                    if let Some(effort) = effort {
-                        reasoning.entry("effort").or_insert(effort);
-                    }
+                    reasoning.entry("effort").or_insert(effort);
                     if reasoning
                         .get("effort")
                         .and_then(Value::as_str)
@@ -535,26 +573,26 @@ fn normalize_extra(body: &mut Map<String, Value>, format: ApiFormat) {
                 // 非对象形态交给服务判定，不擅自改写。
                 Some(_) => {}
                 None => {
-                    if let Some(effort) = effort {
-                        let mut reasoning = Map::new();
-                        if effort.as_str().is_some_and(|effort| effort != "none") {
-                            reasoning.insert("summary".into(), json!("auto"));
-                        }
-                        reasoning.insert("effort".into(), effort);
-                        body.insert("reasoning".into(), Value::Object(reasoning));
+                    let mut reasoning = Map::new();
+                    if effort.as_str().is_some_and(|effort| effort != "none") {
+                        reasoning.insert("summary".into(), json!("auto"));
                     }
+                    reasoning.insert("effort".into(), effort);
+                    body.insert("reasoning".into(), Value::Object(reasoning));
                 }
             }
         }
         ApiFormat::Anthropic => {
             body.remove("stream_options");
-            // 输出上限在三种协议里名字不同，切协议后沿用原值，避免落到默认 8192 被截断。
+            // 输出上限在三种协议里名字不同，切协议后沿用原值；都没有就按输入分档。
             if let Some(max) = body
                 .remove("max_completion_tokens")
                 .or_else(|| body.remove("max_output_tokens"))
             {
                 body.entry("max_tokens").or_insert(max);
             }
+            body.entry("max_tokens".to_string())
+                .or_insert_with(|| json!(dynamic_output_cap(chars)));
             // Anthropic 的思考开关是顶层 thinking；`reasoning` 对象是 OpenAI 的形状，
             // 这里只取其中的 effort，避免把整块 OpenAI 字段发给该协议。
             let reasoning = body.remove("reasoning");
@@ -570,20 +608,20 @@ fn normalize_extra(body: &mut Map<String, Value>, format: ApiFormat) {
                 pin_anthropic_sampling(body);
                 return;
             }
-            let Some(level) = effort
+            let level = effort
                 .as_ref()
                 .and_then(Value::as_str)
-                .filter(|level| !matches!(*level, "none" | "disabled" | "minimal"))
-            else {
+                .unwrap_or(DEFAULT_REASONING_EFFORT);
+            if matches!(level, "none" | "disabled" | "minimal") {
                 return;
-            };
+            }
             // 用 manual thinking 而不是 adaptive：后者只在 Claude 4.6+ 可用，4.5 及更早
             // 会直接报错。budget 是「目标值」，仍受 max_tokens 硬上限约束，按等级给一档
             // 并按实际上限夹取（max_tokens 必须严格大于 budget_tokens）。
             let max = body
                 .get("max_tokens")
                 .and_then(Value::as_u64)
-                .unwrap_or(ANTHROPIC_THINKING_MAX_TOKENS);
+                .unwrap_or_else(|| dynamic_output_cap(chars));
             // 上限不足以容纳最小思考预算（1024）时不开思考，否则服务端直接拒绝。
             if max <= 1_024 {
                 return;
@@ -620,14 +658,16 @@ fn pin_anthropic_sampling(body: &mut Map<String, Value>) {
     }
 }
 
-/// 按协议装配请求体：模型、系统提示与用户输入由应用写入，其余扩展原样传递。
+/// 按协议装配请求体：模型、系统提示与用户输入由应用写入，扩展字段（输出上限、
+/// 思考开关等）经 [`normalize_extra`] 与高级 JSON 逐字段合并后带入。
 fn request_body(settings: &Settings, format: ApiFormat, prompt: &str, input: Value) -> Value {
     let mut body = settings
         .translation_extra
         .as_object()
         .cloned()
         .unwrap_or_default();
-    normalize_extra(&mut body, format);
+    let chars = input_chars(prompt, &input);
+    normalize_extra(&mut body, format, chars);
     body.insert("model".into(), json!(settings.translation_model.trim()));
     // 流式固定开启（ADR 0025）：非流式在网关整段生成期间零字节回传，实测长请求会被
     // 链路按空闲切断（BrokenPipe），流式让字节从头流到尾。
@@ -653,22 +693,13 @@ fn request_body(settings: &Settings, format: ApiFormat, prompt: &str, input: Val
             body.insert("input".into(), json!(input.to_string()));
             body.insert("store".into(), json!(false));
         }
-        // Anthropic：system 为顶层字段，max_tokens 必填（高级 JSON 可覆盖）。
+        // Anthropic：system 为顶层字段；max_tokens 必填，已在 normalize 阶段补齐。
         ApiFormat::Anthropic => {
             body.insert("system".into(), json!(prompt));
             body.insert(
                 "messages".into(),
                 json!([{"role":"user","content": input.to_string()}]),
             );
-            // 思考开启时与正文共享 max_tokens，默认值抬高到 16384，否则长页会在
-            // 思考阶段就耗尽预算。用户显式给了 max_tokens 就尊重原值。
-            let default_max = if body.get("thinking").is_some() {
-                ANTHROPIC_THINKING_MAX_TOKENS
-            } else {
-                ANTHROPIC_DEFAULT_MAX_TOKENS
-            };
-            body.entry("max_tokens".to_string())
-                .or_insert_with(|| json!(default_max));
         }
     }
     // 不强制 response_format：许多兼容端点只支持普通文本，提示词明确要求 JSON。
@@ -2999,6 +3030,8 @@ mod tests {
         assert!(responses.get("reasoning_effort").is_none());
         assert_eq!(responses["reasoning"]["effort"], "low");
         assert_eq!(responses["reasoning"]["summary"], "auto");
+        // 短输入按分档补默认输出上限（用户显式给出的上限永远优先）。
+        assert_eq!(responses["max_output_tokens"], 16_384);
         assert!(responses.get("messages").is_none());
         assert!(responses.get("stream_options").is_none());
 
@@ -3006,8 +3039,8 @@ mod tests {
         assert_eq!(anthropic["system"], "SYS");
         assert_eq!(anthropic["messages"][0]["content"], payload.to_string());
         assert_eq!(
-            anthropic["max_tokens"], ANTHROPIC_THINKING_MAX_TOKENS,
-            "开启思考时抬高默认输出上限，思考与正文共享 max_tokens"
+            anthropic["max_tokens"], 16_384,
+            "默认输出上限按输入分档，思考与正文共享 max_tokens"
         );
         // Anthropic 只认 thinking：reasoning_effort 原样发过去会被静默忽略（ADR 0032）。
         assert!(anthropic.get("reasoning_effort").is_none());
@@ -3070,16 +3103,17 @@ mod tests {
             payload.clone(),
         );
         assert_eq!(kept_top_p["top_p"], 0.98);
-        // 没开思考时不碰采样参数。
+        // 显式关闭思考（none）时不碰采样参数。
         let plain = request_body(
             &Settings {
-                translation_extra: json!({"temperature":0.7,"top_p":0.9}),
+                translation_extra: json!({"reasoning_effort":"none","temperature":0.7,"top_p":0.9}),
                 ..settings.clone()
             },
             ApiFormat::Anthropic,
             "SYS",
             payload.clone(),
         );
+        assert!(plain.get("thinking").is_none());
         assert_eq!(plain["temperature"], 0.7);
         assert_eq!(plain["top_p"], 0.9);
         // 关闭思考（none / disabled）不注入 thinking。
@@ -3097,8 +3131,53 @@ mod tests {
                 disabled.get("thinking").is_none(),
                 "{off} 不应开启思考"
             );
-            assert_eq!(disabled["max_tokens"], ANTHROPIC_DEFAULT_MAX_TOKENS);
+            assert_eq!(disabled["max_tokens"], 16_384);
         }
+    }
+
+    /// 输出上限随输入规模分档：短页 16k、中页 32k、长页 64k，
+    /// 高级 JSON 显式给出的上限永远优先（ADR 0033）。
+    #[test]
+    fn scales_output_cap_with_input_size() {
+        let settings = Settings {
+            translation_model: "mock-model".into(),
+            ..Settings::default()
+        };
+        let short = json!({"page": 1});
+        let long_text = "あ".repeat(30_000);
+        let long = json!({"page": 1, "source_lines": [{"line": 0, "text": long_text}]});
+        for (format, key) in [
+            (ApiFormat::ChatCompletions, "max_completion_tokens"),
+            (ApiFormat::Responses, "max_output_tokens"),
+            (ApiFormat::Anthropic, "max_tokens"),
+        ] {
+            let body = request_body(&settings, format, "S", short.clone());
+            assert_eq!(body[key], 16_384, "{key}: 短输入走小档");
+            // Chat 空配置默认开启思考（medium）。
+            if format == ApiFormat::ChatCompletions {
+                assert_eq!(body["reasoning_effort"], "medium");
+            }
+            if format == ApiFormat::Responses {
+                assert_eq!(body["reasoning"]["effort"], "medium");
+            }
+            if format == ApiFormat::Anthropic {
+                // 默认 medium → budget 4096，受 max_tokens 夹取后仍为 4096。
+                assert_eq!(body["thinking"]["budget_tokens"], 4_096);
+            }
+            let body = request_body(&settings, format, "S", long.clone());
+            assert_eq!(body[key], 65_536, "{key}: 长输入走大档");
+        }
+        // 用户显式给出的上限字段优先于分档（含跨协议写法改名后沿用）。
+        let explicit = request_body(
+            &Settings {
+                translation_extra: json!({"max_tokens": 8192}),
+                ..settings.clone()
+            },
+            ApiFormat::ChatCompletions,
+            "S",
+            long.clone(),
+        );
+        assert_eq!(explicit["max_completion_tokens"], 8192);
     }
 
     /// 高级 JSON 的跨协议字段归一化：Chat 习惯字段进错协议会被 400 或静默忽略。
