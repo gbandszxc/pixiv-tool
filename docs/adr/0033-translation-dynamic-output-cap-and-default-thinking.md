@@ -27,13 +27,19 @@ ADR 0032 之后思考参数能正确落到各协议，但两个新问题暴露�
   | 输入字符数 | 输出上限 |
   |---|---|
   | ≤ 6,000 | 16,384 |
-  | 6,001 ~ 24,000 | 32,768 |
-  | > 24,000 | 65,536 |
-  档位向主流模型支持的输出上限取足余量（实测 opencode 网关三协议对 65,536
-  均接受；上限只是天花板，按实际输出计费）。字段名随协议：Chat
+  | 6,001 ~ 24,000 | 65,536 |
+  | > 24,000 | 262,144 |
+  现代模型输出上限远超 64k（models.dev：GPT-5.x / Claude 4.6+ / GLM-5.x
+  128k、DeepSeek V4 384k、Kimi K2.7 262k、Grok 500k；65k 以上占绝对主流），
+  档位直接向模型上限取：中档对齐主流地板 64k，高档 256k（Kimi K2.7 恰好
+  该值）。上限只是天花板、按实际输出计费；实测 magpie/opencode 网关三协议
+  对 262,144 均正常完成。字段名随协议：Chat
   `max_completion_tokens`、Responses `max_output_tokens`、Anthropic
   `max_tokens`；用户高级 JSON 显式给出的上限（含跨协议写法，装配时统一改名）
-  永远优先。模型不支持该上限返回 400 时，按既有「检查高级 JSON」文案处理。
+  永远优先。个别老模型（如 Claude 4.5 64k、gpt-4o 16k）不支持高档返回 400
+  时，按既有「检查高级 JSON」文案覆盖即可。
+
+  修订（2026-10-18）：初版高档为 65,536，经 models.dev 数据校验后上调。
 - **默认开启思考（三协议一致）**：高级 JSON 没有给出任何思考字段时按
   `medium` 注入——Chat `reasoning_effort: "medium"`、Responses
   `reasoning: {effort: "medium", summary: "auto"}`、Anthropic

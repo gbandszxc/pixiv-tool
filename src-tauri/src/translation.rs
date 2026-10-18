@@ -503,13 +503,16 @@ fn validate_translation(
 const DEFAULT_REASONING_EFFORT: &str = "medium";
 
 /// 按输入字符数分档的输出上限（token）：思考与译文 JSON 共享输出预算，现代模型
-/// 普遍「长思考」，档位向主流模型支持的输出上限取足余量，长页不再截断（ADR 0033）。
-/// 高级 JSON 显式给出的上限字段永远优先；模型不支持该上限时按 400 提示覆盖。
+/// 普遍「长思考」且输出上限远超 64k（GPT-5.x / Claude 4.6+ / GLM-5.x 128k、
+/// DeepSeek V4 384k、Kimi 262k，见 models.dev），档位直接向模型上限取——中档
+/// 对齐主流地板 64k，高档 256k（Kimi K2.7 恰好该值，DeepSeek/Grok 尚有余量），
+/// 长页不再截断（ADR 0033）。上限只是天花板、按实际输出计费；高级 JSON 显式
+/// 给出的上限字段永远优先，个别老模型不支持时按 400 提示覆盖。
 fn dynamic_output_cap(input_chars: usize) -> u64 {
     match input_chars {
         0..=6_000 => 16_384,
-        6_001..=24_000 => 32_768,
-        _ => 65_536,
+        6_001..=24_000 => 65_536,
+        _ => 262_144,
     }
 }
 
@@ -3151,6 +3154,10 @@ mod tests {
             (ApiFormat::Responses, "max_output_tokens"),
             (ApiFormat::Anthropic, "max_tokens"),
         ] {
+            let mid_text = "あ".repeat(10_000);
+            let mid = json!({"page": 1, "source_lines": [{"line": 0, "text": mid_text}]});
+            let body = request_body(&settings, format, "S", mid);
+            assert_eq!(body[key], 65_536, "{key}: 中输入走中档");
             let body = request_body(&settings, format, "S", short.clone());
             assert_eq!(body[key], 16_384, "{key}: 短输入走小档");
             // Chat 空配置默认开启思考（medium）。
@@ -3165,7 +3172,7 @@ mod tests {
                 assert_eq!(body["thinking"]["budget_tokens"], 4_096);
             }
             let body = request_body(&settings, format, "S", long.clone());
-            assert_eq!(body[key], 65_536, "{key}: 长输入走大档");
+            assert_eq!(body[key], 262_144, "{key}: 长输入走大档");
         }
         // 用户显式给出的上限字段优先于分档（含跨协议写法改名后沿用）。
         let explicit = request_body(

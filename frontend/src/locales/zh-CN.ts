@@ -304,7 +304,7 @@ export default {
     testFailed: "检测失败，请检查配置后重试",
     probeHint: "使用当前未保存配置；Key 留空时沿用已保存凭据，清除 Key 后需先重新输入。获取模型通过 /models 请求，部分服务不支持，可继续手动填写。检测会用当前模型与高级 JSON 发起一次简短生成请求，可能产生少量费用；不会发送小说，也不会保存配置。模型列表不保证支持文本生成，请选定后检测。",
     advanced: "高级 JSON 配置",
-    jsonHint: `与后台请求参数逐字段合并：同名字段覆盖默认值，其余字段原样新增；model、messages、system/instructions、stream、工具或凭据字段由应用写入，不可覆盖。默认已开启 medium 思考并按输入长度自动分档输出上限（16k/32k/64k），同一份配置切换协议后仍可用——例如 {'{'}"reasoning_effort":"high"{'}'} 加深思考（Responses 自动转 reasoning.effort、Anthropic 自动转 thinking），{'{'}"reasoning_effort":"none"{'}'} 关闭思考，{'{'}"max_tokens":65536{'}'} 固定上限。参数支持取决于模型与服务。`,
+    jsonHint: `与后台请求参数逐字段合并：同名字段覆盖默认值，其余字段原样新增；model、messages、system/instructions、stream、工具或凭据字段由应用写入，不可覆盖。默认已开启 medium 思考并按输入长度自动分档输出上限（16k/64k/256k），同一份配置切换协议后仍可用——例如 {'{'}"reasoning_effort":"high"{'}'} 加深思考（Responses 自动转 reasoning.effort、Anthropic 自动转 thinking），{'{'}"reasoning_effort":"none"{'}'} 关闭思考，{'{'}"max_tokens":262144{'}'} 固定上限。参数支持取决于模型与服务。`,
     jsonInvalid: "高级 JSON 必须是合法的 JSON 对象",
     keySavedChip: "已保存",
     keyPlaceholderKeep: "留空保留现有 Key",
