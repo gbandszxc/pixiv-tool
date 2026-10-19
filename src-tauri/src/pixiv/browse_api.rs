@@ -85,7 +85,7 @@ pub struct BrowseWorkItem {
     /// bookmarkData 非空即已收藏。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bookmarked: Option<bool>,
-    /// novel：阅读时长（分钟）。
+    /// novel：阅读时长（秒；pixiv 网页端按 `readingTime / 60` 显示分钟）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reading_time: Option<i64>,
     // ---- 以下为收藏列表项扩展（契约 v3.1，wire 名为 camelCase）----
@@ -4049,7 +4049,7 @@ mod tests {
             "seriesNavData": {"seriesType": "novel", "seriesId": 1093870, "title": "系列", "orderNumber": 2,
                 "next": {"id": "9000013", "title": "下一话"}},
             "characterCount": 12345,
-            "readingTime": 25,
+            "readingTime": 1500,
             "bookmarkCount": 66,
             "xRestrict": 0,
             "createDate": "2026-07-21T00:00:00+09:00"
@@ -4062,7 +4062,7 @@ mod tests {
             Some("https://i.pximg.net/novel-cover.jpg")
         );
         assert_eq!(item.text_length, Some(12345));
-        assert_eq!(item.reading_time, Some(25));
+        assert_eq!(item.reading_time, Some(1500), "readingTime 原样透传（秒）");
         assert_eq!(item.bookmark_count, Some(66));
         let series = series.unwrap();
         assert_eq!(series.id, 1093870);

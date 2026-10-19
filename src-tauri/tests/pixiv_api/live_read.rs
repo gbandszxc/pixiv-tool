@@ -644,6 +644,21 @@ async fn live_detail_metadata_illust_manga_novel() {
                     .all(|tag| tag.as_str().is_some_and(|text| !text.is_empty()))),
             "{kind} 详情应解析 tags.tags 标签原文"
         );
+        assert!(
+            item["create_date"]
+                .as_str()
+                .is_some_and(|date| date.contains('T')),
+            "{kind} 详情应解析带时区的 createDate，实际: {}",
+            item["create_date"]
+        );
+        if kind == "novel" {
+            // 单位为秒（research §7.2 勘误）
+            assert!(
+                item["reading_time"].as_i64().is_some_and(|secs| secs > 0),
+                "novel 详情应解析 readingTime（秒），实际: {}",
+                item["reading_time"]
+            );
+        }
     }
 }
 

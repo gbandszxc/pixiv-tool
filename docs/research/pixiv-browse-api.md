@@ -371,7 +371,9 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 | `tags` | Array | 同插画 tags 结构 |
 | `seriesNavData` | Object/null | `{seriesType:"novel", seriesId, title, orderNumber, isConcluded, next}` |
 | `userId` / `userName` / `coverUrl` | string | 作者与封面 |
-| `characterCount` / `wordCount` / `useWordCount` / `readingTime` | - | 字数/词数/阅读时长（分钟） |
+| `characterCount` / `wordCount` / `useWordCount` | - | 字数/词数 |
+| `readingTime` | number | **阅读时长（秒）**。实测 16,474 字作品返回 `1976`，网页端显示「32分」（`1976 / 60 = 32.9`，向下取整）；早期记为「分钟」为误记 |
+| `createDate` | string | 发布时间，ISO 含时区（如 `2026-10-17T23:00:00+09:00`）；网页端作品页展示该时间 |
 | `genre` | string | 流派 id（`0`=无） |
 | `bookmarkCount` / `commentCount` / `markerCount` / `likeCount` / `viewCount` | number | 计数 |
 | `xRestrict` / `restrict` / `isOriginal` / `isBungei` / `aiType` / `language` / `isUnlisted` / `commentOff` | - | 状态位 |

@@ -189,6 +189,7 @@ export interface BrowseNovelDetail {
     like_count?: number;
     view_count?: number;
     bookmark_count?: number;
+    /** 阅读时长（秒，接口 readingTime 原值）；展示时换算为分钟 */
     reading_time?: number;
   };
   content: string;
@@ -1130,7 +1131,10 @@ async function mockNovelDetail(id: number): Promise<BrowseNovelDetail> {
       bookmark_count: 20 + Math.floor(rand() * 2000),
       like_count: 10 + Math.floor(rand() * 1000),
       view_count: 1000 + Math.floor(rand() * 90000),
-      reading_time: 3 + Math.floor(rand() * 25),
+      // readingTime 单位为秒（与 /ajax/novel/{id} 一致）
+      reading_time: 60 * (3 + Math.floor(rand() * 25)),
+      // 详情为带时区的 ISO 时间（列表 mock 的纯日期不走时分展示）
+      create_date: `2026-09-${pad2(1 + Math.floor(rand() * 28))}T${pad2(9 + Math.floor(rand() * 12))}:${pad2(Math.floor(rand() * 60))}:00+09:00`,
     },
     content:
       "[chapter:序]\n这是 mock 正文第一段，用于小说阅读器的视觉验收。正文正文正文正文正文正文正文正文正文正文。\n\n" +

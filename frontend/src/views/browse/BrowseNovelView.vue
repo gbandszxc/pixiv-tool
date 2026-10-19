@@ -34,11 +34,12 @@ import { useTranslationStore } from "../../stores/translation";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
 import { descriptionText } from "../../utils/descriptionText";
+import { formatDateTime } from "../../utils/dateTime";
 import { getNovelTranslation, type NovelTranslationInput, type PageTranslation, type TranslatedLine, type TranslationMode } from "../../api/translation";
 
 const props = defineProps<{ kind: "illust" | "manga" | "novel"; id: number }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const router = useRouter();
 const settings = useSettingsStore();
 const translationStore = useTranslationStore();
@@ -222,17 +223,24 @@ const restrictedLabel = computed(() =>
   item.value?.x_restrict === 2 ? t("common.browseR18G") : t("common.browseR18")
 );
 
-/** 元信息：字数 / 阅读时长 / 点赞、收藏、浏览数（缺失计数不冒充零）。 */
+/**
+ * 元信息：字数 / 阅读时长 / 点赞、收藏、浏览数 / 发布时间（缺失项不冒充零）。
+ * 接口的 readingTime 单位为秒，展示换算成分钟（不足 1 分钟按 1 分钟）。
+ */
 const metaText = computed(() => {
   const it = item.value;
   if (!it) return "";
   const parts: string[] = [];
   if (it.text_length != null) parts.push(t("browse.novel.words", { count: it.text_length.toLocaleString() }));
-  if (it.reading_time != null) parts.push(t("browse.novel.readingTime", { count: it.reading_time }));
+  if (it.reading_time != null) {
+    parts.push(t("browse.novel.readingTime", { count: Math.max(1, Math.floor(it.reading_time / 60)) }));
+  }
   for (const [field, label] of [["like_count", "likes"], ["bookmark_count", "bookmarks"], ["view_count", "views"]] as const) {
     const count = it[field];
     if (count != null) parts.push(`${t(`browse.work.${label}`)} ${count.toLocaleString()}`);
   }
+  const published = formatDateTime(it.create_date, locale.value);
+  if (published) parts.push(published);
   return parts.join(" · ");
 });
 

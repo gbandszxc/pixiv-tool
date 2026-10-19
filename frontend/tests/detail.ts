@@ -25,6 +25,10 @@ window.__TAURI_INTERNALS__ = {
       item: { id: 42, kind: currentKind, title: "测试作品", author_id: 1, author_name: "测试作者", page_count: 1, x_restrict: 0,
         tags: missing ? [] : ["BanG Dream! & 中文", "很长的标签名称".repeat(12)],
         description: missing ? "" : "第一行<br>第二行 &amp; 说明<p>第三行</p><script>不应显示脚本</script>",
+        text_length: missing ? undefined : 16474,
+        // 接口 readingTime 为秒：1976 秒 ≈ 32 分钟（与 pixiv 网页端一致）
+        reading_time: missing ? undefined : 1976,
+        create_date: missing ? undefined : "2026-10-17T23:00:00+09:00",
         like_count: missing ? undefined : 0, bookmark_count: missing ? undefined : 1234, view_count: missing ? undefined : 56789 },
       pages: [{ original: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'/>" }],
       content: "小说正文第一段。\n小说正文第二段。", bookmarkState: null,
@@ -52,6 +56,11 @@ async function run() {
       assert(!host.querySelector(".description script"), `${kind} 不插入描述 HTML`);
       const counts = kind === "novel" ? host.querySelector(".work-meta")?.textContent : host.querySelector(".count-row")?.textContent;
       assert(counts?.includes("1,234") && counts.includes("56,789") && /\b0\b/.test(counts), `${kind} 三项计数包含零值并按千位格式化`);
+      if (kind === "novel") {
+        assert(counts?.includes("16,474 字"), "小说元信息展示字数");
+        assert(counts?.includes("约 32 分钟"), "小说阅读时长按秒换算为分钟（1976 秒 → 32 分钟）");
+        assert(counts?.includes("2026年10月17日 23:00"), `小说元信息按 JST 展示发布时间，实际：${counts}`);
+      }
       const tag = host.querySelector<HTMLAnchorElement>("a.tag-chip");
       assert(tag && tag.getAttribute("href")?.includes("browse/search"), `${kind} 标签为原生搜索链接`);
       tag.click();
