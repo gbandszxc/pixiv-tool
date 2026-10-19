@@ -726,6 +726,15 @@ fn truncated_output_error(output_cap: Option<u64>) -> String {
     }
 }
 
+/// 请求体里实际生效的输出上限。字段名随协议：Chat `max_completion_tokens`、
+/// Responses `max_output_tokens`、Anthropic `max_tokens`；漏掉任一形状都会让
+/// 截断文案丢掉具体数值（ADR 0033）。
+fn output_cap(body: &Value) -> Option<u64> {
+    ["max_completion_tokens", "max_tokens", "max_output_tokens"]
+        .iter()
+        .find_map(|key| body.get(*key).and_then(Value::as_u64))
+}
+
 /// 去掉可选的 JSON 代码块围栏后解析模型输出。
 fn parse_model_json(text: &str) -> Result<Value, String> {
     let text = text.trim();
@@ -1341,10 +1350,7 @@ impl TranslationClient<'_> {
     ) -> Result<(Value, Option<TokenUsage>), String> {
         let body = request_body(self.settings, self.format, prompt, input);
         // 截断报错要展示实际生效的输出上限（应用默认或高级 JSON 覆盖值）。
-        let output_cap = body
-            .get("max_tokens")
-            .or_else(|| body.get("max_output_tokens"))
-            .and_then(Value::as_u64);
+        let output_cap = output_cap(&body);
         let response = self
             .authorized(self.http.post(self.url.as_str()))
             .header("Content-Type", "application/json")
@@ -3173,6 +3179,8 @@ mod tests {
             }
             let body = request_body(&settings, format, "S", long.clone());
             assert_eq!(body[key], 262_144, "{key}: 长输入走大档");
+            // 截断文案要用的生效上限必须能从三种协议各自的字段名取到。
+            assert_eq!(output_cap(&body), Some(262_144), "{key}: 取到生效上限");
         }
         // 用户显式给出的上限字段优先于分档（含跨协议写法改名后沿用）。
         let explicit = request_body(
