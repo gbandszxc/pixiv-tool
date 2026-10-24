@@ -39,6 +39,12 @@ const props = defineProps<{
   errors: Partial<Record<TranslationAgentIntKey, TranslationAgentIssueCode>>;
   /** 本次运行有效的详细诊断（不持久化）。 */
   detailedDiagnostics: boolean;
+  /** 诊断开关切换中：禁用控件，避免并发写。 */
+  diagnosticsBusy: boolean;
+  /** 诊断开关读取 / 写入失败的可读错误。 */
+  diagnosticsError: string;
+  /** 每次读 / 写后自增：用于把开关控件显式对齐到真实状态（回滚时绑定值可能未变）。 */
+  diagnosticsVersion: number;
 }>();
 
 const emit = defineEmits<{
@@ -54,6 +60,7 @@ const { t } = useI18n();
 const openCategory = ref<TranslationAgentCategory | null>(null);
 /** 「恢复全部推荐值」的二次确认：就地展开影响说明，不叠新模态。 */
 const confirmingAll = ref(false);
+const diagnosticsCheckbox = ref<(HTMLElement & { checked: boolean }) | null>(null);
 
 const counts = computed(() => countModifiedTranslationAgent(props.values, props.extraValue));
 const totalModified = computed(() =>
@@ -94,16 +101,18 @@ function focusFirstControl(): void {
 }
 /**
  * 把焦点交给控件。Material Web 元素在升级完成前 `focus()` 是空操作，
- * 因此先调元素方法，未生效再退到其内部 input，并最多重试三帧。
+ * 因此先调元素方法，未生效再退到其内部 input；仍未生效则隔一帧重试
+ * （最多 8 次，约 130ms），避免元素刚插入时升级时序造成的偶发失焦。
  */
 function focusControl(target: HTMLElement | null, attempt = 0): void {
   if (!target) return;
+  (target as HTMLElement & { focus?: () => void }).focus?.();
+  if (document.activeElement === target || target.matches(":focus-within")) return;
   const inner = target.shadowRoot?.querySelector<HTMLElement>("input, textarea");
-  (target as HTMLElement & { focus: () => void }).focus();
-  if (document.activeElement === target || (inner && document.activeElement === inner)) return;
   inner?.focus();
-  if (attempt >= 3 || target.matches(":focus-within")) return;
-  requestAnimationFrame(() => focusControl(target, attempt + 1));
+  if (inner && document.activeElement === inner) return;
+  if (attempt >= 8) return;
+  setTimeout(() => { if (document.contains(target)) focusControl(target, attempt + 1); }, 16);
 }
 /** 保存失败定位：切到目标分类、滚动到字段并聚焦。 */
 function focusLocated(locate: TranslationAgentLocate): void {
@@ -117,6 +126,14 @@ function focusLocated(locate: TranslationAgentLocate): void {
     focusControl(target);
   });
 }
+/**
+ * 开关状态由父级（后端值）决定：切换失败回滚时绑定值可能仍是 true，Vue 不会重写
+ * 自定义元素的 checked；因此每次读 / 写（version 变化）都显式把控件对齐到真实值。
+ */
+watch(() => [props.detailedDiagnostics, props.diagnosticsVersion] as const, ([value]) => {
+  const checkbox = diagnosticsCheckbox.value;
+  if (checkbox && checkbox.checked !== value) checkbox.checked = value;
+});
 watch(() => props.locate, (locate) => { if (locate) focusLocated(locate); });
 // 保存失败时父级会同时切到二级并给出定位目标；此时组件刚挂载，watch 不会触发。
 onMounted(() => { if (props.locate) focusLocated(props.locate); });
@@ -196,9 +213,10 @@ const categoryHintKey = (category: TranslationAgentCategory) => `translation.age
           <HelpTooltip :label="t('translation.agent.diagnostics.toggle')" :text="t('translation.agent.diagnostics.hint')" />
         </div>
         <label class="m3-choice">
-          <md-checkbox id="translation-agent-detailed-diagnostics" :checked="detailedDiagnostics" @change="emit('set-diagnostics', ($event.target as HTMLInputElement).checked)" />
+          <md-checkbox ref="diagnosticsCheckbox" id="translation-agent-detailed-diagnostics" :checked="detailedDiagnostics" :disabled="diagnosticsBusy" @change="emit('set-diagnostics', ($event.target as HTMLInputElement).checked)" />
           {{ t("translation.agent.diagnostics.enable") }}
         </label>
+        <span v-if="diagnosticsError" class="field-hint diagnostics-error" role="alert">{{ diagnosticsError }}</span>
         <span class="field-hint">{{ t("translation.agent.diagnostics.scope") }}</span>
       </div>
 
@@ -236,6 +254,8 @@ const categoryHintKey = (category: TranslationAgentCategory) => `translation.age
 .advanced-chevron { flex: none; width: 18px; height: 18px; color: var(--ink-muted); }
 .advanced-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm) var(--space-md); padding-top: var(--space-md); border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
 .advanced-confirm { color: var(--md-sys-color-error); font-size: 12px; line-height: 1.5; }
+/* 诊断开关读 / 写失败：沿用既有字段错误色，配可读文字（Semantic State Rule） */
+.diagnostics-error { color: var(--md-sys-color-error); }
 /* 窄窗：计数换到标题下一行，不再挤在右侧 */
 @media (max-width: 640px) {
   .advanced-index-item { flex-wrap: wrap; }

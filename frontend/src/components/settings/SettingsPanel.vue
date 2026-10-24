@@ -179,10 +179,13 @@
         :locate="advancedLocate"
         :errors="agentErrors"
         :detailed-diagnostics="detailedDiagnostics"
+        :diagnostics-busy="diagnosticsBusy"
+        :diagnostics-error="diagnosticsError"
+        :diagnostics-version="diagnosticsVersion"
         @set-int="setAgentInt"
         @set-replay="form.translation_agent_replay_unknown = $event"
         @set-extra="setExtra"
-        @set-diagnostics="detailedDiagnostics = $event"
+        @set-diagnostics="changeDiagnostic"
         @reset-all="notify(t('translation.agent.restoredAll'))"
         @back="backToBasic"
       />
@@ -220,7 +223,7 @@ import { useI18n } from "vue-i18n";
 import HelpTooltip from "../common/HelpTooltip.vue";
 import MaintenancePanel from "./MaintenancePanel.vue";
 import TranslationAdvancedPanel from "./TranslationAdvancedPanel.vue";
-import { fetchTranslationModels, testTranslationService, API_FORMATS, TARGET_LANGUAGE_CODES, canonicalApiFormat, canonicalLanguage, type TranslationProbe } from "../../api/translation";
+import { fetchTranslationModels, testTranslationService, API_FORMATS, TARGET_LANGUAGE_CODES, canonicalApiFormat, canonicalLanguage, getTranslationDiagnosticStatus, setTranslationDiagnostic, type TranslationProbe } from "../../api/translation";
 import {
   countModifiedTranslationAgent,
   normalizeTranslationAgentSettings,
@@ -257,8 +260,15 @@ const testResult = ref("");
 const testFailed = ref(false);
 /** 一级 / 二级视图：同一内容区切换，不叠加新模态；草稿始终是 form。 */
 const translationView = ref<"basic" | "advanced">("basic");
-/** 本次运行有效的详细诊断开关：不落 settings.json，重置或关闭弹窗即失效。 */
+/**
+ * 本次运行有效的详细诊断开关：不落 settings.json，不参与「已修改 N 项」与恢复推荐值。
+ * 真值以后端会话状态为准（打开设置时读取），切换失败回滚并显示错误。
+ */
 const detailedDiagnostics = ref(false);
+const diagnosticsBusy = ref(false);
+const diagnosticsError = ref("");
+/** 每次读 / 写诊断状态后自增：让二级开关显式与真实值对齐（失败回滚时绑定值可能没变）。 */
+const diagnosticsVersion = ref(0);
 /** 保存失败的最后一次定位请求：二级页据此切分类、滚动并聚焦。 */
 const advancedLocate = ref<TranslationAgentLocate | null>(null);
 let probeVersion = 0;
@@ -396,7 +406,36 @@ function resetTranslationDraft() {
   translationJsonError.value = "";
   translationView.value = "basic";
   advancedLocate.value = null;
-  detailedDiagnostics.value = false;
+}
+/**
+ * 读取会话级诊断状态：打开设置时以后端为准回显。
+ * 诊断开关不是设置草稿（取消不撤销、保存不写入），所以这里只同步显示值。
+ */
+async function loadDiagnosticStatus() {
+  try {
+    const status = await getTranslationDiagnosticStatus();
+    detailedDiagnostics.value = status === true;
+    diagnosticsError.value = "";
+    diagnosticsVersion.value += 1;
+  } catch (err) {
+    diagnosticsError.value = errorMessage(err) || t("translation.agent.diagnostics.readFailed");
+  }
+}
+/** 诊断开关：立即写后端；失败回滚到切换前的值并给出可读错误。 */
+async function changeDiagnostic(enabled: boolean) {
+  if (diagnosticsBusy.value) return;
+  const previous = detailedDiagnostics.value;
+  diagnosticsBusy.value = true;
+  diagnosticsError.value = "";
+  try {
+    detailedDiagnostics.value = (await setTranslationDiagnostic(enabled)) === true;
+  } catch (err) {
+    detailedDiagnostics.value = previous;
+    diagnosticsError.value = errorMessage(err) || t("translation.agent.diagnostics.writeFailed");
+  } finally {
+    diagnosticsBusy.value = false;
+    diagnosticsVersion.value += 1;
+  }
 }
 const startupPageOptions = computed(() => Object.entries(groupRoots).map(([group, value]) => ({ value, label: t(`workspace.${group}`) })));
 const savedSnapshot = ref("");
@@ -449,7 +488,11 @@ onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settings
   if (!form.value.illust_filename_template) form.value.illust_filename_template = "{title}_{pid}_p{page}";
   if (!form.value.novel_filename_template) form.value.novel_filename_template = "{title}_{nid}";
   if (!form.value.novel_series_filename_template) form.value.novel_series_filename_template = "{order}_{title}";
-  resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); });
+  resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
+  // 诊断是会话级状态，不属于设置草稿：每次打开设置都以后端为准回显。
+  if (props.active) void loadDiagnosticStatus(); });
+/** 设置弹窗每次打开时重新读取诊断开关（可能有别处改过，或应用重启后已复位）。 */
+watch(() => props.active, (active) => { if (active) void loadDiagnosticStatus(); });
 /** 有未保存改动：弹窗据此决定关闭前是否提示。 */
 function hasUnsaved() { return Boolean(translationKey.value) || clearTranslationKey.value || Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
 /** 回滚到上次保存值（取消 / 确认放弃修改）。主题预览随表单回到已保存值。 */

@@ -361,6 +361,8 @@ export default {
         enable: "Log detailed diagnostics for this run",
         hint: "When enabled, this run additionally logs the start, end, duration and length summaries of individual requests and subtasks, which helps locate failures. Only phases, counts and reason codes are recorded — never source text, translations, credentials or full prompts.",
         scope: "Applies to this run only and is not saved; reopening the app returns to the default summary logging.",
+        readFailed: "Could not read the diagnostics switch; the current value may not be accurate",
+        writeFailed: "Could not change the diagnostics switch; the previous state was restored",
       },
       errors: {
         range: "Must be an integer between {min} and {max}; recommended {recommended}",

@@ -406,6 +406,27 @@ export async function getTranslationDiagnostics(): Promise<Record<string, unknow
   return invoke("novel_translation_diagnostics");
 }
 
+/** 会话级详细诊断开关的浏览器 mock 状态：同一页面会话内保持，刷新即复位。 */
+let mockDiagnostic = false;
+
+/**
+ * 会话级详细诊断开关（仅本次运行有效，重启复位；不写 settings.json）。
+ * 返回后端生效后的状态；Tauri 环境命令失败时 reject，由调用方回滚并提示。
+ */
+export async function setTranslationDiagnostic(enabled: boolean): Promise<boolean> {
+  if (!isTauri()) {
+    mockDiagnostic = enabled;
+    return mockDiagnostic;
+  }
+  return invoke("translation_set_diagnostic", { enabled });
+}
+
+/** 读取当前诊断开关状态（用于设置页打开时回显真实值）。 */
+export async function getTranslationDiagnosticStatus(): Promise<boolean> {
+  if (!isTauri()) return mockDiagnostic;
+  return invoke("translation_diagnostic_status");
+}
+
 /** 事件名与后端 agent::events::JOB_EVENT_NAME 一致。 */
 export const JOB_EVENT_NAME = "translation://job";
 

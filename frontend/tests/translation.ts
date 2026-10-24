@@ -44,6 +44,10 @@ let probeTestOk = true;
 let lastProbeUrl = "";
 let lastProbeFormat = "";
 let capturedSettings: Record<string, unknown> = {};
+// 会话级诊断开关：默认关闭；diagnosticFail 用于验收「写入失败回滚 + 可读错误」。
+let diagnosticEnabled = false;
+let diagnosticFail = false;
+let diagnosticWrites = 0;
 
 const book = { bible: { style: "克制", terms: [] }, pages: {} };
 const jobListeners = new Set<(payload: TranslationJobEvent) => void>();
@@ -196,6 +200,13 @@ window.__TAURI_INTERNALS__ = {
       return typeof probeModels === "string" ? Promise.reject(probeModels) : [...probeModels];
     }
     if (command === "translation_test") return probeTestOk ? Promise.resolve() : Promise.reject("模拟检测失败");
+    if (command === "translation_diagnostic_status") return diagnosticEnabled;
+    if (command === "translation_set_diagnostic") {
+      diagnosticWrites++;
+      if (diagnosticFail) return Promise.reject("模拟诊断开关失败");
+      diagnosticEnabled = args.enabled === true;
+      return diagnosticEnabled;
+    }
     return {};
   },
   convertFileSrc: (url: string) => url,
@@ -555,6 +566,36 @@ async function run() {
   assert((panelHost.querySelector("#translation-url") as unknown as { value: string }).value === "https://example.com/v1", "恢复全部不改一级连接设置");
   panel.reset(); await settle(); assert(!panel.hasUnsaved(), "分层操作后的草稿可整体取消");
 
+  // ===== 诊断开关：立即写后端、失败回滚并显示可读错误、不计入已修改项 =====
+  const metaBeforeDiagnostics = entryMeta();
+  await openCategory("诊断");
+  const diagnosticsToggle = panelHost.querySelector<HTMLElement & { checked: boolean }>("#translation-agent-detailed-diagnostics");
+  assert(diagnosticsToggle, "诊断分类有详细诊断开关");
+  assert(diagnosticsToggle!.checked === false, "打开设置时按后端状态回显（默认关闭）");
+  diagnosticsToggle!.checked = true; diagnosticsToggle!.dispatchEvent(new Event("change", { bubbles: true })); await settle();
+  assert(diagnosticWrites === 1 && diagnosticEnabled, "切换开关立即写后端");
+  await toService();
+  assert(entryMeta() === metaBeforeDiagnostics, "诊断开关不计入「已修改 N 项」");
+  assert(!panel.hasUnsaved(), "诊断开关不进入设置脏检查");
+  await openCategory("诊断");
+  diagnosticFail = true;
+  const toggleAgain = panelHost.querySelector<HTMLElement & { checked: boolean }>("#translation-agent-detailed-diagnostics")!;
+  toggleAgain.checked = false; toggleAgain.dispatchEvent(new Event("change", { bubbles: true })); await settle();
+  assert(diagnosticWrites === 2 && diagnosticEnabled, "写入失败不改变后端状态");
+  assert(panelHost.querySelector("#translation-agent-detailed-diagnostics")?.checked === true, "失败后开关回滚到开启");
+  const diagnosticsError = panelHost.querySelector(".diagnostics-error");
+  // 后端 reject 的可读消息原样展示；无消息时才用本地兜底文案。
+  assert(diagnosticsError?.getAttribute("role") === "alert" && (diagnosticsError.textContent ?? "").trim().length > 0,
+    `失败时显示可读错误（错误节点=${diagnosticsError ? diagnosticsError.textContent : "无"}）`);
+  diagnosticFail = false;
+  await toService();
+  await openCategory("诊断");
+  const toggleRestore = panelHost.querySelector<HTMLElement & { checked: boolean }>("#translation-agent-detailed-diagnostics")!;
+  toggleRestore.checked = false; toggleRestore.dispatchEvent(new Event("change", { bubbles: true })); await settle();
+  assert(!diagnosticEnabled && diagnosticWrites === 3, "失败后可重新切换成功");
+  await toService();
+  panel.reset(); await settle();
+
   // 获取模型 / 检测可用：用当前未保存草稿发探测请求，结果只进组件状态、不落 store。
   const findButton = (label: string) => [...panelHost.querySelectorAll<HTMLElement>("md-outlined-button,md-text-button")].find(el => el.textContent?.trim() === label);
   await input("translation-url", "https://api.example.com/v1"); await input("translation-key", "probe-key");
@@ -624,6 +665,6 @@ async function run() {
   document.querySelector<HTMLButtonElement>("#preview-dark")!.onclick = () => document.documentElement.classList.add("dark");
   document.querySelector<HTMLButtonElement>("#preview-light")!.onclick = () => document.documentElement.classList.remove("dark");
   document.querySelector<HTMLElement>("#preview-controls")!.hidden = false;
-  document.querySelector("#translation-result")!.textContent = "PASS：整篇 Job 浮层（四个 tab / 阶段与计数 / 术语确认与冻结 / 块预览未译标示 / 问题排序）、启动与 force、暂停继续取消、关闭不取消、完成与部分完成事件刷新投影、目标语言兜底、失败可见、缓存清理失效、状态点与焦点/Esc/外部关闭、设置一级两组分区与凭据状态胶囊、一级不含运行参数与原始 JSON、二级分类入口与返回、JSON 校验定位、跨级草稿保留、越界即时标红与错误计数、恢复本组/全部推荐值、凭据草稿、获取模型原位下拉与绿红检测状态、目标语言选择、接口协议默认值与切换";
+  document.querySelector("#translation-result")!.textContent = "PASS：整篇 Job 浮层（四个 tab / 阶段与计数 / 术语确认与冻结 / 块预览未译标示 / 问题排序）、启动与 force、暂停继续取消、关闭不取消、完成与部分完成事件刷新投影、目标语言兜底、失败可见、缓存清理失效、状态点与焦点/Esc/外部关闭、设置一级两组分区与凭据状态胶囊、一级不含运行参数与原始 JSON、二级分类入口与返回、JSON 校验定位、跨级草稿保留、越界即时标红与错误计数、恢复本组/全部推荐值、诊断开关读写与失败回滚、凭据草稿、获取模型原位下拉与绿红检测状态、目标语言选择、接口协议默认值与切换";
 }
 run().catch(error => { document.querySelector("#translation-result")!.textContent = `FAIL: ${error instanceof Error && error.stack ? error.stack : error.message}`; console.error(error); });
