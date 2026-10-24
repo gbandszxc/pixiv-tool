@@ -59,6 +59,46 @@ pub const SUMMARY_SYSTEM: &str = "\
 6. 下一步（接下来应执行的最小动作）。\n\
 控制在给定输出上限内；信息不足时写「未知」，不得编造。";
 
+/// 压缩生命周期事件（只用于结构化记录，不携带正文）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompactionEvent {
+    Start,
+    Done,
+    Failed,
+}
+
+impl CompactionEvent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "compact_start",
+            Self::Done => "compact_done",
+            Self::Failed => "compact_failed",
+        }
+    }
+}
+
+/// 一次压缩事件的结构化记录。
+///
+/// 只含估算计数、耗时、保留范围与结果码；**不包含**摘要正文、原文、译文或
+/// 提示词。宿主可据此写入 Job 会话记录（`sessions/journal.jsonl`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompactionRecord {
+    pub event: CompactionEvent,
+    /// 压缩前 / 压缩后的上下文估算 token。
+    pub before_tokens: Option<u32>,
+    pub after_tokens: Option<u32>,
+    /// 保留区起点（历史消息下标）。
+    pub keep_from: Option<usize>,
+    /// 保留的原始消息条数。
+    pub retained: Option<usize>,
+    pub elapsed_ms: u64,
+    /// 失败原因码；成功与开始事件为 `None`。
+    pub code: Option<&'static str>,
+}
+
+/// 压缩记录回调。实现方负责落到自己的日志 / 会话存储。
+pub type CompactionJournal = Arc<dyn Fn(&CompactionRecord) + Send + Sync>;
+
 /// 压缩参数与依赖。
 #[derive(Clone)]
 pub struct CompactionConfig {
@@ -67,6 +107,8 @@ pub struct CompactionConfig {
     pub scheduler: Option<Arc<Scheduler>>,
     /// 摘要调用计入任务总预算。
     pub tracker: Option<Arc<BudgetTracker>>,
+    /// 可选的压缩事件记录钩子（不改变压缩策略或语义）。
+    pub journal: Option<CompactionJournal>,
     pub scope: JobScope,
 }
 
@@ -76,6 +118,7 @@ impl CompactionConfig {
             budget,
             scheduler: None,
             tracker: None,
+            journal: None,
             scope,
         }
     }
@@ -88,6 +131,18 @@ impl CompactionConfig {
     pub fn with_tracker(mut self, tracker: Arc<BudgetTracker>) -> Self {
         self.tracker = Some(tracker);
         self
+    }
+
+    /// 注入压缩事件记录钩子；记录失败不影响压缩本身。
+    pub fn with_journal(mut self, journal: CompactionJournal) -> Self {
+        self.journal = Some(journal);
+        self
+    }
+
+    fn record(&self, record: CompactionRecord) {
+        if let Some(journal) = &self.journal {
+            journal(&record);
+        }
     }
 
     fn available_input(&self) -> u32 {
@@ -191,11 +246,20 @@ pub async fn compact_now(
 ) -> Result<CompactionOutcome, CompactionError> {
     let started = std::time::Instant::now();
     if cancel.is_cancelled() {
+        journal_failure(config, None, None, None, started, "cancelled");
         return Err(CompactionError::Cancelled);
     }
     let before_tokens = projected_tokens(history, None);
     let recent_start = recent_start(history, config.budget.recent_tokens);
     if recent_start == 0 {
+        journal_failure(
+            config,
+            Some(before_tokens),
+            Some(0),
+            Some(0),
+            started,
+            "nothing_to_compact",
+        );
         return Err(CompactionError::NothingToCompact);
     }
     let retained = &history[recent_start..];
@@ -213,6 +277,15 @@ pub async fn compact_now(
             ("keep_from", &recent_start.to_string()),
         ],
     );
+    config.record(CompactionRecord {
+        event: CompactionEvent::Start,
+        before_tokens: Some(before_tokens),
+        after_tokens: None,
+        keep_from: Some(recent_start),
+        retained: Some(retained.len()),
+        elapsed_ms: 0,
+        code: None,
+    });
 
     if let Some(tracker) = &config.tracker
         && !tracker.try_consume_call()
@@ -225,6 +298,14 @@ pub async fn compact_now(
             "compact_failed",
             &[("reason", "budget_exhausted")],
         );
+        journal_failure(
+            config,
+            Some(before_tokens),
+            Some(recent_start),
+            Some(retained.len()),
+            started,
+            "budget_exhausted",
+        );
         return Err(CompactionError::BudgetExhausted);
     }
 
@@ -234,6 +315,14 @@ pub async fn compact_now(
         .max(256);
     let transcript = clip_middle(&render_transcript(summarizable), transcript_budget);
     if transcript.trim().is_empty() {
+        journal_failure(
+            config,
+            Some(before_tokens),
+            Some(recent_start),
+            Some(retained.len()),
+            started,
+            "nothing_to_compact",
+        );
         return Err(CompactionError::NothingToCompact);
     }
 
@@ -246,14 +335,34 @@ pub async fn compact_now(
             let acquire = scheduler.model_permit(config.scope.novel_id);
             tokio::pin!(acquire);
             tokio::select! {
-                () = cancel.cancelled() => return Err(CompactionError::Cancelled),
+                () = cancel.cancelled() => {
+                    journal_failure(
+                        config,
+                        Some(before_tokens),
+                        Some(recent_start),
+                        Some(retained.len()),
+                        started,
+                        "cancelled",
+                    );
+                    return Err(CompactionError::Cancelled);
+                }
                 permit = &mut acquire => permit,
             }
         };
         let call = model.complete(request);
         tokio::pin!(call);
         let result = tokio::select! {
-            () = cancel.cancelled() => return Err(CompactionError::Cancelled),
+            () = cancel.cancelled() => {
+                journal_failure(
+                    config,
+                    Some(before_tokens),
+                    Some(recent_start),
+                    Some(retained.len()),
+                    started,
+                    "cancelled",
+                );
+                return Err(CompactionError::Cancelled);
+            }
             result = &mut call => result,
         };
         drop(permit);
@@ -262,7 +371,17 @@ pub async fn compact_now(
         let call = model.complete(request);
         tokio::pin!(call);
         tokio::select! {
-            () = cancel.cancelled() => return Err(CompactionError::Cancelled),
+            () = cancel.cancelled() => {
+                journal_failure(
+                    config,
+                    Some(before_tokens),
+                    Some(recent_start),
+                    Some(retained.len()),
+                    started,
+                    "cancelled",
+                );
+                return Err(CompactionError::Cancelled);
+            }
             result = &mut call => result,
         }
     };
@@ -283,6 +402,14 @@ pub async fn compact_now(
                     ("elapsed_ms", &started.elapsed().as_millis().to_string()),
                 ],
             );
+            journal_failure(
+                config,
+                Some(before_tokens),
+                Some(recent_start),
+                Some(retained.len()),
+                started,
+                "model_error",
+            );
             return Err(CompactionError::Model(message));
         }
     };
@@ -299,6 +426,14 @@ pub async fn compact_now(
             None,
             "compact_failed",
             &[("reason", "empty_summary")],
+        );
+        journal_failure(
+            config,
+            Some(before_tokens),
+            Some(recent_start),
+            Some(retained.len()),
+            started,
+            "empty_summary",
         );
         return Err(CompactionError::Model("摘要为空".into()));
     }
@@ -324,6 +459,15 @@ pub async fn compact_now(
             ("elapsed_ms", &started.elapsed().as_millis().to_string()),
         ],
     );
+    config.record(CompactionRecord {
+        event: CompactionEvent::Done,
+        before_tokens: Some(before_tokens),
+        after_tokens: Some(after_tokens),
+        keep_from: Some(recent_start),
+        retained: Some(retained.len()),
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        code: None,
+    });
 
     Ok(CompactionOutcome {
         history: new_history,
@@ -334,6 +478,26 @@ pub async fn compact_now(
         usage,
         elapsed_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+/// 记录一次压缩失败；不改变错误返回路径。
+fn journal_failure(
+    config: &CompactionConfig,
+    before_tokens: Option<u32>,
+    keep_from: Option<usize>,
+    retained: Option<usize>,
+    started: std::time::Instant,
+    code: &'static str,
+) {
+    config.record(CompactionRecord {
+        event: CompactionEvent::Failed,
+        before_tokens,
+        after_tokens: None,
+        keep_from,
+        retained,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        code: Some(code),
+    });
 }
 
 /// 按「assistant 工具调用 + 对应 tool result」的配对边界，返回保留区起点。

@@ -24,8 +24,9 @@ pub use budget::{
     BudgetConfig, BudgetTracker, auto_call_budget, available_input, estimate_tokens, request_fits,
 };
 pub use compaction::{
-    CompactionConfig, CompactionError, CompactionOutcome, compact_now, maybe_compact,
-    projected_tokens, should_compact, should_compact_tokens,
+    CompactionConfig, CompactionError, CompactionEvent, CompactionJournal, CompactionOutcome,
+    CompactionRecord, compact_now, maybe_compact, projected_tokens, should_compact,
+    should_compact_tokens,
 };
 pub use events::{
     EventSink, JobEmitter, JobEvent, RecordingSink, TauriEventSink, log_job, runtime_event,

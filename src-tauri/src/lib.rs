@@ -172,6 +172,8 @@ pub fn run() {
             commands::translation_cmds::novel_translation_cancel,
             commands::translation_cmds::novel_translation_delete,
             commands::translation_cmds::novel_translation_preview,
+            commands::translation_cmds::novel_translation_constraints,
+            commands::translation_cmds::novel_translation_issues,
             commands::translation_cmds::novel_translation_diagnostics,
             commands::translation_cmds::translation_set_diagnostic,
             commands::translation_cmds::translation_diagnostic_status,

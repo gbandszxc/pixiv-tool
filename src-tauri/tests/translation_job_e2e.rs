@@ -33,8 +33,10 @@ use pixiv_tool_lib::{
     settings::Settings,
     translation::{
         NovelInput,
-        artifacts::PublishStatus,
-        service::{ConstraintEdit, ConstraintTermEdit, TranslationService},
+        artifacts::{
+            Issue, JobArtifacts, PublishStatus, Review, ReviewVerdict, Severity,
+        },
+        service::{ConstraintEdit, ConstraintTermEdit, StoreIo, TranslationService},
         source::parse_source,
     },
 };
@@ -60,9 +62,31 @@ enum Reply {
     Abort,
     /// 建立响应后持续 keepalive，直到客户端断开（模拟长时间挂起）。
     Hang,
+    /// 保持连接不响应，直到测试闸门放行后按同一请求重新计算回复。
+    Gated { gate: Arc<Gate>, body: Value },
 }
 
 type Handler = Arc<dyn Fn(&Value) -> Reply + Send + Sync>;
+
+/// 测试闸门：默认关闭；`open()` 后放行所有等待中的请求。
+#[derive(Default)]
+struct Gate {
+    opened: AtomicBool,
+}
+
+impl Gate {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn open(&self) {
+        self.opened.store(true, Ordering::SeqCst);
+    }
+
+    fn is_open(&self) -> bool {
+        self.opened.load(Ordering::SeqCst)
+    }
+}
 
 struct MockServer {
     address: String,
@@ -87,37 +111,19 @@ impl MockServer {
                         return;
                     };
                     recorded.lock().unwrap().push(body.clone());
-                    match handler(&body) {
-                        Reply::Sse(chunks) => write_sse(&mut socket, &chunks).await,
-                        Reply::Json(body) => write_json(&mut socket, &body).await,
-                        Reply::Error(status, body) => {
-                            write_error(&mut socket, status, &body).await;
-                        }
-                        Reply::Abort => {
-                            let _ = socket
-                                .write_all(
-                                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
-                                      Connection: close\r\n\r\n",
-                                )
-                                .await;
-                            let _ = socket.flush().await;
-                            // 直接关闭：客户端读到 EOF 而没有结束帧。
-                        }
-                        Reply::Hang => {
-                            let _ = socket
-                                .write_all(
-                                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
-                                      Connection: close\r\n\r\n",
-                                )
-                                .await;
-                            let _ = socket.write_all(b": ready\n\n").await;
-                            let _ = socket.flush().await;
-                            for _ in 0..3000 {
-                                tokio::time::sleep(Duration::from_millis(10)).await;
-                                if socket.write_all(b": keepalive\n\n").await.is_err() {
-                                    return;
+                    let mut reply = handler(&body);
+                    // 闸门关闭时先不响应；放行后按同一请求重新计算回复。
+                    loop {
+                        match reply {
+                            Reply::Gated { gate, body: retry } => {
+                                while !gate.is_open() {
+                                    tokio::time::sleep(Duration::from_millis(5)).await;
                                 }
-                                let _ = socket.flush().await;
+                                reply = handler(&retry);
+                            }
+                            ready => {
+                                write_reply(&mut socket, ready).await;
+                                break;
                             }
                         }
                     }
@@ -150,6 +156,14 @@ impl MockServer {
         self.requests()
             .iter()
             .filter(|body| role_of(&system_of(body)) == "translator")
+            .count()
+    }
+
+    /// 请求体含指定原文标记的次数（用于区分两本小说的实际处理）。
+    fn requests_containing(&self, needle: &str) -> usize {
+        self.requests()
+            .iter()
+            .filter(|body| body.to_string().contains(needle))
             .count()
     }
 }
@@ -233,6 +247,43 @@ async fn write_error(socket: &mut TcpStream, status: u16, body: &Value) {
         )
         .await;
     let _ = socket.flush().await;
+}
+
+async fn write_reply(socket: &mut TcpStream, reply: Reply) {
+    match reply {
+        Reply::Sse(chunks) => write_sse(socket, &chunks).await,
+        Reply::Json(body) => write_json(socket, &body).await,
+        Reply::Error(status, body) => write_error(socket, status, &body).await,
+        Reply::Abort => {
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                      Connection: close\r\n\r\n",
+                )
+                .await;
+            let _ = socket.flush().await;
+            // 直接关闭：客户端读到 EOF 而没有结束帧。
+        }
+        Reply::Hang => {
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                      Connection: close\r\n\r\n",
+                )
+                .await;
+            let _ = socket.write_all(b": ready\n\n").await;
+            let _ = socket.flush().await;
+            for _ in 0..3000 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                if socket.write_all(b": keepalive\n\n").await.is_err() {
+                    return;
+                }
+                let _ = socket.flush().await;
+            }
+        }
+        // 闸门在 accept 循环里消化，不会走到写出阶段。
+        Reply::Gated { .. } => {}
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +769,50 @@ fn novel() -> NovelInput {
     }
 }
 
+/// 两本内容、页数都不同的小说，用于并行与隔离断言。
+fn novel_a() -> NovelInput {
+    NovelInput {
+        novel_id: 6001,
+        title: "并行甲".into(),
+        tags: vec![],
+        description: String::new(),
+        content: "[chapter:甲章]\n甲の勇者が現れた\n甲の二行目\n[newpage]\n甲の第二頁です\n甲の最後の行"
+            .into(),
+    }
+}
+
+fn novel_b() -> NovelInput {
+    NovelInput {
+        novel_id: 6002,
+        title: "并行乙".into(),
+        tags: vec![],
+        description: String::new(),
+        content: "[chapter:乙章]\n乙の剣士が笑った\n乙の最後の行".into(),
+    }
+}
+
+/// 多页正文（每页约 1000 字符），用于让主会话历史稳定越过低压缩阈值。
+fn novel_compact() -> NovelInput {
+    let page = format!("[chapter:圧縮試験]\n{}", "圧縮対象の本文です".repeat(100));
+    NovelInput {
+        novel_id: 5151,
+        title: "压缩测试".into(),
+        tags: vec![],
+        description: String::new(),
+        content: vec![page.clone(), page.clone(), page.clone(), page].join("\n[newpage]\n"),
+    }
+}
+
+fn journal_records(paths: &AppPaths, novel_id: i64, job_id: &str) -> Vec<Value> {
+    let path = job_dir(paths, novel_id, job_id).join("sessions/journal.jsonl");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    raw.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect()
+}
+
 fn service(paths: &AppPaths, settings: Settings, sink: Arc<RecordingSink>) -> TranslationService {
     TranslationService::for_tests(paths.clone(), settings, sink, Some("test-key".into()))
 }
@@ -1014,6 +1109,21 @@ async fn confirmation_mode_waits_for_confirm_then_continues() {
     assert_eq!(server.translator_requests(), 0, "确认前不得开始翻译");
     assert!(waiting.constraint_version >= 1, "冻结后应有约束版本");
 
+    // 只读约束命令：确认前应看到冻结版本与等待确认标志。
+    let before = service
+        .constraints(&started.job_id)
+        .await
+        .expect("确认前可读取约束");
+    assert!(before.frozen, "冻结后 frozen=true");
+    assert!(before.awaiting_confirmation, "确认模式等待确认");
+    assert!(before.version >= 1);
+    let hero = before
+        .terms
+        .iter()
+        .find(|term| term.source_term == "勇者")
+        .expect("冻结术语可见");
+    assert_eq!(hero.locked_translation, "勇士", "冻结时的推荐译名");
+
     // 用户修改术语：用户值优先。
     let edits = ConstraintEdit {
         terms: vec![ConstraintTermEdit {
@@ -1052,6 +1162,26 @@ async fn confirmation_mode_waits_for_confirm_then_continues() {
     assert_eq!(hero["locked_translation"], "英杰", "用户值优先");
     assert_eq!(constraints["data"]["style"], "第三人称，书面语");
     assert!(constraints["data"]["version"].as_u64().unwrap() >= 2);
+
+    // 只读约束命令：确认后版本递增、等待确认标志清除、用户值优先。
+    let after = service
+        .constraints(&started.job_id)
+        .await
+        .expect("确认后可读取约束");
+    assert!(!after.awaiting_confirmation, "确认后不再等待");
+    assert!(after.frozen);
+    assert!(after.version >= 2, "用户确认递增版本");
+    assert_eq!(after.style, "第三人称，书面语");
+    let hero = after
+        .terms
+        .iter()
+        .find(|term| term.source_term == "勇者")
+        .expect("术语保留");
+    assert_eq!(hero.locked_translation, "英杰", "用户值优先");
+
+    // 未知 Job 返回明确错误，不 panic。
+    assert!(service.constraints("20260101000000-abcdef").await.is_err());
+    assert!(service.issues("20260101000000-abcdef").await.is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -1080,9 +1210,17 @@ async fn cancel_stops_immediately_and_keeps_checkpoint() {
     let cancelled = service.snapshot(&started.job_id).await.unwrap();
     assert_eq!(cancelled.state, JobState::Cancelled);
 
-    // 取消后不再产生新请求。
+    // 取消瞬间可能已有请求体被服务端读入（取消无法撤回已发出的字节）；
+    // 先等其落地，再断言此后完全静止，不得继续请求模型。
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(server.requests().len(), before, "取消后不得继续请求模型");
+    let settled = server.requests().len();
+    assert!(settled >= before);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        server.requests().len(),
+        settled,
+        "取消后不得继续请求模型（取消前已发出的在途请求除外）"
+    );
 
     // 检查点保留（目录与 manifest 仍在，可查看已提交产物）。
     let dir = job_dir(&fixture.paths, 5150, &started.job_id);
@@ -1525,4 +1663,497 @@ async fn session_journal_records_facts_without_content() {
     // 清理后会话记录随 Job 一起消失。
     service.delete(&started.job_id).await.expect("删除");
     assert!(!job_dir(&fixture.paths, 5150, &started.job_id).exists());
+}
+
+// ---------------------------------------------------------------------------
+// 12. 压缩记录（compact_start / compact_done / compact_failed）
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compaction_writes_journal_records_without_content() {
+    let fixture = fixture("compact-journal");
+    let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
+    let mut settings = settings_for(&server);
+    // 低阈值：小上下文 + 最小输出上限 + 50% 触发 + 最小保留窗口。
+    settings.translation_agent_context_window = 32_768;
+    settings.translation_agent_output_cap = 1_024;
+    settings.translation_agent_compact_percent = 50;
+    settings.translation_agent_recent_history_tokens = 512;
+    settings.translation_agent_summary_tokens = 256;
+    let service = service(&fixture.paths, settings, Arc::new(RecordingSink::new()));
+
+    let started = service.start(novel_compact(), false).await.expect("启动成功");
+    let done = wait_for(&service, &started.job_id, &[
+        JobState::Completed,
+        JobState::NeedsAttention,
+        JobState::Paused,
+    ])
+    .await;
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "低阈值下仍应完成：{} error={:?}",
+        done.message,
+        done.error_code
+    );
+
+    let records = journal_records(&fixture.paths, 5151, &started.job_id);
+    assert!(
+        records.iter().any(|record| record["kind"] == "compact_start"),
+        "应记录 compact_start：{records:?}"
+    );
+    let completed = records
+        .iter()
+        .find(|record| record["kind"] == "compact_done")
+        .expect("低阈值应触发一次成功压缩");
+    let before = completed["before_est"].as_u64().expect("before_est 计数");
+    let after = completed["after_est"].as_u64().expect("after_est 计数");
+    assert!(before > 0, "压缩前估算应为正数");
+    assert!(after <= before, "压缩后估算不得高于压缩前");
+    assert!(completed["elapsed_ms"].is_number(), "应记录耗时");
+    assert!(
+        completed["retained"].as_u64().is_some(),
+        "应记录保留条数"
+    );
+    assert!(
+        completed["keep_from"].as_u64().is_some(),
+        "应记录保留区起点"
+    );
+
+    for record in records.iter().filter(|record| {
+        record["kind"]
+            .as_str()
+            .is_some_and(|kind| kind.starts_with("compact"))
+    }) {
+        assert_eq!(record["agent"], "main");
+        assert!(record["phase"].is_string(), "应附阶段关联");
+        let keys: Vec<&String> = record.as_object().unwrap().keys().collect();
+        for forbidden in [
+            "text",
+            "content",
+            "summary",
+            "prompt",
+            "source",
+            "translation",
+            "original",
+            "key",
+        ] {
+            assert!(
+                !keys.iter().any(|key| key.as_str() == forbidden),
+                "压缩记录不得包含正文字段 {forbidden}: {record}"
+            );
+        }
+        let serialized = record.to_string();
+        assert!(!serialized.contains("圧縮対象の本文です"), "不得记录原文");
+        assert!(!serialized.contains("这是本段的中文译文"), "不得记录译文");
+        assert!(!serialized.contains("test-key"), "不得记录凭据");
+        assert!(
+            !serialized.contains("目标：完成整篇翻译"),
+            "不得记录摘要正文: {record}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 13. 审查问题只读命令
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issues_command_aggregates_reviews_and_excludes_passed_chunks() {
+    let fixture = fixture("issues");
+    let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
+    let initial = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+
+    let started = initial.start(novel(), false).await.expect("启动成功");
+    let done = wait_for(&initial, &started.job_id, &[
+        JobState::Completed,
+        JobState::NeedsAttention,
+    ])
+    .await;
+    assert_eq!(done.state, JobState::Completed, "基础流程应完成：{}", done.message);
+
+    // 翻转 c0001 的审查结论，制造一个有问题块；c0002 保持通过。
+    let manifest: pixiv_tool_lib::agent::Manifest =
+        serde_json::from_value(manifest_of(&fixture.paths, 5150, &started.job_id)).unwrap();
+    let scope = JobScope {
+        novel_id: manifest.novel_id,
+        job_id: manifest.job_id.clone(),
+        generation: manifest.generation,
+    };
+    let store = Arc::new(JobStore::open(&fixture.paths, &scope).unwrap());
+    let io = StoreIo::new(store);
+    let artifacts = JobArtifacts::new(&io);
+    let draft = artifacts
+        .read_draft("c0001")
+        .expect("读取草稿")
+        .expect("c0001 有草稿");
+    artifacts
+        .write_review(&Review {
+            chunk_id: "c0001".into(),
+            draft_version: draft.version,
+            verdict: ReviewVerdict::NeedsFix,
+            issues: vec![
+                Issue {
+                    segment_id: "p001-l001-s0".into(),
+                    kind: "style".into(),
+                    severity: Severity::Minor,
+                    detail: "语气与冻结风格不一致".into(),
+                },
+                Issue {
+                    segment_id: "p001-l001-s0".into(),
+                    kind: "omission".into(),
+                    severity: Severity::Critical,
+                    detail: "漏译一个片段".into(),
+                },
+                Issue {
+                    segment_id: "p001-l002-s0".into(),
+                    kind: "term".into(),
+                    severity: Severity::Major,
+                    detail: "术语与冻结约束不一致".into(),
+                },
+            ],
+            notes: "存在阻断问题".into(),
+        })
+        .unwrap();
+
+    // 新实例（无内存 JobHandle）走磁盘路径，验证命令不依赖运行态。
+    let fresh = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let view = fresh.issues(&started.job_id).await.expect("问题汇总可读");
+    assert_eq!(view.issues.len(), 3);
+    let severities: Vec<Severity> = view.issues.iter().map(|issue| issue.severity).collect();
+    assert_eq!(
+        severities,
+        vec![Severity::Critical, Severity::Major, Severity::Minor],
+        "按 severity critical → major → minor 稳定排序"
+    );
+    assert!(view.issues.iter().all(|issue| issue.chunk_id == "c0001"));
+    assert_eq!(view.affected_chunks, vec!["c0001"]);
+    assert!(view.unresolved_chunks.contains(&"c0001".to_string()));
+    assert!(
+        !view.unresolved_chunks.contains(&"c0002".to_string()),
+        "通过块不得进入 unresolved：{:?}",
+        view.unresolved_chunks
+    );
+    assert_eq!(view.reviewed, view.total, "基础流程每块都有审查记录");
+    assert!(view.total >= 2);
+    for issue in &view.issues {
+        assert!(issue.detail.chars().count() <= 301, "detail 必须限长");
+    }
+    let serialized = serde_json::to_string(&view).unwrap();
+    assert!(!serialized.contains("第二頁の本文です"), "汇总不得含原文");
+    assert!(!serialized.contains("这是本段的中文译文"), "汇总不得含译文");
+}
+
+// ---------------------------------------------------------------------------
+// 14. 两本小说并行 + 取消隔离
+// ---------------------------------------------------------------------------
+
+/// 等待两本小说都进入 Running 且调度器同时持有两个活跃小说槽位。
+async fn wait_two_running(
+    service: &TranslationService,
+    server: &MockServer,
+    first: &str,
+    second: &str,
+) -> (
+    pixiv_tool_lib::translation::service::TranslationJobSnapshot,
+    pixiv_tool_lib::translation::service::TranslationJobSnapshot,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let a = service.snapshot(first).await.expect("甲快照可读");
+        let b = service.snapshot(second).await.expect("乙快照可读");
+        if a.state == JobState::Running
+            && b.state == JobState::Running
+            && service.scheduler().active_novel_count() == 2
+            && server.translator_requests() >= 2
+        {
+            return (a, b);
+        }
+        assert!(
+            tokio::time::Instant::now() <= deadline,
+            "两本小说未能同时运行：甲={:?} 乙={:?} active={} translator_requests={}",
+            a.state,
+            b.state,
+            service.scheduler().active_novel_count(),
+            server.translator_requests()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_novels_run_concurrently_without_crossing_jobs() {
+    let fixture = fixture("parallel");
+    let gate = Arc::new(Gate::new());
+    let handler = {
+        let gate = gate.clone();
+        Arc::new(move |body: &Value| {
+            if role_of(&system_of(body)) == "translator" && !gate.is_open() {
+                return Reply::Gated {
+                    gate: gate.clone(),
+                    body: body.clone(),
+                };
+            }
+            scripted(body)
+        }) as Handler
+    };
+    let server = MockServer::start(handler).await;
+    let mut settings = settings_for(&server);
+    settings.translation_agent_active_novels = 2;
+    settings.translation_agent_global_concurrency = 4;
+    let sink = Arc::new(RecordingSink::new());
+    let service = service(&fixture.paths, settings, sink.clone());
+
+    let a = service.start(novel_a(), false).await.expect("甲启动");
+    let b = service.start(novel_b(), false).await.expect("乙启动");
+    assert_ne!(a.job_id, b.job_id, "不同小说必须拥有不同 Job");
+    wait_two_running(&service, &server, &a.job_id, &b.job_id).await;
+    gate.open();
+
+    let done_a = wait_for(&service, &a.job_id, &[
+        JobState::Completed,
+        JobState::NeedsAttention,
+        JobState::Cancelled,
+    ])
+    .await;
+    let done_b = wait_for(&service, &b.job_id, &[
+        JobState::Completed,
+        JobState::NeedsAttention,
+        JobState::Cancelled,
+    ])
+    .await;
+    assert_eq!(done_a.state, JobState::Completed, "甲应完成：{}", done_a.message);
+    assert_eq!(done_b.state, JobState::Completed, "乙应完成：{}", done_b.message);
+
+    // 各自目录 / manifest / 结果互不覆盖。
+    let dir_a = job_dir(&fixture.paths, 6001, &a.job_id);
+    let dir_b = job_dir(&fixture.paths, 6002, &b.job_id);
+    assert_ne!(dir_a, dir_b);
+    assert!(dir_a.join("output/result.json").is_file());
+    assert!(dir_b.join("output/result.json").is_file());
+    assert_eq!(
+        manifest_of(&fixture.paths, 6001, &a.job_id)["novel_id"],
+        6001
+    );
+    assert_eq!(
+        manifest_of(&fixture.paths, 6002, &b.job_id)["novel_id"],
+        6002
+    );
+
+    let result_a = service.result(6001).await.unwrap().expect("甲结果");
+    let result_b = service.result(6002).await.unwrap().expect("乙结果");
+    assert_eq!(result_a.novel_id, 6001);
+    assert_eq!(result_b.novel_id, 6002);
+    let source_a = parse_source(&novel_a().content, "zh-CN").unwrap();
+    let source_b = parse_source(&novel_b().content, "zh-CN").unwrap();
+    assert_eq!(result_a.pages.len(), source_a.pages.len());
+    assert_eq!(result_b.pages.len(), source_b.pages.len());
+    assert_ne!(
+        result_a.pages.len(),
+        result_b.pages.len(),
+        "两本页数不同，能区分结果归属"
+    );
+
+    // 事件 seq 每个 Job 各自独立、严格递增。
+    let events = sink.events();
+    for job_id in [&a.job_id, &b.job_id] {
+        let seqs: Vec<u64> = events
+            .iter()
+            .filter(|event| &event.job_id == job_id)
+            .map(|event| event.seq)
+            .collect();
+        assert!(seqs.len() > 3, "每个 Job 都应有进度事件");
+        let mut last = 0;
+        for seq in seqs {
+            assert!(seq > last, "同一 Job 的事件 seq 必须单调递增：{last} -> {seq}");
+            last = seq;
+        }
+    }
+    assert!(
+        events
+            .iter()
+            .filter(|event| event.job_id == a.job_id)
+            .last()
+            .is_some_and(|event| event.state == JobState::Completed)
+    );
+    assert!(
+        events
+            .iter()
+            .filter(|event| event.job_id == b.job_id)
+            .last()
+            .is_some_and(|event| event.state == JobState::Completed)
+    );
+
+    // 产物不串页 / 串块：每块的原文都来自本 Job 的小说，草稿片段与块一一对应。
+    for (manifest_value, novel, label) in [
+        (
+            manifest_of(&fixture.paths, 6001, &a.job_id),
+            novel_a(),
+            "甲",
+        ),
+        (
+            manifest_of(&fixture.paths, 6002, &b.job_id),
+            novel_b(),
+            "乙",
+        ),
+    ] {
+        let manifest: pixiv_tool_lib::agent::Manifest =
+            serde_json::from_value(manifest_value).unwrap();
+        let (chunks, drafts, reviews) =
+            pixiv_tool_lib::translation::service::read_job_artifacts(&fixture.paths, &manifest)
+                .expect("读取产物");
+        assert!(!chunks.is_empty());
+        assert_eq!(drafts.len(), chunks.len(), "{label} 每块都有草稿");
+        assert_eq!(reviews.len(), chunks.len(), "{label} 每块都有审查");
+        for chunk in &chunks {
+            for segment in &chunk.segments {
+                assert!(
+                    novel.content.contains(&segment.text),
+                    "{label} Job 混入其他小说原文：{}",
+                    segment.text
+                );
+            }
+            let draft = drafts
+                .iter()
+                .find(|draft| draft.chunk_id == chunk.id)
+                .expect("块有对应草稿");
+            let chunk_ids: Vec<&String> = chunk.segments.iter().map(|item| &item.id).collect();
+            let draft_ids: Vec<&String> = draft.segments.iter().map(|item| &item.id).collect();
+            assert_eq!(chunk_ids, draft_ids, "{label} {} 片段顺序必须一致", chunk.id);
+        }
+    }
+    assert!(server.requests_containing("甲") > 0, "甲小说确实被处理");
+    assert!(server.requests_containing("乙") > 0, "乙小说确实被处理");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn active_novels_limit_queues_second_novel_until_first_releases() {
+    let fixture = fixture("fair");
+    let gate = Arc::new(Gate::new());
+    let handler = {
+        let gate = gate.clone();
+        Arc::new(move |body: &Value| {
+            if role_of(&system_of(body)) == "translator" && !gate.is_open() {
+                return Reply::Gated {
+                    gate: gate.clone(),
+                    body: body.clone(),
+                };
+            }
+            scripted(body)
+        }) as Handler
+    };
+    let server = MockServer::start(handler).await;
+    let mut settings = settings_for(&server);
+    settings.translation_agent_active_novels = 1;
+    settings.translation_agent_global_concurrency = 4;
+    let service = service(&fixture.paths, settings, Arc::new(RecordingSink::new()));
+
+    let a = service.start(novel_a(), false).await.expect("甲启动");
+    assert!(
+        wait_until(|| server.translator_requests() >= 1, 30_000).await,
+        "甲应先进入翻译并被闸门挡住"
+    );
+    let b = service.start(novel_b(), false).await.expect("乙启动");
+
+    // 甲被闸门挡住期间，乙必须留在队列，且不产生任何含乙原文的请求。
+    for _ in 0..10 {
+        let snapshot = service.snapshot(&b.job_id).await.expect("乙快照可读");
+        assert_eq!(snapshot.state, JobState::Queued, "乙应在队列等待");
+        assert_eq!(
+            service.snapshot(&a.job_id).await.unwrap().state,
+            JobState::Running,
+            "甲仍占用唯一的活跃小说槽位"
+        );
+        assert_eq!(
+            server.requests_containing("乙"),
+            0,
+            "甲未释放前乙不得发起任何请求"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    gate.open();
+    let done_a = wait_for(&service, &a.job_id, &[
+        JobState::Completed,
+        JobState::NeedsAttention,
+    ])
+    .await;
+    assert_eq!(done_a.state, JobState::Completed, "甲应完成：{}", done_a.message);
+    let done_b = wait_for(&service, &b.job_id, &[
+        JobState::Completed,
+        JobState::NeedsAttention,
+    ])
+    .await;
+    assert_eq!(
+        done_b.state,
+        JobState::Completed,
+        "乙应在甲释放后完成：{}",
+        done_b.message
+    );
+    assert!(
+        server.requests_containing("乙") > 0,
+        "乙必须在甲释放后才真正开始"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancelling_one_novel_does_not_affect_the_other() {
+    let fixture = fixture("cancel-isolated");
+    let gate = Arc::new(Gate::new());
+    let handler = {
+        let gate = gate.clone();
+        Arc::new(move |body: &Value| {
+            if role_of(&system_of(body)) == "translator" && !gate.is_open() {
+                return Reply::Gated {
+                    gate: gate.clone(),
+                    body: body.clone(),
+                };
+            }
+            scripted(body)
+        }) as Handler
+    };
+    let server = MockServer::start(handler).await;
+    let mut settings = settings_for(&server);
+    settings.translation_agent_active_novels = 2;
+    settings.translation_agent_global_concurrency = 4;
+    let service = service(&fixture.paths, settings, Arc::new(RecordingSink::new()));
+
+    let a = service.start(novel_a(), false).await.expect("甲启动");
+    let b = service.start(novel_b(), false).await.expect("乙启动");
+    wait_two_running(&service, &server, &a.job_id, &b.job_id).await;
+
+    service.cancel(&a.job_id).await.expect("取消甲");
+    let cancelled = service.snapshot(&a.job_id).await.unwrap();
+    assert_eq!(cancelled.state, JobState::Cancelled);
+    assert_eq!(
+        service.snapshot(&b.job_id).await.unwrap().state,
+        JobState::Running,
+        "取消甲不得改变乙的运行状态"
+    );
+
+    gate.open();
+    let done_b = wait_for(&service, &b.job_id, &[
+        JobState::Completed,
+        JobState::NeedsAttention,
+        JobState::Cancelled,
+    ])
+    .await;
+    assert_eq!(
+        done_b.state,
+        JobState::Completed,
+        "乙不受甲取消影响，应完成：{}",
+        done_b.message
+    );
+    assert_eq!(
+        manifest_of(&fixture.paths, 6001, &a.job_id)["state"],
+        "cancelled"
+    );
+    assert_eq!(
+        manifest_of(&fixture.paths, 6002, &b.job_id)["state"],
+        "completed"
+    );
+    assert!(
+        service.result(6002).await.unwrap().is_some(),
+        "乙有正式结果"
+    );
 }

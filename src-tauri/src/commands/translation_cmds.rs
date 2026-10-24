@@ -133,6 +133,31 @@ pub async fn novel_translation_preview(
     service.preview(&job_id, &chunk_id).await
 }
 
+/// 约束浮层只读查询：版本、术语、风格、冲突与未解决项。
+///
+/// 只读 `preparation/constraints.json` 与 manifest，不产生副作用，可与运行中的
+/// Job 并发调用。约束尚未生成时返回明确错误。
+#[tauri::command]
+pub async fn novel_translation_constraints(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<crate::translation::service::ConstraintsView, String> {
+    let service = state.translation_service.clone();
+    service.constraints(&job_id).await
+}
+
+/// 审查问题浮层只读查询：汇总全部 `reviews/*.json` 的问题与受影响块。
+///
+/// 只返回问题定位与计数，不含原文 / 译文；不产生副作用，可与运行中的 Job 并发调用。
+#[tauri::command]
+pub async fn novel_translation_issues(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<crate::translation::service::IssuesView, String> {
+    let service = state.translation_service.clone();
+    service.issues(&job_id).await
+}
+
 /// 会话级详细诊断开关（仅本次运行有效，重启复位为关闭）。
 ///
 /// 开启后日志级别切到 DEBUG，输出工具 / 请求 / 子任务的起止与长度；

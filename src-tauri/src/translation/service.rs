@@ -13,7 +13,7 @@
 //! - 启动恢复只把未结束状态改写为 `interrupted`，绝不自动发起付费请求。
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -45,8 +45,9 @@ use crate::{
     settings::Settings,
     translation::{
         artifacts::{
-            Chunk, Constraints, Draft, JobArtifacts, MergeReport, PublishStatus, Review,
-            ReviewVerdict, SourceDoc, TranslatedLine, TranslationResult,
+            AgentTerm, ArtifactIo, Chunk, Constraints, Draft, JobArtifacts, MergeReport,
+            PublishStatus, Review, ReviewVerdict, Severity, SourceDoc, TranslatedLine,
+            TranslationResult,
         },
         chunking::ChunkConfig,
         publish::{publish_status_with_language, render_markdown},
@@ -339,6 +340,8 @@ pub struct JobContext {
     pub confirm_before_start: bool,
     /// manifest 读改写串行化。
     manifest_lock: StdMutex<()>,
+    /// `sessions/journal.jsonl` 追加串行化（主运行与子任务并发写入时防丢行）。
+    journal_lock: StdMutex<()>,
     /// 单 Job 子任务并发闸门。
     pub dispatch_gate: Arc<Semaphore>,
     /// 本 Job 累计用量（跨多次运行）。
@@ -432,19 +435,20 @@ impl JobContext {
     /// 只写结构化事实（角色、块 ID、状态、耗时、长度、用量），不写原文、译文、
     /// 提示词或凭据。`sessions/` 属于 Job 缓存拥有者，随 Job 一起删除。
     ///
-    /// **未实现（本轮）**：上下文压缩的 `compact_start / compact_done /
-    /// compact_failed` 明细尚未落到本文件。压缩逻辑在 `agent/compaction.rs`
-    /// （U2 所有，U4 不得改动），它只通过 `log` 输出固定键值行，没有向宿主暴露
-    /// 回调点。本轮能记录的替代事实是每次主运行的用量合计（`kind="main_run"`），
-    /// 但不区分压缩调用。补齐方式：在 `CompactionConfig` 增加一个 `journal:
-    /// Option<Arc<dyn Fn(CompactionRecord)>>` 钩子（或让 `compaction` 调用宿主
-    /// 提供的 `EventSink`），由 `tools`/`service` 注入本方法。
+    /// 主运行的上下文压缩经 `CompactionConfig::with_journal` 注入本方法，记录
+    /// `compact_start / compact_done / compact_failed`，只含估算 token、耗时、
+    /// 保留范围与结果码。
     pub fn append_session(&self, record: &Value) {
         const PATH: &str = "sessions/journal.jsonl";
         let line = match serde_json::to_string(record) {
             Ok(line) => line,
             Err(_) => return,
         };
+        // 主运行（含压缩记录）与子任务完成记录可能并发到达；串行化读改写。
+        let _guard = self
+            .journal_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let mut bytes = self.store.read(PATH).ok().flatten().unwrap_or_default();
         // 单 Job 最多保留 4000 行，超出后丢弃最旧的记录（保留最近事实）。
         const MAX_LINES: usize = 4_000;
@@ -597,6 +601,59 @@ pub struct PreviewReview {
     pub verdict: ReviewVerdict,
     pub notes: String,
     pub issues: Vec<crate::translation::artifacts::Issue>,
+}
+
+/// 约束浮层的只读视图（不产生副作用，也不阻塞运行中的 Job）。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConstraintsView {
+    pub version: u64,
+    pub terms: Vec<AgentTerm>,
+    pub style: String,
+    pub conflicts: Vec<ConflictGroupView>,
+    pub unresolved: Vec<String>,
+    pub frozen: bool,
+    pub awaiting_confirmation: bool,
+}
+
+/// 同一术语 / 类型的冲突候选值。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConflictValueView {
+    pub value: String,
+    /// 提出该候选值的块；既有锁定译名没有来源块，记为空串。
+    pub chunk_id: String,
+}
+
+/// 术语冲突分组。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConflictGroupView {
+    pub source_term: String,
+    pub term_type: String,
+    pub values: Vec<ConflictValueView>,
+}
+
+/// 审查问题浮层的只读视图。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IssueView {
+    pub chunk_id: String,
+    pub segment_id: String,
+    pub kind: String,
+    pub severity: Severity,
+    /// 已限长并压平控制字符；不含原文 / 译文。
+    pub detail: String,
+}
+
+/// 全部单块审查问题的汇总。
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct IssuesView {
+    pub issues: Vec<IssueView>,
+    /// 有问题的块（按块顺序）。
+    pub affected_chunks: Vec<String>,
+    /// 仍有未解决问题的块（审查未通过或有阻断问题，按块顺序）。
+    pub unresolved_chunks: Vec<String>,
+    /// 已有审查记录的块数。
+    pub reviewed: u32,
+    /// 计划内块总数（没有计划时退化为已落盘块数）。
+    pub total: u32,
 }
 
 // ----------------------------------------------------------------------
@@ -980,6 +1037,7 @@ impl TranslationService {
             control: Control::default(),
             confirm_before_start: settings.translation_confirm_before_start,
             manifest_lock: StdMutex::new(()),
+            journal_lock: StdMutex::new(()),
             dispatch_gate,
             usage: StdMutex::new(TokenUsage::default()),
             io: StoreIo::new(store),
@@ -1179,6 +1237,57 @@ impl TranslationService {
             JobStore::open(&self.inner.paths, &scope).map_err(|error| error.to_string())?;
         let io = StoreIo::new(Arc::new(store));
         preview_from_io(&io, chunk_id)
+    }
+
+    /// 约束浮层只读查询：读 `preparation/constraints.json` 与 manifest 状态。
+    ///
+    /// 与运行中的 Job 并发安全：只读文件，不写 manifest、不发事件、不阻塞派发。
+    pub async fn constraints(&self, job_id: &str) -> Result<ConstraintsView, String> {
+        if let Some(handle) = self.handle(job_id) {
+            let awaiting = handle
+                .runtime
+                .lock()
+                .map(|runtime| runtime.state == JobState::AwaitingConfirmation)
+                .unwrap_or(false);
+            return handle
+                .ctx
+                .with_artifacts(|artifacts| constraints_view(artifacts.io(), awaiting))?
+                .ok_or_else(|| format!("约束尚未生成：{job_id}"));
+        }
+        let (manifest, corrupt) = self.find_manifest(job_id)?;
+        if corrupt {
+            return Err("任务清单损坏，无法读取约束".into());
+        }
+        let io = job_store(&self.inner.paths, &manifest)
+            .ok_or_else(|| format!("任务目录不可用：{job_id}"))?;
+        constraints_view(&io, manifest.state == JobState::AwaitingConfirmation)?
+            .ok_or_else(|| format!("约束尚未生成：{job_id}"))
+    }
+
+    /// 审查问题浮层只读查询：汇总 `reviews/*.json`，按严重度与块顺序稳定排序。
+    ///
+    /// 只返回问题定位与计数，不含原文、译文；与运行中的 Job 并发安全。
+    pub async fn issues(&self, job_id: &str) -> Result<IssuesView, String> {
+        if let Some(handle) = self.handle(job_id) {
+            let plan_ids = plan_ids_from_store(&handle.ctx.store);
+            return handle
+                .ctx
+                .with_artifacts(|artifacts| issues_view(artifacts.io(), &plan_ids));
+        }
+        let (manifest, corrupt) = self.find_manifest(job_id)?;
+        if corrupt {
+            return Err("任务清单损坏，无法读取审查问题".into());
+        }
+        let scope = JobScope {
+            novel_id: manifest.novel_id,
+            job_id: manifest.job_id.clone(),
+            generation: manifest.generation,
+        };
+        let store = JobStore::open(&self.inner.paths, &scope)
+            .map_err(|error| format!("任务目录不可用：{error}"))?;
+        let plan_ids = plan_ids_from_store(&store);
+        let io = StoreIo::new(Arc::new(store));
+        issues_view(&io, &plan_ids)
     }
 
     fn handle_snapshot(&self, handle: &Arc<JobHandle>) -> TranslationJobSnapshot {
@@ -1540,6 +1649,7 @@ impl TranslationService {
             confirm_before_start: settings.translation_confirm_before_start
                 && manifest.constraint_version == 0,
             manifest_lock: StdMutex::new(()),
+            journal_lock: StdMutex::new(()),
             dispatch_gate,
             usage: StdMutex::new(usage),
             io: StoreIo::new(Arc::new(
@@ -1784,11 +1894,32 @@ impl TranslationService {
         .with_phase(phase)
         .with_budget(ctx.budget.clone())
         .with_budget_config(ctx.budget_config.clone())
-        .with_compaction(
+        .with_compaction({
+            let journal_ctx = handle.ctx.clone();
             crate::agent::CompactionConfig::new(ctx.budget_config.clone(), ctx.scope.clone())
                 .with_scheduler(ctx.scheduler.clone())
-                .with_tracker(ctx.budget.clone()),
-        )
+                .with_tracker(ctx.budget.clone())
+                .with_journal(Arc::new(
+                    move |record: &crate::agent::CompactionRecord| {
+                        // 压缩记录只写计数、耗时、保留范围与结果码；摘要正文不入账。
+                        let phase = journal_ctx
+                            .read_manifest()
+                            .map(|manifest| manifest.phase)
+                            .unwrap_or(Phase::Translate);
+                        journal_ctx.append_session(&json!({
+                            "kind": record.event.as_str(),
+                            "agent": "main",
+                            "phase": phase.as_str(),
+                            "before_est": record.before_tokens,
+                            "after_est": record.after_tokens,
+                            "keep_from": record.keep_from,
+                            "retained": record.retained,
+                            "elapsed_ms": record.elapsed_ms,
+                            "code": record.code,
+                        }));
+                    },
+                ))
+        })
         .with_scheduler(ctx.scheduler.clone())
         .with_request_params(max_tokens, params);
 
@@ -2081,6 +2212,135 @@ fn preview_from_io(io: &StoreIo, chunk_id: &str) -> Result<ChunkPreview, String>
             issues: review.issues,
         }),
     })
+}
+
+/// 约束视图：只读 `preparation/constraints.json`；不存在返回 `Ok(None)`。
+fn constraints_view(
+    io: &dyn ArtifactIo,
+    awaiting_confirmation: bool,
+) -> Result<Option<ConstraintsView>, String> {
+    let artifacts = JobArtifacts::new(io);
+    let Some(constraints) = artifacts.read_constraints()? else {
+        return Ok(None);
+    };
+    let mut conflicts: Vec<ConflictGroupView> = Vec::new();
+    for conflict in &constraints.conflicts {
+        let term_type = constraints
+            .terms
+            .iter()
+            .find(|term| term.source_term == conflict.source_term)
+            .map(|term| term.term_type.clone())
+            .filter(|term_type| !term_type.trim().is_empty())
+            .unwrap_or_else(|| "other".to_string());
+        let index = match conflicts.iter().position(|group| {
+            group.source_term == conflict.source_term && group.term_type == term_type
+        }) {
+            Some(index) => index,
+            None => {
+                conflicts.push(ConflictGroupView {
+                    source_term: conflict.source_term.clone(),
+                    term_type,
+                    values: Vec::new(),
+                });
+                conflicts.len() - 1
+            }
+        };
+        let group = &mut conflicts[index];
+        // 既有锁定译名没有来源块；候选值保留提出它的块。
+        for value in [
+            ConflictValueView {
+                value: conflict.existing_translation.clone(),
+                chunk_id: String::new(),
+            },
+            ConflictValueView {
+                value: conflict.candidate_translation.clone(),
+                chunk_id: conflict.chunk_id.clone(),
+            },
+        ] {
+            if !group.values.contains(&value) {
+                group.values.push(value);
+            }
+        }
+    }
+    Ok(Some(ConstraintsView {
+        version: constraints.version,
+        terms: constraints.terms,
+        style: constraints.style,
+        conflicts,
+        unresolved: constraints.unresolved,
+        frozen: constraints.frozen,
+        awaiting_confirmation,
+    }))
+}
+
+/// 问题视图：只读全部单块审查记录，按严重度 + 块顺序稳定排序。
+fn issues_view(io: &dyn ArtifactIo, plan_ids: &[String]) -> Result<IssuesView, String> {
+    let artifacts = JobArtifacts::new(io);
+    let ids: Vec<String> = if plan_ids.is_empty() {
+        artifacts.list_chunks()?
+    } else {
+        plan_ids.to_vec()
+    };
+    let mut issues = Vec::new();
+    let mut affected = BTreeSet::new();
+    let mut unresolved = BTreeSet::new();
+    let mut reviewed = 0u32;
+    for chunk_id in &ids {
+        let Some(review) = artifacts.read_review(chunk_id)? else {
+            continue;
+        };
+        reviewed = reviewed.saturating_add(1);
+        if review.verdict != ReviewVerdict::Pass || !review.issues.is_empty() {
+            unresolved.insert(chunk_id.clone());
+        }
+        for issue in &review.issues {
+            affected.insert(chunk_id.clone());
+            issues.push(IssueView {
+                chunk_id: chunk_id.clone(),
+                segment_id: issue.segment_id.clone(),
+                kind: issue.kind.clone(),
+                severity: issue.severity,
+                // 只保留问题定位说明；限长且压平控制字符，不含原文 / 译文。
+                detail: crate::agent::events::safe_text(&issue.detail, 300),
+            });
+        }
+    }
+    issues.sort_by(|a, b| {
+        a.severity
+            .cmp(&b.severity)
+            .then_with(|| chunk_rank(&a.chunk_id).cmp(&chunk_rank(&b.chunk_id)))
+            .then_with(|| a.segment_id.cmp(&b.segment_id))
+            .then_with(|| a.kind.cmp(&b.kind))
+    });
+    let mut affected_chunks: Vec<String> = affected.into_iter().collect();
+    affected_chunks.sort_by_key(|chunk_id| chunk_rank(chunk_id));
+    let mut unresolved_chunks: Vec<String> = unresolved.into_iter().collect();
+    unresolved_chunks.sort_by_key(|chunk_id| chunk_rank(chunk_id));
+    Ok(IssuesView {
+        issues,
+        affected_chunks,
+        unresolved_chunks,
+        reviewed,
+        total: ids.len() as u32,
+    })
+}
+
+/// 计划内块 ID；计划缺失时返回空（调用方退化为已落盘块）。
+fn plan_ids_from_store(store: &JobStore) -> Vec<String> {
+    let Some(bytes) = store.read("preparation/chunk-plan.json").ok().flatten() else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<crate::translation::tools::ChunkPlan>(&bytes)
+        .map(|plan| plan.entries.into_iter().map(|entry| entry.id).collect())
+        .unwrap_or_default()
+}
+
+/// `c0001` → 1；非法 ID 排到最后。
+fn chunk_rank(chunk_id: &str) -> u32 {
+    chunk_id
+        .strip_prefix('c')
+        .and_then(|digits| digits.parse::<u32>().ok())
+        .unwrap_or(u32::MAX)
 }
 
 /// 读取 Job 内保存的原文（`prepare_source` 与阶段重置共用）。
