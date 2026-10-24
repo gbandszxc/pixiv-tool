@@ -1,7 +1,12 @@
 //! 日志 —— tauri-plugin-log。
 //!
-//! 日志文件 `<data_dir>/logs/app.log`，INFO 级别，格式带本地时间戳；
+//! 日志文件 `<data_dir>/logs/app.log`，默认 INFO 级别，格式带本地时间戳；
 //! dev（debug 编译）额外输出到 stdout。
+//!
+//! **详细诊断**：`agent` target 的门限固定允许 DEBUG，其余依赖保持 INFO，
+//! 运行时用 [`set_diagnostic`] 在 `log::set_max_level` 的 Info / Debug 之间切换。
+//! 这样默认不产生 DEBUG 记录，开启后也只放行本项目 `agent` target 的工具 / 请求 /
+//! 子任务起止与长度，不会把依赖库噪声写进日志。
 //!
 //! 日志插件必须在 `tauri::Builder` 上注册（先于 setup 执行），因此本模块提供
 //! `build_log_plugin(&AppPaths, dev)` 在 `run()` 里构造；`init()` 在 setup 里
@@ -32,6 +37,9 @@ pub fn build_log_plugin(paths: &AppPaths, dev: bool) -> TauriPlugin<Wry> {
     };
     tauri_plugin_log::Builder::new()
         .level(log::LevelFilter::Info)
+        // `agent` target 单独放宽：默认被 `log::set_max_level(Info)` 挡住，
+        // 只有会话级诊断开关会把它抬到 Debug。
+        .level_for(AGENT_LOG_TARGET, log::LevelFilter::Debug)
         .max_file_size(MAX_LOG_FILE_SIZE)
         .targets(targets)
         .format(|out, message, record| {
@@ -44,6 +52,27 @@ pub fn build_log_plugin(paths: &AppPaths, dev: bool) -> TauriPlugin<Wry> {
             ))
         })
         .build()
+}
+
+/// 详细诊断日志所属的 target（见 `agent::events`）。
+pub const AGENT_LOG_TARGET: &str = "agent";
+
+/// 会话级详细诊断开关：`true` 放行 `agent` target 的 DEBUG 记录，`false` 恢复 INFO。
+///
+/// 只切日志门限，不改变业务行为；调用方（翻译服务）负责保存会话状态。
+/// `RUST_LOG` 已显式注入时不覆盖，尊重开发者的环境设置。
+pub fn set_diagnostic(enabled: bool) -> bool {
+    if std::env::var_os("RUST_LOG").is_some() {
+        log::info!("检测到 RUST_LOG，跳过诊断门限切换");
+        return false;
+    }
+    log::set_max_level(if enabled {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    });
+    log::info!("日志门限切换为 {}", if enabled { "debug" } else { "info" });
+    true
 }
 
 /// 在 setup 里调用：记录启动信息（Python 侧本来就没接线日志，这里从简）。

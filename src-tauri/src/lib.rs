@@ -131,7 +131,25 @@ pub fn run() {
                 "light" => Some(tauri::Theme::Light),
                 _ => None,
             };
-            app.manage(AppState::new(paths.clone(), settings, db));
+            app.manage(
+                AppState::new(paths.clone(), settings, db)
+                    .with_translation_sink(std::sync::Arc::new(
+                        agent::events::TauriEventSink::new(app.handle().clone()),
+                    )),
+            );
+            // 启动恢复：上次退出时未结束的翻译任务转为 interrupted，不自动请求模型。
+            {
+                let service = app.state::<AppState>().translation_service.clone();
+                tauri::async_runtime::spawn(async move {
+                    match service.recover_interrupted().await {
+                        Ok(recovered) if !recovered.is_empty() => {
+                            log::info!("翻译任务恢复：{} 个未结束任务标记为 interrupted", recovered.len());
+                        }
+                        Ok(_) => {}
+                        Err(error) => log::warn!("翻译任务恢复失败：{error}"),
+                    }
+                });
+            }
             if let Some(theme) = explicit_theme {
                 if let Some(win) = app.get_window("main") {
                     let _ = win.set_theme(Some(theme));
@@ -143,8 +161,21 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // 小说翻译（v2 整篇 Job + v1 只读兼容）
+            commands::translation_cmds::novel_translation_start,
+            commands::translation_cmds::novel_translation_jobs,
+            commands::translation_cmds::novel_translation_status,
+            commands::translation_cmds::novel_translation_result,
+            commands::translation_cmds::novel_translation_confirm,
+            commands::translation_cmds::novel_translation_pause,
+            commands::translation_cmds::novel_translation_resume,
+            commands::translation_cmds::novel_translation_cancel,
+            commands::translation_cmds::novel_translation_delete,
+            commands::translation_cmds::novel_translation_preview,
+            commands::translation_cmds::novel_translation_diagnostics,
+            commands::translation_cmds::translation_set_diagnostic,
+            commands::translation_cmds::translation_diagnostic_status,
             translation::novel_translation_get,
-            translation::novel_translate_page,
             translation::translation_models,
             translation::translation_test,
             // auth

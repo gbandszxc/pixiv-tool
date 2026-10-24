@@ -4,11 +4,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::accounts::AccountManager;
+use crate::agent::CacheGeneration;
 use crate::cookies::CookieStore;
 use crate::core::task_manager::TaskManager;
 use crate::db::Db;
 use crate::paths::AppPaths;
 use crate::settings::Settings;
+use crate::translation::service::TranslationService;
 
 pub struct AppState {
     pub paths: AppPaths,
@@ -20,21 +22,48 @@ pub struct AppState {
     pub accounts: AccountManager,
     pub tasks: Arc<TaskManager>,
     pub translation_locks: TranslationLocks,
+    /// 整篇翻译 Job 服务（v2）：状态真相源、事件出口与缓存世代。
+    pub translation_service: TranslationService,
+    /// 翻译缓存清理世代：每次清理递增，迟到回调用旧世代写入会被拒绝。
+    pub translation_generation: CacheGeneration,
 }
 
 impl AppState {
     /// 在 setup 里构造（settings 加载 / db 打开已由 lib.rs 完成）。
+    ///
+    /// 事件出口默认为空实现；`lib.rs` 在 setup 里用
+    /// [`Self::with_translation_sink`] 注入 Tauri 事件出口。
     pub fn new(paths: AppPaths, settings: Settings, db: Db) -> Self {
         let tasks = Arc::new(TaskManager::new(db.clone(), paths.data_dir.clone()));
+        let settings = Arc::new(Mutex::new(settings));
+        let translation_generation = CacheGeneration::new(0);
+        let translation_service = TranslationService::new(
+            paths.clone(),
+            settings.clone(),
+            translation_generation.clone(),
+        );
         Self {
             accounts: AccountManager::new(&paths.config_dir),
             paths,
-            settings: Arc::new(Mutex::new(settings)),
+            settings,
             db,
             cookies: CookieStore::new(),
             tasks,
             translation_locks: TranslationLocks::default(),
+            translation_service,
+            translation_generation,
         }
+    }
+
+    /// 用真实事件出口重建翻译服务（setup 里 `AppHandle` 可用后调用）。
+    pub fn with_translation_sink(mut self, sink: Arc<dyn crate::agent::EventSink>) -> Self {
+        self.translation_service = TranslationService::with_sink(
+            self.paths.clone(),
+            self.settings.clone(),
+            self.translation_generation.clone(),
+            sink,
+        );
+        self
     }
 
     /// 读取设置快照（短锁立即释放，避免跨 await 持锁）。

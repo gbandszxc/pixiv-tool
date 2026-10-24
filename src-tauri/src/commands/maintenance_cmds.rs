@@ -186,9 +186,13 @@ pub async fn read_logs(state: State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 pub async fn clear_cache(state: State<'_, AppState>, kind: String) -> Result<Value, String> {
     let path = cache_path(&state.paths, &kind)?;
-    // 翻译缓存清理与在途翻译互斥（ADR 0031）：多小说可并行翻译，所以用读写门——
+    // 翻译缓存清理与在途翻译互斥（ADR 0031 / 0027）：多小说可并行翻译，所以用读写门——
     // 任一翻译在读，写锁就取不到；任务本身按小说串行的锁不参与这里。
+    // v2 的运行态由翻译服务单独判定：只要还有任务在跑或收尾中，就直接拒绝。
     let _guard = if kind == "translation" {
+        if state.translation_service.active_jobs() > 0 {
+            return Err("小说翻译正在进行，请完成后再清理".into());
+        }
         Some(
             state
                 .translation_locks
@@ -199,19 +203,61 @@ pub async fn clear_cache(state: State<'_, AppState>, kind: String) -> Result<Val
         None
     };
     let paths = state.paths.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         check_path(&paths, &path)?;
         clear_directory(&path)?;
         Ok(json!({"status":"success"}))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    if kind == "translation" && result.is_ok() {
+        // 清理成功后递增世代并清空索引：迟到回调的旧世代写入会被拒绝，
+        // 也不会重建已删除的 Job 目录（计划 §10.3）。
+        state.translation_service.invalidate_cache();
+    }
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn v2_translation_tree_is_counted_and_cleared_with_v1() {
+        let dir = std::env::temp_dir().join(format!("pixiv-maint-v2-{}", uuid::Uuid::new_v4()));
+        let paths = AppPaths {
+            data_dir: dir.clone(),
+            config_dir: dir.join("config"),
+            logs_dir: dir.join("logs"),
+        };
+        let translation = cache_path(&paths, "translation").unwrap();
+        // v1 旧缓存 + v2 任务目录（manifest / chunks / sessions / temporary）。
+        fs::create_dir_all(translation.join("42")).unwrap();
+        fs::write(translation.join("42/book.json"), b"12345").unwrap();
+        let job = translation.join("v2/42/20260101000000-abcdef");
+        for sub in ["chunks", "sessions", "temporary", "output"] {
+            fs::create_dir_all(job.join(sub)).unwrap();
+        }
+        fs::write(job.join("manifest.json"), b"{}").unwrap();
+        fs::write(job.join("chunks/c0001.draft.json"), b"000").unwrap();
+        fs::write(job.join("sessions/journal.jsonl"), b"00").unwrap();
+        fs::write(job.join("temporary/write.tmp"), b"0").unwrap();
+        fs::write(job.join("output/result.json"), b"0").unwrap();
+
+        let result = info(&paths).unwrap();
+        assert_eq!(result["translation"]["bytes"], 5 + 2 + 3 + 2 + 1 + 1);
+        assert_eq!(result["translation"]["files"], 6);
+
+        clear_directory(&translation).unwrap();
+        assert_eq!(info(&paths).unwrap()["translation"]["bytes"], 0);
+        assert!(
+            !translation.join("v2").exists() || info(&paths).unwrap()["translation"]["files"] == 0
+        );
+        fs::write(dir.join("app.db"), b"keep").unwrap();
+        assert!(dir.join("app.db").exists(), "app.db 不属于翻译缓存");
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn maintenance_counts_tails_and_clears_only_managed_files() {
