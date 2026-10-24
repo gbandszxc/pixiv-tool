@@ -26,6 +26,7 @@ pub mod saucenao;
 pub mod settings;
 pub mod state;
 pub mod translation;
+mod translation_legacy;
 mod translation_diagnostics;
 mod translation_summary;
 

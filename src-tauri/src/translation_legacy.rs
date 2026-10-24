@@ -230,7 +230,9 @@ fn normalize_language_code(value: &str) -> String {
 }
 
 /// 本次生效的目标语言（code, 提示词语言名）：设置留空跟随界面语言；不在白名单内即拒绝。
-fn resolve_target_language(settings: &Settings) -> Result<(&'static str, &'static str), String> {
+pub(crate) fn resolve_target_language(
+    settings: &Settings,
+) -> Result<(&'static str, &'static str), String> {
     let raw = if settings.translation_target_language.trim().is_empty() {
         settings.language.trim()
     } else {
@@ -246,7 +248,7 @@ fn resolve_target_language(settings: &Settings) -> Result<(&'static str, &'stati
 
 /// 原文主导语言；只服务「是否需要翻译」的快速判定，不做精确识别。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SourceLanguage {
+pub(crate) enum SourceLanguage {
     Japanese,
     Korean,
     /// 中文；用字倾向只区分简繁，用于匹配 zh-CN / zh-TW。
@@ -265,7 +267,7 @@ const SIMPLIFIED_ONLY: &str = "们这说国学对时会来为么种样个东车�
 
 /// 采样正文前 4000 字判定主导语言：假名 / 谚文占比 ≥5% 即判日 / 韩；
 /// 汉字占一半以上按简繁用字倾向区分；拉丁、西里尔按主导文字判定。
-fn detect_language(text: &str) -> SourceLanguage {
+pub(crate) fn detect_language(text: &str) -> SourceLanguage {
     let (mut kana, mut hangul, mut han, mut latin, mut cyrillic) = (0, 0, 0, 0, 0);
     let (mut traditional, mut simplified) = (0, 0);
     for character in text.chars().take(4000) {
@@ -309,7 +311,7 @@ fn detect_language(text: &str) -> SourceLanguage {
 }
 
 /// 原文语言与目标语言一致。拉丁文字只匹配 en：es / fr / de 无法本地区分，始终走翻译。
-fn same_target_language(source: SourceLanguage, target: &str) -> bool {
+pub(crate) fn same_target_language(source: SourceLanguage, target: &str) -> bool {
     match (source, target) {
         (SourceLanguage::Japanese, "ja")
         | (SourceLanguage::Korean, "ko")
@@ -1477,7 +1479,7 @@ fn default_translation_timeout() -> i64 {
 
 /// 单请求超时（秒）：兜底到合法区间——手改 settings.json 的越界值会在加载期回落，
 /// 这里再兜一次，避免 0 秒让请求立刻超时。客户端 timeout 与超时文案共用此值。
-fn translation_timeout_seconds(seconds: i64) -> u64 {
+pub(crate) fn translation_timeout_seconds(seconds: i64) -> u64 {
     seconds.clamp(
         crate::settings::TRANSLATION_TIMEOUT_MIN_SECONDS,
         crate::settings::TRANSLATION_TIMEOUT_MAX_SECONDS,
