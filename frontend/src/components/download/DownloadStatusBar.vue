@@ -1,18 +1,27 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+/**
+ * 底部状态栏（下载 + 翻译后台任务）。
+ *
+ * 翻译侧以 Job 快照为准（ADR 0034）：每本小说最多一条活跃任务；单个任务整条文案即返回入口，
+ * 多个任务显示计数并向上浮出选择菜单。暂停 / 等待确认 / 需要处理仍计入后台，但文案不谎称
+ * 「正在进行」；已完成 / 已取消 / 已中断等终态不再占位。
+ */
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { taskFailedCount, taskProgress, useTaskStore } from "../../stores/tasks";
 import { useDownloadPanelStore } from "../../stores/downloadPanel";
-import { useTranslationStore, type TranslationActive } from "../../stores/translation";
+import { useTranslationStore } from "../../stores/translation";
+import type { TranslationJobSnapshot } from "../../api/translation";
 const tasks = useTaskStore(); const panel = useDownloadPanelStore(); const translation = useTranslationStore();
 const router = useRouter(); const route = useRoute(); const { t } = useI18n();
 function openTasks() { if (route.path !== '/tools/tasks') void router.push('/tools/tasks'); }
 
-/**
- * 翻译后台指示（ADR 0031）：单个任务保持原样——整条文案直接回到该小说；
- * 多个任务时显示「后台 N 个翻译任务正在进行」，点击在底栏上方浮出任务选择菜单。
- */
+/** 活跃翻译任务（每本小说一条；暂停 / 待确认 / 待处理也在此列，但不冒充进行中）。 */
+const jobs = computed(() => translation.activeJobs);
+/** 真正在推进（排队 / 运行 / 收尾）的任务数：决定计数文案用「正在进行」还是中性说法。 */
+const runningCount = computed(() => jobs.value.filter((job) => ["queued", "running", "pausing", "cancelling"].includes(job.state)).length);
+
 const pickerOpen = ref(false);
 const picker = ref<HTMLElement | null>(null);
 const trigger = ref<{ focus(): void } | null>(null);
@@ -24,17 +33,28 @@ function goToNovel(id: number) {
 }
 function closePicker() { pickerOpen.value = false; }
 function togglePicker() { pickerOpen.value = !pickerOpen.value; }
-/** 阶段文案与浮窗进度区同源；选择菜单里只作一行辅助信息。 */
-function phaseText(task: TranslationActive): string {
-  if (task.phase === "queued") return t("translation.progressQueued");
-  if (task.phase === "prepare") return t("translation.progressPrepare");
-  return t("translation.progressTranslate");
+
+function jobTitle(job: TranslationJobSnapshot): string {
+  return translation.titleFor(job.novel_id) || t("translation.job.untitled", { id: job.novel_id });
 }
-/** 已用时间：分′秒″（1′42″），秒补零；时钟回拨不出现负值（与浮窗进度区同格式）。 */
-function elapsedText(task: TranslationActive): string {
-  const total = Math.max(0, Math.floor(task.elapsed / 1000));
+function stateText(job: TranslationJobSnapshot): string { return t(`translation.job.state.${job.state}`); }
+function phaseText(job: TranslationJobSnapshot): string { return t(`translation.job.phase.${job.phase}`); }
+function pageText(job: TranslationJobSnapshot): string {
+  const page = job.current?.page;
+  return page != null ? t("translation.job.page", { page }) : t("translation.job.pageUnknown");
+}
+/** 已用时间：分′秒″；活跃任务在 store 的 1s ticker 上自走。 */
+function elapsedText(job: TranslationJobSnapshot): string {
+  const total = Math.max(0, Math.floor(translation.elapsedFor(job) / 1000));
   return `${Math.floor(total / 60)}′${String(total % 60).padStart(2, "0")}″`;
 }
+/** 计数入口：全部在推进时说「正在进行」，有暂停 / 待确认时不冒充。 */
+const countLabel = computed(() =>
+  runningCount.value === jobs.value.length
+    ? t("translation.statusBarTranslatingCount", { count: jobs.value.length })
+    : t("translation.job.statusBarCountIdle", { count: jobs.value.length })
+);
+
 async function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape" && !document.querySelector("dialog[open]")) closePicker();
 }
@@ -48,9 +68,10 @@ watch(pickerOpen, (open) => {
   }
 });
 // 任务全部结束时菜单自动收起；降到一条时保留菜单（用户可能正在挑选）。
-watch(() => translation.active.length, (count) => {
+watch(() => jobs.value.length, (count) => {
   if (count === 0) pickerOpen.value = false;
 });
+onMounted(() => { void translation.ensureListening(); });
 onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 </script>
 
@@ -66,25 +87,31 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       </template>
       <span v-else>{{ t('workspace.idle') }}</span>
     </button>
-    <!-- 单任务：与既有样式完全一致，整条文案即返回入口 -->
-    <button v-if="translation.active.length === 1" class="status-translation" :aria-label="t('translation.statusBarBackTo') + '：' + t('translation.statusBarTranslating', { title: translation.active[0].title, page: translation.active[0].page })" :title="t('translation.statusBarTranslating', { title: translation.active[0].title, page: translation.active[0].page })" @click="goToNovel(translation.active[0].novelId)">
-      <span class="translation-full">{{ t('translation.statusBarTranslating', { title: translation.active[0].title, page: translation.active[0].page }) }}</span>
-      <span class="translation-short">{{ t('translation.statusBarTranslatingShort') }}</span>
+    <!-- 单任务：整条文案即返回入口（标题 · 页码 · 状态） -->
+    <button
+      v-if="jobs.length === 1"
+      class="status-translation"
+      :aria-label="t('translation.statusBarBackTo') + '：' + t('translation.job.statusBarSingle', { title: jobTitle(jobs[0]), page: pageText(jobs[0]), state: stateText(jobs[0]) })"
+      :title="t('translation.job.statusBarSingle', { title: jobTitle(jobs[0]), page: pageText(jobs[0]), state: stateText(jobs[0]) })"
+      @click="goToNovel(jobs[0].novel_id)"
+    >
+      <span class="translation-full">{{ t('translation.job.statusBarSingle', { title: jobTitle(jobs[0]), page: pageText(jobs[0]), state: stateText(jobs[0]) }) }}</span>
+      <span class="translation-short">{{ t('translation.job.statusBarShort') }}</span>
     </button>
-    <!-- 多任务：计数入口 + 上方任务选择菜单（同一浮层配方：surface-container / control 圆角 / 唯一合法轻阴影） -->
-    <div v-else-if="translation.active.length > 1" class="translation-menu">
-      <button ref="trigger" class="status-translation status-translation-count" :aria-label="t('translation.statusBarTranslatingCount', { count: translation.active.length })" :title="t('translation.statusBarTranslatingCount', { count: translation.active.length })" aria-haspopup="menu" :aria-expanded="pickerOpen" @click="togglePicker">
-        <span class="translation-full">{{ t('translation.statusBarTranslatingCount', { count: translation.active.length }) }}</span>
-        <span class="translation-short">{{ t('translation.statusBarTranslatingCountShort', { count: translation.active.length }) }}</span>
+    <!-- 多任务：计数入口 + 上方任务选择菜单（同一浮层配方） -->
+    <div v-else-if="jobs.length > 1" class="translation-menu">
+      <button ref="trigger" class="status-translation status-translation-count" :aria-label="countLabel" :title="countLabel" aria-haspopup="menu" :aria-expanded="pickerOpen" @click="togglePicker">
+        <span class="translation-full">{{ countLabel }}</span>
+        <span class="translation-short">{{ runningCount === jobs.length ? t('translation.statusBarTranslatingCountShort', { count: jobs.length }) : t('translation.job.statusBarCountIdleShort', { count: jobs.length }) }}</span>
       </button>
       <div v-if="pickerOpen" class="translation-backdrop" @click="closePicker"></div>
       <div v-if="pickerOpen" ref="picker" class="translation-picker" role="menu" :aria-label="t('translation.statusBarTasks')" tabindex="-1" @keydown.esc="closePicker">
         <span class="picker-title">{{ t('translation.statusBarTasks') }}</span>
-        <button v-for="task in translation.active" :key="task.id" role="menuitem" class="picker-item" @click="goToNovel(task.novelId)">
-          <span class="picker-dot" aria-hidden="true"></span>
+        <button v-for="job in jobs" :key="job.job_id" role="menuitem" class="picker-item" @click="goToNovel(job.novel_id)">
+          <span class="picker-dot" :class="`is-${job.state}`" aria-hidden="true"></span>
           <span class="picker-body">
-            <span class="picker-name">{{ task.title }}</span>
-            <span class="picker-meta">{{ t('translation.statusBarTaskMeta', { page: task.page, phase: phaseText(task), time: elapsedText(task) }) }}</span>
+            <span class="picker-name">{{ jobTitle(job) }}</span>
+            <span class="picker-meta">{{ t('translation.job.statusBarTaskMeta', { page: pageText(job), state: stateText(job), phase: phaseText(job), time: elapsedText(job) }) }}</span>
           </span>
         </button>
       </div>
@@ -99,28 +126,26 @@ button { color:var(--ink-muted); font:inherit; border:0; background:transparent;
 button:hover { background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent); }
 button:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-offset:-2px; }
 .status-link { flex:1; min-width:0; display:flex; align-items:center; gap:var(--space-md); text-align:left; white-space:nowrap; }
-/* 左侧固定短文案不换行、不收缩：长小说标题只能在右侧翻译入口内省略 */
 .status-link > span:not(.task-summary) { flex:none; }
 .status-translation { flex:0 1 auto; min-width:0; display:flex; align-items:center; color:var(--md-sys-color-primary); padding:0 var(--space-sm); }
-/* 单任务标题上限按底栏宽度计（该按钮是底栏直接子元素，百分比基准正确）：
-   长标题在 55% 处省略，剩余空间留给下载进度区，避免「下载 / 无进行中任务」被挤换行 */
+/* 单任务标题上限按底栏宽度计：长标题在 55% 处省略，剩余空间留给下载进度区 */
 .download-status > .status-translation { max-width:55%; }
-/* 计数文案是固定短句，不参与收缩：flex:none 保证整句完整显示，由左侧下载区让位
-   （百分比 max-width 在宽度由内容决定的 flex 容器上会互相牵制，把文案压成省略号） */
 .translation-menu { position:relative; display:flex; flex:none; height:100%; }
 .status-translation-count { flex:none; }
 .translation-full { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .translation-short { display:none; white-space:nowrap; }
 /* 透明遮罩只负责「点击外部关闭」，不做变暗 scrim（AccountMenu / 翻译浮窗同配方） */
 .translation-backdrop { position:fixed; inset:0; z-index:890; }
-/* 任务选择菜单：锚定计数入口上方、右对齐向左展开，与既有浮层同宽同配方 */
 .translation-picker { position:absolute; right:0; bottom:calc(100% + var(--space-sm)); z-index:900; display:flex; flex-direction:column; gap:var(--space-xxs); box-sizing:border-box; width:calc(var(--space-lg) * 24); max-width:calc(100vw - var(--space-lg) * 2); max-height:min(60vh,320px); overflow-y:auto; padding:var(--space-sm); border-radius:var(--radius-control); background:var(--md-sys-color-surface-container); color:var(--ink); box-shadow:0 4px 12px rgb(0 0 0 / 18%); outline:none; transform-origin:bottom right; }
 .picker-title { padding:0 var(--space-sm); color:var(--ink-muted); font-size:12px; font-weight:600; line-height:32px; }
 .picker-item { display:flex; align-items:flex-start; gap:var(--space-sm); width:100%; min-height:48px; padding:var(--space-sm); color:var(--ink); font:inherit; text-align:left; background:transparent; border:0; border-radius:var(--radius-control); cursor:pointer; }
 .picker-item:hover { background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent); }
 .picker-item:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-offset:-2px; }
-/* 进行中状态点：与翻译浮窗入口点同色（primary），不新增语义色 */
-.picker-dot { flex:none; width:8px; height:8px; margin-top:6px; border-radius:50%; background:var(--md-sys-color-primary); }
+/* 状态点：进行中 primary、完成绿、需处理 error、暂停 / 待确认中性（不新增语义色） */
+.picker-dot { flex:none; width:8px; height:8px; margin-top:6px; border-radius:50%; background:var(--ink-subtle); }
+.picker-dot.is-running, .picker-dot.is-queued, .picker-dot.is-pausing, .picker-dot.is-cancelling { background:var(--md-sys-color-primary); }
+.picker-dot.is-needs_attention { background:var(--md-sys-color-error); }
+.picker-dot.is-completed { background:var(--state-success-ink); }
 .picker-body { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .picker-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; line-height:1.4; }
 .picker-meta { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--ink-muted); font-size:12px; line-height:1.4; }

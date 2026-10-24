@@ -35,7 +35,7 @@ import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
 import { descriptionText } from "../../utils/descriptionText";
 import { formatDateTime } from "../../utils/dateTime";
-import { getNovelTranslation, type NovelTranslationInput, type PageTranslation, type TranslatedLine, type TranslationMode } from "../../api/translation";
+import { getNovelTranslationResult, type NovelTranslationInput, type PublishStatus, type TranslatedLine, type TranslationMode } from "../../api/translation";
 
 const props = defineProps<{ kind: "illust" | "manga" | "novel"; id: number }>();
 
@@ -106,112 +106,133 @@ const series = computed(() => detail.value?.series ?? null);
 const nextEpisodeId = computed(() => series.value?.next_id ?? null);
 
 const translationMode = ref<TranslationMode>("bilingual");
+/** 页码（1 起）→ 已投影译文行（行号页内 0 起）；整篇 Job 完成后由后端一次性投影。 */
 const translations = ref<Record<string, TranslatedLine[]>>({});
-/** 页 → 目标语言 code：该页原文已是目标语言，未请求模型（再次点击可强制翻译）。 */
-const skippedPages = ref<Record<number, string>>({});
+/** 原文已是目标语言（整篇未建 Job）；再次点击「仍然翻译」带 force 强制。 */
+const skippedTarget = ref("");
 const translationError = ref("");
-const translationErrorPage = ref(0);
+/** 投影结果状态与未解决块数（partial / needs_attention 时浮层提示）。 */
+const publishStatus = ref<PublishStatus | null>(null);
+const publishUnresolved = ref(0);
 let translationGeneration = 0;
 let cacheGeneration = 0;
 const translationInput = computed<NovelTranslationInput>(() => ({
   novel_id: props.id, title: item.value?.title ?? "", tags: item.value?.tags ?? [],
   description: plainDescription.value, content: content.value,
 }));
-const currentTranslation = computed(() => translations.value[page.value] ?? []);
-const currentSkipped = computed(() => skippedPages.value[page.value] ?? "");
-// 浮窗进度区数据与「翻译中」状态：仅当前小说的进行中任务（翻译在后台跨页执行，
-// 别的小说页面不显示他人进度；跳转返回后 store 是唯一真相源）。多小说并行时
-// 每本小说各自一条，store.activeFor 按小说取。
+/** 当前页译文行；当前页没有译文时为空数组（不借用别页）。 */
+const currentTranslation = computed(() => translations.value[String(page.value)] ?? []);
+/** 任何一页已有译文（入口状态点与「重新翻译」文案据此判断）。 */
+const hasTranslations = computed(() => Object.values(translations.value).some((lines) => lines?.length > 0));
+
+// 浮层 / 状态栏的数据源：该小说最新的 Job 与其当前活跃状态（多小说并行时各取各的）。
+const novelJob = computed(() => translationStore.jobFor(props.id));
 const activeTranslation = computed(() => translationStore.activeFor(props.id));
-// 设定集整理/精翻等内部阶段不面向用户，只回显统一的进行中状态与最终成败。
-// 进行中以全局 store 的在途任务为准（跳转返回后旧实例的页内态已丢，store 才是唯一真相源）。
-// 完成态 token 用量只对「当前页刚由任务跑完」回显（缓存恢复或别的页完成不冒充）。
-const doneUsageTotal = computed(() => {
-  const done = translationStore.doneFor(props.id);
-  return done && done.page === page.value ? done.usage?.total : undefined;
-});
+
+/**
+ * 状态摘要只反映状态与阶段，不拼计数——它是浮层唯一的 aria-live 区，
+ * 不能让每一条进度事件都触发朗读。计数与预览在「状态」tab 内非播报展示。
+ */
 const translationStatus = computed(() => {
-  if (activeTranslation.value) return t("translation.translating", { page: activeTranslation.value.page });
-  if (translationErrorPage.value === page.value && translationError.value) return translationError.value;
-  if (currentSkipped.value) return t("translation.sameLanguage", { language: t(`translation.targetLanguages.${currentSkipped.value}`) });
-  if (currentTranslation.value.length) {
-    return doneUsageTotal.value != null
-      ? t("translation.completedWithUsage", { tokens: doneUsageTotal.value.toLocaleString() })
-      : t("translation.completed");
+  if (translationError.value) return translationError.value;
+  const active = activeTranslation.value;
+  if (active) return t(`translation.job.state.${active.state}`);
+  // 目标语言一致优先于终态回显：此时没有可继续的任务，提示本身就是结论。
+  if (skippedTarget.value) {
+    return t("translation.sameLanguage", { language: t(`translation.targetLanguages.${skippedTarget.value}`) });
   }
+  const job = novelJob.value;
+  if (job) {
+    if (job.state === "completed") {
+      const total = job.usage?.total ?? 0;
+      return total > 0
+        ? t("translation.job.completedWithUsage", { tokens: total.toLocaleString() })
+        : t("translation.job.completed");
+    }
+    if (job.state !== "queued" && job.state !== "running") return t(`translation.job.state.${job.state}`);
+  }
+  if (hasTranslations.value) return t("translation.completed");
   return t("translation.noTranslation");
 });
 
-/** 应用单页翻译结果到页内状态（translatePage 即时路径与 store 完成快照跨页路径共用）。 */
-function applyTranslationResult(result: PageTranslation, targetPage: number): void {
-  if (result.status === "already_target_language") {
-    skippedPages.value = { ...skippedPages.value, [targetPage]: result.target_language };
-  } else {
-    const skipped = { ...skippedPages.value };
-    delete skipped[targetPage];
-    skippedPages.value = skipped;
-    translations.value[targetPage] = result.lines;
+/** 把后端投影结果映射到页内状态：pages 键为页码字符串，行号页内 0 起。 */
+function applyResult(result: Awaited<ReturnType<typeof getNovelTranslationResult>>): void {
+  publishStatus.value = result?.status ?? null;
+  publishUnresolved.value = result?.unresolved ?? 0;
+  if (!result) {
+    translations.value = {};
+    return;
+  }
+  const next: Record<string, TranslatedLine[]> = {};
+  for (const [pageKey, lines] of Object.entries(result.pages ?? {})) {
+    if (Array.isArray(lines) && lines.length) next[pageKey] = lines;
+  }
+  translations.value = next;
+}
+
+/**
+ * 拉取整篇投影结果（legacy / v2 均由后端回退，前端不区分）。
+ * 只在挂载、任务完成/部分完成（事件驱动的 lastResultVersion）与缓存清理后调用。
+ */
+async function restoreTranslations(generation: number, force = false): Promise<void> {
+  const cacheVersion = cacheGeneration;
+  try {
+    const result = await translationStore.result(props.id, force);
+    if (generation === translationGeneration && cacheVersion === cacheGeneration) applyResult(result);
+  } catch (err) {
+    if (generation === translationGeneration && cacheVersion === cacheGeneration) {
+      translationError.value = errorMessage(err);
+    }
   }
 }
 
-async function translatePage(): Promise<void> {
-  if (activeTranslation.value || !hasContent.value) return;
+/** 启动请求在途：浮层据此禁用重复点击（store.start 返回后复位）。 */
+const translationStarting = ref(false);
+
+/** 启动 / 重新翻译整篇：整篇原文一次提交，后端合并重复启动并回传既有 Job。 */
+async function startWhole(force: boolean): Promise<void> {
+  if (!hasContent.value || translationStarting.value) return;
   const generation = translationGeneration;
-  const cacheVersion = cacheGeneration;
-  const targetPage = page.value;
+  translationStarting.value = true;
   translationError.value = "";
   try {
-    // 本页已提示「无需翻译」时再次点击即强制翻译，避免语言判定误判后无法覆盖。
-    const force = Boolean(translations.value[targetPage]) || Boolean(skippedPages.value[targetPage]);
-    // 任务交全局 translation store：由 store 持有 invoke 与计时器，离开页面不中断，
-    // progress 事件驱动浮窗进度区；失败由 store 记录后原样 rethrow，页内 catch 照旧展示。
-    const result = await translationStore.begin(translationInput.value, item.value?.title ?? "", targetPage, force);
-    if (generation === translationGeneration && cacheVersion === cacheGeneration) {
-      applyTranslationResult(result, targetPage);
+    const outcome = await translationStore.start(translationInput.value, force);
+    if (generation !== translationGeneration) return;
+    if (outcome.status === "already_target_language") {
+      skippedTarget.value = outcome.targetLanguage;
+      publishStatus.value = null;
+      publishUnresolved.value = 0;
+      translations.value = {};
+      return;
+    }
+    skippedTarget.value = "";
+    // 加入既有已完成 Job 时不会再有完成事件：立即刷新一次投影结果。
+    const job = outcome.job;
+    if (job && (job.state === "completed" || job.state === "needs_attention")) {
+      await restoreTranslations(generation, true);
     }
   } catch (err) {
-    if (generation === translationGeneration && cacheVersion === cacheGeneration) {
-      translationError.value = errorMessage(err);
-      translationErrorPage.value = targetPage;
-    }
+    if (generation === translationGeneration) translationError.value = errorMessage(err);
   } finally {
-    // 进行中状态由 store.active 驱动（finally 无需页内清理）；错误已由 store 跨页记录。
-  }
-}
-
-async function restoreTranslations(generation: number): Promise<void> {
-  const cacheVersion = cacheGeneration;
-  try {
-    const book = await getNovelTranslation(translationInput.value);
-    if (generation === translationGeneration && cacheVersion === cacheGeneration) translations.value = { ...book.pages, ...translations.value };
-  } catch (err) {
-    if (generation === translationGeneration && cacheVersion === cacheGeneration) {
-      translationError.value = errorMessage(err);
-      translationErrorPage.value = page.value;
-    }
+    translationStarting.value = false;
   }
 }
 
 function onTranslationCacheCleared(): void {
   cacheGeneration++;
   translations.value = {};
-  skippedPages.value = {};
+  skippedTarget.value = "";
   translationError.value = "";
+  publishStatus.value = null;
+  publishUnresolved.value = 0;
 }
-// 跨页完成同步：翻译在后台跑完时 store 追加完成快照（多小说并行，每本各自一条），
-// 本页 watch 到属于本小说的新快照就把译文应用进页内状态——修复「离开页面后翻译完成、
-// 返回正文不刷新」。immediate 覆盖「返回前一刻刚好完成」：挂载即消费一次已有结果。
-const appliedDones = new WeakSet<object>();
+// 整篇任务完成 / 部分完成（事件驱动，只在该信号变化时拉一次结果，不逐帧轮询）。
 watch(
-  () => translationStore.dones,
-  (dones) => {
-    for (const done of dones) {
-      if (done.novelId !== props.id || appliedDones.has(done)) continue;
-      appliedDones.add(done);
-      applyTranslationResult({ status: done.status, lines: done.lines, target_language: done.target_language }, done.page);
-    }
-  },
-  { immediate: true }
+  [() => translationStore.lastResultVersion, () => translationStore.lastResultNovelId],
+  () => {
+    if (translationStore.lastResultNovelId !== props.id) return;
+    void restoreTranslations(translationGeneration);
+  }
 );
 
 onMounted(() => {
@@ -247,8 +268,10 @@ const metaText = computed(() => {
 async function load(): Promise<void> {
   const generation = ++translationGeneration;
   translations.value = {};
-  skippedPages.value = {};
+  skippedTarget.value = "";
   translationError.value = "";
+  publishStatus.value = null;
+  publishUnresolved.value = 0;
   translationMode.value = "bilingual";
   loading.value = true;
   error.value = "";
@@ -265,14 +288,12 @@ async function load(): Promise<void> {
     if (data.detail_kind !== "novel") throw new Error("unexpected detail kind");
     detail.value = data;
     bookmarkState.value = data.bookmarkState ?? null;
-    void restoreTranslations(generation);
-    // 翻译失败记录由 store 跨页保留（退出页面不再被吞）：只消费当前页匹配的记录，
-    // 翻页导致的页不匹配保留现场，留给用户回到目标页时展示。
-    const failed = translationStore.consumeError(props.id, page.value);
-    if (failed) {
-      translationError.value = failed;
-      translationErrorPage.value = page.value;
-    }
+    // 先确保全局监听就绪（快照 + 订阅），再拉一次投影结果；任务在后台完成时由事件刷新。
+    translationStore.registerTitle(props.id, data.item.title);
+    void translationStore.ensureListening().then(() => restoreTranslations(generation, true));
+    // 翻译失败记录由 store 跨页保留：进入小说即消费该小说的记录并展示，翻页不丢。
+    const failed = translationStore.consumeError(props.id);
+    if (failed) translationError.value = failed;
     // 加载成功后上报浏览历史（失败静默）
     void browseHistoryRecord({
       workId: data.item.id,
@@ -657,14 +678,17 @@ function openInPixiv(): void {
           <NovelBgPicker :model-value="readBg" @update:model-value="setReadBg" />
           <NovelTranslationMenu
             v-model="translationMode"
+            :job="novelJob"
             :status="translationStatus"
-            :error="Boolean(!activeTranslation && translationErrorPage === page && translationError)"
-            :busy="Boolean(activeTranslation)"
+            :error="Boolean(translationError)"
             :disabled="loading"
-            :translated="currentTranslation.length > 0"
-            :skipped="Boolean(currentSkipped)"
-            :active="activeTranslation"
-            @translate="translatePage"
+            :translated="hasTranslations"
+            :skipped="Boolean(skippedTarget)"
+            :pages="totalPages"
+            :starting="translationStarting"
+            :result-status="publishStatus"
+            :result-unresolved="publishUnresolved"
+            @start="startWhole"
           />
         </div>
       </template>

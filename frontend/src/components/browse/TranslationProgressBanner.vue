@@ -1,93 +1,125 @@
 <script setup lang="ts">
+/**
+ * 浮层「状态」tab 的进度区（整篇 Job 版）。
+ *
+ * 数据全部来自 store 的 Job 快照：阶段、计数、当前页/块、实时预览、已用与用量。
+ * 进度条在块数未知（prepare_source）时保持 indeterminate；终态按计数收敛。
+ * 本区整体不进 aria-live——状态摘要由浮层头部唯一播报，避免逐帧刷屏。
+ */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import type { TranslationActive } from "../../stores/translation";
+import { isActiveJobState, type TranslationJobSnapshot } from "../../api/translation";
+import { useTranslationStore } from "../../stores/translation";
 
-const props = defineProps<{ active: TranslationActive }>();
+const props = defineProps<{ job: TranslationJobSnapshot }>();
 const { t } = useI18n();
+const store = useTranslationStore();
 
-/** 阶段文案：queued 排队等待 / prepare 整理设定集（Pass 1）/ translate 翻译正文（Pass 2）。 */
-const phaseText = computed(() => {
-  switch (props.active.phase) {
-    case "queued":
-      return t("translation.progressQueued");
-    case "prepare":
-      return t("translation.progressPrepare");
-    default:
-      return t("translation.progressTranslate");
-  }
+/** 阶段文案（prepare_source … publish）。 */
+const phaseText = computed(() => t(`translation.job.phase.${props.job.phase}`));
+
+/** 计数：已译 / 已审 / 待修 / 总块；块数未知时只显示页数。 */
+const countsText = computed(() => {
+  const { chunks, translated, reviewed, needs_repair: repair } = props.job.counts;
+  if (chunks <= 0) return t("translation.job.countsPending");
+  return t("translation.job.counts", { translated, reviewed, repair, chunks });
 });
 
-/** 已用时间：分′秒″（1′42″），秒补零；时钟回拨不出现负值。 */
+/** 进度比例（0~1）：块数未知为 0；终态完成按 1 收敛。 */
+const progress = computed(() => {
+  const { chunks, translated } = props.job.counts;
+  if (chunks <= 0) return 0;
+  if (props.job.state === "completed") return 1;
+  return Math.min(1, Math.max(0, translated / chunks));
+});
+
+/** 块数未知且任务仍活跃时用不定进度条（准备原文阶段）。 */
+const indeterminate = computed(() => isActiveJobState(props.job.state) && props.job.counts.chunks <= 0);
+
+/** 当前工作位置：有页码才渲染（准备阶段可能只有块或为空）。 */
+const currentText = computed(() => {
+  const current = props.job.current;
+  if (!current || (current.page == null && !current.chunk_id)) return "";
+  if (current.page != null && current.chunk_id) return t("translation.job.currentBoth", { page: current.page, chunk: current.chunk_id });
+  if (current.page != null) return t("translation.job.currentPage", { page: current.page });
+  return t("translation.job.currentChunk", { chunk: current.chunk_id ?? "" });
+});
+
+/** 已用时间：m′ss″；活跃任务每秒自走。 */
 const elapsedText = computed(() => {
-  const total = Math.max(0, Math.floor(props.active.elapsed / 1000));
+  const total = Math.max(0, Math.floor(store.elapsedFor(props.job) / 1000));
   return `${Math.floor(total / 60)}′${String(total % 60).padStart(2, "0")}″`;
 });
 
-/** 已接收体积：≥1024 转 KB（一位小数），否则按 B 取整。 */
-const receivedText = computed(() => {
-  const bytes = Math.max(0, props.active.received);
-  return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${Math.round(bytes)} B`;
+const usageText = computed(() => {
+  const total = props.job.usage?.total ?? 0;
+  return total > 0 ? t("translation.job.usage", { tokens: total.toLocaleString() }) : "";
 });
 
-/** 摘要行：有流式摘要显示摘要（Pass 1 为设定集字段值、Pass 2 为译文行）；取不到时降级显示后台安抚文案。 */
-const summaryLine = computed(() => props.active.summary || t("translation.progressBackgroundHint"));
+/** 预览文本：正文摘要优先，否则思考尾窗；都按 60 字符截断。 */
+function clip(text: string): string {
+  const value = text.trim();
+  return value.length > 60 ? `${value.slice(0, 60)}…` : value;
+}
+const summaryLine = computed(() => clip(props.job.preview?.summary ?? ""));
+const reasoningLine = computed(() => (summaryLine.value ? "" : clip(props.job.preview?.reasoning ?? "")));
+const previewLine = computed(() => summaryLine.value || reasoningLine.value);
 
-// ===== 摘要 marquee：仅单行溢出时滚动 =====
+// ===== 摘要 marquee：仅单行溢出时滚动（思考态静态省略） =====
 
-/** clip 盒（<code>）：clientWidth 即浮窗内容区可用宽度，溢出内容由其裁掉。 */
 const summaryEl = ref<HTMLElement | null>(null);
-/** 首份摘要文本：offsetWidth 即摘要自然宽度，与 clip 盒宽度比较判定是否溢出。 */
 const textEl = ref<HTMLElement | null>(null);
 const overflow = ref(false);
 
-function measureOverflow() {
+function measureOverflow(): void {
   const box = summaryEl.value;
   const text = textEl.value;
   if (!box || !text) return;
   overflow.value = text.offsetWidth > box.clientWidth;
 }
 
-// 摘要文案逐行刷新、面板宽度变化（窗口 resize / 窄窗 max-width）或减少动态效果偏好切换后重新判定。
-function onResize() { measureOverflow(); }
 const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
-function onMotionChange() { void nextTick(measureOverflow); }
-
-watch(summaryLine, () => void nextTick(measureOverflow));
+function onMotionChange(): void { void nextTick(measureOverflow); }
+watch(previewLine, () => void nextTick(measureOverflow));
 onMounted(() => {
   measureOverflow();
-  window.addEventListener("resize", onResize);
+  window.addEventListener("resize", measureOverflow);
   motionQuery.addEventListener("change", onMotionChange);
 });
 onBeforeUnmount(() => {
-  window.removeEventListener("resize", onResize);
+  window.removeEventListener("resize", measureOverflow);
   motionQuery.removeEventListener("change", onMotionChange);
 });
 </script>
 
 <template>
-  <!-- 浮窗内嵌紧凑进度区（NovelTranslationMenu 状态行下方、模式组上方）：不定进度条 + 阶段/已用/已接收 + 一行流式摘要。
-       无自有容器边框/背景/内外边距——浮窗自身即 surface-container；播报由浮窗状态行负责，本区整体不进 aria-live。 -->
   <div class="translation-progress">
-    <md-linear-progress class="progress-bar" :indeterminate="true" aria-hidden="true" />
-    <!-- meta 行：阶段 + 已用 + 已接收，12px ink-muted；窄窗允许换行，不横向溢出 -->
+    <md-linear-progress
+      class="progress-bar"
+      :value="indeterminate ? 0 : progress"
+      :indeterminate="indeterminate"
+      aria-hidden="true"
+    />
     <div class="progress-meta">
       <span class="progress-phase">{{ phaseText }}</span>
       <span class="progress-sep" aria-hidden="true">·</span>
-      <span class="progress-elapsed">{{ t("translation.progressElapsed", { time: elapsedText }) }}</span>
-      <span class="progress-sep" aria-hidden="true">·</span>
-      <span class="progress-received">{{ t("translation.progressReceived", { size: receivedText }) }}</span>
+      <span class="progress-counts">{{ countsText }}</span>
     </div>
-    <!-- 预览行（思考与摘要共用同一行位置）：思考期显示思考尾窗（ink-subtle，静态 ellipsis——
-         思考逐帧刷新，滚动动画会被不断重置反而抖动）；正文摘要一旦到达即取代思考的显示位置
-         （ink-muted，溢出走马灯），思考的最后一句不驻留。两态整行 aria-hidden，全文经 title 悬停查看 -->
+    <div class="progress-meta">
+      <span class="progress-elapsed">{{ t("translation.job.elapsed", { time: elapsedText }) }}</span>
+      <template v-if="usageText">
+        <span class="progress-sep" aria-hidden="true">·</span>
+        <span class="progress-usage">{{ usageText }}</span>
+      </template>
+    </div>
+    <span v-if="currentText" class="progress-current">{{ currentText }}</span>
     <code
-      v-if="active.reasoning && !active.summary"
+      v-if="reasoningLine"
       class="progress-reasoning"
       aria-hidden="true"
-      :title="active.reasoning"
+      :title="reasoningLine"
     >
-      <span class="progress-reasoning-label">{{ t("translation.progressReasoning") }}</span>{{ active.reasoning }}
+      <span class="progress-reasoning-label">{{ t("translation.progressReasoning") }}</span>{{ reasoningLine }}
     </code>
     <code
       v-else
@@ -95,22 +127,22 @@ onBeforeUnmount(() => {
       class="progress-summary"
       :class="{ 'is-overflow': overflow }"
       aria-hidden="true"
-      :title="summaryLine"
+      :title="previewLine"
     >
       <span class="progress-summary-track">
-        <span ref="textEl" class="progress-summary-text">{{ summaryLine }}</span>
-        <span v-if="overflow" class="progress-summary-text progress-summary-clone" aria-hidden="true">{{ summaryLine }}</span>
+        <span ref="textEl" class="progress-summary-text">{{ previewLine || t("translation.progressBackgroundHint") }}</span>
+        <span v-if="overflow" class="progress-summary-text progress-summary-clone" aria-hidden="true">{{ previewLine }}</span>
       </span>
     </code>
   </div>
 </template>
 
 <style scoped>
-/* 内嵌进度区：只管排布与间距，无容器边框/背景/内外边距（浮窗自身即 surface-container + 合法轻阴影） */
+/* 只管排布与间距，无容器边框 / 背景 / 内外边距（浮窗自身即 surface-container） */
 .translation-progress {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: var(--space-xs);
   min-width: 0;
 }
 
@@ -118,7 +150,6 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 
-/* meta 行：12px ink-muted，窄窗换行不溢出 */
 .progress-meta {
   display: flex;
   flex-wrap: wrap;
@@ -129,8 +160,13 @@ onBeforeUnmount(() => {
   line-height: 1.5;
 }
 
-/* 思考行：12px ink-subtle（比摘要行的 ink-muted 弱一档），「思考」前缀加重；
-   单行静态 ellipsis——思考逐帧刷新，marquee 的循环动画会被不断重置反而抖动 */
+.progress-current {
+  color: var(--ink-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .progress-reasoning {
   display: block;
   min-width: 0;
@@ -143,15 +179,14 @@ onBeforeUnmount(() => {
 }
 
 .progress-reasoning-label {
-  font-weight: 600;
   margin-right: var(--space-xs);
+  font-weight: 600;
 }
 
 .progress-sep {
   color: var(--ink-subtle);
 }
 
-/* 摘要行：clip 盒，单行 nowrap；静态态（未溢出 / reduced-motion）由 ellipsis 收尾 */
 .progress-summary {
   display: block;
   min-width: 0;
@@ -163,7 +198,6 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
-/* 轨道：首份 + 溢出时的克隆份等宽并排，flex gap 即循环间隔；溢出时整体左移一份实现无缝循环 */
 .progress-summary-track {
   display: flex;
   width: max-content;
@@ -184,7 +218,6 @@ onBeforeUnmount(() => {
   to { transform: translateX(calc(-50% - var(--space-xl) / 2)); }
 }
 
-/* reduced-motion：停止滚动，克隆份退场，单份静态 ellipsis */
 @media (prefers-reduced-motion: reduce) {
   .progress-summary-track { display: block; width: auto; animation: none; }
   .progress-summary-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
