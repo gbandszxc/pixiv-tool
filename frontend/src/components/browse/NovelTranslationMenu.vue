@@ -104,6 +104,13 @@ const startLabel = computed(() => {
 });
 /** 只在可发起任务时显示「开始 / 重新翻译」；活跃任务只显示暂停、继续、取消。 */
 const showStart = computed(() => canStart.value && (startable.value || props.skipped));
+/** 错误码只对需要处理/失败的任务有意义；完成态残留的旧错误码不展示。 */
+const errorCode = computed(() => {
+  const current = job.value;
+  if (!current?.error_code) return "";
+  return current.state === "needs_attention" || current.state === "interrupted" ? current.error_code : "";
+});
+
 const partialNotice = computed(() => {
   if (props.resultStatus === "complete") return "";
   if (props.resultStatus === "partial") return t("translation.job.partial", { count: props.resultUnresolved });
@@ -392,17 +399,27 @@ watch(awaiting, (value) => {
 function close(): void { open.value = false; }
 
 /**
- * 左缘钳制：384px 浮窗右缘对齐触发器，左缘可能伸进侧栏区；打开与窗口变化时把浮窗整体右推。
- * 层级上浮窗 z-index 恒高于侧栏，此处只解决横跨边界的视觉错误。
+ * 视口内钳制：默认右缘对齐触发器，窄窗或触发器靠左时改为显式左边界，
+ * 始终留在侧栏右侧与视口内（上一步的内联值先清掉，避免多次打开累积偏移）。
  */
 function clampPanel(): void {
   const el = panel.value;
   if (!el) return;
+  el.style.left = "";
+  el.style.right = "";
   const gap = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--space-sm")) || 8;
-  const sidebar = document.querySelector(".sidebar");
-  const minLeft = (sidebar?.getBoundingClientRect().right ?? 0) + gap;
   const rect = el.getBoundingClientRect();
-  el.style.right = rect.left < minLeft ? `${Math.round(rect.left - minLeft)}px` : "";
+  const width = rect.width;
+  const viewport = document.documentElement.clientWidth || window.innerWidth;
+  const sidebar = document.querySelector(".sidebar");
+  const minLeft = Math.max(gap, (sidebar?.getBoundingClientRect().right ?? 0) + gap);
+  const maxLeft = Math.max(minLeft, viewport - width - gap);
+  const target = Math.min(Math.max(rect.left, minLeft), maxLeft);
+  if (Math.abs(target - rect.left) < 0.5) return;
+  const parent = el.offsetParent as HTMLElement | null;
+  const baseLeft = parent?.getBoundingClientRect().left ?? 0;
+  el.style.left = `${Math.round(target - baseLeft)}px`;
+  el.style.right = "auto";
 }
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape" && !document.querySelector("dialog[open]")) close();
@@ -413,6 +430,7 @@ watch(open, (value) => {
     window.addEventListener("resize", clampPanel);
     activateTab(tab.value);
     void nextTick(() => {
+      void document.fonts?.ready.then(() => clampPanel());
       clampPanel();
       panel.value?.focus();
     });
@@ -492,7 +510,7 @@ onBeforeUnmount(() => {
           <TranslationProgressBanner v-if="job" :job="job" />
           <p v-else class="panel-empty">{{ t('translation.job.notStarted') }}</p>
           <p v-if="partialNotice" class="panel-notice">{{ partialNotice }}</p>
-          <p v-if="job?.error_code" class="panel-error-code">{{ t('translation.job.errorCode', { code: job.error_code }) }}</p>
+          <p v-if="errorCode" class="panel-error-code">{{ t('translation.job.errorCode', { code: errorCode }) }}</p>
           <p v-if="actionError" class="panel-error" role="alert">{{ actionError }}</p>
         </section>
 

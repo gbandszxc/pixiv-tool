@@ -64,6 +64,10 @@ function clip(text: string): string {
 const summaryLine = computed(() => clip(props.job.preview?.summary ?? ""));
 const reasoningLine = computed(() => (summaryLine.value ? "" : clip(props.job.preview?.reasoning ?? "")));
 const previewLine = computed(() => summaryLine.value || reasoningLine.value);
+/** 「后台继续」只属于仍在推进的任务；完成/暂停/失败不应显示这句提示。 */
+const backgroundHint = computed(() =>
+  !previewLine.value && isActiveJobState(props.job.state) ? t("translation.progressBackgroundHint") : "",
+);
 
 // ===== 摘要 marquee：仅单行溢出时滚动（思考态静态省略） =====
 
@@ -130,7 +134,7 @@ onBeforeUnmount(() => {
       :title="previewLine"
     >
       <span class="progress-summary-track">
-        <span ref="textEl" class="progress-summary-text">{{ previewLine || t("translation.progressBackgroundHint") }}</span>
+        <span ref="textEl" class="progress-summary-text">{{ previewLine || backgroundHint }}</span>
         <span v-if="overflow" class="progress-summary-text progress-summary-clone" aria-hidden="true">{{ previewLine }}</span>
       </span>
     </code>

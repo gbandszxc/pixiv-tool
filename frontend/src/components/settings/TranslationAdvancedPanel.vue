@@ -144,7 +144,7 @@ const categoryHintKey = (category: TranslationAgentCategory) => `translation.age
 
 <template>
   <div id="translation-advanced-page" class="translation-advanced">
-    <div class="advanced-head">
+    <div v-if="!openCategory" class="advanced-head">
       <md-text-button class="advanced-back advanced-back-service" @click="backToService">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
         {{ t("translation.agent.backToService") }}
