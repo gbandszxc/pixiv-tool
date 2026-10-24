@@ -207,8 +207,12 @@ export const useTranslationStore = defineStore("translation", () => {
     applySnapshot(snapshotFromEvent(event, existing));
   }
 
-  /** 拉全量快照（首次订阅前 / 重新可见 / 手动刷新）。 */
-  async function refreshJobs(): Promise<void> {
+  /**
+   * 拉全量快照（重新可见 / 手动刷新）。
+   * `startedAt` 之前就收到的 Job 才允许被列表判定为已删除，避免刷新期间刚由事件
+   * 建立的任务被一次旧列表误删。
+   */
+  async function refreshJobs(startedAt = 0): Promise<void> {
     const list = await listTranslationJobs();
     const seen = new Set<string>();
     for (const job of list.jobs) {
@@ -216,14 +220,14 @@ export const useTranslationStore = defineStore("translation", () => {
       applySnapshot(job);
     }
     for (const jobId of [...jobs.value.keys()]) {
-      if (!seen.has(jobId)) {
+      if (!seen.has(jobId) && (receivedAt.get(jobId) ?? 0) < startedAt) {
         jobs.value.delete(jobId);
         seqByJob.delete(jobId);
         receivedAt.delete(jobId);
       }
     }
     for (const [novelId, jobId] of [...activeByNovel.value.entries()]) {
-      if (!seen.has(jobId)) activeByNovel.value.delete(novelId);
+      if (!jobs.value.has(jobId)) activeByNovel.value.delete(novelId);
     }
   }
 
@@ -258,17 +262,22 @@ export const useTranslationStore = defineStore("translation", () => {
     await refreshJobs().catch(() => {});
   }
 
-  /** 全局单例初始化（幂等）：先快照、再订阅，最后挂缓存清理与重连钩子。 */
+  /**
+   * 全局单例初始化（幂等）：先订阅、再取快照，最后挂缓存清理与重连钩子。
+   * 订阅在前可避免「读完快照到建立订阅」之间的空窗丢事件；快照落后于已应用
+   * 事件时由 `applySnapshot` 的 seq 保护拒绝回退。
+   */
   function ensureListening(): Promise<void> {
     if (started) return started;
     started = (async () => {
-      await refreshJobs().catch(() => {});
       try {
         unlisten = await subscribeTranslationJob(ingest);
       } catch {
         // 事件不可用（如测试环境缺少 event plugin）：退化为快照 + 手动刷新。
         unlisten = null;
       }
+      const startedAt = Date.now();
+      await refreshJobs(startedAt).catch(() => {});
       if (typeof window !== "undefined" && !cacheClearBound) {
         cacheClearBound = true;
         window.addEventListener("pixiv-tool:translation-cache-cleared", reset);
