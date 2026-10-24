@@ -2,6 +2,8 @@
 
 > 2026-08-20 随 ADR 0008 全量重构更新：PyInstaller 流程已随 Python 栈移除，
 > 本文为现行 Tauri bundler 打包指引。旧 PyInstaller 历史见 git log。
+> 2026-10-25：构建基线固定 Rust 1.99.1，补充 Rig 0.45 依赖与内置 Agent 资源的
+> 编译嵌入说明（ADR 0034）。
 
 ## 1. 构建命令
 ### 根目录开发脚本
@@ -63,14 +65,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\dev.ps1 -h
 ```
 
 对应 Bash 调用只需替换前缀，例如 `bash ./dev.sh build debug`。
-Windows 的 PowerShell 入口自动使用 MSVC Rust stable 工具链、Visual Studio
-2022 C++ 环境与 `Visual Studio 17 2022` CMake generator；Git Bash 入口委托
-同目录 `dev.ps1`，保持完全相同的工具链初始化行为。须提前安装工具链；
-脚本不会下载 Rust / Visual Studio / LLVM。LLVM 自动查找 Scoop 的
+Windows 的 PowerShell 入口自动使用 `1.99.1-x86_64-pc-windows-msvc` 工具链、
+Visual Studio 2022 C++ 环境与 `Visual Studio 17 2022` CMake generator；Git Bash
+入口委托同目录 `dev.ps1`，保持完全相同的工具链初始化行为。版本由仓库根
+`rust-toolchain.toml` 固定，脚本不跟随 `stable` 漂移。须提前安装工具链；
+Windows 执行 `rustup toolchain install 1.99.1-x86_64-pc-windows-msvc`，其他平台
+执行 `rustup toolchain install 1.99.1`。脚本不会下载 Rust / Visual Studio / LLVM。LLVM 自动查找 Scoop 的
 `~/scoop/apps/llvm/current/bin` 与 `%ProgramFiles%/LLVM/bin`，可通过
 `LIBCLANG_PATH` 指定其他目录；`VSINSTALLDIR` 可覆盖 VS 2022 的自动发现。
-macOS / Linux 直接使用当前 cargo 工具链与环境，服务管理另需 `lsof`，
-系统依赖仍按下文安装。Unix 操作以 `.dev/pids/operation.lock` 目录串行化；
+macOS / Linux 由 `dev.sh` 固定 `RUSTUP_TOOLCHAIN=1.99.1` 并使用当前环境，
+服务管理另需 `lsof`，系统依赖仍按下文安装。Unix 操作以 `.dev/pids/operation.lock` 目录串行化；
 若控制进程被强杀，确认无启动/停止操作正在执行后可删除该空锁目录再试。
 
 ### 直接调用 CLI
@@ -99,17 +103,19 @@ Windows、deb/rpm/appimage on Linux——`tauri.conf.json` 的 `targets` 为 `al
 | Windows | MSVC Build Tools、WebView2 SDK（一般随系统）、cmake、**LLVM/libclang**（`winget install LLVM.LLVM`） |
 | Linux | webkit2gtk-4.1、cmake、gcc/g++、libclang-dev |
 
-Rust ≥ 1.88（edition 2024）。首次构建约 5–15 分钟（BoringSSL 现场编译 +
-bindgen），增量秒级。
+Rust 固定 **1.99.1**（edition 2024），由仓库根 `rust-toolchain.toml` 固定；发版
+CI 使用 `dtolnay/rust-toolchain@1.99.1`。Rig 0.45 不额外要求 TLS 工具链，构建
+前置条件仍由 wreq 的 cmake + LLVM/libclang 决定。首次构建约 5–15 分钟
+（BoringSSL 现场编译 + bindgen），增量秒级。
 
 ### Windows 工具链标准（本机实测，2026-10-01）
 
-默认 `stable-x86_64-pc-windows-gnu` 的 cdylib 链接超 mingw ld 65535 导出上限
+默认的 `x86_64-pc-windows-gnu` 工具链在 cdylib 链接时超 mingw ld 65535 导出上限
 （"export ordinal too large"，debug/release 均复现），**统一改用 MSVC 工具链**。
 所有 cargo 命令（dev/test/build）前设置：
 
 ```bash
-export RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc
+export RUSTUP_TOOLCHAIN=1.99.1-x86_64-pc-windows-msvc
 export LIBCLANG_PATH="<LLVM 安装路径>\bin"        # 例（scoop）：C:\Users\<用户名>\scoop\apps\llvm\current\bin
 export CMAKE_GENERATOR="Visual Studio 17 2022"    # 避免 MSYS Makefiles 误选
 ```
@@ -123,7 +129,9 @@ Git Bash 里 tauri CLI 用 frontend 的本地依赖：`./frontend/node_modules/.
 - **Vite 6.4.3+**，配合 `@vitejs/plugin-vue` 5.2.4：旧 Vite 5 无修复
   Windows 路径绕过与 UNC/NTLM 泄露的补丁版本。只升级构建工具，不改变
   Vue、Material Web 与 IPC 架构；`pnpm-lock.yaml` 同时收敛传递依赖安全补丁。
-- **Rust 1.88+**：`time` 0.3.47 与 `serde_with` 3.21 安全补丁要求，见 ADR 0019。
+- **Rust 1.99.1**：`rust-toolchain.toml`、`Cargo.toml` 的 `rust-version` 与发版
+  CI 同批固定，不跟随 `stable` 漂移。ADR 0019 的 Vite / Rust 传递依赖安全补丁
+  理由继续有效；1.99.1 基线及 Rig 集成边界见 ADR 0034。
   wreq 指纹锁定保持不变；GTK/WebKit 等不能兼容升级的传递依赖须记录
   上游限制与真实可达性，不能用添加另一版本依赖来掩盖旧版本告警。
 - **Tauri CSP** 已启用：生产脚本仅允许应用自身资源，Tauri 负责 IPC 初始化
@@ -138,6 +146,15 @@ Git Bash 里 tauri CLI 用 frontend 的本地依赖：`./frontend/node_modules/.
 - **wreq = 6.0.0-rc.31 / wreq-util = 3.0.0-rc.14**：指纹伪装库，锁定版本。
   wreq-util **必须 ≥ 3.0.0-rc.12**（Apache-2.0；更早版本 GPL-3.0 传染）。
   升级前需重新 spike 验证 pixiv 风控通过性（ADR 0008）。
+- **Rig 0.45.0（精确锁定）**：`rig-core` / `rig-agent` / `rig-memory` 均锁
+  `=0.45.0` 且 `default-features = false`。不启用 server / MCP / vector /
+  embeddings / image / audio / pdf，也不新增 reqwest / rustls 传输路径；模型
+  请求统一经自定义 wreq `HttpClientExt`，保留系统代理、单请求超时、禁重定向、
+  opencode 会话头与错误脱敏（ADR 0034）。
+- **内置 Agent 资源**：`src-tauri/resources/agent/**` 经 `include_str!` 编译
+  嵌入（`src-tauri/src/agent/resources.rs`），没有运行时资源目录、额外安装
+  步骤或 Tauri bundler `resources` 声明；修改资源后必须重新构建。资源 ID、
+  版本 hash 与升级规则见 `src-tauri/resources/agent/README.md`。
 - keyring 3 已显式开平台 features（apple-native / windows-native /
   linux-native-sync-persistent），无默认后端的平台不会静默落内存存储。
 
@@ -168,7 +185,9 @@ Linux Secret Service（service `pixiv-tool.cookies`，account `default`）。
 ## 6. 发布方式（GitHub Actions 发版 CI）
 
 GitHub 托管，发版走 `release` 工作流（`.github/workflows/release.yml`，2026-10-01
-随迁移 GitHub 重新引入；此前的 GitCode 本地打包时代结束）：
+随迁移 GitHub 重新引入；此前的 GitCode 本地打包时代结束）。工作流固定
+`dtolnay/rust-toolchain@1.99.1`，与仓库根 `rust-toolchain.toml`、`Cargo.toml`
+的 `rust-version` 同批升级；不改用 `stable` 标签：
 
 1. 仓库 **Actions → Release → Run workflow** 手动触发，输入版本号（semver，
    格式非法会在构建前置校验阶段直接失败）
