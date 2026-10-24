@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
+import { scrollContentToTop } from "../../utils/scroll";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -48,7 +49,7 @@ onMounted(() => {
 });
 
 function scrollToTop(): void {
-  window.scrollTo({ top: 0 });
+  scrollContentToTop();
 }
 
 function onKindChange(value: string): void {
@@ -75,28 +76,30 @@ function goWork(item: BrowseWorkItem): void {
 
 <template>
   <div class="page-view">
-    <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.following") }}</h1></div>
-      <ListRefreshButton :busy="loading || loadingMore" @refresh="list.reload" />
-    </div>
-    <BrowseNavigation />
-
-    <div class="feed-controls">
-      <div
-        class="control-row"
-        role="group"
-        :aria-label="t('browse.feed.kindLabel')"
-      >
-        <span class="control-label">{{ t("browse.feed.kindLabel") }}</span>
-        <SectionTabs :tabs="kindTabs" :value="kind" @change="onKindChange" />
+    <div class="app-page-head">
+      <div class="browse-list-header">
+        <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.following") }}</h1></div>
+        <ListRefreshButton :busy="loading || loadingMore" @refresh="list.reload" />
       </div>
-      <div
-        class="control-row"
-        role="group"
-        :aria-label="t('browse.feed.scopeLabel')"
-      >
-        <span class="control-label">{{ t("browse.feed.scopeLabel") }}</span>
-        <SectionTabs :tabs="modeTabs" :value="mode" @change="onModeChange" />
+      <BrowseNavigation />
+
+      <div class="feed-controls">
+        <div
+          class="control-row"
+          role="group"
+          :aria-label="t('browse.feed.kindLabel')"
+        >
+          <span class="control-label">{{ t("browse.feed.kindLabel") }}</span>
+          <SectionTabs :tabs="kindTabs" :value="kind" @change="onKindChange" />
+        </div>
+        <div
+          class="control-row"
+          role="group"
+          :aria-label="t('browse.feed.scopeLabel')"
+        >
+          <span class="control-label">{{ t("browse.feed.scopeLabel") }}</span>
+          <SectionTabs :tabs="modeTabs" :value="mode" @change="onModeChange" />
+        </div>
       </div>
     </div>
 

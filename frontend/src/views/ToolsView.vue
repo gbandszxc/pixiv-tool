@@ -1,17 +1,21 @@
 <template>
   <div class="page-view tools-view">
-    <div class="page-heading tools-header">
-      <PageBackButton />
-      <h1 class="page-title">{{ t('workspace.downloads') }}</h1>
-      <md-filled-button @click="panel.open()">{{ t('workspace.newDownload') }}</md-filled-button>
+    <div class="app-page-head">
+      <div class="page-heading tools-header">
+        <PageBackButton />
+        <h1 class="page-title">{{ t('workspace.downloads') }}</h1>
+        <md-filled-button @click="panel.open()">{{ t('workspace.newDownload') }}</md-filled-button>
+      </div>
+      <div class="tools-navigation"><SectionTabs class="tools-tabs" :tabs="tabs" :value="route.path" @change="onTabChange" /></div>
     </div>
-    <div class="tools-navigation"><SectionTabs class="tools-tabs" :tabs="tabs" :value="route.path" @change="onTabChange" /></div>
     <div class="tools-body"><router-view /></div>
   </div>
 </template>
 
 <script setup lang="ts">
-/** 下载页：任务 / 下载历史沿子路由导航，新建下载打开非模态表单。 */
+/** 下载页：任务 / 下载历史沿子路由导航，新建下载打开非模态表单。
+ * 页头吸顶；子页面的工具行（分类 / 批量操作）以 `.app-page-head.is-sub` 再吸附在页头下沿，
+ * 偏移与页内定位余量由 App.vue 统一实测写入滚动容器的 --app-head-h。 */
 import { computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import HelpTooltip from "../../components/common/HelpTooltip.vue";
+import { scrollContentToTop } from "../../utils/scroll";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -179,7 +180,7 @@ async function load(): Promise<void> {
 
 /** 整页替换后的收尾：回页首；处于计数排序时为新页补取计数。 */
 function afterLoad(): void {
-  window.scrollTo({ top: 0 });
+  scrollContentToTop();
   if (sortKey.value) void ensureCounts();
 }
 
@@ -446,76 +447,78 @@ const typeTabs = computed(() => [
 
 <template>
   <div class="page-view">
-    <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseSearch") }}</h1></div>
-      <md-text-button @click="router.push('/saucenao')">{{ t('nav.saucenao') }}</md-text-button>
-      <ListRefreshButton :busy="loading" :disabled="!word.trim()" @refresh="runSearch(sigOf(currentParams()))" />
-    </div>
-
-    <!-- 搜索工具行：大而醒目的输入框 + 搜索按钮 -->
-    <div class="tool-row">
-      <md-outlined-text-field
-        class="search-field"
-        :value="word"
-        :placeholder="t('browse.search.placeholder')"
-        :aria-label="t('nav.browseSearch')"
-        @input="word = ($event.target as HTMLInputElement).value"
-        @keydown.enter="doSearch"
-      />
-      <md-filled-button class="search-btn" @click="doSearch">
-        {{ t("common.search") }}
-      </md-filled-button>
-      <HelpTooltip :label="t('common.search')" :text="t('browse.search.help')" />
-    </div>
-
-    <!-- 过滤行：类型 tabs + 排序 / 对象 / 匹配下拉 -->
-    <div class="filter-row">
-      <div class="type-tabs-wrap" role="group" :aria-label="t('browse.search.typeLabel')">
-        <SectionTabs class="type-tabs" :tabs="typeTabs" :value="kind" @change="onKindChange" />
+    <div class="app-page-head">
+      <div class="browse-list-header">
+        <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseSearch") }}</h1></div>
+        <md-text-button @click="router.push('/saucenao')">{{ t('nav.saucenao') }}</md-text-button>
+        <ListRefreshButton :busy="loading" :disabled="!word.trim()" @refresh="runSearch(sigOf(currentParams()))" />
       </div>
-      <label class="select-item">
-        <span>{{ t("browse.search.orderLabel") }}</span>
-        <md-outlined-select :value="order" :aria-label="t('browse.search.orderLabel')" @change="onOrderChange">
-          <md-select-option value="date_d">{{ t("browse.search.orderDateDesc") }}</md-select-option>
-          <md-select-option value="date">{{ t("browse.search.orderDateAsc") }}</md-select-option>
-          <md-select-option value="popular_d">{{ t("browse.search.orderPopular") }}</md-select-option>
-        </md-outlined-select>
-      </label>
-      <label class="select-item">
-        <span>{{ t("browse.search.modeLabel") }}</span>
-        <md-outlined-select :value="mode" :aria-label="t('browse.search.modeLabel')" @change="onModeChange">
-          <md-select-option value="all">{{ t("browse.search.modeAll") }}</md-select-option>
-          <md-select-option value="safe">{{ t("browse.search.modeSafe") }}</md-select-option>
-          <md-select-option value="r18">{{ t("browse.search.modeR18") }}</md-select-option>
-        </md-outlined-select>
-      </label>
-      <label class="select-item">
-        <span>{{ t("browse.search.sModeLabel") }}</span>
-        <md-outlined-select :value="sMode" :aria-label="t('browse.search.sModeLabel')" @change="onSModeChange">
-          <md-select-option value="s_tag">{{ t("browse.search.sModeTag") }}</md-select-option>
-          <md-select-option value="s_tag_full">{{ t("browse.search.sModeTagFull") }}</md-select-option>
-          <md-select-option value="s_tc">{{ t("browse.search.sModeTc") }}</md-select-option>
-        </md-outlined-select>
-      </label>
-      <!-- 本页排序：维度下拉 + 升降方向切换；仅对当前显示页 20 条本地排序（计数按需补取） -->
-      <div class="local-sort">
-        <span class="local-sort-label" aria-hidden="true">{{ t("browse.search.localSortLabel") }}</span>
-        <md-outlined-select
-          :value="sortKey || 'default'"
-          :disabled="!items.length"
-          :aria-label="t('browse.search.localSortLabel')"
-          @change="onSortKeyChange"
-        >
-          <md-select-option value="default">{{ t("browse.search.localSortDefault") }}</md-select-option>
-          <md-select-option value="like">{{ t("browse.search.localSortLike") }}</md-select-option>
-          <md-select-option value="bookmark">{{ t("browse.search.localSortBookmark") }}</md-select-option>
-          <md-select-option value="view">{{ t("browse.search.localSortView") }}</md-select-option>
-        </md-outlined-select>
-        <SortDirectionToggle
-          :value="sortDir"
-          :disabled="!sortKey || !items.length"
-          @change="onSortDirChange"
+
+      <!-- 搜索工具行：大而醒目的输入框 + 搜索按钮 -->
+      <div class="tool-row">
+        <md-outlined-text-field
+          class="search-field"
+          :value="word"
+          :placeholder="t('browse.search.placeholder')"
+          :aria-label="t('nav.browseSearch')"
+          @input="word = ($event.target as HTMLInputElement).value"
+          @keydown.enter="doSearch"
         />
+        <md-filled-button class="search-btn" @click="doSearch">
+          {{ t("common.search") }}
+        </md-filled-button>
+        <HelpTooltip :label="t('common.search')" :text="t('browse.search.help')" />
+      </div>
+
+      <!-- 过滤行：类型 tabs + 排序 / 对象 / 匹配下拉 -->
+      <div class="filter-row">
+        <div class="type-tabs-wrap" role="group" :aria-label="t('browse.search.typeLabel')">
+          <SectionTabs class="type-tabs" :tabs="typeTabs" :value="kind" @change="onKindChange" />
+        </div>
+        <label class="select-item">
+          <span>{{ t("browse.search.orderLabel") }}</span>
+          <md-outlined-select :value="order" :aria-label="t('browse.search.orderLabel')" @change="onOrderChange">
+            <md-select-option value="date_d">{{ t("browse.search.orderDateDesc") }}</md-select-option>
+            <md-select-option value="date">{{ t("browse.search.orderDateAsc") }}</md-select-option>
+            <md-select-option value="popular_d">{{ t("browse.search.orderPopular") }}</md-select-option>
+          </md-outlined-select>
+        </label>
+        <label class="select-item">
+          <span>{{ t("browse.search.modeLabel") }}</span>
+          <md-outlined-select :value="mode" :aria-label="t('browse.search.modeLabel')" @change="onModeChange">
+            <md-select-option value="all">{{ t("browse.search.modeAll") }}</md-select-option>
+            <md-select-option value="safe">{{ t("browse.search.modeSafe") }}</md-select-option>
+            <md-select-option value="r18">{{ t("browse.search.modeR18") }}</md-select-option>
+          </md-outlined-select>
+        </label>
+        <label class="select-item">
+          <span>{{ t("browse.search.sModeLabel") }}</span>
+          <md-outlined-select :value="sMode" :aria-label="t('browse.search.sModeLabel')" @change="onSModeChange">
+            <md-select-option value="s_tag">{{ t("browse.search.sModeTag") }}</md-select-option>
+            <md-select-option value="s_tag_full">{{ t("browse.search.sModeTagFull") }}</md-select-option>
+            <md-select-option value="s_tc">{{ t("browse.search.sModeTc") }}</md-select-option>
+          </md-outlined-select>
+        </label>
+        <!-- 本页排序：维度下拉 + 升降方向切换；仅对当前显示页 20 条本地排序（计数按需补取） -->
+        <div class="local-sort">
+          <span class="local-sort-label" aria-hidden="true">{{ t("browse.search.localSortLabel") }}</span>
+          <md-outlined-select
+            :value="sortKey || 'default'"
+            :disabled="!items.length"
+            :aria-label="t('browse.search.localSortLabel')"
+            @change="onSortKeyChange"
+          >
+            <md-select-option value="default">{{ t("browse.search.localSortDefault") }}</md-select-option>
+            <md-select-option value="like">{{ t("browse.search.localSortLike") }}</md-select-option>
+            <md-select-option value="bookmark">{{ t("browse.search.localSortBookmark") }}</md-select-option>
+            <md-select-option value="view">{{ t("browse.search.localSortView") }}</md-select-option>
+          </md-outlined-select>
+          <SortDirectionToggle
+            :value="sortDir"
+            :disabled="!sortKey || !items.length"
+            @change="onSortDirChange"
+          />
+        </div>
       </div>
     </div>
 

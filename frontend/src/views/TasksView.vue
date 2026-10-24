@@ -3,14 +3,17 @@
     <div v-if="loading" class="m3-loading" role="status">…</div>
     <p v-else-if="!taskStore.tasks.length" class="m3-empty">{{ t("tasks.empty") }}</p>
     <template v-else>
-      <div class="tasks-toolbar">
-        <div class="m3-radio-group" role="radiogroup" :aria-label='t("tasks.title")'>
-          <label v-for="option in categories" :key="option.value" class="m3-choice"><md-radio name="task-category" :value="option.value" :checked='categoryFilter === option.value' @change='changeCategory(option.value)' />{{ option.label }}</label>
-        </div>
-        <div class="task-management">
-        <label class="m3-choice"><md-checkbox :checked="allSelected" :indeterminate="someSelected" :disabled='!filteredTasks.length' @change='toggleAll(($event.target as HTMLInputElement).checked)' />{{ t("tasks.selectAllDeletable") }}</label>
-        <md-outlined-button :disabled='!selectedTaskIds.length || batchDeleting' @click='openConfirm("batch")'>{{ batchDeleting ? "…" : t("tasks.batchDelete", { count: selectedTaskIds.length }) }}</md-outlined-button>
-        <md-text-button :disabled='!completedTaskCount || loading' @click='openConfirm("clear")'>{{ clearingCompleted ? "…" : t("tasks.clearCompleted") }}</md-text-button>
+      <!-- 分类筛选与批量操作吸附在工具壳页头下方（层级与偏移见 main.css 的 .app-page-head.is-sub） -->
+      <div class="app-page-head is-sub">
+        <div class="tasks-toolbar">
+          <div class="m3-radio-group" role="radiogroup" :aria-label='t("tasks.title")'>
+            <label v-for="option in categories" :key="option.value" class="m3-choice"><md-radio name="task-category" :value="option.value" :checked='categoryFilter === option.value' @change='changeCategory(option.value)' />{{ option.label }}</label>
+          </div>
+          <div class="task-management">
+          <label class="m3-choice"><md-checkbox :checked="allSelected" :indeterminate="someSelected" :disabled='!filteredTasks.length' @change='toggleAll(($event.target as HTMLInputElement).checked)' />{{ t("tasks.selectAllDeletable") }}</label>
+          <md-outlined-button :disabled='!selectedTaskIds.length || batchDeleting' @click='openConfirm("batch")'>{{ batchDeleting ? "…" : t("tasks.batchDelete", { count: selectedTaskIds.length }) }}</md-outlined-button>
+          <md-text-button :disabled='!completedTaskCount || loading' @click='openConfirm("clear")'>{{ clearingCompleted ? "…" : t("tasks.clearCompleted") }}</md-text-button>
+          </div>
         </div>
       </div>
       <section class="task-list" :aria-label='t("tasks.title")'>
@@ -104,5 +107,5 @@ onUnmounted(() => { disposed = true; });
 .tasks-toolbar { display:flex; align-items:center; justify-content:space-between; gap:var(--space-lg) var(--space-xl); padding-bottom:var(--space-sm); }
 .tasks-toolbar .m3-radio-group { gap:var(--space-md); }
 @media (max-width:640px) { .task-management { margin-left:0; } }
-.task-heading,.task-actions,.pagination{display:flex;align-items:center;gap:var(--space-md)}.tasks-toolbar,.m3-radio-group,.task-actions{flex-wrap:wrap}.tasks-toolbar{margin-bottom:var(--space-md)}.m3-radio-group{display:flex;gap:var(--space-sm)}.task-list{overflow:hidden;border-radius:16px;background:var(--md-sys-color-surface-container)}.task-item{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-sm);padding:var(--space-lg);border-bottom:1px solid color-mix(in srgb,var(--md-sys-color-outline) 30%,transparent)}.task-item:last-child{border-bottom:0}.task-select{padding-top:2px}.task-heading{justify-content:space-between;margin-bottom:var(--space-sm)}.task-source{margin-left:var(--space-sm)}.m3-label,.m3-status{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}.m3-status{background:color-mix(in srgb,var(--md-sys-color-outline) 18%,transparent);color:var(--ink-muted)}.status-done{background:#c8f7d0;color:#0d3b18}.status-failed{background:#ffdad6;color:#410002}.status-paused{background:#ffddb2;color:#2a1700}.task-progress-meta{margin:var(--space-xs) 0}.pagination{margin-top:var(--space-md)}.m3-empty,.m3-loading{padding:var(--space-xl);color:var(--ink-muted);text-align:center}@media (max-width:640px){.task-heading{align-items:flex-start;flex-direction:column}.task-source{display:block;margin:var(--space-xs) 0 0}}
+.task-heading,.task-actions,.pagination{display:flex;align-items:center;gap:var(--space-md)}.tasks-toolbar,.m3-radio-group,.task-actions{flex-wrap:wrap}.tasks-toolbar{margin-bottom:0}.m3-radio-group{display:flex;gap:var(--space-sm)}.task-list{overflow:hidden;border-radius:16px;background:var(--md-sys-color-surface-container)}.task-item{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-sm);padding:var(--space-lg);border-bottom:1px solid color-mix(in srgb,var(--md-sys-color-outline) 30%,transparent)}.task-item:last-child{border-bottom:0}.task-select{padding-top:2px}.task-heading{justify-content:space-between;margin-bottom:var(--space-sm)}.task-source{margin-left:var(--space-sm)}.m3-label,.m3-status{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}.m3-status{background:color-mix(in srgb,var(--md-sys-color-outline) 18%,transparent);color:var(--ink-muted)}.status-done{background:#c8f7d0;color:#0d3b18}.status-failed{background:#ffdad6;color:#410002}.status-paused{background:#ffddb2;color:#2a1700}.task-progress-meta{margin:var(--space-xs) 0}.pagination{margin-top:var(--space-md)}.m3-empty,.m3-loading{padding:var(--space-xl);color:var(--ink-muted);text-align:center}@media (max-width:640px){.task-heading{align-items:flex-start;flex-direction:column}.task-source{display:block;margin:var(--space-xs) 0 0}}
 </style>

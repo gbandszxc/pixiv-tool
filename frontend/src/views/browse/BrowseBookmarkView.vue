@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
+import { scrollContentToTop } from "../../utils/scroll";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -103,7 +104,7 @@ function reloadList(): void {
   offsetCursor = 0;
   total.value = null;
   list.reload();
-  window.scrollTo({ top: 0 });
+  scrollContentToTop();
 }
 
 function refresh(): void {
@@ -182,34 +183,36 @@ function goWork(item: BrowseWorkItem): void {
 
 <template>
   <div class="page-view bookmark-view">
-    <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.library") }}</h1></div>
-      <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
-    </div>
-    <BrowseNavigation />
+    <div class="app-page-head">
+      <div class="browse-list-header">
+        <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.library") }}</h1></div>
+        <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
+      </div>
+      <BrowseNavigation />
 
-    <!-- 控制行：类型 tabs（左） + 公开/私密（右） -->
-    <div class="bm-controls">
-      <SectionTabs class="bm-kind-tabs" :tabs="kindTabs" :value="kind" @change="onKindChange" />
-      <div class="rest-group" role="group" :aria-label="t('browse.bookmark.restLabel')">
-        <button
-          type="button"
-          class="rest-btn"
-          :class="{ active: rest === 'show' }"
-          :aria-pressed="rest === 'show'"
-          @click="setRest('show')"
-        >
-          {{ t("browse.bookmark.restPublic") }}
-        </button>
-        <button
-          type="button"
-          class="rest-btn"
-          :class="{ active: rest === 'hide' }"
-          :aria-pressed="rest === 'hide'"
-          @click="setRest('hide')"
-        >
-          {{ t("browse.bookmark.restPrivate") }}
-        </button>
+      <!-- 控制行：类型 tabs（左） + 公开/私密（右） -->
+      <div class="bm-controls">
+        <SectionTabs class="bm-kind-tabs" :tabs="kindTabs" :value="kind" @change="onKindChange" />
+        <div class="rest-group" role="group" :aria-label="t('browse.bookmark.restLabel')">
+          <button
+            type="button"
+            class="rest-btn"
+            :class="{ active: rest === 'show' }"
+            :aria-pressed="rest === 'show'"
+            @click="setRest('show')"
+          >
+            {{ t("browse.bookmark.restPublic") }}
+          </button>
+          <button
+            type="button"
+            class="rest-btn"
+            :class="{ active: rest === 'hide' }"
+            :aria-pressed="rest === 'hide'"
+            @click="setRest('hide')"
+          >
+            {{ t("browse.bookmark.restPrivate") }}
+          </button>
+        </div>
       </div>
     </div>
 

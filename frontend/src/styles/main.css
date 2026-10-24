@@ -127,7 +127,12 @@ textarea {
 }
 
 .app-content {
-  padding: var(--space-xl);
+  /* 滚动容器内边距：`.app-page-head` 要靠它抵消 sticky 吸附矩形被内缩的偏移，
+   * 故收成变量，窄窗改值时两处同时跟随。 */
+  --app-content-pad: var(--space-xl);
+  padding: var(--app-content-pad);
+  /* 吸顶页头的背景/分隔线用 -100vw 伪元素横向铺满，这里裁掉溢出，不出现横向滚动条。 */
+  overflow-x: hidden;
 }
 
 /* 内容列宽度：窗口宽高比 ≤16:9 时不设上限，铺满可用宽度（列表/网格自适应向右补满）；
@@ -135,6 +140,67 @@ textarea {
 .page-view {
   width: min(100%, calc(100vh * 16 / 9));
   margin-inline: auto;
+}
+
+/* ===== 吸顶页头（DESIGN.md「页头吸顶」）=====
+ * 把「返回 + 标题 + 刷新」「分区导航」「本页筛选」合成一块，吸附在 .app-content 这个
+ * 唯一滚动容器的顶边，页面只剩下方内容滚动。
+ * - sticky 的吸附矩形按滚动容器的内边距内缩：容器带 24px 上内距时，页头吸附后上方会
+ *   漏出 24px 的滚动内容。故仅对含吸顶页头的页面把容器上内距归零，改由页头自带
+ *   （静止态视觉不变，吸附时紧贴滚动口顶边）；阅读器 / 查看器等不带页头的页面不受影响。
+ * - flow-root：作为 BFC 收住子元素 margin，末个子元素的下距也属于页头，背景完整覆盖；
+ * - 背景与分隔线用 -100vw 伪元素横向铺满容器内边距与超宽窗口的居中留白，
+ *   避免两侧露出滚过去的卡片；
+ * - 分隔线沿用常驻条配方（outline 30%，与阅读器顶栏 / 吸底翻页器一致），无阴影。 */
+.app-content:has(> .page-view > .app-page-head) {
+  padding-top: 0;
+}
+
+.app-page-head {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flow-root;
+  isolation: isolate;
+  padding-top: var(--app-content-pad);
+  background: var(--surface);
+}
+
+.app-page-head::before,
+.app-page-head::after {
+  content: "";
+  position: absolute;
+  inset-inline: -100vw;
+  pointer-events: none;
+}
+
+.app-page-head::before {
+  inset-block: 0;
+  z-index: -1;
+  background: var(--surface);
+}
+
+.app-page-head::after {
+  inset-block-end: 0;
+  height: 1px;
+  background: color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
+}
+
+/* 次级吸顶条（工具壳的子页面：任务分类行 / 下载历史工具行）吸附在工具壳页头下方。
+ * 偏移量取页头实测高度 --app-head-h（由 App.vue 观察吸顶页头写入），不写死——
+ * 页头在窄窗换行、或导航项文案随语言变长时高度都会变。间距由本条承担，
+ * 子页面的工具行自身不再带下距。 */
+.app-page-head.is-sub {
+  top: var(--app-head-h, 0px);
+  z-index: 4;
+  padding-block: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+/* 页内 scrollIntoView 的目标不得钻到吸顶页头下方：滚动容器按页头高度预留定位余量。
+ * 不带吸顶页头的页面（阅读器 / 详情 / 以图识图）无该变量，回退 0。 */
+.app-content {
+  scroll-padding-top: calc(var(--app-head-h, 0px) + var(--space-sm));
 }
 
 .browse-list-header {
@@ -234,7 +300,7 @@ textarea {
 
 @media (max-width: 640px) {
   .app-content {
-    padding: var(--space-lg);
+    --app-content-pad: var(--space-lg);
   }
 
   .history-search {

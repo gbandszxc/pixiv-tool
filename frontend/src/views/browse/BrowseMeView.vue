@@ -36,11 +36,13 @@ function openExternal(url: string): void {
 
 <template>
   <div class="page-view me-view">
-    <!-- 未登录：返回入口 + 标题 + 引导（对齐「空态保留返回入口」的既有规则） -->
-    <div v-if="meId === 0" class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseMe") }}</h1></div>
+    <div class="app-page-head">
+      <!-- 未登录：返回入口 + 标题 + 引导（对齐「空态保留返回入口」的既有规则） -->
+      <div v-if="meId === 0" class="browse-list-header">
+        <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseMe") }}</h1></div>
+      </div>
+      <BrowseNavigation />
     </div>
-    <BrowseNavigation />
     <div v-if="meId === 0" class="me-state" role="status">
       <p class="state-text">{{ t("browseMe.loginRequired") }}</p>
       <md-filled-button @click="openLogin">{{ t("auth.login") }}</md-filled-button>

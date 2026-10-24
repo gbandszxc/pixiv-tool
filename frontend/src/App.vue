@@ -148,6 +148,7 @@ const removeAfterEach = router.afterEach(async (to, from, failure) => {
   }
   await nextTick();
   if (route.path === to.path) contentEl.value?.scrollTo({ top, behavior: "instant" });
+  observeStickyHead();
   if (to.path === '/browse/search') await focusSearch();
 });
 watch(browseSession, () => {
@@ -155,7 +156,22 @@ watch(browseSession, () => {
   if (isCachedBrowsePage(route.path)) browseScroll.set(route.path, 0);
   contentEl.value?.scrollTo({ top: 0, behavior: "instant" });
 });
-onBeforeUnmount(() => { removeBeforeEach(); removeAfterEach(); });
+/** 吸顶页头实测高度写入滚动容器，供次级吸顶条（.app-page-head.is-sub）取 top 偏移、
+ * 以及 scroll-padding-top 让页内定位目标不钻到页头下面。页面切换后页头高度会变
+ * （窄窗换行、有无分区导航），故由 ResizeObserver 跟随，不写死。 */
+let headObserver: ResizeObserver | undefined;
+function observeStickyHead(): void {
+  const main = contentEl.value; if (!main) return;
+  headObserver?.disconnect();
+  const head = main.querySelector<HTMLElement>(".app-page-head:not(.is-sub)");
+  if (!head) { main.style.removeProperty("--app-head-h"); return; }
+  headObserver = new ResizeObserver(([entry]) => {
+    const blockSize = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+    main.style.setProperty("--app-head-h", `${Math.round(blockSize)}px`);
+  });
+  headObserver.observe(head);
+}
+onBeforeUnmount(() => { removeBeforeEach(); removeAfterEach(); headObserver?.disconnect(); });
 const showLoginDialog = ref(false); const showSettings = ref(false); const showExitConfirm = ref(false); const exitDialog = ref<HTMLDialogElement>();
 const siderCollapsed = ref(false); const notification = ref(""); let toastTimer: number | undefined; let unlistenExit: (() => void) | undefined;
 let disposed = false;
@@ -188,7 +204,7 @@ onMounted(() => {
   resizeObserver = new ResizeObserver(entries => { const width = entries[0]?.contentRect.width ?? 0; if (lastWidth && width !== lastWidth) restoreLayout(); lastWidth = width; captureLayout(); });
   if (workspaceEl.value) resizeObserver.observe(workspaceEl.value);
   contentEl.value?.addEventListener('scroll', captureLayout, { passive: true });
-  media.addEventListener("change", onMediaChange); authStore.fetchAccounts(); if (isTauri()) void listen("app://confirm-exit", () => { if (!disposed) showExitConfirm.value = true; }).then(fn => { if (disposed) fn(); else unlistenExit = fn; }).catch(() => {}); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
+  media.addEventListener("change", onMediaChange); authStore.fetchAccounts(); if (isTauri()) void listen("app://confirm-exit", () => { if (!disposed) showExitConfirm.value = true; }).then(fn => { if (disposed) fn(); else unlistenExit = fn; }).catch(() => {}); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); observeStickyHead(); });
 onBeforeUnmount(() => { disposed = true; clearTimeout(toastTimer); layoutAnchor = undefined; stopTasks?.(); resizeObserver?.disconnect(); window.removeEventListener('keydown', onWorkspaceKey); window.removeEventListener('pixiv-tool:image-fullscreen', onImageFullscreen); contentEl.value?.removeEventListener('scroll', captureLayout); media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
 </script>
 

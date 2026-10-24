@@ -38,6 +38,7 @@ import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
 import { descriptionText } from "../../utils/descriptionText";
+import { scrollContentToTop } from "../../utils/scroll";
 import type { WorkBookmarkState } from "../../api/browse";
 
 const props = defineProps<{
@@ -209,7 +210,7 @@ async function loadRelated(): Promise<void> {
 
 function scrollReset(): void {
   infoCol.value?.scrollTo({ top: 0 });
-  window.scrollTo({ top: 0 });
+  scrollContentToTop();
 }
 
 /** 顶栏评论按钮：切换右列面板（评论只在切到该面板时挂载，首开即拉第一页）。 */

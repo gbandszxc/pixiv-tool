@@ -193,43 +193,45 @@ function openWork(item: BrowseWorkItem): void {
 
 <template>
   <div class="page-view browse-ranking">
-    <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseRanking") }}</h1></div>
-      <ListRefreshButton :busy="loading" @refresh="load" />
-    </div>
-    <BrowseNavigation />
+    <div class="app-page-head">
+      <div class="browse-list-header">
+        <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseRanking") }}</h1></div>
+        <ListRefreshButton :busy="loading" @refresh="load" />
+      </div>
+      <BrowseNavigation />
 
-    <div class="ranking-toolbar">
-      <SectionTabs class="kind-tabs" :tabs="kindTabs" :value="kind" @change="changeKind" />
-      <div class="toolbar-controls">
-        <md-outlined-select
-          class="mode-select"
-          :value="mode"
-          :aria-label="t('browse.ranking.modeLabel')"
-          @change="changeMode(($event.target as HTMLSelectElement).value)"
-        >
-          <md-select-option v-for="opt in modeOptions" :key="opt.value" :value="opt.value">
-            {{ opt.label }}
-          </md-select-option>
-        </md-outlined-select>
-        <div class="date-nav">
-          <md-icon-button
-            :disabled="!prevDate || loading"
-            :aria-label="t('browse.ranking.prevDate')"
-            :title="t('browse.ranking.prevDate')"
-            @click="goDate(prevDate)"
+      <div class="ranking-toolbar">
+        <SectionTabs class="kind-tabs" :tabs="kindTabs" :value="kind" @change="changeKind" />
+        <div class="toolbar-controls">
+          <md-outlined-select
+            class="mode-select"
+            :value="mode"
+            :aria-label="t('browse.ranking.modeLabel')"
+            @change="changeMode(($event.target as HTMLSelectElement).value)"
           >
-            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
-          </md-icon-button>
-          <span class="date-text">{{ dateDisplay }}</span>
-          <md-icon-button
-            :disabled="!nextDate || loading"
-            :aria-label="t('browse.ranking.nextDate')"
-            :title="t('browse.ranking.nextDate')"
-            @click="goDate(nextDate)"
-          >
-            <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
-          </md-icon-button>
+            <md-select-option v-for="opt in modeOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </md-select-option>
+          </md-outlined-select>
+          <div class="date-nav">
+            <md-icon-button
+              :disabled="!prevDate || loading"
+              :aria-label="t('browse.ranking.prevDate')"
+              :title="t('browse.ranking.prevDate')"
+              @click="goDate(prevDate)"
+            >
+              <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+            </md-icon-button>
+            <span class="date-text">{{ dateDisplay }}</span>
+            <md-icon-button
+              :disabled="!nextDate || loading"
+              :aria-label="t('browse.ranking.nextDate')"
+              :title="t('browse.ranking.nextDate')"
+              @click="goDate(nextDate)"
+            >
+              <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+            </md-icon-button>
+          </div>
         </div>
       </div>
     </div>

@@ -125,26 +125,28 @@ function goWork(item: BrowseWorkItem): void {
 
 <template>
   <div class="page-view">
-    <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.discover") }}</h1></div>
-      <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
-    </div>
-    <BrowseNavigation />
+    <div class="app-page-head">
+      <div class="browse-list-header">
+        <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.discover") }}</h1></div>
+        <ListRefreshButton :busy="loading || loadingMore" @refresh="refresh" />
+      </div>
+      <BrowseNavigation />
 
-    <!-- 过滤 chips：自绘胶囊，选中态 secondary-container（DESIGN.md M3 角色） -->
-    <div class="chips-row" role="group" :aria-label="t('nav.browseDiscover')">
-      <button
-        v-for="option in filterOptions"
-        :key="option.value"
-        type="button"
-        class="chip"
-        :class="{ selected: filter === option.value }"
-        :aria-pressed="filter === option.value"
-        @click="filter = option.value"
-      >
-        {{ option.label }}
-      </button>
-      <span class="novel-note">{{ t("browse.discover.novelNote") }}</span>
+      <!-- 过滤 chips：自绘胶囊，选中态 secondary-container（DESIGN.md M3 角色） -->
+      <div class="chips-row" role="group" :aria-label="t('nav.browseDiscover')">
+        <button
+          v-for="option in filterOptions"
+          :key="option.value"
+          type="button"
+          class="chip"
+          :class="{ selected: filter === option.value }"
+          :aria-pressed="filter === option.value"
+          @click="filter = option.value"
+        >
+          {{ option.label }}
+        </button>
+        <span class="novel-note">{{ t("browse.discover.novelNote") }}</span>
+      </div>
     </div>
 
     <WorkGrid

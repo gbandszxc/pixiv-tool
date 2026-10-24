@@ -141,14 +141,16 @@ function openTag(name: string): void {
 
 <template>
   <div class="page-view browse-channel">
-    <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ title }}</h1></div>
-      <ListRefreshButton :busy="loading" @refresh="load" />
-    </div>
-    <BrowseNavigation />
+    <div class="app-page-head">
+      <div class="browse-list-header">
+        <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ title }}</h1></div>
+        <ListRefreshButton :busy="loading" @refresh="load" />
+      </div>
+      <BrowseNavigation />
 
-    <!-- R-18 切换服务端频道；计数提示统一在筛选条右侧 -->
-    <R18FilterBar :model-value="filter" :hidden-count="hiddenCount" @update:model-value="setFilter" />
+      <!-- R-18 切换服务端频道；计数提示统一在筛选条右侧 -->
+      <R18FilterBar :model-value="filter" :hidden-count="hiddenCount" @update:model-value="setFilter" />
+    </div>
     <p v-if="error && data" role="alert">{{ error }}</p>
 
     <!-- 整页错误（快照尚未到手）→ 文案 + 重试 -->

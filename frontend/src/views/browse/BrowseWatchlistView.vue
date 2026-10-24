@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
+import { scrollContentToTop } from "../../utils/scroll";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
@@ -53,7 +54,7 @@ function onKindChange(value: string): void {
   if (value === kind.value) return;
   kind.value = value as WatchKind;
   void load();
-  window.scrollTo({ top: 0 });
+  scrollContentToTop();
 }
 
 onMounted(load);
@@ -80,15 +81,17 @@ function openSeries(item: BrowseWatchlistItem): void {
 
 <template>
   <div class="page-view browse-watchlist">
-    <div class="browse-list-header">
-      <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.following") }}</h1></div>
-      <ListRefreshButton :busy="loading" @refresh="load" />
-    </div>
-    <BrowseNavigation />
+    <div class="app-page-head">
+      <div class="browse-list-header">
+        <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("workspace.following") }}</h1></div>
+        <ListRefreshButton :busy="loading" @refresh="load" />
+      </div>
+      <BrowseNavigation />
 
-    <div class="control-row" role="group" :aria-label="t('browse.watchlist.tabLabel')">
-      <span class="control-label">{{ t("browse.watchlist.tabLabel") }}</span>
-      <SectionTabs :tabs="kindTabs" :value="kind" @change="onKindChange" />
+      <div class="control-row" role="group" :aria-label="t('browse.watchlist.tabLabel')">
+        <span class="control-label">{{ t("browse.watchlist.tabLabel") }}</span>
+        <SectionTabs :tabs="kindTabs" :value="kind" @change="onKindChange" />
+      </div>
     </div>
 
     <!-- 整页错误（快照尚未到手）→ 文案 + 重试 -->

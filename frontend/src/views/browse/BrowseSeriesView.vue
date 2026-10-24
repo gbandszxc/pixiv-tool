@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
+import { scrollContentToTop } from "../../utils/scroll";
 import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 系列分集页（/browse/series/:kind/:id，series-episode-ui / F1）。
@@ -67,7 +68,7 @@ async function load(target: number, initial: boolean): Promise<void> {
     novelData.value = null;
     illustData.value = null;
     // 进入/切换系列回到页首（SPA 内路由切换会保留上一页滚动位置）
-    window.scrollTo(0, 0);
+    scrollContentToTop();
   } else {
     switching.value = true;
   }
@@ -101,7 +102,7 @@ watch(
 function changePage(target: number): void {
   if (target === page.value || loading.value || switching.value) return;
   // 切页回到页首；数据到达前旧内容以局部过渡呈现（不闪烁）
-  window.scrollTo(0, 0);
+  scrollContentToTop();
   void load(target, false);
 }
 
@@ -236,18 +237,25 @@ function openInPixiv(): void {
 
 <template>
   <div class="page-view series-view">
-    <!-- 系列头始终保留返回入口，骨架不能遮蔽可操作控件。 -->
+    <!-- 吸顶：返回 + 标题 + 刷新 + 目录工具行。封面与简介属内容元信息，随页滚动。 -->
+    <div class="app-page-head">
+      <div class="page-heading series-heading">
+        <PageBackButton />
+        <div v-if="loading" class="sk sk-title" aria-hidden="true"></div>
+        <h1 v-else class="page-title" :title="head?.title">{{ head?.title || t("common.browseSeriesTitle") }}</h1>
+        <ListRefreshButton :busy="loading || switching" @refresh="load(page, !hasData)" />
+      </div>
+      <!-- 工具行：目录标签 + 宫格/列表模式切换（会话内记忆）；首屏骨架 / 错误态下无目录可控制，不渲染 -->
+      <div v-if="!loading && !error && head" class="series-toolbar">
+        <p class="toolbar-label">{{ t("browse.series.listLabel") }}</p>
+        <ViewModeToggle :value="mode" @change="setMode" />
+      </div>
+    </div>
+
     <header class="series-head">
       <div v-if="loading" class="sk sk-cover" aria-hidden="true"></div>
       <img v-else-if="cover" class="cover" :src="cover" alt="" @error="onCoverError" />
       <div class="head-info">
-        <!-- 刷新并入标题行右端（与频道页等同一形态）；标题 min-width:0 可省略，窄窗不挤压刷新。 -->
-        <div class="page-heading">
-          <PageBackButton />
-          <div v-if="loading" class="sk sk-title" aria-hidden="true"></div>
-          <h1 v-else class="page-title" :title="head?.title">{{ head?.title || t("common.browseSeriesTitle") }}</h1>
-          <ListRefreshButton :busy="loading || switching" @refresh="load(page, !hasData)" />
-        </div>
         <template v-if="loading">
           <div class="sk sk-line w40" aria-hidden="true"></div>
           <div class="sk sk-line w60" aria-hidden="true"></div>
@@ -286,13 +294,6 @@ function openInPixiv(): void {
     </div>
 
     <template v-else-if="head">
-
-      <!-- 工具行：目录标签 + 宫格/列表模式切换（会话内记忆） -->
-      <div class="series-toolbar">
-        <p class="toolbar-label">{{ t("browse.series.listLabel") }}</p>
-        <ViewModeToggle :value="mode" @change="setMode" />
-      </div>
-
       <!-- 切页失败：内容保留，错误就地显示 -->
       <p v-if="pageError" class="page-error" role="alert">{{ pageError }}</p>
 
@@ -368,7 +369,9 @@ function openInPixiv(): void {
   min-width: 0;
 }
 
-.head-info > .page-heading { margin-bottom: var(--space-lg); }
+/* 标题行在吸顶页头内，自身不再吃间距；下距由 .series-head 承担 */
+.series-heading { margin-bottom: 0; }
+.series-heading .page-title { flex: 1; }
 
 .head-info .page-title {
   overflow: hidden;
@@ -433,7 +436,8 @@ function openInPixiv(): void {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-md);
-  margin-bottom: var(--space-md);
+  margin-top: var(--space-sm);
+  padding-bottom: var(--space-sm);
 }
 
 .toolbar-label {

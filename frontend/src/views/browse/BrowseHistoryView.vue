@@ -149,37 +149,39 @@ onActivated(load);
 
 <template>
   <div class="page-view browse-history">
-    <div class="browse-list-header">
-      <div class="page-heading">
-        <PageBackButton />
-        <h1 class="page-title">{{ t("workspace.library") }}</h1>
+    <div class="app-page-head">
+      <div class="browse-list-header">
+        <div class="page-heading">
+          <PageBackButton />
+          <h1 class="page-title">{{ t("workspace.library") }}</h1>
+        </div>
+        <div class="header-actions">
+          <ListRefreshButton :busy="loading" @refresh="load" />
+          <md-text-button
+            class="clear-btn"
+            :disabled="loading || clearing || total === 0"
+            @click="openClearConfirm"
+          >
+            {{ t("browseHistory.clearAll") }}
+          </md-text-button>
+        </div>
       </div>
-      <div class="header-actions">
-        <ListRefreshButton :busy="loading" @refresh="load" />
-        <md-text-button
-          class="clear-btn"
-          :disabled="loading || clearing || total === 0"
-          @click="openClearConfirm"
-        >
-          {{ t("browseHistory.clearAll") }}
-        </md-text-button>
-      </div>
-    </div>
-    <BrowseNavigation />
+      <BrowseNavigation />
 
-    <!-- 类别筛选：全部 / 插画 / 漫画 / 小说（默认全部），切换回第 1 页重新加载 -->
-    <div class="kind-filter" role="group" :aria-label="t('browseHistory.filterLabel')">
-      <button
-        v-for="option in kindOptions"
-        :key="option.value"
-        type="button"
-        class="chip"
-        :class="{ selected: kind === option.value }"
-        :aria-pressed="kind === option.value"
-        @click="selectKind(option.value)"
-      >
-        {{ option.label }}
-      </button>
+      <!-- 类别筛选：全部 / 插画 / 漫画 / 小说（默认全部），切换回第 1 页重新加载 -->
+      <div class="kind-filter" role="group" :aria-label="t('browseHistory.filterLabel')">
+        <button
+          v-for="option in kindOptions"
+          :key="option.value"
+          type="button"
+          class="chip"
+          :class="{ selected: kind === option.value }"
+          :aria-pressed="kind === option.value"
+          @click="selectKind(option.value)"
+        >
+          {{ option.label }}
+        </button>
+      </div>
     </div>
 
     <!-- 首屏骨架：纯 surface-container 色块，无闪烁动画（对齐 WorkGrid 骨架规范） -->
