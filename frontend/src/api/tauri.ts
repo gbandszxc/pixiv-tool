@@ -140,6 +140,52 @@ export interface Settings {
   /** 小说翻译单请求超时（秒），默认 600（10 分钟），合法区间 30~3600 */
   translation_timeout_seconds: number;
   translation_extra: Record<string, unknown>;
+  // ===== 小说翻译运行参数（二级高级设置，键名与区间见 src-tauri/src/settings.rs）=====
+  // 后端总是返回这些键；标为可选是为了兼容浏览器 mock 与旧响应，读取时按后端默认值兜底。
+  /** 全局模型请求并发（1~16，默认 4） */
+  translation_agent_global_concurrency?: number;
+  /** 单小说子任务并发（1~16，默认 4） */
+  translation_agent_novel_concurrency?: number;
+  /** 同时活跃小说数（1~8，默认 2） */
+  translation_agent_active_novels?: number;
+  /** 自动网络重试次数（0~5，默认 2） */
+  translation_agent_retry_limit?: number;
+  /** 自动退避基础延迟（毫秒，500~30000，默认 1000） */
+  translation_agent_backoff_base_ms?: number;
+  /** 自动退避上限（秒，10~600，默认 120） */
+  translation_agent_backoff_max_seconds?: number;
+  /** 质检返工轮数（0~5，默认 2） */
+  translation_agent_rework_rounds?: number;
+  /** 超限细分深度（0~5，默认 3） */
+  translation_agent_split_depth?: number;
+  /** 工具参数纠错次数（0~3，默认 2） */
+  translation_agent_tool_corrections?: number;
+  /** 单子任务模型轮次（4~128，默认 24） */
+  translation_agent_max_turns?: number;
+  /** 主 Agent 无进展上限（3~32，默认 8） */
+  translation_agent_stall_limit?: number;
+  /** 未知模型上下文窗口（16384~2097152，默认 32768） */
+  translation_agent_context_window?: number;
+  /** 单请求输出上限（1024~262144，默认 16384，且不超过上下文窗口） */
+  translation_agent_output_cap?: number;
+  /** 自动压缩触发百分比（50~90，默认 75） */
+  translation_agent_compact_percent?: number;
+  /** 保留近期历史 token（512~131072，默认 4096） */
+  translation_agent_recent_history_tokens?: number;
+  /** 摘要目标 token（256~65536，默认 2048） */
+  translation_agent_summary_tokens?: number;
+  /** 分块目标字符数（500~100000，默认 3000，且不超过字符上限） */
+  translation_agent_chunk_target_chars?: number;
+  /** 分块字符上限（1000~200000，默认 6000） */
+  translation_agent_chunk_max_chars?: number;
+  /** 邻接参考窗口字符数（0~20000，默认 600） */
+  translation_agent_context_chars?: number;
+  /** 整篇累计模型调用预算（0 = 自动，0~1000000） */
+  translation_call_budget?: number;
+  /** 请求结果未知时自动重放（默认 false） */
+  translation_agent_replay_unknown?: boolean;
+  /** 启动前确认术语与风格（默认 false） */
+  translation_confirm_before_start?: boolean;
   /** 只回传凭据是否存在，永不回传 API Key。 */
   translation_key_configured: boolean;
   translation_key_error: string;

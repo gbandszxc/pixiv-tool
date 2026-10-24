@@ -131,25 +131,75 @@ async function run() {
   panelApp.config.errorHandler = error => { renderErrors.push(error); };
   const panel = panelApp.mount(panelHost) as unknown as { save(): Promise<boolean>; reset(): void; hasUnsaved(): boolean };
   await settle();
+  // ===== 一级 / 二级共用的导航助手：按实际 DOM 层级显式驱动，避免推断状态 =====
+  const advancedPage = () => panelHost.querySelector("#translation-advanced-page");
+  const level = () => {
+    if (!advancedPage()) return "basic";
+    if (panelHost.querySelector(".advanced-index")) return "index";
+    return "detail";
+  };
+  const findOutlinedButton = (label: string) => [...panelHost.querySelectorAll<HTMLElement>("md-outlined-button,md-filled-button")].find(el => el.textContent?.trim() === label);  /** 一级 → 二级分类首页（幂等）。 */
+  const toIndex = async () => {
+    if (level() === "basic") {
+      const entry = panelHost.querySelector<HTMLElement>(".translation-advanced-entry");
+      assert(entry, "一级存在高级设置入口");
+      entry.click(); await settle();
+    }
+    if (level() === "detail") {
+      panelHost.querySelector<HTMLElement>(".advanced-back-index")!.click(); await settle();
+    }
+    assert(level() === "index", `二级分类首页（当前 ${level()}）`);
+  };
+  /** 二级任意层级 → 一级（幂等）。 */
+  const toService = async () => {
+    await toIndex();
+    panelHost.querySelector<HTMLElement>(".advanced-back-service")!.click(); await settle();
+    assert(level() === "basic", `返回小说翻译回到一级（当前 ${level()}）`);
+  };
+  const openCategory = async (title: string) => {
+    await toIndex();
+    const item = [...panelHost.querySelectorAll<HTMLElement>(".advanced-index-item")].find(el => el.querySelector(".advanced-index-title")?.textContent?.trim() === title);
+    assert(item, `二级分类入口 ${title}`);
+    item.click(); await settle();
+    assert(level() === "detail", `进入分类 ${title}`);
+  };
+  const inputIn = async (id: string, value: string) => { const element = panelHost.querySelector<HTMLElement & { value: string }>(`#${id}`); assert(element, `字段 ${id}`); element.value = value; element.dispatchEvent(new Event("input", { bubbles: true })); await settle(); };
+  const setExtra = async (value: string) => { await openCategory("请求扩展"); await inputIn("translation-agent-extra", value); };
+  const advancedSummary = () => panelHost.querySelector(".advanced-category")?.textContent?.trim() ?? "";
+  const entryMeta = () => panelHost.querySelector(".translation-advanced-meta")?.textContent?.trim() ?? "";
+  const entryErrors = () => panelHost.querySelector(".translation-advanced-error")?.textContent?.trim() ?? "";
+
   for (const locale of ["zh-CN", "en-US"] as const) {
     i18n.global.locale.value = locale; await settle();
     assert(!renderErrors.length, `小说翻译设置渲染异常（${locale}）：${renderErrors.map(String).join("；")}`);
-    for (const id of ["translation-format", "translation-url", "translation-key", "translation-model", "translation-target-language", "translation-json"]) {
-      assert(panelHost.querySelector(`#${id}`), `小说翻译设置字段 ${id} 在 ${locale} 下可见`);
+    for (const id of ["translation-format", "translation-url", "translation-key", "translation-model", "translation-target-language", "translation-confirm-before-start"]) {
+      assert(panelHost.querySelector(`#${id}`), `小说翻译一级字段 ${id} 在 ${locale} 下可见`);
     }
-    assert(panelHost.querySelectorAll("fieldset.translation-group").length === 3, `小说翻译表单分为三组（${locale}）`);
-    assert(panelHost.querySelector('[for="translation-json"]')?.parentElement?.textContent?.includes('{"reasoning_effort":"none"}'), `JSON 示例在 ${locale} 下完整显示`);
+    // 一级不得出现运行参数墙或原始 JSON（计划 §8.1 / 验收 8）
+    assert(!panelHost.querySelector("#translation-json") && !panelHost.querySelector("#translation-agent-extra"), `一级不显示原始 JSON（${locale}）`);
+    assert(!panelHost.querySelector('[id^="translation-agent-"]:not(#translation-agent-replay-unknown)'), `一级不显示运行参数（${locale}）`);
+    assert(panelHost.querySelectorAll("fieldset.translation-group").length === 2, `小说翻译一级分为两组（${locale}）`);
+    assert(entryMeta().length > 0, `高级入口显示推荐参数摘要（${locale}）`);
+    await toIndex();
+    assert(panelHost.querySelectorAll(".advanced-index-item").length === 6, `二级分类入口为六个（${locale}）`);
+    await openCategory(locale === "zh-CN" ? "请求扩展" : "Request extensions");
+    const extraLabel = panelHost.querySelector('[for="translation-agent-extra"]');
+    assert(extraLabel?.parentElement?.textContent?.includes('{"reasoning_effort":"none"}'), `JSON 示例在 ${locale} 下完整显示`);
+    await toService();
   }
   i18n.global.locale.value = "zh-CN"; await settle();
-  assert([...panelHost.querySelectorAll("fieldset.translation-group > .translation-legend")].map(el => el.textContent?.trim()).join("/") === "服务连接/模型与语言/高级", "子分区标题为服务连接 / 模型与语言 / 高级");
-  assert(panelHost.querySelectorAll('fieldset.translation-group[role="group"][aria-labelledby]').length === 3, "分组以 role=group + aria-labelledby 命名");
+  assert([...panelHost.querySelectorAll("fieldset.translation-group > .translation-legend")].map(el => el.textContent?.trim()).join("/") === "服务连接/模型与语言", "一级子分区为服务连接 / 模型与语言");
+  assert(panelHost.querySelectorAll('fieldset.translation-group[role="group"][aria-labelledby]').length === 2, "分组以 role=group + aria-labelledby 命名");
   const input = async (id: string, value: string) => { const element = panelHost.querySelector<HTMLElement & { value: string }>(`#${id}`); assert(element, `字段 ${id}`); element.value = value; element.dispatchEvent(new Event("input", { bubbles: true })); await settle(); };
   assert(panelHost.querySelector("#translation-key")?.getAttribute("type") === "password", "Key 为密码字段");
   assert(panelHost.querySelector(".translation-key-chip")?.textContent?.trim() === "已保存", "已存凭据在标签行显示状态胶囊");
-  await input("translation-json", "[]"); assert(!await panel.save(), "拒绝非对象 JSON");
-  await input("translation-json", '{"reasoning_effort":"high","thinking":{"budget_tokens":2048}}');
+  await setExtra("[]"); assert(!await panel.save(), "拒绝非对象 JSON");
+  assert(advancedPage() && advancedSummary() === "请求扩展", "JSON 校验失败定位到请求扩展分类");
+  await setExtra('{"reasoning_effort":"high","thinking":{"budget_tokens":2048}}');
+  await toService();
   await input("translation-url", "https://example.com/v1"); await input("translation-model", "test-model"); await input("translation-key", "test-only-key");
   assert(panel.hasUnsaved(), "敏感草稿进入脏检查"); assert(await panel.save(), "合法配置保存");
+  assert(!advancedPage() && panelHost.querySelector(".translation-advanced-entry"), "保存成功后回到一级");
   assert(capturedSettings.translation_api_key === "test-only-key", "Key 仅通过单次写入参数发送");
   assert(!(settings.settings as unknown as Record<string, unknown>).translation_api_key && !(panelHost.querySelector("#translation-key") as any).value, "Store 和保存后字段不留 Key");
   assert(!panel.hasUnsaved(), "保存后清除脏状态");
@@ -158,6 +208,43 @@ async function run() {
   assert(panelHost.querySelector(".translation-key-chip")?.textContent?.trim() === "保存时清除 Key", "清除动作在胶囊上回显待清除状态");
   assert(panel.hasUnsaved() && await panel.save() && capturedSettings.translation_api_key === "", "显式清除凭据");
   await input("translation-key", "discard-only"); panel.reset(); await settle(); assert(!panel.hasUnsaved(), "取消清空敏感草稿");
+
+  // ===== 设置分层（验收 8）：草稿跨级保留、分组 / 全部恢复、隐藏项错误定位 =====
+  assert(entryMeta() === "已修改 1 项", `已保存的高级 JSON 让一级入口显示已修改项数（实际 ${entryMeta()}）`);
+  await openCategory("并发与任务预算");
+  await inputIn("translation-agent-global-concurrency", "9");
+  assert(panelHost.querySelector(".field-hint")?.textContent?.includes("自动（32 + 16 × 分块数）"), "调用预算为 0 时显示自动公式");
+  await toService();
+  assert(entryMeta() === "已修改 2 项", `一级摘要随草稿更新（实际 ${entryMeta()}）`);
+  await openCategory("并发与任务预算");
+  assert((panelHost.querySelector("#translation-agent-global-concurrency") as unknown as { value: string }).value === "9", "一级 / 二级往返保留草稿");
+  await inputIn("translation-agent-global-concurrency", "99");
+  assert(panelHost.querySelector("#translation-agent-global-concurrency")?.hasAttribute("error"), "越界即时标红");
+  await toService();
+  assert(entryErrors().includes("1"), "一级入口显示待修正项数");
+  // 面板平时 display:none，隐藏元素拿不到焦点；定位检查段临时可见，检查完恢复。
+  panelHost.style.display = "block"; await settle();
+  assert(!await panel.save(), "隐藏分类的非法值阻止保存");
+  await settle();
+  assert(advancedPage() && advancedSummary() === "并发与任务预算", "保存失败定位到出错分类");
+  const badField = panelHost.querySelector("#translation-agent-global-concurrency");
+  // Material Web 的 text field 把焦点放在内部 input 上，因此接受「内部输入框获得焦点」。
+  const innerInput = badField?.shadowRoot?.querySelector("input");
+  assert(document.activeElement === badField || document.activeElement === innerInput || badField?.matches(":focus-within") || innerInput?.matches(":focus"),
+    `保存失败聚焦到出错字段（active=${document.activeElement?.tagName}，字段=${badField?.tagName}）`);
+  panelHost.style.display = "none"; await settle();
+  await inputIn("translation-agent-global-concurrency", "9");
+  const restoreGroup = findOutlinedButton("恢复本组推荐值"); assert(restoreGroup, "分类页有恢复本组推荐值"); restoreGroup.click(); await settle();
+  assert((panelHost.querySelector("#translation-agent-global-concurrency") as unknown as { value: string }).value === "4", "恢复本组推荐值");
+  assert(advancedSummary() === "并发与任务预算" && entryErrors() === "", "恢复本组后本组无待修正项");
+  await toIndex();
+  const restoreAllButton = findOutlinedButton("恢复全部推荐值"); assert(restoreAllButton, "分类首页有恢复全部推荐值"); restoreAllButton.click(); await settle();
+  const restoreConfirm = findOutlinedButton("确认恢复"); assert(restoreConfirm, "恢复全部有确认按钮"); restoreConfirm.click(); await settle();
+  await toService();
+  assert(entryMeta() === "推荐参数", "恢复全部后一级摘要回到推荐参数");
+  assert(!panelHost.querySelector(".translation-advanced-error"), "恢复全部后无待修正项");
+  assert((panelHost.querySelector("#translation-url") as unknown as { value: string }).value === "https://example.com/v1", "恢复全部不改一级连接设置");
+  panel.reset(); await settle(); assert(!panel.hasUnsaved(), "分层操作后的草稿可整体取消");
 
   // 获取模型 / 检测可用：用当前未保存草稿发探测请求，结果只进组件状态、不落 store。
   const findButton = (label: string) => [...panelHost.querySelectorAll<HTMLElement>("md-outlined-button,md-text-button")].find(el => el.textContent?.trim() === label);
@@ -216,6 +303,6 @@ async function run() {
   document.querySelector<HTMLButtonElement>("#preview-dark")!.onclick = () => document.documentElement.classList.add("dark");
   document.querySelector<HTMLButtonElement>("#preview-light")!.onclick = () => document.documentElement.classList.remove("dark");
   document.querySelector<HTMLElement>("#preview-controls")!.hidden = false;
-  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、状态点与 hover 报错、统一翻译中状态、目标语言一致提示与强制翻译、设置三组分区与凭据状态胶囊、JSON 校验与凭据草稿、获取模型原位下拉与绿红检测状态、目标语言选择、接口协议默认值与切换";
+  document.querySelector("#translation-result")!.textContent = "PASS：底栏 SVG 弹层、焦点/Esc/外部关闭、模式、图片、跨页异步、错误重试、状态点与 hover 报错、统一翻译中状态、目标语言一致提示与强制翻译、设置一级两组分区与凭据状态胶囊、一级不含运行参数与原始 JSON、二级分类入口与返回、JSON 校验定位、跨级草稿保留、越界即时标红与错误计数、恢复本组/全部推荐值、凭据草稿、获取模型原位下拉与绿红检测状态、目标语言选择、接口协议默认值与切换";
 }
-run().catch(error => { document.querySelector("#translation-result")!.textContent = `FAIL: ${error.message}`; console.error(error); });
+run().catch(error => { document.querySelector("#translation-result")!.textContent = `FAIL: ${error instanceof Error && error.stack ? error.stack : error.message}`; console.error(error); });

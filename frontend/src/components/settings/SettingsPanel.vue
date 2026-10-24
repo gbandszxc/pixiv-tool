@@ -93,71 +93,99 @@
     </template>
 
     <template v-else-if="section === 'translation'">
-      <fieldset class="m3-field settings-fieldset translation-group" role="group" aria-labelledby="translation-group-service">
-        <div id="translation-group-service" class="translation-legend">{{ t("translation.groupService") }}</div>
-        <div class="m3-field">
-          <div class="field-label"><label for="translation-format">{{ t('translation.apiFormat') }}</label><HelpTooltip :label="t('translation.apiFormat')" :text="t('translation.apiFormatHint')" /></div>
-          <md-outlined-select id="translation-format" :value="apiFormat" @change="changeApiFormat(($event.target as HTMLSelectElement).value)">
-            <md-select-option v-for="format in API_FORMATS" :key="format" :value="format">{{ t(`translation.apiFormats.${format}`) }}</md-select-option>
-          </md-outlined-select>
-        </div>
-        <div class="m3-field">
-          <div class="field-label"><label for="translation-url">{{ t('translation.apiUrl') }}</label><HelpTooltip :label="t('translation.apiUrl')" :text="`${t('translation.settingsHint')}\n\n${t('translation.urlHint', { endpoint: apiFormatEndpoint })}`" /></div>
-          <md-outlined-text-field id="translation-url" :value="form.translation_api_url" :placeholder="apiFormatPlaceholder" @input="form.translation_api_url = ($event.target as HTMLInputElement).value" />
-        </div>
-        <div class="m3-field">
-          <div class="field-label">
-            <label for="translation-key">API Key</label>
-            <HelpTooltip label="API Key" :text="t('translation.keyHint')" />
-            <span v-if="form.translation_key_configured" class="translation-key-chip" :class="{ 'is-clearing': clearTranslationKey }">{{ t(clearTranslationKey ? 'translation.keyWillClear' : 'translation.keySavedChip') }}</span>
-          </div>
-          <div class="translation-key-row">
-            <md-outlined-text-field id="translation-key" type="password" autocomplete="new-password" :value="translationKey" :placeholder="t(form.translation_key_configured ? 'translation.keyPlaceholderKeep' : 'translation.keyPlaceholder')" @input="translationKey = ($event.target as HTMLInputElement).value; clearTranslationKey = false" />
-            <md-text-button v-if="form.translation_key_configured" class="translation-key-clear" :disabled="clearTranslationKey" @click="clearTranslationKey = true; translationKey = ''">{{ t('translation.clearKey') }}</md-text-button>
-          </div>
-          <span v-if="form.translation_key_error" class="field-hint credential-error" role="alert">{{ form.translation_key_error }}</span>
-        </div>
-        <div class="m3-field">
-          <div class="field-label"><label for="translation-timeout">{{ t('translation.timeout') }}</label><HelpTooltip :label="t('translation.timeout')" :text="t('translation.timeoutHint')" /></div>
-          <div class="m3-row"><md-outlined-text-field id="translation-timeout" class="settings-number-input" type="number" min="30" max="3600" step="30" :value="String(form.translation_timeout_seconds)" @input="form.translation_timeout_seconds = Number(($event.target as HTMLInputElement).value)" /></div>
-        </div>
-      </fieldset>
-
-      <fieldset class="m3-field settings-fieldset translation-group" role="group" aria-labelledby="translation-group-model">
-        <div id="translation-group-model" class="translation-legend">{{ t("translation.groupModel") }}</div>
-        <div class="m3-field">
-          <div class="field-label"><label for="translation-model">{{ t('translation.model') }}</label><HelpTooltip :label="t('translation.model')" :text="t('translation.probeHint')" /></div>
-          <div class="m3-row translation-model-row">
-            <md-outlined-select v-if="availableModels.length" id="translation-model" class="translation-model-control" :aria-label="t('translation.model')" :value="form.translation_model" @change="form.translation_model = ($event.target as HTMLSelectElement).value">
-              <md-select-option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</md-select-option>
+      <!-- 一级：只放连接必需项与常用项；运行参数与原始 JSON 在二级高级设置。 -->
+      <template v-if="translationView === 'basic'">
+        <fieldset class="m3-field settings-fieldset translation-group" role="group" aria-labelledby="translation-group-service">
+          <div id="translation-group-service" class="translation-legend">{{ t("translation.groupService") }}</div>
+          <div class="m3-field">
+            <div class="field-label"><label for="translation-format">{{ t('translation.apiFormat') }}</label><HelpTooltip :label="t('translation.apiFormat')" :text="t('translation.apiFormatHint')" /></div>
+            <md-outlined-select id="translation-format" :value="apiFormat" @change="changeApiFormat(($event.target as HTMLSelectElement).value)">
+              <md-select-option v-for="format in API_FORMATS" :key="format" :value="format">{{ t(`translation.apiFormats.${format}`) }}</md-select-option>
             </md-outlined-select>
-            <md-outlined-text-field v-else id="translation-model" class="translation-model-control" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
-            <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe" @click="runProbe('models')">{{ t(probeBusy === 'models' ? 'translation.fetchingModels' : 'translation.fetchModels') }}</md-outlined-button>
           </div>
-          <md-text-button v-if="availableModels.length" class="translation-manual-model" @click="useManualModel">{{ t('translation.manualModel') }}</md-text-button>
-          <span v-if="modelsError" class="field-hint state-error" role="alert">{{ modelsError }}</span>
-        </div>
-        <div class="m3-field">
-          <div class="field-label"><label for="translation-target-language">{{ t('translation.targetLanguage') }}</label><HelpTooltip :label="t('translation.targetLanguage')" :text="t('translation.targetLanguageHint')" /></div>
-          <md-outlined-select id="translation-target-language" :value="canonicalTargetLanguage" @change="form.translation_target_language = ($event.target as HTMLSelectElement).value">
-            <md-select-option value="">{{ t('translation.followUiLanguage', { language: t(`settings.languages.${locale}`) }) }}</md-select-option>
-            <md-select-option v-for="code in TARGET_LANGUAGE_CODES" :key="code" :value="code">{{ t(`translation.targetLanguages.${code}`) }}</md-select-option>
-          </md-outlined-select>
-        </div>
-      </fieldset>
+          <div class="m3-field">
+            <div class="field-label"><label for="translation-url">{{ t('translation.apiUrl') }}</label><HelpTooltip :label="t('translation.apiUrl')" :text="`${t('translation.settingsHint')}\n\n${t('translation.urlHint', { endpoint: apiFormatEndpoint })}`" /></div>
+            <md-outlined-text-field id="translation-url" :value="form.translation_api_url" :placeholder="apiFormatPlaceholder" @input="form.translation_api_url = ($event.target as HTMLInputElement).value" />
+          </div>
+          <div class="m3-field">
+            <div class="field-label">
+              <label for="translation-key">API Key</label>
+              <HelpTooltip label="API Key" :text="t('translation.keyHint')" />
+              <span v-if="form.translation_key_configured" class="translation-key-chip" :class="{ 'is-clearing': clearTranslationKey }">{{ t(clearTranslationKey ? 'translation.keyWillClear' : 'translation.keySavedChip') }}</span>
+            </div>
+            <div class="translation-key-row">
+              <md-outlined-text-field id="translation-key" type="password" autocomplete="new-password" :value="translationKey" :placeholder="t(form.translation_key_configured ? 'translation.keyPlaceholderKeep' : 'translation.keyPlaceholder')" @input="translationKey = ($event.target as HTMLInputElement).value; clearTranslationKey = false" />
+              <md-text-button v-if="form.translation_key_configured" class="translation-key-clear" :disabled="clearTranslationKey" @click="clearTranslationKey = true; translationKey = ''">{{ t('translation.clearKey') }}</md-text-button>
+            </div>
+            <span v-if="form.translation_key_error" class="field-hint credential-error" role="alert">{{ form.translation_key_error }}</span>
+          </div>
+        </fieldset>
 
-      <fieldset class="m3-field settings-fieldset translation-group" role="group" aria-labelledby="translation-group-advanced">
-        <div id="translation-group-advanced" class="translation-legend">{{ t("translation.groupAdvanced") }}</div>
+        <fieldset class="m3-field settings-fieldset translation-group" role="group" aria-labelledby="translation-group-model">
+          <div id="translation-group-model" class="translation-legend">{{ t("translation.groupModel") }}</div>
+          <div class="m3-field">
+            <div class="field-label"><label for="translation-model">{{ t('translation.model') }}</label><HelpTooltip :label="t('translation.model')" :text="t('translation.probeHint')" /></div>
+            <div class="m3-row translation-model-row">
+              <md-outlined-select v-if="availableModels.length" id="translation-model" class="translation-model-control" :aria-label="t('translation.model')" :value="form.translation_model" @change="form.translation_model = ($event.target as HTMLSelectElement).value">
+                <md-select-option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</md-select-option>
+              </md-outlined-select>
+              <md-outlined-text-field v-else id="translation-model" class="translation-model-control" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
+              <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe" @click="runProbe('models')">{{ t(probeBusy === 'models' ? 'translation.fetchingModels' : 'translation.fetchModels') }}</md-outlined-button>
+            </div>
+            <md-text-button v-if="availableModels.length" class="translation-manual-model" @click="useManualModel">{{ t('translation.manualModel') }}</md-text-button>
+            <span v-if="modelsError" class="field-hint state-error" role="alert">{{ modelsError }}</span>
+          </div>
+          <div class="m3-field">
+            <div class="field-label"><label for="translation-target-language">{{ t('translation.targetLanguage') }}</label><HelpTooltip :label="t('translation.targetLanguage')" :text="t('translation.targetLanguageHint')" /></div>
+            <md-outlined-select id="translation-target-language" :value="canonicalTargetLanguage" @change="form.translation_target_language = ($event.target as HTMLSelectElement).value">
+              <md-select-option value="">{{ t('translation.followUiLanguage', { language: t(`settings.languages.${locale}`) }) }}</md-select-option>
+              <md-select-option v-for="code in TARGET_LANGUAGE_CODES" :key="code" :value="code">{{ t(`translation.targetLanguages.${code}`) }}</md-select-option>
+            </md-outlined-select>
+          </div>
+        </fieldset>
+
         <div class="m3-field">
-          <div class="field-label"><label for="translation-json">{{ t('translation.advanced') }}</label><HelpTooltip :label="t('translation.advanced')" :text="t('translation.jsonHint')" /></div>
-          <md-outlined-text-field id="translation-json" type="textarea" rows="5" :value="translationJson" :error="Boolean(translationJsonError)" :error-text="translationJsonError" @input="translationJson = ($event.target as HTMLTextAreaElement).value; translationJsonError = ''" />
+          <div class="translation-choice-row">
+            <label class="m3-choice"><md-checkbox id="translation-confirm-before-start" :checked="form.translation_confirm_before_start === true" @change="form.translation_confirm_before_start = ($event.target as HTMLInputElement).checked" />{{ t("translation.confirmBeforeStart") }}</label>
+            <HelpTooltip :label="t('translation.confirmBeforeStart')" :text="t('translation.confirmBeforeStartHint')" />
+          </div>
         </div>
-        <div class="translation-probe-row" :aria-busy="Boolean(probeBusy)">
-          <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe || !form.translation_model.trim()" @click="runProbe('test')">{{ t(probeBusy === 'test' ? 'translation.testing' : 'translation.testService') }}</md-outlined-button>
-          <span v-if="probeBusy === 'test'" class="field-hint" role="status">{{ t('translation.testing') }}</span>
-          <span v-else-if="testResult" class="field-hint" :class="testFailed ? 'state-error' : 'state-success'" :role="testFailed ? 'alert' : 'status'">{{ testResult }}</span>
+
+        <div class="m3-field">
+          <div class="translation-probe-row" :aria-busy="Boolean(probeBusy)">
+            <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe || !form.translation_model.trim()" @click="runProbe('test')">{{ t(probeBusy === 'test' ? 'translation.testing' : 'translation.testService') }}</md-outlined-button>
+            <span v-if="probeBusy === 'test'" class="field-hint" role="status">{{ t('translation.testing') }}</span>
+            <span v-else-if="testResult" class="field-hint" :class="testFailed ? 'state-error' : 'state-success'" :role="testFailed ? 'alert' : 'status'">{{ testResult }}</span>
+          </div>
         </div>
-      </fieldset>
+
+        <!-- 高级设置入口：显示推荐参数摘要与待修正项数，进入二级页面 -->
+        <button type="button" class="translation-advanced-entry" :aria-label="advancedEntryAria" @click="openAdvanced">
+          <span class="translation-advanced-text">
+            <span class="translation-advanced-title">{{ t("translation.agent.advancedEntry") }}</span>
+            <span class="translation-advanced-meta">{{ advancedEntryMeta }}</span>
+          </span>
+          <span v-if="translationIssueCount" class="translation-advanced-error" role="status">{{ t("translation.agent.entryErrors", { count: translationIssueCount }) }}</span>
+          <svg class="translation-advanced-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+        </button>
+      </template>
+
+      <TranslationAdvancedPanel
+        v-else
+        :values="form"
+        :extra-text="translationJson"
+        :extra-error="translationJsonError"
+        :extra-value="translationExtraValue"
+        :locate="advancedLocate"
+        :errors="agentErrors"
+        :detailed-diagnostics="detailedDiagnostics"
+        @set-int="setAgentInt"
+        @set-replay="form.translation_agent_replay_unknown = $event"
+        @set-extra="setExtra"
+        @set-diagnostics="detailedDiagnostics = $event"
+        @reset-all="notify(t('translation.agent.restoredAll'))"
+        @back="backToBasic"
+      />
     </template>
 
     <template v-else>
@@ -191,7 +219,17 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useI18n } from "vue-i18n";
 import HelpTooltip from "../common/HelpTooltip.vue";
 import MaintenancePanel from "./MaintenancePanel.vue";
+import TranslationAdvancedPanel from "./TranslationAdvancedPanel.vue";
 import { fetchTranslationModels, testTranslationService, API_FORMATS, TARGET_LANGUAGE_CODES, canonicalApiFormat, canonicalLanguage, type TranslationProbe } from "../../api/translation";
+import {
+  countModifiedTranslationAgent,
+  normalizeTranslationAgentSettings,
+  translationAgentIntRule,
+  validateTranslationAgent,
+  type TranslationAgentIntKey,
+  type TranslationAgentIssueCode,
+  type TranslationAgentLocate,
+} from "../../stores/settings";
 import { useSettingsStore } from "../../stores/settings";
 import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
@@ -200,7 +238,7 @@ import { formatTemplatePlaceholders, ILLUST_TEMPLATE_PLACEHOLDERS, NOVEL_TEMPLAT
 import { notify } from "../../ui/notify";
 import type { SettingsSection } from "./sections";
 
-withDefaults(defineProps<{ section: SettingsSection; active?: boolean }>(), { active: true });
+const props = withDefaults(defineProps<{ section: SettingsSection; active?: boolean }>(), { active: true });
 
 const { t, locale } = useI18n();
 const settingsStore = useSettingsStore();
@@ -217,6 +255,12 @@ const modelsError = ref("");
 const probeBusy = ref<"test" | "models" | null>(null);
 const testResult = ref("");
 const testFailed = ref(false);
+/** 一级 / 二级视图：同一内容区切换，不叠加新模态；草稿始终是 form。 */
+const translationView = ref<"basic" | "advanced">("basic");
+/** 本次运行有效的详细诊断开关：不落 settings.json，重置或关闭弹窗即失效。 */
+const detailedDiagnostics = ref(false);
+/** 保存失败的最后一次定位请求：二级页据此切分类、滚动并聚焦。 */
+const advancedLocate = ref<TranslationAgentLocate | null>(null);
 let probeVersion = 0;
 let probeRequest = 0;
 const canProbe = computed(() => Boolean(form.value.translation_api_url.trim() && !clearTranslationKey.value && (translationKey.value.trim() || form.value.translation_key_configured)));
@@ -289,6 +333,60 @@ async function runProbe(action: "test" | "models") {
 }
 /** 收起下拉回到自由文本输入：列表可能不含目标模型，或用户想直接粘贴模型 ID。 */
 function useManualModel() { availableModels.value = []; modelsError.value = ""; }
+
+// ===== 小说翻译高级设置（一级摘要 + 二级页面）=====
+
+/** 高级 JSON 的草稿解析：合法对象返回对象，非法返回 undefined（不写错误状态）。 */
+function parseExtraDraft(text: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && !Array.isArray(parsed) && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+const translationExtraValue = computed(() => parseExtraDraft(translationJson.value));
+/** 二级字段的即时错误：草稿变即重算，越界立刻红字。 */
+const agentIssues = computed(() => validateTranslationAgent(form.value));
+const agentErrors = computed<Partial<Record<TranslationAgentIntKey, TranslationAgentIssueCode>>>(() => {
+  const errors: Partial<Record<TranslationAgentIntKey, TranslationAgentIssueCode>> = {};
+  for (const issue of agentIssues.value) if (!errors[issue.key]) errors[issue.key] = issue.code;
+  return errors;
+});
+/** 一级入口的错误计数：实际出错字段数（含高级 JSON 解析失败）。 */
+const translationIssueCount = computed(() => agentIssues.value.length + (translationExtraValue.value === undefined ? 1 : 0));
+const translationModified = computed(() =>
+  countModifiedTranslationAgent(form.value, translationExtraValue.value));
+const translationModifiedTotal = computed(() =>
+  (Object.values(translationModified.value) as number[]).reduce((sum, count) => sum + count, 0));
+/** 一级摘要文字：「推荐参数」或「已修改 N 项」，出错时追加待修正提示。 */
+const advancedEntryMeta = computed(() => translationModifiedTotal.value === 0
+  ? t("translation.agent.recommendedParams")
+  : t("translation.agent.modifiedCount", { count: translationModifiedTotal.value }));
+const advancedEntryAria = computed(() => `${t("translation.agent.advancedEntry")}，${advancedEntryMeta.value}`);
+function openAdvanced() {
+  advancedLocate.value = null;
+  translationView.value = "advanced";
+  void nextTick(() => document.getElementById("translation-advanced-page")?.scrollIntoView({ block: "start" }));
+}
+function backToBasic() { translationView.value = "basic"; }
+/** 二级写回整数参数：未填（空串）记为 NaN，保存时由校验拦截并在原位提示。 */
+function setAgentInt(key: TranslationAgentIntKey, value: number) {
+  (form.value as unknown as Record<string, number>)[key] = value;
+}
+/** 二级写回高级 JSON 草稿：编辑即清上一次的解析错误，避免旧红字误导。 */
+function setExtra(value: string) {
+  translationJson.value = value;
+  translationJsonError.value = "";
+}
+/** 保存失败定位到分类与字段：值是 rule 定义，交叉违规挂在被标红的下游字段上。 */
+function locateInvalidAgentField(key: TranslationAgentIntKey) {
+  const rule = translationAgentIntRule(key);
+  translationView.value = "advanced";
+  advancedLocate.value = { category: rule.category, key };
+}
 function resetTranslationDraft() {
   probeRequest++; probeVersion++; probeBusy.value = null;
   availableModels.value = []; modelsError.value = ""; testResult.value = "";
@@ -296,6 +394,9 @@ function resetTranslationDraft() {
   clearTranslationKey.value = false;
   translationJson.value = JSON.stringify(form.value.translation_extra, null, 2);
   translationJsonError.value = "";
+  translationView.value = "basic";
+  advancedLocate.value = null;
+  detailedDiagnostics.value = false;
 }
 const startupPageOptions = computed(() => Object.entries(groupRoots).map(([group, value]) => ({ value, label: t(`workspace.${group}`) })));
 const savedSnapshot = ref("");
@@ -333,8 +434,17 @@ function applyLanguage(lang: string) { locale.value = lang; localStorage.setItem
 function changeLang(lang: string) { applyLanguage(lang); form.value.language = lang; }
 function snapshot() { return JSON.stringify([form.value, translationJson.value]); }
 function applyPreview() { const dark = form.value.theme === "dark" || (form.value.theme === "auto" && window.matchMedia("(prefers-color-scheme: dark)").matches); document.documentElement.classList.toggle("dark", dark); document.documentElement.dataset.palette = form.value.theme_color || "pixiv"; setWindowTheme(dark ? "dark" : "light").catch(() => {}); }
+/** 离开「小说翻译」组时回到一级，避免下次进入落在二级分类页。 */
+watch(() => props.section, (section) => {
+  if (section !== "translation") {
+    translationView.value = "basic";
+    advancedLocate.value = null;
+  }
+});
 watch(() => [form.value.theme, form.value.theme_color], applyPreview);
-onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180; if (typeof settingsStore.settings.translation_timeout_seconds !== "number") settingsStore.settings.translation_timeout_seconds = 600; form.value = { ...settingsStore.settings };
+onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180;
+  // 老配置 / mock 缺运行参数键时补后端默认值，避免草稿里出现 undefined 被当成越界
+  form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
   // 老配置缺模板键时回落默认值（与 stores/settings.ts 初值一致），避免空值卡住保存校验
   if (!form.value.illust_filename_template) form.value.illust_filename_template = "{title}_{pid}_p{page}";
   if (!form.value.novel_filename_template) form.value.novel_filename_template = "{title}_{nid}";
@@ -343,14 +453,26 @@ onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settings
 /** 有未保存改动：弹窗据此决定关闭前是否提示。 */
 function hasUnsaved() { return Boolean(translationKey.value) || clearTranslationKey.value || Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
 /** 回滚到上次保存值（取消 / 确认放弃修改）。主题预览随表单回到已保存值。 */
-function reset() { form.value = { ...settingsStore.settings }; templateErrors.value = { illust: "", novel: "", series: "" }; resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language); }
+function reset() {
+  form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
+  templateErrors.value = { illust: "", novel: "", series: "" };
+  translationJsonError.value = "";
+  resetTranslationDraft(); savedSnapshot.value = snapshot();
+  if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
+}
 defineExpose({ save, reset, hasUnsaved });
 async function save(): Promise<boolean> {
   if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) { notify(t("settings.maxWaitInvalid")); return false; }
   const cacheMax = form.value.image_cache_max_mib;
   if (!Number.isInteger(cacheMax) || cacheMax < 256 || cacheMax > 2048) { notify(t("settings.imageCacheMaxInvalid")); return false; }
-  const timeout = form.value.translation_timeout_seconds;
-  if (!timeout || timeout < 30 || timeout > 3600) { notify(t("translation.timeoutInvalid")); return false; }
+  // 运行参数（含二级隐藏分类）统一校验：失败时切到二级并把焦点落到出错字段，
+  // 一级入口同时显示错误计数，用户不必自己翻分类找问题。
+  const agentIssues = validateTranslationAgent(form.value);
+  if (agentIssues.length) {
+    locateInvalidAgentField(agentIssues[0].key);
+    notify(t("translation.agent.errors.saveBlocked", { count: agentIssues.length }));
+    return false;
+  }
   // 文件名模板保存前预校验：非法字段标红（error-text 替换 supporting text）并阻止整表写入
   const templateChecks: Array<["illust" | "novel" | "series", FilenameTemplateKind, string]> = [
     ["illust", "illust", form.value.illust_filename_template],
@@ -366,11 +488,17 @@ async function save(): Promise<boolean> {
   if (templateInvalid) return false;
   let extra: Record<string, unknown>;
   try { extra = parseTranslationJson(); }
-  catch { notify(translationJsonError.value); return false; }
+  catch {
+    // 原始 JSON 校验失败同样定位到二级「请求扩展」分类的文本框
+    translationView.value = "advanced";
+    advancedLocate.value = { category: "extra", key: null };
+    notify(translationJsonError.value);
+    return false;
+  }
   try {
     await settingsStore.saveSettings({ ...form.value, translation_extra: extra,
       ...(clearTranslationKey.value ? { translation_api_key: "" } : translationKey.value.trim() ? { translation_api_key: translationKey.value } : {}) });
-    form.value = { ...settingsStore.settings };
+    form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
     resetTranslationDraft(); savedSnapshot.value = snapshot(); notify(t("settings.saved")); return true;
   } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); return false; }
 }
@@ -411,6 +539,25 @@ fieldset.translation-group > .m3-field:last-child { margin-bottom: 0; }
 /* 低强调动作靠左对齐，不随 grid 拉伸成整行宽的胶囊 */
 .translation-manual-model { justify-self: start; }
 .translation-probe-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-md); }
+/* 「翻译前确认术语与风格」：勾选行与帮助图标同排，窄窗自然换行 */
+.translation-choice-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+/* 高级设置入口：整行可点的次级动作行（非卡片），标题 + 参数摘要 + 可选错误计数；
+ * hover 用既有 8% primary 状态层，focus-visible 为 primary 2px 外环，不新增 token。 */
+.translation-advanced-entry {
+  display: flex; align-items: center; gap: var(--space-md); width: 100%; min-height: 56px;
+  margin-top: var(--space-xl); padding: var(--space-sm) var(--space-xs); color: var(--ink);
+  font: inherit; text-align: left; background: transparent; border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent);
+  cursor: pointer;
+}
+.translation-advanced-entry:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
+.translation-advanced-entry:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.translation-advanced-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.translation-advanced-title { font-size: 14px; font-weight: 500; }
+.translation-advanced-meta { color: var(--ink-muted); font-size: 12px; }
+.translation-advanced-error { flex: none; color: var(--md-sys-color-error); font-size: 12px; font-weight: 600; }
+.translation-advanced-chevron { flex: none; width: 18px; height: 18px; color: var(--ink-muted); }
 .danger-button { --md-text-button-label-text-color: #ba1a1a; }
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
 /* 维护组：名称与帮助图标在左、动作按钮在右，行间以 divider 分隔 */
