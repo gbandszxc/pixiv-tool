@@ -8,6 +8,8 @@
 //! - 主窗口关闭确认（读 settings.language 决定中英文文案）
 
 pub mod accounts;
+// 通用 Agent 内核（阶段 1：模型传输与三协议装配）；运行层由后续单元填充。
+pub mod agent;
 pub mod auth;
 pub mod commands;
 pub mod cookies;

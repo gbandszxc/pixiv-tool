@@ -41,11 +41,13 @@ function Initialize-Rust {
     Require-Command cargo
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return }
     Require-Command rustup
-    $env:RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-msvc'
+    # 固定基线（计划 §12 / ADR 0019）：显式指定 1.99.1 的 MSVC 工具链，
+    # 不让 stable 标签静默漂移；版本与仓库根 rust-toolchain.toml 一致。
+    $env:RUSTUP_TOOLCHAIN = '1.99.1-x86_64-pc-windows-msvc'
     $toolchains = & rustup toolchain list
     if ($LASTEXITCODE -ne 0) { throw 'Cannot list Rust toolchains.' }
-    if (-not ($toolchains -match '^stable-x86_64-pc-windows-msvc(?:\s|$)')) {
-        throw 'Run: rustup toolchain install stable-x86_64-pc-windows-msvc'
+    if (-not ($toolchains -match '^1\.99\.1-x86_64-pc-windows-msvc(?:\s|$)')) {
+        throw 'Run: rustup toolchain install 1.99.1-x86_64-pc-windows-msvc'
     }
     if (-not $env:LIBCLANG_PATH) {
         $candidates = @(

@@ -20,22 +20,45 @@ use tauri::State;
 use crate::core::filename_template::TemplateKind;
 use crate::settings::{
     STARTUP_PAGES, Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
-    validate_detail_image_scale_value, validate_filename_template_value,
-    validate_image_cache_max_value, validate_max_wait_value, validate_novel_bg_color_value,
-    validate_novel_font_scale_value, validate_output_dir_value, validate_thumb_tier,
+    TRANSLATION_AGENT_BOOL_KEYS, TRANSLATION_AGENT_INT_RULES, validate_detail_image_scale_value,
+    validate_filename_template_value, validate_image_cache_max_value, validate_max_wait_value,
+    validate_novel_bg_color_value, validate_novel_font_scale_value, validate_output_dir_value,
+    validate_thumb_tier, validate_translation_agent_int_value, validate_translation_agent_settings,
     validate_translation_timeout_value,
 };
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 26] = [
+const WRITABLE_KEYS: [&str; 48] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
     "translation_target_language",
     "translation_timeout_seconds",
     "translation_extra",
+    "translation_agent_global_concurrency",
+    "translation_agent_novel_concurrency",
+    "translation_agent_active_novels",
+    "translation_agent_retry_limit",
+    "translation_agent_backoff_base_ms",
+    "translation_agent_backoff_max_seconds",
+    "translation_agent_rework_rounds",
+    "translation_agent_split_depth",
+    "translation_agent_tool_corrections",
+    "translation_agent_max_turns",
+    "translation_agent_stall_limit",
+    "translation_agent_context_window",
+    "translation_agent_output_cap",
+    "translation_agent_compact_percent",
+    "translation_agent_recent_history_tokens",
+    "translation_agent_summary_tokens",
+    "translation_agent_chunk_target_chars",
+    "translation_agent_chunk_max_chars",
+    "translation_agent_context_chars",
+    "translation_call_budget",
+    "translation_agent_replay_unknown",
+    "translation_confirm_before_start",
     "startup_page",
     "output_dir",
     "output_formats",
@@ -137,6 +160,18 @@ pub fn apply_settings_patch(
     if let Some(value) = patch_obj.get("translation_timeout_seconds") {
         validate_translation_timeout_value(value)?;
     }
+    // 运行参数与加载期回落共用 settings.rs 的同一张区间表。
+    for rule in TRANSLATION_AGENT_INT_RULES {
+        if let Some(value) = patch_obj.get(rule.key) {
+            validate_translation_agent_int_value(rule.key, value)
+                .expect("运行参数区间表与键名同步")?;
+        }
+    }
+    for key in TRANSLATION_AGENT_BOOL_KEYS {
+        if patch_obj.get(key).is_some_and(|value| !value.is_boolean()) {
+            return Err(format!("设置项 {key} 必须是布尔值"));
+        }
+    }
     if let Some(value) = patch_obj.get("theme_color") {
         let color = value.as_str().ok_or_else(|| "主题色板无效".to_string())?;
         if !["pixiv", "indigo", "jade", "violet", "amber"].contains(&color) {
@@ -203,6 +238,7 @@ pub fn apply_settings_patch(
     let updated: Settings = serde_json::from_value(Value::Object(merged))
         .map_err(|_| "设置字段格式不正确".to_string())?;
     crate::translation::validate_settings(&updated)?;
+    validate_translation_agent_settings(&updated)?;
     Ok(updated)
 }
 
@@ -865,6 +901,60 @@ mod tests {
         let updated =
             apply_settings_patch(&updated, &json!({"language": "en-US"}), &data_dir).unwrap();
         assert_eq!(updated.saucenao_api_key, "");
+        cleanup(&data_dir);
+    }
+
+    #[test]
+    fn patch_validates_translation_agent_settings() {
+        let data_dir = temp_data_dir("agent-settings");
+        // 区间内保存成功，并写回对应字段。
+        let updated = apply_settings_patch(
+            &Settings::default(),
+            &json!({
+                "translation_agent_global_concurrency": 8,
+                "translation_agent_replay_unknown": true,
+                "translation_confirm_before_start": true,
+                "translation_call_budget": 64
+            }),
+            &data_dir,
+        )
+        .unwrap();
+        assert_eq!(updated.translation_agent_global_concurrency, 8);
+        assert!(updated.translation_agent_replay_unknown);
+        assert!(updated.translation_confirm_before_start);
+        assert_eq!(updated.translation_call_budget, 64);
+        // 越界 / 非整数 / 布尔字段类型错误都拒绝。
+        for bad in [json!(0), json!(17), json!("4"), json!(true)] {
+            assert!(
+                apply_settings_patch(
+                    &Settings::default(),
+                    &json!({ "translation_agent_global_concurrency": bad }),
+                    &data_dir
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            apply_settings_patch(
+                &Settings::default(),
+                &json!({ "translation_agent_replay_unknown": "yes" }),
+                &data_dir
+            )
+            .is_err()
+        );
+        // 交叉约束：输出上限不能超过上下文窗口。
+        assert_eq!(
+            apply_settings_patch(
+                &Settings::default(),
+                &json!({
+                    "translation_agent_output_cap": 100000,
+                    "translation_agent_context_window": 32768
+                }),
+                &data_dir
+            )
+            .unwrap_err(),
+            "单请求输出上限不能超过未知模型上下文窗口"
+        );
         cleanup(&data_dir);
     }
 }

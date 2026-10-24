@@ -5,7 +5,9 @@ description = "Pixiv Tool —— 本地 Pixiv 小说/插画抓取工具（Tauri 
 authors = ["pixiv-tool"]
 license = "MIT"
 edition = "2024"
-rust-version = "1.88"
+# 通用 Agent 内核基线（计划 §12 / ADR 0019）：与仓库根 rust-toolchain.toml、
+# dev.ps1/dev.sh 与发版 CI 保持一致，不静默跟随 stable。
+rust-version = "1.99.1"
 
 # lib 名固定 pixiv_tool_lib：main.rs 只做薄壳，业务全在 lib 里（方便测试与后续移动端壳复用）
 [lib]
@@ -22,7 +24,7 @@ tauri-build = { version = "2.6", features = [] }
 [dependencies]
 tauri = { version = "2.11", features = ["unstable"] }
 # 打开外链（浏览页「在浏览器中打开」）：系统默认浏览器，不经内嵌 webview。
-# 锁 2.5：2.6+ 声明 rust-version 1.90，高于项目最低 Rust 1.88；且 npm 侧
+# 锁 2.5：2.6+ 声明 rust-version 1.90；且 npm 侧
 # @tauri-apps/plugin-opener 必须与之同 major.minor，两侧一起升才动这里。
 tauri-plugin-opener = "2.5"
 tauri-plugin-dialog = "2.7"
@@ -49,6 +51,14 @@ keyring = { version = "3.6", features = [
 # 该感知对进程内所有 wreq client（含 pixiv 抓取）生效——期望行为：
 # 与用户浏览器同链路，弱网环境抓取成功率同浏览器。
 wreq = { version = "=6.0.0-rc.31", features = ["system-proxy", "stream"] }
+# Agent 内核（计划 §12 / 阶段 1）：只取最小必要 feature，不启用 server / MCP /
+# vector / embeddings / image / audio / pdf / reqwest / rustls（本项目 HTTP 全部走
+# wreq + 自实现 HttpClientExt，见 agent/model/transport.rs）。
+rig-core = { version = "=0.45.0", default-features = false }
+rig-agent = { version = "=0.45.0", default-features = false }
+rig-memory = { version = "=0.45.0", default-features = false }
+http = "1"
+futures = "0.3"
 sha2 = "0.10"
 wreq-util = "=3.0.0-rc.14"
 # CDP WebSocket（ws://127.0.0.1 本机调试端口，无需 TLS feature）

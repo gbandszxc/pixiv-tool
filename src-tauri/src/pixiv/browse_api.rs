@@ -1493,7 +1493,14 @@ fn parse_user_profile(id: i64, body: &Value) -> BrowseUserProfile {
 fn parse_user_works_batch(body: &Value, fallback_kind: &str) -> Vec<BrowseWorkItem> {
     let entries: Vec<&Value> = match body {
         Value::Array(arr) => arr.iter().collect(),
-        Value::Object(map) => map.values().collect(),
+        // 对象形响应原来依赖 serde_json 默认的 BTreeMap 字典序；通用 Agent
+        // 依赖开启了 serde_json/preserve_order（Map 改按插入序），这里显式
+        // 按 key 排序，保持既有语义且不受全局 feature 影响。
+        Value::Object(map) => {
+            let mut ordered: Vec<(&String, &Value)> = map.iter().collect();
+            ordered.sort_by(|(left, _), (right, _)| left.cmp(right));
+            ordered.into_iter().map(|(_, value)| value).collect()
+        }
         _ => Vec::new(),
     };
     entries

@@ -1,0 +1,5 @@
+[toolchain]
+# 统一开发/构建基线（ADR 0019 / 通用内核计划 §12）。版本只在这里固定，
+# dev 脚本与 CI 显式选择同一版本，避免 stable 静默漂移。
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]

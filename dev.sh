@@ -87,6 +87,9 @@ case "$(uname -s)" in
         exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$root/dev.ps1")" "${original_args[@]}"
         ;;
 esac
+# 固定基线（计划 §12 / ADR 0019）：非 Windows 侧优先使用 1.99.1；
+# 仓库根 rust-toolchain.toml 同时固定版本，避免 stable 静默漂移。
+export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.99.1}"
 if [[ $command_name == logs ]]; then
     if [[ $source_name == app ]]; then path="$root/data/logs/app.log"
     else path="$root/.dev/logs/$source_name.log"; fi

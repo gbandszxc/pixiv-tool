@@ -81,6 +81,51 @@ pub struct Settings {
     pub translation_timeout_seconds: i64,
     /// 模型请求体扩展；不含凭据或应用保留字段，可用键随协议不同。
     pub translation_extra: Value,
+    /// 全局模型请求并发（所有小说共用），默认 4，区间 1~16。
+    pub translation_agent_global_concurrency: i64,
+    /// 单小说子任务并发，默认 4，区间 1~16（实际受全局上限约束）。
+    pub translation_agent_novel_concurrency: i64,
+    /// 同时活跃小说数，默认 2，区间 1~8。
+    pub translation_agent_active_novels: i64,
+    /// 自动网络重试次数（不含首次），默认 2，区间 0~5。
+    pub translation_agent_retry_limit: i64,
+    /// 自动退避基础延迟（毫秒），默认 1000，区间 500~30000。
+    pub translation_agent_backoff_base_ms: i64,
+    /// 自动退避上限（秒），默认 120，区间 10~600。
+    pub translation_agent_backoff_max_seconds: i64,
+    /// 质检返工轮数（修复 + 复检），默认 2，区间 0~5。
+    pub translation_agent_rework_rounds: i64,
+    /// 超限细分深度，默认 3，区间 0~5。
+    pub translation_agent_split_depth: i64,
+    /// 工具参数 / 结构纠正次数，默认 2，区间 0~3。
+    pub translation_agent_tool_corrections: i64,
+    /// 单子任务模型轮次，默认 24，区间 4~128。
+    pub translation_agent_max_turns: i64,
+    /// 主 Agent 无进展上限（轮），默认 8，区间 3~32。
+    pub translation_agent_stall_limit: i64,
+    /// 未知模型上下文窗口（token），默认 32768，区间 16384~2097152。
+    pub translation_agent_context_window: i64,
+    /// 单请求输出上限（token），默认 16384，区间 1024~262144，且不超过上下文窗口。
+    pub translation_agent_output_cap: i64,
+    /// 自动压缩触发阈值（可用输入预算百分比），默认 75，区间 50~90。
+    pub translation_agent_compact_percent: i64,
+    /// 保留近期历史（token），默认 4096，区间 512~131072。
+    pub translation_agent_recent_history_tokens: i64,
+    /// 摘要目标（token），默认 2048，区间 256~65536。
+    pub translation_agent_summary_tokens: i64,
+    /// 分块目标字符数，默认 3000，区间 500~100000，且不超过字符上限。
+    pub translation_agent_chunk_target_chars: i64,
+    /// 分块字符上限，默认 6000，区间 1000~200000。
+    pub translation_agent_chunk_max_chars: i64,
+    /// 邻接参考窗口（前后各多少字符），默认 600，区间 0~20000。
+    pub translation_agent_context_chars: i64,
+    /// 整篇累计模型尝试预算；0 = 自动公式（32 + 16 × 初始分块数），
+    /// 自定义正整数区间 1~1000000。
+    pub translation_call_budget: i64,
+    /// 请求结果未知时是否自动重放；默认关闭（可能重复计费）。
+    pub translation_agent_replay_unknown: bool,
+    /// 启动前确认术语与风格；默认关闭，浮层可对本次任务覆盖。
+    pub translation_confirm_before_start: bool,
 }
 
 impl Default for Settings {
@@ -112,6 +157,28 @@ impl Default for Settings {
             translation_target_language: String::new(),
             translation_timeout_seconds: DEFAULT_TRANSLATION_TIMEOUT_SECONDS,
             translation_extra: serde_json::json!({}),
+            translation_agent_global_concurrency: 4,
+            translation_agent_novel_concurrency: 4,
+            translation_agent_active_novels: 2,
+            translation_agent_retry_limit: 2,
+            translation_agent_backoff_base_ms: 1_000,
+            translation_agent_backoff_max_seconds: 120,
+            translation_agent_rework_rounds: 2,
+            translation_agent_split_depth: 3,
+            translation_agent_tool_corrections: 2,
+            translation_agent_max_turns: 24,
+            translation_agent_stall_limit: 8,
+            translation_agent_context_window: 32_768,
+            translation_agent_output_cap: 16_384,
+            translation_agent_compact_percent: 75,
+            translation_agent_recent_history_tokens: 4_096,
+            translation_agent_summary_tokens: 2_048,
+            translation_agent_chunk_target_chars: 3_000,
+            translation_agent_chunk_max_chars: 6_000,
+            translation_agent_context_chars: 600,
+            translation_call_budget: 0,
+            translation_agent_replay_unknown: false,
+            translation_confirm_before_start: false,
         }
     }
 }
@@ -163,6 +230,224 @@ pub const TRANSLATION_TIMEOUT_MIN_SECONDS: i64 = 30;
 /// 小说翻译单请求超时合法区间上限（秒）= 1 小时。
 pub const TRANSLATION_TIMEOUT_MAX_SECONDS: i64 = 3600;
 
+/// 通用 Agent 运行参数的整数区间定义。
+///
+/// 加载期回落与保存期校验共用本表（单一真相源），避免两处区间漂移。
+#[derive(Debug, Clone, Copy)]
+pub struct TranslationIntRule {
+    /// settings.json 键名。
+    pub key: &'static str,
+    /// 缺省 / 越界回落值。
+    pub default: i64,
+    /// 合法区间下限（含）。
+    pub min: i64,
+    /// 合法区间上限（含）。
+    pub max: i64,
+    /// 中文提示用的字段名。
+    pub label: &'static str,
+}
+
+impl TranslationIntRule {
+    pub fn contains(self, value: i64) -> bool {
+        (self.min..=self.max).contains(&value)
+    }
+
+    pub fn message(self) -> String {
+        format!("{}必须是 {}~{} 之间的整数", self.label, self.min, self.max)
+    }
+}
+
+/// 计划 §7.1 的运行参数（整数部分）。`translation_call_budget` 的 0 表示自动。
+pub const TRANSLATION_AGENT_INT_RULES: &[TranslationIntRule] = &[
+    TranslationIntRule {
+        key: "translation_agent_global_concurrency",
+        default: 4,
+        min: 1,
+        max: 16,
+        label: "全局模型请求并发",
+    },
+    TranslationIntRule {
+        key: "translation_agent_novel_concurrency",
+        default: 4,
+        min: 1,
+        max: 16,
+        label: "单小说子任务并发",
+    },
+    TranslationIntRule {
+        key: "translation_agent_active_novels",
+        default: 2,
+        min: 1,
+        max: 8,
+        label: "同时活跃小说数",
+    },
+    TranslationIntRule {
+        key: "translation_agent_retry_limit",
+        default: 2,
+        min: 0,
+        max: 5,
+        label: "自动网络重试次数",
+    },
+    TranslationIntRule {
+        key: "translation_agent_backoff_base_ms",
+        default: 1_000,
+        min: 500,
+        max: 30_000,
+        label: "自动退避基础延迟（毫秒）",
+    },
+    TranslationIntRule {
+        key: "translation_agent_backoff_max_seconds",
+        default: 120,
+        min: 10,
+        max: 600,
+        label: "自动退避上限（秒）",
+    },
+    TranslationIntRule {
+        key: "translation_agent_rework_rounds",
+        default: 2,
+        min: 0,
+        max: 5,
+        label: "质检返工轮数",
+    },
+    TranslationIntRule {
+        key: "translation_agent_split_depth",
+        default: 3,
+        min: 0,
+        max: 5,
+        label: "超限细分深度",
+    },
+    TranslationIntRule {
+        key: "translation_agent_tool_corrections",
+        default: 2,
+        min: 0,
+        max: 3,
+        label: "工具参数纠错次数",
+    },
+    TranslationIntRule {
+        key: "translation_agent_max_turns",
+        default: 24,
+        min: 4,
+        max: 128,
+        label: "单子任务模型轮次",
+    },
+    TranslationIntRule {
+        key: "translation_agent_stall_limit",
+        default: 8,
+        min: 3,
+        max: 32,
+        label: "主 Agent 无进展上限",
+    },
+    TranslationIntRule {
+        key: "translation_agent_context_window",
+        default: 32_768,
+        min: 16_384,
+        max: 2_097_152,
+        label: "未知模型上下文窗口",
+    },
+    TranslationIntRule {
+        key: "translation_agent_output_cap",
+        default: 16_384,
+        min: 1_024,
+        max: 262_144,
+        label: "单请求输出上限",
+    },
+    TranslationIntRule {
+        key: "translation_agent_compact_percent",
+        default: 75,
+        min: 50,
+        max: 90,
+        label: "自动压缩触发百分比",
+    },
+    TranslationIntRule {
+        key: "translation_agent_recent_history_tokens",
+        default: 4_096,
+        min: 512,
+        max: 131_072,
+        label: "保留近期历史 token",
+    },
+    TranslationIntRule {
+        key: "translation_agent_summary_tokens",
+        default: 2_048,
+        min: 256,
+        max: 65_536,
+        label: "摘要目标 token",
+    },
+    TranslationIntRule {
+        key: "translation_agent_chunk_target_chars",
+        default: 3_000,
+        min: 500,
+        max: 100_000,
+        label: "分块目标字符数",
+    },
+    TranslationIntRule {
+        key: "translation_agent_chunk_max_chars",
+        default: 6_000,
+        min: 1_000,
+        max: 200_000,
+        label: "分块字符上限",
+    },
+    TranslationIntRule {
+        key: "translation_agent_context_chars",
+        default: 600,
+        min: 0,
+        max: 20_000,
+        label: "邻接参考窗口字符数",
+    },
+    TranslationIntRule {
+        key: "translation_call_budget",
+        default: 0,
+        min: 0,
+        max: 1_000_000,
+        label: "整篇累计模型调用预算（0 = 自动）",
+    },
+];
+
+/// 布尔运行参数键；保存时只校验类型。
+pub const TRANSLATION_AGENT_BOOL_KEYS: [&str; 2] = [
+    "translation_agent_replay_unknown",
+    "translation_confirm_before_start",
+];
+
+/// 按键查整数区间定义。
+pub fn translation_agent_int_rule(key: &str) -> Option<&'static TranslationIntRule> {
+    TRANSLATION_AGENT_INT_RULES
+        .iter()
+        .find(|rule| rule.key == key)
+}
+
+/// JSON 值形式的运行参数校验；未知键返回 `None`。
+pub fn validate_translation_agent_int_value(
+    key: &str,
+    value: &Value,
+) -> Option<Result<i64, String>> {
+    let rule = translation_agent_int_rule(key)?;
+    Some(match value.as_i64() {
+        Some(n) if !value.is_boolean() && rule.contains(n) => Ok(n),
+        _ => Err(rule.message()),
+    })
+}
+
+/// 保存前交叉校验：单项区间之外，还要保证输出 / 摘要 / 分块预算自洽。
+pub fn validate_translation_agent_settings(settings: &Settings) -> Result<(), String> {
+    for rule in TRANSLATION_AGENT_INT_RULES {
+        let value = settings.agent_int(rule.key).unwrap_or(rule.default);
+        if !rule.contains(value) {
+            return Err(rule.message());
+        }
+    }
+    if settings.translation_agent_chunk_target_chars > settings.translation_agent_chunk_max_chars {
+        return Err("分块目标字符数不能超过分块字符上限".into());
+    }
+    if settings.translation_agent_output_cap > settings.translation_agent_context_window {
+        return Err("单请求输出上限不能超过未知模型上下文窗口".into());
+    }
+    if settings.translation_agent_recent_history_tokens + settings.translation_agent_summary_tokens
+        > settings.translation_agent_context_window
+    {
+        return Err("保留近期历史与摘要目标之和不能超过上下文窗口".into());
+    }
+    Ok(())
+}
+
 /// 缩略图档位校验：非字符串或不在 `allowed` 集合内 → Err(message)。
 pub fn validate_thumb_tier(value: &Value, allowed: &[&str], message: &str) -> Result<(), String> {
     match value.as_str() {
@@ -207,6 +492,16 @@ impl Settings {
         }
 
         let raw = std::fs::read_to_string(&path).unwrap_or_default();
+        // 记录文件里实际出现的键：serde 的容器级 default 对缺失整数给 0，
+        // 而 0 对部分运行参数是合法值，不能靠越界判定识别「缺键」。
+        let present: std::collections::HashSet<String> = serde_json::from_str::<Value>(&raw)
+            .ok()
+            .and_then(|value| {
+                value
+                    .as_object()
+                    .map(|object| object.keys().cloned().collect())
+            })
+            .unwrap_or_default();
         match serde_json::from_str::<Settings>(&raw) {
             Ok(mut settings) => {
                 if !STARTUP_PAGES.contains(&settings.startup_page.as_str()) {
@@ -286,6 +581,7 @@ impl Settings {
                     TemplateKind::NovelSeries,
                     "novel_series_filename_template",
                 );
+                settings.normalize_translation_agent(&present);
                 settings
             }
             Err(_) => {
@@ -296,6 +592,121 @@ impl Settings {
                 }
                 settings
             }
+        }
+    }
+
+    /// 按键取运行参数整数值；未知键返回 `None`。
+    fn agent_int(&self, key: &str) -> Option<i64> {
+        Some(match key {
+            "translation_agent_global_concurrency" => self.translation_agent_global_concurrency,
+            "translation_agent_novel_concurrency" => self.translation_agent_novel_concurrency,
+            "translation_agent_active_novels" => self.translation_agent_active_novels,
+            "translation_agent_retry_limit" => self.translation_agent_retry_limit,
+            "translation_agent_backoff_base_ms" => self.translation_agent_backoff_base_ms,
+            "translation_agent_backoff_max_seconds" => self.translation_agent_backoff_max_seconds,
+            "translation_agent_rework_rounds" => self.translation_agent_rework_rounds,
+            "translation_agent_split_depth" => self.translation_agent_split_depth,
+            "translation_agent_tool_corrections" => self.translation_agent_tool_corrections,
+            "translation_agent_max_turns" => self.translation_agent_max_turns,
+            "translation_agent_stall_limit" => self.translation_agent_stall_limit,
+            "translation_agent_context_window" => self.translation_agent_context_window,
+            "translation_agent_output_cap" => self.translation_agent_output_cap,
+            "translation_agent_compact_percent" => self.translation_agent_compact_percent,
+            "translation_agent_recent_history_tokens" => {
+                self.translation_agent_recent_history_tokens
+            }
+            "translation_agent_summary_tokens" => self.translation_agent_summary_tokens,
+            "translation_agent_chunk_target_chars" => self.translation_agent_chunk_target_chars,
+            "translation_agent_chunk_max_chars" => self.translation_agent_chunk_max_chars,
+            "translation_agent_context_chars" => self.translation_agent_context_chars,
+            "translation_call_budget" => self.translation_call_budget,
+            _ => return None,
+        })
+    }
+
+    /// 按键取运行参数可变引用；未知键返回 `None`。
+    fn agent_int_mut(&mut self, key: &str) -> Option<&mut i64> {
+        Some(match key {
+            "translation_agent_global_concurrency" => {
+                &mut self.translation_agent_global_concurrency
+            }
+            "translation_agent_novel_concurrency" => &mut self.translation_agent_novel_concurrency,
+            "translation_agent_active_novels" => &mut self.translation_agent_active_novels,
+            "translation_agent_retry_limit" => &mut self.translation_agent_retry_limit,
+            "translation_agent_backoff_base_ms" => &mut self.translation_agent_backoff_base_ms,
+            "translation_agent_backoff_max_seconds" => {
+                &mut self.translation_agent_backoff_max_seconds
+            }
+            "translation_agent_rework_rounds" => &mut self.translation_agent_rework_rounds,
+            "translation_agent_split_depth" => &mut self.translation_agent_split_depth,
+            "translation_agent_tool_corrections" => &mut self.translation_agent_tool_corrections,
+            "translation_agent_max_turns" => &mut self.translation_agent_max_turns,
+            "translation_agent_stall_limit" => &mut self.translation_agent_stall_limit,
+            "translation_agent_context_window" => &mut self.translation_agent_context_window,
+            "translation_agent_output_cap" => &mut self.translation_agent_output_cap,
+            "translation_agent_compact_percent" => &mut self.translation_agent_compact_percent,
+            "translation_agent_recent_history_tokens" => {
+                &mut self.translation_agent_recent_history_tokens
+            }
+            "translation_agent_summary_tokens" => &mut self.translation_agent_summary_tokens,
+            "translation_agent_chunk_target_chars" => {
+                &mut self.translation_agent_chunk_target_chars
+            }
+            "translation_agent_chunk_max_chars" => &mut self.translation_agent_chunk_max_chars,
+            "translation_agent_context_chars" => &mut self.translation_agent_context_chars,
+            "translation_call_budget" => &mut self.translation_call_budget,
+            _ => return None,
+        })
+    }
+
+    /// 加载期归一：缺键或越界回落默认并记录；交叉约束冲突时整组回落默认，
+    /// 不让手改 settings.json 写出会让运行层立刻拒绝的组合。
+    fn normalize_translation_agent(&mut self, present: &std::collections::HashSet<String>) {
+        for rule in TRANSLATION_AGENT_INT_RULES {
+            let Some(value) = self.agent_int_mut(rule.key) else {
+                continue;
+            };
+            if !present.contains(rule.key) {
+                // 旧版 settings.json 没有这些键：serde 给的是 0，必须回填计划默认值。
+                *value = rule.default;
+                continue;
+            }
+            if !rule.contains(*value) {
+                eprintln!(
+                    "settings.json 的 {} 越界（{}），回落默认 {}",
+                    rule.key, *value, rule.default
+                );
+                *value = rule.default;
+            }
+        }
+        for key in TRANSLATION_AGENT_BOOL_KEYS {
+            if !present.contains(key) {
+                match key {
+                    "translation_agent_replay_unknown" => {
+                        self.translation_agent_replay_unknown = false;
+                    }
+                    "translation_confirm_before_start" => {
+                        self.translation_confirm_before_start = false;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if self.translation_agent_chunk_target_chars > self.translation_agent_chunk_max_chars {
+            eprintln!("settings.json 的分块目标超过字符上限，两项回落默认");
+            self.translation_agent_chunk_target_chars = 3_000;
+            self.translation_agent_chunk_max_chars = 6_000;
+        }
+        if self.translation_agent_output_cap > self.translation_agent_context_window {
+            eprintln!("settings.json 的输出上限超过上下文窗口，回落默认");
+            self.translation_agent_output_cap = 16_384.min(self.translation_agent_context_window);
+        }
+        if self.translation_agent_recent_history_tokens + self.translation_agent_summary_tokens
+            > self.translation_agent_context_window
+        {
+            eprintln!("settings.json 的近期历史与摘要目标超过上下文窗口，两项回落默认");
+            self.translation_agent_recent_history_tokens = 4_096;
+            self.translation_agent_summary_tokens = 2_048;
         }
     }
 
@@ -1111,5 +1522,81 @@ mod tests {
                 message
             );
         }
+    }
+
+    #[test]
+    fn translation_agent_defaults_match_plan() {
+        let settings = Settings::default();
+        assert_eq!(settings.translation_agent_global_concurrency, 4);
+        assert_eq!(settings.translation_agent_novel_concurrency, 4);
+        assert_eq!(settings.translation_agent_active_novels, 2);
+        assert_eq!(settings.translation_agent_retry_limit, 2);
+        assert_eq!(settings.translation_agent_backoff_base_ms, 1_000);
+        assert_eq!(settings.translation_agent_backoff_max_seconds, 120);
+        assert_eq!(settings.translation_agent_rework_rounds, 2);
+        assert_eq!(settings.translation_agent_split_depth, 3);
+        assert_eq!(settings.translation_agent_tool_corrections, 2);
+        assert_eq!(settings.translation_agent_max_turns, 24);
+        assert_eq!(settings.translation_agent_stall_limit, 8);
+        assert_eq!(settings.translation_agent_context_window, 32_768);
+        assert_eq!(settings.translation_agent_output_cap, 16_384);
+        assert_eq!(settings.translation_agent_compact_percent, 75);
+        assert_eq!(settings.translation_agent_recent_history_tokens, 4_096);
+        assert_eq!(settings.translation_agent_summary_tokens, 2_048);
+        assert_eq!(settings.translation_agent_chunk_target_chars, 3_000);
+        assert_eq!(settings.translation_agent_chunk_max_chars, 6_000);
+        assert_eq!(settings.translation_agent_context_chars, 600);
+        assert_eq!(settings.translation_call_budget, 0, "0 = 自动预算");
+        assert!(!settings.translation_agent_replay_unknown);
+        assert!(!settings.translation_confirm_before_start);
+        validate_translation_agent_settings(&settings).unwrap();
+    }
+
+    #[test]
+    fn translation_agent_out_of_range_falls_back_on_load() {
+        let dir = temp_config_dir("agent-range");
+        std::fs::write(
+            settings_path(&dir),
+            r#"{
+                "translation_agent_global_concurrency": 0,
+                "translation_agent_context_window": 100,
+                "translation_agent_chunk_target_chars": 9999,
+                "translation_agent_chunk_max_chars": 6000,
+                "translation_call_budget": -1
+            }"#,
+        )
+        .unwrap();
+        let settings = Settings::load_or_init(&dir);
+        assert_eq!(settings.translation_agent_global_concurrency, 4);
+        assert_eq!(settings.translation_agent_context_window, 32_768);
+        // 交叉冲突（目标 > 上限）整组回落默认。
+        assert_eq!(settings.translation_agent_chunk_target_chars, 3_000);
+        assert_eq!(settings.translation_agent_chunk_max_chars, 6_000);
+        assert_eq!(settings.translation_call_budget, 0);
+        // 文件里缺失的键回填计划默认值，而不是 serde 的整数 0。
+        assert_eq!(settings.translation_agent_retry_limit, 2);
+        assert_eq!(settings.translation_agent_split_depth, 3);
+        assert_eq!(settings.translation_agent_tool_corrections, 2);
+        assert_eq!(settings.translation_agent_context_chars, 600);
+        assert_eq!(settings.translation_agent_recent_history_tokens, 4_096);
+        assert!(!settings.translation_agent_replay_unknown);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn translation_agent_cross_validation_rejects_conflicts() {
+        let mut settings = Settings::default();
+        settings.translation_agent_output_cap = 100_000;
+        settings.translation_agent_context_window = 32_768;
+        assert_eq!(
+            validate_translation_agent_settings(&settings).unwrap_err(),
+            "单请求输出上限不能超过未知模型上下文窗口"
+        );
+        let mut settings = Settings::default();
+        settings.translation_agent_chunk_target_chars = 10_000;
+        assert_eq!(
+            validate_translation_agent_settings(&settings).unwrap_err(),
+            "分块目标字符数不能超过分块字符上限"
+        );
     }
 }
