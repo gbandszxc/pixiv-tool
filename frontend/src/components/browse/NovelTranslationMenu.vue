@@ -102,8 +102,16 @@ const startLabel = computed(() => {
   if (props.skipped) return t("translation.translateAnyway");
   return job.value ? t("translation.job.retranslateJob") : t("translation.job.startJob");
 });
-/** 只在可发起任务时显示「开始 / 重新翻译」；活跃任务只显示暂停、继续、取消。 */
-const showStart = computed(() => canStart.value && (startable.value || props.skipped));
+/** 只在可发起任务时显示「开始 / 重新翻译」；失败 / 中断态与「继续」并存，
+ * 作为资源版本失效等无法续跑场景的出路（force 新建任务）。 */
+const showStart = computed(
+  () =>
+    canStart.value &&
+    (startable.value ||
+      props.skipped ||
+      job.value?.state === "needs_attention" ||
+      job.value?.state === "interrupted"),
+);
 /** 错误码只对需要处理/失败的任务有意义；完成态残留的旧错误码不展示。 */
 const errorCode = computed(() => {
   const current = job.value;

@@ -63,7 +63,13 @@ function clip(text: string): string {
 }
 const summaryLine = computed(() => clip(props.job.preview?.summary ?? ""));
 const reasoningLine = computed(() => (summaryLine.value ? "" : clip(props.job.preview?.reasoning ?? "")));
-const previewLine = computed(() => summaryLine.value || reasoningLine.value);
+/** 预览文本只在推进 / 暂停态展示；失败与中断态的残留文本（模型最后的话）有误导性。 */
+const previewLine = computed(() => {
+  if (!["running", "pausing", "awaiting_confirmation", "paused"].includes(props.job.state)) {
+    return "";
+  }
+  return summaryLine.value || reasoningLine.value;
+});
 /** 「后台继续」只属于仍在推进的任务；暂停 / 失败 / 完成不应显示这句提示。 */
 const backgroundHint = computed(() =>
   !previewLine.value && (props.job.state === "running" || props.job.state === "pausing")

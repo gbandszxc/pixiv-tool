@@ -1695,9 +1695,37 @@ impl TranslationService {
 
     /// 取消：立即传播取消信号，保留检查点与已提交产物。
     pub async fn cancel(&self, job_id: &str) -> Result<(), String> {
-        let handle = self
-            .handle(job_id)
-            .ok_or_else(|| format!("翻译任务不存在：{job_id}"))?;
+        let Some(handle) = self.handle(job_id) else {
+            // 进程重启后任务不在内存：没有在途运行可中断，按磁盘状态直接标记取消。
+            let (manifest, corrupt) = self.find_manifest(job_id)?;
+            if corrupt {
+                return Err("任务清单损坏，无法安全取消；请清理翻译缓存".into());
+            }
+            if matches!(
+                manifest.state,
+                JobState::Cancelled | JobState::Completed | JobState::Deleted
+            ) {
+                return Ok(());
+            }
+            let scope = JobScope {
+                novel_id: manifest.novel_id,
+                job_id: manifest.job_id.clone(),
+                generation: manifest.generation,
+            };
+            let store =
+                JobStore::open(&self.inner.paths, &scope).map_err(|error| error.to_string())?;
+            // 只写 manifest 不广播：seq 由每任务的 emitter 维护，磁盘路径没有该状态；
+            // 前端在取消成功后主动刷新任务快照。
+            store.update_manifest(|manifest| {
+                manifest.state = JobState::Cancelled;
+                manifest.last_error = Some(SafeError {
+                    code: "cancelled".into(),
+                    message: "cancelled".into(),
+                    step: manifest.phase.as_str().into(),
+                });
+            }).map_err(|error| error.to_string())?;
+            return Ok(());
+        };
         let state = handle
             .runtime
             .lock()
