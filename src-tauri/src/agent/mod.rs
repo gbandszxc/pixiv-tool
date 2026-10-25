@@ -25,8 +25,8 @@ pub use budget::{
 };
 pub use compaction::{
     CompactionConfig, CompactionError, CompactionEvent, CompactionJournal, CompactionOutcome,
-    CompactionRecord, compact_now, maybe_compact, projected_tokens, should_compact,
-    should_compact_tokens,
+    CompactionRecord, compact_now, emergency_truncate, maybe_compact, projected_tokens,
+    should_compact, should_compact_tokens,
 };
 pub use events::{
     EventSink, JobEmitter, JobEvent, RecordingSink, TauriEventSink, log_job, runtime_event,
@@ -34,7 +34,10 @@ pub use events::{
 };
 pub use recovery::{FailureClass, RetryPolicy, backoff, backoff_with_retry_after, classify_http};
 pub use resources::{ResourceId, ResourceVersions, load_resource, role_prompt, system_prompt};
-pub use runtime::{RunError, RunLimits, RunOutcome, RunRequest, RunStatus, run};
+pub use runtime::{
+    RunError, RunLimits, RunOutcome, RunRequest, RunStatus, ToolResultEstimator, run,
+    turn_tool_budget,
+};
 pub use scheduler::{ModelPermit, NovelPermit, RuntimeConfig, Scheduler};
 pub use storage::{
     CacheGeneration, JobScope, JobStore, JobSummary, Manifest, StoreError, list_jobs,
@@ -138,7 +141,9 @@ impl Phase {
 /// Agent 角色。子 Agent 默认一层：只有 Main 可以派发，Translator / Reviewer 不再派生。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum Role {
+    #[default]
     Main,
     Translator,
     Reviewer,
@@ -237,12 +242,6 @@ pub struct CurrentWork {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunk_id: Option<ChunkId>,
     pub role: Role,
-}
-
-impl Default for Role {
-    fn default() -> Self {
-        Self::Main
-    }
 }
 
 /// 生成内容预览（仅用于界面实时展示，不落盘、不写日志正文）。

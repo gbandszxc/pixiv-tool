@@ -17,7 +17,7 @@ use rig_core::{
     DynModel,
     completion::{CompletionRequest, CompletionResponse},
     error::ProviderError,
-    message::{AssistantContent, Message, UserContent},
+    message::{AssistantContent, Message, ToolResultContent, UserContent},
     operation::Completion,
 };
 
@@ -639,6 +639,118 @@ fn response_text(response: &rig_core::completion::CompletionResponse) -> String 
         .join("\n")
 }
 
+/// 紧急截断：常规压缩救不回来时，从最旧到最新把历史中超大的成功工具结果
+/// 正文截短（保留头尾、标注省略），直到总输入估算降到 `target_tokens` 以内。
+///
+/// 一轮截完仍不达标时按半深迭代收紧单条上限（最低 64 tokens），保证极小窗口
+/// 下历史也能压到位。不调用模型、不改变消息结构（工具调用与结果保持配对）；
+/// 错误结果不截。返回（截断后的历史, 截断条数）。
+pub fn emergency_truncate(
+    history: &[Arc<Message>],
+    current_tokens: u32,
+    target_tokens: u32,
+    per_result_tokens: u32,
+) -> (Vec<Arc<Message>>, usize) {
+    if current_tokens <= target_tokens || history.is_empty() {
+        return (history.to_vec(), 0);
+    }
+    let mut excess = current_tokens - target_tokens;
+    let mut per = per_result_tokens;
+    let mut messages = history.to_vec();
+    let mut total_truncated = 0usize;
+    loop {
+        let (next, count) = truncate_pass(&messages, &mut excess, per);
+        total_truncated += count;
+        messages = next;
+        if excess == 0 || count == 0 || per <= 64 {
+            return (messages, total_truncated);
+        }
+        per /= 2;
+    }
+}
+
+/// 单遍截断：从旧到新把超出 `per_result_tokens` 的工具结果正文替换为截断
+/// 版本；返回（新历史, 修改的消息条数）。`excess` 按腾出的估算 token 递减。
+fn truncate_pass(
+    history: &[Arc<Message>],
+    excess: &mut u32,
+    per_result_tokens: u32,
+) -> (Vec<Arc<Message>>, usize) {
+    let mut messages: Vec<Arc<Message>> = Vec::with_capacity(history.len());
+    let mut truncated = 0usize;
+    for message in history {
+        let replaced = replace_oversized_result(message, per_result_tokens, excess);
+        if replaced.is_some() {
+            truncated += 1;
+        }
+        messages.push(replaced.unwrap_or_else(|| message.clone()));
+        if *excess == 0 {
+            messages.extend(history[messages.len()..].iter().cloned());
+            break;
+        }
+    }
+    (messages, truncated)
+}
+
+/// 把单条消息中超出 `per_result_tokens` 的工具结果正文替换为截断版本；
+/// 返回 `None` 表示该消息无需修改。`excess` 按腾出的估算 token 递减。
+fn replace_oversized_result(
+    message: &Arc<Message>,
+    per_result_tokens: u32,
+    excess: &mut u32,
+) -> Option<Arc<Message>> {
+    let Message::User { content } = message.as_ref() else {
+        return None;
+    };
+    let mut changed = false;
+    let mut new_content = Vec::with_capacity(content.len());
+    for part in content {
+        let UserContent::ToolResult(result) = part else {
+            new_content.push(part.clone());
+            continue;
+        };
+        if result.is_error || *excess == 0 {
+            new_content.push(part.clone());
+            continue;
+        }
+        let text = result
+            .content
+            .iter()
+            .map(|item| match item {
+                ToolResultContent::Text(text) => text.text.clone(),
+                ToolResultContent::Json { value } => value.to_string(),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let text_tokens = estimate_tokens(&text);
+        if text_tokens <= per_result_tokens {
+            new_content.push(part.clone());
+            continue;
+        }
+        let clipped = format!(
+            "{}\n[已截断：正文过长，中段省略；如需完整内容请重新读取]",
+            clip_middle(&text, per_result_tokens)
+        );
+        let saved = text_tokens.saturating_sub(per_result_tokens + 48);
+        *excess = excess.saturating_sub(saved);
+        new_content.push(UserContent::ToolResult(rig_core::message::ToolResult {
+            call: result.call.clone(),
+            name: result.name.clone(),
+            content: vec![ToolResultContent::text(clipped)],
+            is_error: false,
+        }));
+        changed = true;
+    }
+    if changed {
+        Some(Arc::new(Message::User {
+            content: new_content,
+        }))
+    } else {
+        None
+    }
+}
+
 /// 超长输入保留头尾，中间省略；头部保留目标与约束，尾部保留最近进度。
 fn clip_middle(text: &str, limit: u32) -> String {
     if estimate_tokens(text) <= limit {
@@ -671,6 +783,8 @@ fn safe_error(text: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    use crate::agent::turn_tool_budget;
 
     use rig_core::{
         completion::Usage,
@@ -902,5 +1016,104 @@ mod tests {
                 .is_none()
         );
         assert!(model.requests().is_empty(), "未达阈值不得发起请求");
+    }
+
+    fn big_tool_result(call: &str, chars: usize) -> Arc<Message> {
+        Arc::new(Message::tool_result(
+            CallId::from_wire(call),
+            tool_name(),
+            long_text(chars),
+        ))
+    }
+
+    fn error_tool_result(call: &str, chars: usize) -> Arc<Message> {
+        Arc::new(Message::User {
+            content: vec![UserContent::ToolResult(rig_core::message::ToolResult {
+                call: CallId::from_wire(call),
+                name: tool_name(),
+                content: vec![rig_core::message::ToolResultContent::text(long_text(chars))],
+                is_error: true,
+            })],
+        })
+    }
+
+    #[test]
+    fn emergency_truncate_shrinks_results_and_keeps_structure() {
+        let history = vec![
+            user("goal"),
+            assistant_call("call_1"),
+            tool_result("call_1"),
+            assistant_call("call_2"),
+            big_tool_result("call_2", 2_000),
+            assistant_call("call_3"),
+            big_tool_result("call_3", 3_000),
+        ];
+        let current = projected_tokens(&history, None);
+        let (truncated, count) = emergency_truncate(&history, current, current / 3, 256);
+        assert!(count >= 2, "两个大结果都应被截断（实际 {count}）");
+        assert_eq!(truncated.len(), history.len(), "消息条数不变");
+        assert!(
+            matches!(&*truncated[1], Message::Assistant(_)),
+            "配对结构不变"
+        );
+        assert!(matches!(&*truncated[2], Message::User { .. }));
+        let after = projected_tokens(&truncated, None);
+        assert!(after < current, "截断后估算必须下降（{current} → {after}）");
+        let rendered = render_transcript(&truncated);
+        assert!(rendered.contains("已截断"), "截断标注必须可见");
+        assert!(
+            rendered.contains("[tool_result translate]"),
+            "未截的小结果原样保留"
+        );
+    }
+
+    #[test]
+    fn emergency_truncate_never_touches_error_results() {
+        let history = vec![
+            user("goal"),
+            assistant_call("call_1"),
+            error_tool_result("call_1", 2_000),
+        ];
+        let current = projected_tokens(&history, None);
+        let (truncated, count) = emergency_truncate(&history, current, 64, 256);
+        assert_eq!(count, 0, "错误结果不得截断");
+        assert_eq!(
+            projected_tokens(&truncated, None),
+            current,
+            "历史应原样保留"
+        );
+    }
+
+    #[test]
+    fn emergency_truncate_noop_when_already_within_target() {
+        let history = vec![
+            user("goal"),
+            assistant_call("call_1"),
+            tool_result("call_1"),
+        ];
+        let current = projected_tokens(&history, None);
+        let (truncated, count) = emergency_truncate(&history, current, current, 256);
+        assert_eq!(count, 0);
+        assert_eq!(truncated.len(), history.len());
+    }
+
+    #[test]
+    fn turn_tool_budget_scales_with_window_and_has_floor() {
+        let small = BudgetConfig {
+            context_window: 32_768,
+            output_limit: 16_384,
+            compact_pct: 75,
+            recent_tokens: 4_096,
+            summary_tokens: 2_048,
+            call_budget: 0,
+        };
+        // 32k 窗口扣掉输出上限与安全余量后空间很小：16 128 − 8 238 − 2 048。
+        assert_eq!(turn_tool_budget(&small, 8_238), 5_842);
+        let large = BudgetConfig {
+            context_window: 65_536,
+            ..small
+        };
+        // 48 896（可用输入）− 8 238（固定开销）− 2 048（历史保留）。
+        assert_eq!(turn_tool_budget(&large, 8_238), 38_610);
     }
 }

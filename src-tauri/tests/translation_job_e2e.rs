@@ -17,7 +17,7 @@
 //! 9. 断线（连接中断）、输出截断（缩块重做）、工具参数错误三条失败路径。
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -26,16 +26,12 @@ use std::{
 };
 
 use pixiv_tool_lib::{
-    agent::{
-        CacheGeneration, JobScope, JobState, RecordingSink, storage::JobStore,
-    },
+    agent::{CacheGeneration, JobScope, JobState, RecordingSink, storage::JobStore},
     paths::AppPaths,
     settings::Settings,
     translation::{
         NovelInput,
-        artifacts::{
-            Issue, JobArtifacts, PublishStatus, Review, ReviewVerdict, Severity,
-        },
+        artifacts::{Issue, JobArtifacts, PublishStatus, Review, ReviewVerdict, Severity},
         service::{ConstraintEdit, ConstraintTermEdit, StoreIo, TranslationService},
         source::parse_source,
     },
@@ -368,8 +364,10 @@ fn content_text(message: &Value) -> String {
             .iter()
             .filter_map(|part| part["text"].as_str())
             .collect::<Vec<_>>()
-            .join("
-"),
+            .join(
+                "
+",
+            ),
         _ => String::new(),
     }
 }
@@ -384,8 +382,10 @@ fn system_of(body: &Value) -> String {
                 .filter(|message| message["role"] == "system")
                 .map(content_text)
                 .collect::<Vec<_>>()
-                .join("
-")
+                .join(
+                    "
+",
+                )
         })
         .unwrap_or_default()
 }
@@ -413,7 +413,10 @@ fn tool_history(body: &Value) -> (Vec<(String, Value)>, BTreeMap<String, Value>)
         for message in messages {
             if let Some(list) = message["tool_calls"].as_array() {
                 for call in list {
-                    let name = call["function"]["name"].as_str().unwrap_or_default().to_string();
+                    let name = call["function"]["name"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
                     let args = call["function"]["arguments"]
                         .as_str()
                         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
@@ -666,7 +669,9 @@ fn reviewer_next(calls: &[(String, Value)], results: &BTreeMap<String, Value>) -
 /// 通用脚本：按角色分派；`hint` 从 user prompt 取 chunk_id 供首轮使用。
 fn scripted(body: &Value) -> Reply {
     // 上下文压缩的摘要请求不带工具定义：返回一次性 JSON 摘要。
-    let has_tools = body["tools"].as_array().is_some_and(|tools| !tools.is_empty());
+    let has_tools = body["tools"]
+        .as_array()
+        .is_some_and(|tools| !tools.is_empty());
     if !has_tools {
         return json_reply(
             "1. 目标：完成整篇翻译；2. 约束：已冻结；3. 产物：见块产物；             4. 进度：按检查点；5. 未决：无；6. 下一步：继续派发待办块。",
@@ -776,8 +781,9 @@ fn novel_a() -> NovelInput {
         title: "并行甲".into(),
         tags: vec![],
         description: String::new(),
-        content: "[chapter:甲章]\n甲の勇者が現れた\n甲の二行目\n[newpage]\n甲の第二頁です\n甲の最後の行"
-            .into(),
+        content:
+            "[chapter:甲章]\n甲の勇者が現れた\n甲の二行目\n[newpage]\n甲の第二頁です\n甲の最後の行"
+                .into(),
     }
 }
 
@@ -799,7 +805,7 @@ fn novel_compact() -> NovelInput {
         title: "压缩测试".into(),
         tags: vec![],
         description: String::new(),
-        content: vec![page.clone(), page.clone(), page.clone(), page].join("\n[newpage]\n"),
+        content: [page.clone(), page.clone(), page.clone(), page].join("\n[newpage]\n"),
     }
 }
 
@@ -884,12 +890,16 @@ async fn full_job_completes_with_stable_page_line_mapping() {
     assert_eq!(started.state, JobState::Queued, "start 立即返回 queued");
     assert!(!started.already_target_language);
 
-    let done = wait_for(&service, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-        JobState::Cancelled,
-        JobState::Paused,
-    ])
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Cancelled,
+            JobState::Paused,
+        ],
+    )
     .await;
     assert_eq!(
         done.state,
@@ -919,11 +929,7 @@ async fn full_job_completes_with_stable_page_line_mapping() {
     assert_eq!(result.status, PublishStatus::Complete);
     assert_eq!(result.unresolved, 0);
     let source = parse_source(&novel_text(), "zh-CN").unwrap();
-    assert_eq!(
-        result.pages.len(),
-        source.pages.len(),
-        "页数与原文一致"
-    );
+    assert_eq!(result.pages.len(), source.pages.len(), "页数与原文一致");
     for page in &source.pages {
         let lines = result.pages.get(&page.page).expect("每页都有译文");
         let expected: Vec<u32> = page.lines.iter().map(|line| line.line).collect();
@@ -944,8 +950,10 @@ async fn full_job_completes_with_stable_page_line_mapping() {
     }
 
     // 合并稿规则。
-    let merged = std::fs::read_to_string(job_dir(&fixture.paths, 5150, &started.job_id).join("output/merged.md"))
-        .expect("应写入合并稿");
+    let merged = std::fs::read_to_string(
+        job_dir(&fixture.paths, 5150, &started.job_id).join("output/merged.md"),
+    )
+    .expect("应写入合并稿");
     assert!(merged.contains("## 中文标题"), "章节标记渲染为标题");
     assert!(merged.contains("汉字(hanzi)呀"), "ruby 渲染为 A(B)");
     assert!(merged.contains("<!-- 图片占位 -->"), "图片行渲染为占位注释");
@@ -969,12 +977,11 @@ async fn full_job_completes_with_stable_page_line_mapping() {
     ] {
         assert!(dir.join(rel).is_file(), "缺少产物 {rel}");
     }
-    let (chunks, drafts, reviews) =
-        pixiv_tool_lib::translation::service::read_job_artifacts(
-            &fixture.paths,
-            &serde_json::from_value(manifest.clone()).unwrap(),
-        )
-        .expect("读取产物");
+    let (chunks, drafts, reviews) = pixiv_tool_lib::translation::service::read_job_artifacts(
+        &fixture.paths,
+        &serde_json::from_value(manifest.clone()).unwrap(),
+    )
+    .expect("读取产物");
     assert!(!chunks.is_empty());
     assert_eq!(drafts.len(), chunks.len(), "每块都有草稿");
     assert_eq!(reviews.len(), chunks.len(), "每块都有审查结论");
@@ -986,7 +993,11 @@ async fn full_job_completes_with_stable_page_line_mapping() {
     assert!(events.len() > 5, "应有进度事件");
     let mut last = 0;
     for event in &events {
-        assert!(event.seq > last, "事件 seq 必须单调递增：{last} -> {}", event.seq);
+        assert!(
+            event.seq > last,
+            "事件 seq 必须单调递增：{last} -> {}",
+            event.seq
+        );
         last = event.seq;
         assert_eq!(event.job_id, started.job_id);
         assert_eq!(event.novel_id, 5150);
@@ -1013,7 +1024,11 @@ async fn full_job_completes_with_stable_page_line_mapping() {
 async fn duplicate_start_joins_the_existing_job() {
     let fixture = fixture("join");
     let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let first = service.start(novel(), false).await.expect("首次启动");
     let second = service.start(novel(), false).await.expect("重复启动加入");
@@ -1050,7 +1065,11 @@ async fn pause_then_resume_continues_without_redoing_chunks() {
         }) as Handler
     };
     let server = MockServer::start(handler).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let started = service.start(novel(), false).await.expect("启动");
     // 等 c0001 完成翻译（其他块继续），再暂停。
@@ -1067,18 +1086,27 @@ async fn pause_then_resume_continues_without_redoing_chunks() {
     blocked.store(false, Ordering::SeqCst);
     service.resume(&started.job_id).await.expect("恢复成功");
 
-    let done = wait_for(&service, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
-    assert_eq!(done.state, JobState::Completed, "恢复后应完成：{}", done.message);
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "恢复后应完成：{}",
+        done.message
+    );
     assert_eq!(
         server.translator_requests_for("c0001"),
         before_c1,
         "已完成且有效的块不得重复请求"
     );
-    assert!(server.translator_requests_for("c0002") >= 1, "未完成块应重新请求");
+    assert!(
+        server.translator_requests_for("c0002") >= 1,
+        "未完成块应重新请求"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1094,11 +1122,15 @@ async fn confirmation_mode_waits_for_confirm_then_continues() {
     let service = service(&fixture.paths, settings, Arc::new(RecordingSink::new()));
 
     let started = service.start(novel(), false).await.expect("启动");
-    let waiting = wait_for(&service, &started.job_id, &[
-        JobState::AwaitingConfirmation,
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let waiting = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::AwaitingConfirmation,
+            JobState::Completed,
+            JobState::NeedsAttention,
+        ],
+    )
     .await;
     assert_eq!(
         waiting.state,
@@ -1140,12 +1172,18 @@ async fn confirmation_mode_waits_for_confirm_then_continues() {
         .await
         .expect("确认成功");
 
-    let done = wait_for(&service, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
-    assert_eq!(done.state, JobState::Completed, "确认后应完成：{}", done.message);
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "确认后应完成：{}",
+        done.message
+    );
 
     let constraints: Value = serde_json::from_slice(
         &std::fs::read(
@@ -1198,7 +1236,11 @@ async fn cancel_stops_immediately_and_keeps_checkpoint() {
         scripted(body)
     }) as Handler;
     let server = MockServer::start(handler).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let started = service.start(novel(), false).await.expect("启动");
     assert!(
@@ -1225,7 +1267,10 @@ async fn cancel_stops_immediately_and_keeps_checkpoint() {
     // 检查点保留（目录与 manifest 仍在，可查看已提交产物）。
     let dir = job_dir(&fixture.paths, 5150, &started.job_id);
     assert!(dir.join("manifest.json").is_file());
-    assert_eq!(manifest_of(&fixture.paths, 5150, &started.job_id)["state"], "cancelled");
+    assert_eq!(
+        manifest_of(&fixture.paths, 5150, &started.job_id)["state"],
+        "cancelled"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1236,7 +1281,11 @@ async fn cancel_stops_immediately_and_keeps_checkpoint() {
 async fn cache_clear_bumps_generation_and_rejects_stale_writes() {
     let fixture = fixture("cache");
     let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let started = service.start(novel(), false).await.expect("启动");
     assert!(!started.job_id.is_empty());
@@ -1248,7 +1297,9 @@ async fn cache_clear_bumps_generation_and_rejects_stale_writes() {
     // 模拟一个仍持有旧世代的写入者（例如迟到的子任务回调）。
     let generation: CacheGeneration = service.generation();
     let stale = JobStore::create_guarded(&fixture.paths, &scope, generation.clone()).unwrap();
-    stale.write_atomic("chunks/stale.json", b"{}").expect("清前可写");
+    stale
+        .write_atomic("chunks/stale.json", b"{}")
+        .expect("清前可写");
 
     service.invalidate_cache();
     let root = stale.root().to_path_buf();
@@ -1267,7 +1318,10 @@ async fn cache_clear_bumps_generation_and_rejects_stale_writes() {
         service.jobs().await.jobs.is_empty(),
         "清理后索引必须归零，不保留幽灵任务"
     );
-    assert!(service.generation().get() > scope.generation, "世代必须递增");
+    assert!(
+        service.generation().get() > scope.generation,
+        "世代必须递增"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1278,7 +1332,11 @@ async fn cache_clear_bumps_generation_and_rejects_stale_writes() {
 async fn corrupt_manifest_is_flagged_and_never_requested() {
     let fixture = fixture("corrupt");
     let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let dir = fixture
         .paths
@@ -1319,13 +1377,18 @@ async fn corrupt_manifest_is_flagged_and_never_requested() {
 async fn delete_removes_whole_job_tree() {
     let fixture = fixture("delete");
     let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let started = service.start(novel(), false).await.expect("启动");
-    let done = wait_for(&service, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
     assert_eq!(done.state, JobState::Completed);
     let dir = job_dir(&fixture.paths, 5150, &started.job_id);
@@ -1349,21 +1412,24 @@ async fn dropped_connection_fails_the_chunk_without_completing_the_job() {
     let fixture = fixture("drop");
     let handler = Arc::new(|body: &Value| {
         // 翻译 c0002 时只发响应头就断开。
-        if role_of(&system_of(body)) == "translator"
-            && user_of(body).contains("chunk_id: c0002")
-        {
+        if role_of(&system_of(body)) == "translator" && user_of(body).contains("chunk_id: c0002") {
             return Reply::Abort;
         }
         scripted(body)
     }) as Handler;
     let server = MockServer::start(handler).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let started = service.start(novel(), false).await.expect("启动");
-    let done = wait_for(&service, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
     assert_eq!(
         done.state,
@@ -1387,7 +1453,11 @@ async fn dropped_connection_fails_the_chunk_without_completing_the_job() {
         chunks.len()
     );
     assert!(
-        service.result(5150).await.unwrap().is_none_or(|result| result.status != PublishStatus::Complete),
+        service
+            .result(5150)
+            .await
+            .unwrap()
+            .is_none_or(|result| result.status != PublishStatus::Complete),
         "未通过审查不得产出正式完整结果"
     );
 }
@@ -1417,15 +1487,25 @@ async fn truncated_output_splits_the_chunk_and_still_completes() {
         }) as Handler
     };
     let server = MockServer::start(handler).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let started = service.start(novel(), false).await.expect("启动");
-    let done = wait_for(&service, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
-    assert_eq!(done.state, JobState::Completed, "缩块后应完成：{}", done.message);
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "缩块后应完成：{}",
+        done.message
+    );
 
     // 计划里应出现派生块（原 c0001 被两个派生块取代）。
     let plan: Value = serde_json::from_slice(
@@ -1442,7 +1522,11 @@ async fn truncated_output_splits_the_chunk_and_still_completes() {
         .collect();
     assert_eq!(derived.len(), 2, "超限块应拆成两个派生块");
     assert!(derived.iter().all(|entry| entry["depth"] == 1));
-    assert_eq!(fired.load(Ordering::SeqCst), 1, "超限请求只发生一次，不原样重发");
+    assert_eq!(
+        fired.load(Ordering::SeqCst),
+        1,
+        "超限请求只发生一次，不原样重发"
+    );
 
     // 派生块也要有完整译文与审查，最终投影仍覆盖全部页行。
     let result = service.result(5150).await.unwrap().unwrap();
@@ -1478,15 +1562,25 @@ async fn invalid_tool_arguments_stop_after_corrections() {
         scripted(body)
     }) as Handler;
     let server = MockServer::start(handler).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let started = service.start(novel(), false).await.expect("启动");
-    let done = wait_for(&service, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
-    assert_eq!(done.state, JobState::NeedsAttention, "参数错误不得完成：{}", done.message);
+    assert_eq!(
+        done.state,
+        JobState::NeedsAttention,
+        "参数错误不得完成：{}",
+        done.message
+    );
 
     let manifest = manifest_of(&fixture.paths, 5150, &started.job_id);
     let (_, drafts, _) = pixiv_tool_lib::translation::service::read_job_artifacts(
@@ -1502,7 +1596,6 @@ async fn invalid_tool_arguments_stop_after_corrections() {
         server.translator_requests()
     );
 }
-
 
 // ---------------------------------------------------------------------------
 // 10. 重启后恢复（不依赖进程内 JobHandle）
@@ -1552,7 +1645,10 @@ async fn resume_after_restart_rebuilds_job_from_disk() {
     let sink2 = Arc::new(RecordingSink::new());
     let restarted = service(&fixture.paths, settings, sink2.clone());
     restarted.recover_interrupted().await.expect("恢复扫描");
-    let after_scan = restarted.snapshot(&started.job_id).await.expect("重启后可见");
+    let after_scan = restarted
+        .snapshot(&started.job_id)
+        .await
+        .expect("重启后可见");
     // 暂停已是稳定检查点，恢复扫描不改它；仍在跑的状态才转 interrupted。
     assert_eq!(after_scan.state, JobState::Paused, "暂停状态是稳定检查点");
     assert!(
@@ -1561,11 +1657,15 @@ async fn resume_after_restart_rebuilds_job_from_disk() {
     );
 
     // 重建上下文并续跑：已完成块不重复请求。
-    restarted.resume(&started.job_id).await.expect("重启后恢复成功");
-    let done = wait_until_async(&restarted, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    restarted
+        .resume(&started.job_id)
+        .await
+        .expect("重启后恢复成功");
+    let done = wait_until_async(
+        &restarted,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
     assert_eq!(
         done.state,
@@ -1579,7 +1679,10 @@ async fn resume_after_restart_rebuilds_job_from_disk() {
         before_c1,
         "重启恢复不得重复请求已完成块"
     );
-    assert!(server.translator_requests_for("c0002") >= 1, "未完成块应重新请求");
+    assert!(
+        server.translator_requests_for("c0002") >= 1,
+        "未完成块应重新请求"
+    );
 
     // 重建后的预算沿用累计值（不清零）。
     assert!(done.budget.used > 0, "预算用量应从 manifest 还原");
@@ -1616,13 +1719,18 @@ async fn wait_until_async(
 async fn session_journal_records_facts_without_content() {
     let fixture = fixture("journal");
     let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
-    let service = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let started = service.start(novel(), false).await.expect("启动");
-    let done = wait_for(&service, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
     assert_eq!(done.state, JobState::Completed);
 
@@ -1636,11 +1744,15 @@ async fn session_journal_records_facts_without_content() {
         .collect();
     assert!(!records.is_empty(), "会话记录不应为空");
     assert!(
-        records.iter().any(|record| record["kind"] == "subtask_translate_done"),
+        records
+            .iter()
+            .any(|record| record["kind"] == "subtask_translate_done"),
         "应有翻译子任务记录"
     );
     assert!(
-        records.iter().any(|record| record["kind"] == "subtask_review_done"),
+        records
+            .iter()
+            .any(|record| record["kind"] == "subtask_review_done"),
         "应有审查子任务记录"
     );
     assert!(
@@ -1649,7 +1761,14 @@ async fn session_journal_records_facts_without_content() {
     );
     for record in &records {
         let keys: Vec<&String> = record.as_object().unwrap().keys().collect();
-        for forbidden in ["text", "content", "prompt", "summary", "source", "translation"] {
+        for forbidden in [
+            "text",
+            "content",
+            "prompt",
+            "summary",
+            "source",
+            "translation",
+        ] {
             assert!(
                 !keys.iter().any(|key| key.as_str() == forbidden),
                 "会话记录不得包含正文字段 {forbidden}: {record}"
@@ -1682,12 +1801,19 @@ async fn compaction_writes_journal_records_without_content() {
     settings.translation_agent_summary_tokens = 256;
     let service = service(&fixture.paths, settings, Arc::new(RecordingSink::new()));
 
-    let started = service.start(novel_compact(), false).await.expect("启动成功");
-    let done = wait_for(&service, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-        JobState::Paused,
-    ])
+    let started = service
+        .start(novel_compact(), false)
+        .await
+        .expect("启动成功");
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Paused,
+        ],
+    )
     .await;
     assert_eq!(
         done.state,
@@ -1699,7 +1825,9 @@ async fn compaction_writes_journal_records_without_content() {
 
     let records = journal_records(&fixture.paths, 5151, &started.job_id);
     assert!(
-        records.iter().any(|record| record["kind"] == "compact_start"),
+        records
+            .iter()
+            .any(|record| record["kind"] == "compact_start"),
         "应记录 compact_start：{records:?}"
     );
     let completed = records
@@ -1711,10 +1839,7 @@ async fn compaction_writes_journal_records_without_content() {
     assert!(before > 0, "压缩前估算应为正数");
     assert!(after <= before, "压缩后估算不得高于压缩前");
     assert!(completed["elapsed_ms"].is_number(), "应记录耗时");
-    assert!(
-        completed["retained"].as_u64().is_some(),
-        "应记录保留条数"
-    );
+    assert!(completed["retained"].as_u64().is_some(), "应记录保留条数");
     assert!(
         completed["keep_from"].as_u64().is_some(),
         "应记录保留区起点"
@@ -1762,15 +1887,25 @@ async fn compaction_writes_journal_records_without_content() {
 async fn issues_command_aggregates_reviews_and_excludes_passed_chunks() {
     let fixture = fixture("issues");
     let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
-    let initial = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let initial = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
 
     let started = initial.start(novel(), false).await.expect("启动成功");
-    let done = wait_for(&initial, &started.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let done = wait_for(
+        &initial,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
-    assert_eq!(done.state, JobState::Completed, "基础流程应完成：{}", done.message);
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "基础流程应完成：{}",
+        done.message
+    );
 
     // 翻转 c0001 的审查结论，制造一个有问题块；c0002 保持通过。
     let manifest: pixiv_tool_lib::agent::Manifest =
@@ -1817,7 +1952,11 @@ async fn issues_command_aggregates_reviews_and_excludes_passed_chunks() {
         .unwrap();
 
     // 新实例（无内存 JobHandle）走磁盘路径，验证命令不依赖运行态。
-    let fresh = service(&fixture.paths, settings_for(&server), Arc::new(RecordingSink::new()));
+    let fresh = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
     let view = fresh.issues(&started.job_id).await.expect("问题汇总可读");
     assert_eq!(view.issues.len(), 3);
     let severities: Vec<Severity> = view.issues.iter().map(|issue| issue.severity).collect();
@@ -1910,20 +2049,38 @@ async fn two_novels_run_concurrently_without_crossing_jobs() {
     wait_two_running(&service, &server, &a.job_id, &b.job_id).await;
     gate.open();
 
-    let done_a = wait_for(&service, &a.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-        JobState::Cancelled,
-    ])
+    let done_a = wait_for(
+        &service,
+        &a.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Cancelled,
+        ],
+    )
     .await;
-    let done_b = wait_for(&service, &b.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-        JobState::Cancelled,
-    ])
+    let done_b = wait_for(
+        &service,
+        &b.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Cancelled,
+        ],
+    )
     .await;
-    assert_eq!(done_a.state, JobState::Completed, "甲应完成：{}", done_a.message);
-    assert_eq!(done_b.state, JobState::Completed, "乙应完成：{}", done_b.message);
+    assert_eq!(
+        done_a.state,
+        JobState::Completed,
+        "甲应完成：{}",
+        done_a.message
+    );
+    assert_eq!(
+        done_b.state,
+        JobState::Completed,
+        "乙应完成：{}",
+        done_b.message
+    );
 
     // 各自目录 / manifest / 结果互不覆盖。
     let dir_a = job_dir(&fixture.paths, 6001, &a.job_id);
@@ -1965,7 +2122,10 @@ async fn two_novels_run_concurrently_without_crossing_jobs() {
         assert!(seqs.len() > 3, "每个 Job 都应有进度事件");
         let mut last = 0;
         for seq in seqs {
-            assert!(seq > last, "同一 Job 的事件 seq 必须单调递增：{last} -> {seq}");
+            assert!(
+                seq > last,
+                "同一 Job 的事件 seq 必须单调递增：{last} -> {seq}"
+            );
             last = seq;
         }
     }
@@ -1973,14 +2133,14 @@ async fn two_novels_run_concurrently_without_crossing_jobs() {
         events
             .iter()
             .filter(|event| event.job_id == a.job_id)
-            .last()
+            .next_back()
             .is_some_and(|event| event.state == JobState::Completed)
     );
     assert!(
         events
             .iter()
             .filter(|event| event.job_id == b.job_id)
-            .last()
+            .next_back()
             .is_some_and(|event| event.state == JobState::Completed)
     );
 
@@ -2019,7 +2179,11 @@ async fn two_novels_run_concurrently_without_crossing_jobs() {
                 .expect("块有对应草稿");
             let chunk_ids: Vec<&String> = chunk.segments.iter().map(|item| &item.id).collect();
             let draft_ids: Vec<&String> = draft.segments.iter().map(|item| &item.id).collect();
-            assert_eq!(chunk_ids, draft_ids, "{label} {} 片段顺序必须一致", chunk.id);
+            assert_eq!(
+                chunk_ids, draft_ids,
+                "{label} {} 片段顺序必须一致",
+                chunk.id
+            );
         }
     }
     assert!(server.requests_containing("甲") > 0, "甲小说确实被处理");
@@ -2073,16 +2237,23 @@ async fn active_novels_limit_queues_second_novel_until_first_releases() {
     }
 
     gate.open();
-    let done_a = wait_for(&service, &a.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+    let done_a = wait_for(
+        &service,
+        &a.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
-    assert_eq!(done_a.state, JobState::Completed, "甲应完成：{}", done_a.message);
-    let done_b = wait_for(&service, &b.job_id, &[
+    assert_eq!(
+        done_a.state,
         JobState::Completed,
-        JobState::NeedsAttention,
-    ])
+        "甲应完成：{}",
+        done_a.message
+    );
+    let done_b = wait_for(
+        &service,
+        &b.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
     .await;
     assert_eq!(
         done_b.state,
@@ -2132,11 +2303,15 @@ async fn cancelling_one_novel_does_not_affect_the_other() {
     );
 
     gate.open();
-    let done_b = wait_for(&service, &b.job_id, &[
-        JobState::Completed,
-        JobState::NeedsAttention,
-        JobState::Cancelled,
-    ])
+    let done_b = wait_for(
+        &service,
+        &b.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Cancelled,
+        ],
+    )
     .await;
     assert_eq!(
         done_b.state,
@@ -2156,4 +2331,353 @@ async fn cancelling_one_novel_does_not_affect_the_other() {
         service.result(6002).await.unwrap().is_some(),
         "乙有正式结果"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 运行层防护：单轮工具结果预算与任务续跑
+// ---------------------------------------------------------------------------
+
+/// 一条 assistant 消息携带多个工具调用（并行读块场景）。
+fn multi_tool_call_stream(calls: Vec<(String, String, String)>) -> Reply {
+    let tool_calls: Vec<Value> = calls
+        .iter()
+        .enumerate()
+        .map(|(index, (id, tool, args))| {
+            json!({
+                "index": index,
+                "id": id,
+                "type": "function",
+                "function": {"name": tool, "arguments": args}
+            })
+        })
+        .collect();
+    Reply::Sse(vec![
+        chat_chunk(
+            json!({"role": "assistant", "tool_calls": tool_calls}),
+            None,
+            None,
+        ),
+        chat_chunk(json!({}), Some("tool_calls"), None),
+        b"data: [DONE]\n\n".to_vec(),
+    ])
+}
+
+/// 按调用 id 精确收集拿到成功结果（JSON 正文）的 read_chunk 块 ID；
+/// 被单轮预算跳过的调用正文是纯文本提示，不会计入。
+fn successful_read_chunks(body: &Value) -> Vec<String> {
+    let mut args_by_call: BTreeMap<String, Value> = BTreeMap::new();
+    let mut read_ok = Vec::new();
+    if let Some(messages) = body["messages"].as_array() {
+        for message in messages {
+            if let Some(list) = message["tool_calls"].as_array() {
+                for call in list {
+                    if call["function"]["name"] == "read_chunk"
+                        && let Some(id) = call["id"].as_str()
+                    {
+                        let args = call["function"]["arguments"]
+                            .as_str()
+                            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                            .unwrap_or(Value::Null);
+                        args_by_call.insert(id.to_string(), args);
+                    }
+                }
+            }
+        }
+        for message in messages {
+            if message["role"] == "tool"
+                && let Some(id) = message["tool_call_id"].as_str()
+                && let Some(args) = args_by_call.get(id)
+            {
+                let raw = content_text(message);
+                if serde_json::from_str::<Value>(&raw).is_ok()
+                    && let Some(chunk_id) = args["chunk_id"].as_str()
+                {
+                    read_ok.push(chunk_id.to_string());
+                }
+            }
+        }
+    }
+    read_ok
+}
+
+/// 多页大正文（约 12 页，切成约 12 块），用于触发单轮工具结果预算。
+fn novel_throttle() -> NovelInput {
+    let page = format!("[chapter:流量試験]\n{}", "しぼう対象の本文です".repeat(100));
+    NovelInput {
+        novel_id: 5152,
+        title: "节流测试".into(),
+        tags: vec![],
+        description: String::new(),
+        content: std::iter::repeat_n(page.clone(), 12)
+            .collect::<Vec<_>>()
+            .join("\n[newpage]\n"),
+    }
+}
+
+#[tokio::test]
+async fn main_run_continuation_completes_after_idle_end() {
+    let fixture = fixture("continuation");
+    let main_calls = Arc::new(AtomicUsize::new(0));
+    let counter = main_calls.clone();
+    let handler: Handler = Arc::new(move |body: &Value| {
+        if body["tools"]
+            .as_array()
+            .is_some_and(|tools| !tools.is_empty())
+        {
+            let role = role_of(&system_of(body));
+            if role != "translator" && role != "reviewer" {
+                let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                if n == 2 {
+                    // 第一轮运行里模型输出纯文本收工（不再调用工具）。
+                    return text_stream("当前阶段已准备完毕，本轮先汇报到这里。");
+                }
+            }
+        }
+        scripted(body)
+    });
+    let server = MockServer::start(handler).await;
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
+
+    let started = service.start(novel(), false).await.expect("启动成功");
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Cancelled,
+        ],
+    )
+    .await;
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "模型提前收工后应自动续跑到完成：{} error={:?}",
+        done.message,
+        done.error_code
+    );
+
+    // 会话里应有两次 main_run 记录（第一轮 + 续跑轮）。
+    let runs: Vec<Value> = journal_records(&fixture.paths, 5150, &started.job_id)
+        .into_iter()
+        .filter(|record| record["kind"] == "main_run")
+        .collect();
+    assert!(
+        runs.len() >= 2,
+        "应至少两次主运行记录，实际 {}：{runs:?}",
+        runs.len()
+    );
+}
+
+#[tokio::test]
+async fn bulk_read_chunk_throttled_by_turn_budget_still_completes() {
+    let fixture = fixture("throttle");
+    // 有状态机：跨压缩保留进度（真实模型依据压缩摘要与检查点继续推进）。
+    let state = Arc::new(Mutex::new(BulkState::default()));
+    let handler: Handler = {
+        let state = state.clone();
+        Arc::new(move |body: &Value| {
+            let has_tools = body["tools"]
+                .as_array()
+                .is_some_and(|tools| !tools.is_empty());
+            if !has_tools {
+                return json_reply(
+                    "1. 目标：完成整篇翻译；2. 约束：已冻结；3. 产物：见块产物；             4. 进度：按检查点；5. 未决：无；6. 下一步：继续派发待办块。",
+                );
+            }
+            let role = role_of(&system_of(body));
+            if role == "translator" || role == "reviewer" {
+                return scripted(body);
+            }
+            let (_calls, results) = tool_history(body);
+            let mut state = state.lock().unwrap();
+            if let Some(ids) = results
+                .get("prepare_source")
+                .and_then(|value| value["chunk_ids"].as_array())
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                && !ids.is_empty()
+            {
+                state.chunk_ids = ids;
+            }
+            if state.chunk_ids.is_empty() {
+                return tool_call_stream("m1", "prepare_source", "{}");
+            }
+            {
+                let mut memory = state.read.lock().unwrap();
+                memory.extend(successful_read_chunks(body));
+            }
+            let unscanned: Vec<String> = state
+                .chunk_ids
+                .iter()
+                .filter(|id| !state.scanned.contains(id.as_str()))
+                .cloned()
+                .collect();
+            if !unscanned.is_empty() {
+                let unread: Vec<String> = unscanned
+                    .iter()
+                    .filter(|id| !state.read.lock().unwrap().contains(id.as_str()))
+                    .cloned()
+                    .collect();
+                if !unread.is_empty() {
+                    let batch: Vec<(String, String, String)> = unread
+                        .iter()
+                        .enumerate()
+                        .map(|(index, id)| {
+                            (
+                                format!("mr-{index}"),
+                                "read_chunk".into(),
+                                json!({"chunk_id": id, "include_context": true}).to_string(),
+                            )
+                        })
+                        .collect();
+                    return multi_tool_call_stream(batch);
+                }
+                let chunk_id = unscanned[0].clone();
+                state.scanned.insert(chunk_id.clone());
+                let scan = json!({
+                    "chunk_id": chunk_id,
+                    "terms": [{
+                        "source_term": "勇者",
+                        "locked_translation": "勇士",
+                        "term_type": "character",
+                        "notes": "主角称谓",
+                    }],
+                    "style": {"text_type": "小说", "formality": "书面语，对白偏口语"},
+                    "notes": "叙述视角为第三人称",
+                    "confidence": "high",
+                });
+                return tool_call_stream("m3", "submit_scan", &scan.to_string());
+            }
+            if !state.frozen {
+                state.frozen = true;
+                return tool_call_stream("m4", "freeze_constraints", "{}");
+            }
+            if !state.translated {
+                state.translated = true;
+                let ids = state.chunk_ids.clone();
+                return tool_call_stream(
+                    "m6",
+                    "dispatch_translation",
+                    &json!({"chunk_ids": ids}).to_string(),
+                );
+            }
+            if !state.reviewed {
+                state.reviewed = true;
+                let ids = state.chunk_ids.clone();
+                return tool_call_stream(
+                    "m7",
+                    "dispatch_review",
+                    &json!({"chunk_ids": ids}).to_string(),
+                );
+            }
+            if !state.review_summary {
+                state.review_summary = true;
+                return tool_call_stream("m9", "read_review_summary", "{}");
+            }
+            if !state.merged {
+                state.merged = true;
+                return tool_call_stream("m10", "merge_drafts", "{}");
+            }
+            if !state.global_reviewed {
+                state.global_reviewed = true;
+                let sample = state.chunk_ids.iter().take(8).cloned().collect::<Vec<_>>();
+                let review = json!({
+                    "sample_chunk_ids": if sample.is_empty() { json!(["c0001"]) } else { json!(sample) },
+                    "notes": "术语、风格、对白、纯净度、标记五项已核",
+                    "passed": true,
+                });
+                return tool_call_stream("m11", "record_global_review", &review.to_string());
+            }
+            if !state.published {
+                state.published = true;
+                return tool_call_stream("m12", "publish", "{}");
+            }
+            text_stream("done")
+        })
+    };
+    let server = MockServer::start(handler).await;
+
+    // 用较小的输出上限压低单轮工具结果预算（约 18k）：12 块（每块约 2563
+    // tokens）并行读取时第 8 个起会被跳过；历史保留用生产默认（4k），
+    // 旧块结果由正常压缩摘要，紧急截断只兜底。
+    let mut settings = settings_for(&server);
+    settings.translation_agent_context_window = 32_768;
+    settings.translation_agent_output_cap = 4_096;
+    settings.translation_agent_recent_history_tokens = 4_096;
+    settings.translation_agent_summary_tokens = 2_048;
+    let service = service(&fixture.paths, settings, Arc::new(RecordingSink::new()));
+
+    let started = service
+        .start(novel_throttle(), false)
+        .await
+        .expect("启动成功");
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Cancelled,
+        ],
+    )
+    .await;
+    let artifacts_summary = {
+        let manifest = manifest_of(&fixture.paths, 5152, &started.job_id);
+        pixiv_tool_lib::translation::service::read_job_artifacts(
+            &fixture.paths,
+            &serde_json::from_value::<pixiv_tool_lib::agent::Manifest>(manifest).unwrap(),
+        )
+        .map(|(chunks, drafts, reviews)| {
+            format!(
+                "chunks={} drafts={} reviews={}",
+                chunks.len(),
+                drafts.len(),
+                reviews.len()
+            )
+        })
+        .unwrap_or_else(|| "read artifacts failed".into())
+    };
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "批量读块被预算节流后任务仍应完成：{} error={:?} artifacts=[{artifacts_summary}]",
+        done.message,
+        done.error_code
+    );
+    let manifest = manifest_of(&fixture.paths, 5152, &started.job_id);
+    assert_eq!(manifest["state"], "completed");
+    assert!(
+        server.requests_containing("本轮工具结果预算已用尽") > 0,
+        "应有至少一次预算跳过提示回传给模型（chunks={}，含 read_chunk 的请求 {} 次）",
+        manifest["counts"]["chunks"],
+        server
+            .requests()
+            .iter()
+            .filter(|body| body.to_string().contains("read_chunk"))
+            .count()
+    );
+}
+
+/// bulk 测试的有状态进度：跨压缩（历史被摘要）保留各阶段进度。
+#[derive(Default)]
+struct BulkState {
+    chunk_ids: Vec<String>,
+    read: Arc<Mutex<BTreeSet<String>>>,
+    scanned: BTreeSet<String>,
+    frozen: bool,
+    translated: bool,
+    reviewed: bool,
+    review_summary: bool,
+    merged: bool,
+    global_reviewed: bool,
+    published: bool,
 }

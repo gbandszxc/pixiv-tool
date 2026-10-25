@@ -30,14 +30,38 @@ use rig_core::{
 use crate::agent::{
     BudgetConfig, BudgetTracker, CancelToken, CurrentWork, FailureClass, JobScope, JobState,
     ModelPermit, Phase, Preview, Role, Scheduler, TokenUsage,
-    budget::{estimate_tokens, request_fits},
-    compaction::{CompactionConfig, compact_now, should_compact_tokens},
+    budget::{available_input, estimate_tokens, request_fits},
+    compaction::{CompactionConfig, compact_now, emergency_truncate, should_compact_tokens},
     events::{EventSink, debug_job, log_job, runtime_event, safe_text, warn_job},
     recovery::classify_http,
 };
 
 /// 预览事件的最小间隔（events 层还有 300ms 的合并窗口）。
 const PREVIEW_EMIT_INTERVAL: Duration = Duration::from_millis(120);
+
+/// 单轮工具结果预算中为压缩后历史保留的空间。
+const TURN_HISTORY_RESERVE_TOKENS: u32 = 2_048;
+/// 单轮工具结果预算地板：防止极小窗口把预算压到 0 后模型完全读不到任何块。
+/// 超出地板的调用会被跳过，提示中说明需要调大窗口或调小块大小。
+const MIN_TURN_TOOL_TOKENS: u32 = 1_024;
+/// 紧急截断后单个工具结果保留的 token 上限。
+const TRUNCATED_RESULT_TOKENS: u32 = 512;
+
+/// 计算单轮工具结果的累计 token 预算：可用输入扣掉固定开销与历史保留，
+/// 保证「预算内的结果 + 固定开销 + 压缩到保留区内的历史」装得下可用输入。
+pub fn turn_tool_budget(budget: &BudgetConfig, overhead_tokens: u32) -> u32 {
+    available_input(budget.context_window, budget.output_limit)
+        .saturating_sub(overhead_tokens)
+        .saturating_sub(TURN_HISTORY_RESERVE_TOKENS)
+        .max(MIN_TURN_TOOL_TOKENS)
+}
+
+/// 工具结果大小预估器：运行层据此限制单轮工具结果的累计输入。
+///
+/// 返回 `0` 表示小结果或不认识该工具，不参与单轮预算。
+pub trait ToolResultEstimator: Send + Sync {
+    fn estimate(&self, tool: &str, args: &str) -> u32;
+}
 
 /// 单次运行限制。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,6 +176,9 @@ pub struct RunOutcome {
     pub usage: TokenUsage,
     pub tool_calls: u32,
     pub status: RunStatus,
+    /// 本次运行结束时的对话投影（压缩后历史 + 末轮消息 + 最终回答），
+    /// 供调用方续跑时注入；失败时不产出 [`RunOutcome`]，此字段为空集语义。
+    pub history: Vec<Arc<Message>>,
 }
 
 /// 运行请求。业务资源与工具由调用方装配；`system` 必须包含角色定义、工具契约
@@ -179,6 +206,10 @@ pub struct RunRequest {
     pub max_tokens: Option<u64>,
     /// 调用方按协议归一化后的请求扩展字段（不含凭据与保留字段）。
     pub additional_params: Option<serde_json::Value>,
+    /// 续跑时注入的先前历史（应为压缩后投影；首跑为空）。
+    pub history: Vec<Arc<Message>>,
+    /// 工具结果大小预估器；传入后启用单轮工具结果预算。
+    pub result_estimator: Option<Arc<dyn ToolResultEstimator>>,
 }
 
 impl RunRequest {
@@ -209,6 +240,8 @@ impl RunRequest {
             scheduler: None,
             max_tokens: None,
             additional_params: None,
+            history: Vec::new(),
+            result_estimator: None,
         }
     }
 
@@ -248,6 +281,18 @@ impl RunRequest {
         self.phase = phase;
         self
     }
+
+    /// 注入续跑历史（应为上一轮 [`RunOutcome::history`] 加续跑提示）。
+    pub fn with_history(mut self, history: Vec<Arc<Message>>) -> Self {
+        self.history = history;
+        self
+    }
+
+    /// 注入工具结果大小预估器，启用单轮工具结果预算。
+    pub fn with_result_estimator(mut self, estimator: Arc<dyn ToolResultEstimator>) -> Self {
+        self.result_estimator = Some(estimator);
+        self
+    }
 }
 
 struct CompactionCache {
@@ -285,6 +330,11 @@ struct RunState {
     preview: Mutex<Preview>,
     last_preview_emit: Mutex<Option<Instant>>,
     compaction_cache: Mutex<Option<CompactionCache>>,
+    /// 单轮已批准的工具结果预估 token；每次模型调用前清零。
+    turn_result_tokens: AtomicU32,
+    result_estimator: Option<Arc<dyn ToolResultEstimator>>,
+    /// 末次模型调用时的（历史, prompt）快照；run 成功后据此组装带回历史。
+    last_context: Mutex<Option<(Vec<Arc<Message>>, Arc<Message>)>>,
 }
 
 impl RunState {
@@ -440,6 +490,13 @@ impl AgentHook for RuntimeHooks {
             return state.stop("cancelled");
         }
 
+        // 新一轮模型调用：清空上一轮的工具结果预算累计，并记录上下文快照
+        // （run 成功结束后据此组装带回历史）。
+        state.turn_result_tokens.store(0, Ordering::SeqCst);
+        if let Ok(mut snapshot) = state.last_context.lock() {
+            *snapshot = Some((event.history.to_vec(), Arc::new(event.prompt.clone())));
+        }
+
         // 无进展检测：上一次模型调用之后没有任何新的工具派发。
         // 用「模型调用次数」而不是 turn 判断，重试同一轮也会累计。
         let turn = event.turn as u32;
@@ -534,19 +591,46 @@ impl AgentHook for RuntimeHooks {
 
         let config = state.budget_config.clone().normalized();
         if !request_fits(input_est, config.output_limit, config.context_window) {
-            warn_job(
-                &state.scope,
-                state.role.as_str(),
-                state.phase,
-                None,
-                "input_too_large",
-                &[
-                    ("turn", &turn.to_string()),
-                    ("input_est", &input_est.to_string()),
-                    ("window", &config.context_window.to_string()),
-                ],
-            );
-            return state.stop("input_too_large");
+            // 常规压缩救不回来时（没有可压缩历史，或压缩后仍超窗），紧急截断
+            // 历史中较早的工具结果正文作为最后防线；截断后的投影写回压缩缓存。
+            // 目标留出历史保留量作缓冲，吸收截断估算与消息结构的误差。
+            let target = available_input(config.context_window, config.output_limit)
+                .saturating_sub(TURN_HISTORY_RESERVE_TOKENS);
+            let (truncated, count) =
+                emergency_truncate(&projection, input_est, target, TRUNCATED_RESULT_TOKENS);
+            if count > 0 {
+                state.store_projection(truncated.clone(), history.len());
+                projection = truncated;
+                input_est = projected_input(&projection, Some(prompt))
+                    .saturating_add(state.overhead_tokens);
+                warn_job(
+                    &state.scope,
+                    state.role.as_str(),
+                    state.phase,
+                    None,
+                    "emergency_truncate",
+                    &[
+                        ("turn", &turn.to_string()),
+                        ("results", &count.to_string()),
+                        ("after_est", &input_est.to_string()),
+                    ],
+                );
+            }
+            if !request_fits(input_est, config.output_limit, config.context_window) {
+                warn_job(
+                    &state.scope,
+                    state.role.as_str(),
+                    state.phase,
+                    None,
+                    "input_too_large",
+                    &[
+                        ("turn", &turn.to_string()),
+                        ("input_est", &input_est.to_string()),
+                        ("window", &config.context_window.to_string()),
+                    ],
+                );
+                return state.stop("input_too_large");
+            }
         }
 
         debug_job(
@@ -601,6 +685,44 @@ impl AgentHook for RuntimeHooks {
 
     async fn on_dispatch(&self, _ctx: &HookContext, event: DispatchEvent<'_>) -> DispatchAction {
         if let Some(name) = event.tool_name() {
+            // 单轮工具结果预算：预估值超出本轮剩余额度时跳过该调用，模型会
+            // 收到跳过原因并在下一轮分批读取，而不是把上下文一次性拉爆。
+            if let Some(estimator) = &self.state.result_estimator {
+                let estimate = estimator.estimate(name, event.tool_args().unwrap_or("{}"));
+                if estimate > 0 {
+                    let normalized = self.state.budget_config.clone().normalized();
+                    let budget = turn_tool_budget(&normalized, self.state.overhead_tokens);
+                    let projected = self
+                        .state
+                        .turn_result_tokens
+                        .fetch_add(estimate, Ordering::SeqCst)
+                        + estimate;
+                    if projected > budget {
+                        self.state
+                            .turn_result_tokens
+                            .fetch_sub(estimate, Ordering::SeqCst);
+                        warn_job(
+                            &self.state.scope,
+                            self.state.role.as_str(),
+                            self.state.phase,
+                            None,
+                            "tool_budget_skip",
+                            &[
+                                ("turn", &event.turn.to_string()),
+                                ("tool", name),
+                                ("estimate", &estimate.to_string()),
+                                ("turn_total", &projected.to_string()),
+                                ("budget", &budget.to_string()),
+                            ],
+                        );
+                        return DispatchAction::skip(format!(
+                            "本轮工具结果预算已用尽（本轮已批准约 {projected} tokens，上限 {budget}）。\
+                             本次调用被跳过；请在下一轮分批调用本工具，一次少量读取。\
+                             若单块内容始终超过预算，说明上下文窗口不足，需要调大窗口或调小块大小。"
+                        ));
+                    }
+                }
+            }
             self.state.tool_dispatches.fetch_add(1, Ordering::SeqCst);
             debug_job(
                 &self.state.scope,
@@ -698,7 +820,7 @@ fn invalid_reason(event: &InvalidToolCallContext) -> &'static str {
 
 fn tool_tokens(tool: &DynamicTool) -> u32 {
     let definition = tool.definition();
-    estimate_tokens(&definition.name.to_string())
+    estimate_tokens(definition.name.as_ref())
         .saturating_add(estimate_tokens(&definition.description))
         .saturating_add(estimate_tokens(&definition.parameters.to_string()))
         .saturating_add(16)
@@ -709,7 +831,7 @@ fn projected_input(history: &[Arc<Message>], prompt: Option<&Message>) -> u32 {
         .iter()
         .map(|message| message_tokens(message))
         .fold(0u32, |acc, tokens| acc.saturating_add(tokens));
-    let prompt_tokens = prompt.map(|prompt| message_tokens(prompt)).unwrap_or(0);
+    let prompt_tokens = prompt.map(message_tokens).unwrap_or(0);
     history_tokens.saturating_add(prompt_tokens)
 }
 
@@ -743,7 +865,7 @@ fn message_tokens(message: &Message) -> u32 {
             .map(|part| match part {
                 rig_core::message::AssistantContent::Text(text) => estimate_tokens(&text.text),
                 rig_core::message::AssistantContent::ToolCall(call) => {
-                    estimate_tokens(&call.function.name.to_string()).saturating_add(16)
+                    estimate_tokens(call.function.name.as_ref()).saturating_add(16)
                 }
                 _ => 0,
             })
@@ -765,10 +887,10 @@ pub async fn run(req: RunRequest, cancel: CancelToken) -> Result<RunOutcome, Run
         budget_config: req.budget_config.clone(),
         compaction: {
             let mut compaction = req.compaction.clone();
-            if let (Some(config), Some(scheduler)) = (compaction.as_mut(), req.scheduler.as_ref()) {
-                if config.scheduler.is_none() {
-                    config.scheduler = Some(scheduler.clone());
-                }
+            if let (Some(config), Some(scheduler)) = (compaction.as_mut(), req.scheduler.as_ref())
+                && config.scheduler.is_none()
+            {
+                config.scheduler = Some(scheduler.clone());
             }
             compaction
         },
@@ -789,6 +911,9 @@ pub async fn run(req: RunRequest, cancel: CancelToken) -> Result<RunOutcome, Run
         preview: Mutex::new(Preview::default()),
         last_preview_emit: Mutex::new(None),
         compaction_cache: Mutex::new(None),
+        turn_result_tokens: AtomicU32::new(0),
+        result_estimator: req.result_estimator.clone(),
+        last_context: Mutex::new(None),
     });
 
     log_job(
@@ -824,6 +949,7 @@ pub async fn run(req: RunRequest, cancel: CancelToken) -> Result<RunOutcome, Run
 
     let stream = agent
         .prompt(req.prompt)
+        .history(req.history.iter().map(|message| message.as_ref().clone()))
         .max_turns(req.limits.max_turns.max(1) as usize)
         .max_invalid_tool_call_retries(req.limits.max_tool_corrections as usize)
         .stream();
@@ -885,11 +1011,32 @@ pub async fn run(req: RunRequest, cancel: CancelToken) -> Result<RunOutcome, Run
         }
     }
 
+    // 组装带回历史：末次模型调用的压缩投影 + 末轮 prompt + 最终回答。
+    let carried_history = {
+        let snapshot = state
+            .last_context
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
+        match snapshot {
+            Some((history, prompt)) => {
+                let mut carried = state.projection(&history);
+                carried.push(prompt);
+                if !final_text.is_empty() {
+                    carried.push(Arc::new(Message::assistant(final_text.clone())));
+                }
+                carried
+            }
+            None => Vec::new(),
+        }
+    };
+
     let outcome = RunOutcome {
         text: final_text.clone(),
         usage: state.usage(),
         tool_calls: state.tool_calls.load(Ordering::SeqCst),
         status: RunStatus::Completed,
+        history: carried_history,
     };
     log_job(
         &state.scope,

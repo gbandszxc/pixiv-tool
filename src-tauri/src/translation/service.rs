@@ -1,8 +1,10 @@
 //! 整篇小说翻译 Job 服务：生命周期、调度、恢复、预算与 IPC 快照。
 //!
 //! 设计要点（计划 §10、§11 与冻结接口 §8）：
-//! - 后端是状态真相源：`start` 快速返回 Job 快照，后台 tokio 任务驱动一次主
-//!   Agent 运行；阶段、计数、用量与终态由本服务写入 manifest 并广播事件。
+//! - 后端是状态真相源：`start` 快速返回 Job 快照，后台 tokio 任务驱动主 Agent
+//!   运行；一轮运行正常结束但完成校验未通过时自动续跑（带压缩后历史与最新检查点），
+//!   连续无进展达到上限才转 needs_attention。阶段、计数、用量与终态由本服务写入
+//!   manifest 并广播事件。
 //! - 同一小说同一原文版本、同一目标语言的重复启动加入既有 Job；重译（force）
 //!   创建新 Job，旧结果保留到新结果通过为止。
 //! - 暂停 = 停止派发并停在最近检查点；取消 = 立即传播取消令牌，保留检查点。
@@ -15,9 +17,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     sync::{
-        Arc,
+        Arc, Mutex as StdMutex,
         atomic::{AtomicBool, Ordering},
-        Mutex as StdMutex,
     },
     time::Instant,
 };
@@ -30,9 +31,9 @@ use tokio::sync::Semaphore;
 use crate::{
     agent::{
         AttemptBudget, BudgetConfig, BudgetTracker, CacheGeneration, CancelToken, EventSink,
-        JobCounts, JobEvent, JobId, JobScope, JobState, Phase, Preview, Role, RunLimits, RunRequest,
-        Scheduler, SafeError, TokenUsage,
-        events::{JobEmitter, work_event},
+        JobCounts, JobEvent, JobId, JobScope, JobState, Phase, Preview, Role, RunError, RunLimits,
+        RunRequest, SafeError, Scheduler, TokenUsage,
+        events::{JobEmitter, log_job, work_event},
         model::providers::{
             ApiFormat, ProviderConfig, request_defaults, resolve_api_format, session_header_for,
             session_id,
@@ -385,10 +386,7 @@ impl JobContext {
     }
 
     pub fn usage(&self) -> TokenUsage {
-        self.usage
-            .lock()
-            .map(|usage| *usage)
-            .unwrap_or_default()
+        self.usage.lock().map(|usage| *usage).unwrap_or_default()
     }
 
     pub fn add_usage(&self, usage: TokenUsage) {
@@ -788,10 +786,7 @@ impl TranslationService {
     pub fn set_diagnostic(&self, enabled: bool) -> bool {
         self.inner.diagnostic.store(enabled, Ordering::SeqCst);
         let _ = crate::logging::set_diagnostic(enabled);
-        log::info!(
-            "翻译诊断开关：{}",
-            if enabled { "debug" } else { "info" }
-        );
+        log::info!("翻译诊断开关：{}", if enabled { "debug" } else { "info" });
         enabled
     }
 
@@ -1233,8 +1228,7 @@ impl TranslationService {
             job_id: manifest.job_id.clone(),
             generation: manifest.generation,
         };
-        let store =
-            JobStore::open(&self.inner.paths, &scope).map_err(|error| error.to_string())?;
+        let store = JobStore::open(&self.inner.paths, &scope).map_err(|error| error.to_string())?;
         let io = StoreIo::new(Arc::new(store));
         preview_from_io(&io, chunk_id)
     }
@@ -1749,8 +1743,7 @@ impl TranslationService {
             job_id: job_id.to_string(),
             generation: manifest.generation,
         };
-        let store =
-            JobStore::open(&self.inner.paths, &scope).map_err(|error| error.to_string())?;
+        let store = JobStore::open(&self.inner.paths, &scope).map_err(|error| error.to_string())?;
         store.remove_tree().map_err(|error| error.to_string())
     }
 
@@ -1785,10 +1778,7 @@ impl TranslationService {
                 };
                 if matches!(
                     manifest.state,
-                    JobState::Queued
-                        | JobState::Running
-                        | JobState::Pausing
-                        | JobState::Cancelling
+                    JobState::Queued | JobState::Running | JobState::Pausing | JobState::Cancelling
                 ) {
                     manifest.state = JobState::Interrupted;
                     manifest.updated_at = Utc::now().to_rfc3339();
@@ -1846,7 +1836,11 @@ impl TranslationService {
         // 同一小说串行：先取小说锁，再占活跃小说槽位（排队中的小说不占活跃名额）。
         let novel_lock = self.novel_lock(handle.ctx.scope.novel_id);
         let _novel_guard = novel_lock.lock().await;
-        let _novel_permit = self.inner.scheduler.enter_novel(handle.ctx.scope.novel_id).await;
+        let _novel_permit = self
+            .inner
+            .scheduler
+            .enter_novel(handle.ctx.scope.novel_id)
+            .await;
         let result = self.drive(&handle).await;
         handle.running.store(false, Ordering::SeqCst);
         if let Err(error) = result {
@@ -1881,26 +1875,37 @@ impl TranslationService {
             tools::COORDINATOR_TOOL_CONTRACT
         );
         let prompt = main_prompt(ctx);
-        let request = RunRequest::new(
-            Role::Main,
-            system,
-            prompt,
-            ctx.model.model()?,
-            tools::coordinator_tools(ctx),
-            limits,
-            ctx.run_sink(),
-            ctx.scope.clone(),
-        )
-        .with_phase(phase)
-        .with_budget(ctx.budget.clone())
-        .with_budget_config(ctx.budget_config.clone())
-        .with_compaction({
-            let journal_ctx = handle.ctx.clone();
-            crate::agent::CompactionConfig::new(ctx.budget_config.clone(), ctx.scope.clone())
-                .with_scheduler(ctx.scheduler.clone())
-                .with_tracker(ctx.budget.clone())
-                .with_journal(Arc::new(
-                    move |record: &crate::agent::CompactionRecord| {
+
+        let stop = ctx.control.stop_signal();
+        // 续跑循环：一次运行正常结束但完成校验未通过时，带着上次运行的压缩后
+        // 历史投影与最新检查点状态重新拉起；连续无进展达到上限才转 needs_attention。
+        // 单次运行的轮次上限（max_turns）只约束一轮，任务级的推进由本循环收敛。
+        const MAX_IDLE_CONTINUATIONS: u32 = 3;
+        let mut carried: Vec<Arc<rig_core::message::Message>> = Vec::new();
+        let mut last_progress = self.progress_snapshot(ctx);
+        let mut idle_runs: u32 = 0;
+        let mut run_index: u32 = 0;
+        let outcome: Result<(), RunError> = loop {
+            run_index += 1;
+            let request = RunRequest::new(
+                Role::Main,
+                system.clone(),
+                prompt.clone(),
+                ctx.model.model()?,
+                tools::coordinator_tools(ctx),
+                limits,
+                ctx.run_sink(),
+                ctx.scope.clone(),
+            )
+            .with_phase(phase)
+            .with_budget(ctx.budget.clone())
+            .with_budget_config(ctx.budget_config.clone())
+            .with_compaction({
+                let journal_ctx = handle.ctx.clone();
+                crate::agent::CompactionConfig::new(ctx.budget_config.clone(), ctx.scope.clone())
+                    .with_scheduler(ctx.scheduler.clone())
+                    .with_tracker(ctx.budget.clone())
+                    .with_journal(Arc::new(move |record: &crate::agent::CompactionRecord| {
                         // 压缩记录只写计数、耗时、保留范围与结果码；摘要正文不入账。
                         let phase = journal_ctx
                             .read_manifest()
@@ -1917,58 +1922,100 @@ impl TranslationService {
                             "elapsed_ms": record.elapsed_ms,
                             "code": record.code,
                         }));
-                    },
-                ))
-        })
-        .with_scheduler(ctx.scheduler.clone())
-        .with_request_params(max_tokens, params);
-
-        let stop = ctx.control.stop_signal();
-        let outcome = {
-            let run = runtime::run(request, ctx.control.cancel.child());
-            tokio::pin!(run);
-            tokio::select! {
-                biased;
-                result = &mut run => Some(result),
-                () = stop.cancelled() => None,
+                    }))
+            })
+            .with_scheduler(ctx.scheduler.clone())
+            .with_request_params(max_tokens, params.clone())
+            .with_history(carried.clone())
+            .with_result_estimator(Arc::new(tools::ChunkResultEstimator::new(ctx.clone())));
+            let result = {
+                let run = runtime::run(request, ctx.control.cancel.child());
+                tokio::pin!(run);
+                tokio::select! {
+                    biased;
+                    result = &mut run => Some(result),
+                    () = stop.cancelled() => None,
+                }
+            };
+            if ctx.control.cancelled() {
+                self.transition(handle, JobState::Cancelled, "cancelled", Some("cancelled"));
+                return Ok(());
+            }
+            if ctx.control.awaiting_confirmation() {
+                self.transition(
+                    handle,
+                    JobState::AwaitingConfirmation,
+                    "awaiting_confirmation",
+                    None,
+                );
+                return Ok(());
+            }
+            if ctx.control.pause_requested() {
+                self.transition(handle, JobState::Paused, "paused", None);
+                return Ok(());
+            }
+            let Some(result) = result else {
+                self.transition(handle, JobState::Paused, "paused", None);
+                return Ok(());
+            };
+            match result {
+                Ok(run_outcome) => {
+                    ctx.append_session(&json!({
+                        "kind": "main_run",
+                        "run": run_index,
+                        "phase": phase.as_str(),
+                        "elapsed_ms": handle.started.elapsed().as_millis() as u64,
+                        "tool_calls": run_outcome.tool_calls,
+                        "usage": {
+                            "input": run_outcome.usage.input,
+                            "output": run_outcome.usage.output,
+                            "total": run_outcome.usage.total,
+                        },
+                        "budget_used": ctx.budget.snapshot().used,
+                    }));
+                    self.record_usage(handle, run_outcome.usage);
+                    if self.verify_complete(ctx) {
+                        break Ok(());
+                    }
+                    let progress = self.progress_snapshot(ctx);
+                    if progress > last_progress {
+                        last_progress = progress;
+                        idle_runs = 0;
+                    } else {
+                        idle_runs += 1;
+                    }
+                    if idle_runs >= MAX_IDLE_CONTINUATIONS {
+                        log_job(
+                            &ctx.scope,
+                            "main",
+                            phase,
+                            None,
+                            "continuation_stopped",
+                            &[("runs", &run_index.to_string())],
+                        );
+                        break Ok(());
+                    }
+                    log_job(
+                        &ctx.scope,
+                        "main",
+                        phase,
+                        None,
+                        "run_continue",
+                        &[
+                            ("runs", &run_index.to_string()),
+                            ("idle", &idle_runs.to_string()),
+                        ],
+                    );
+                    // 续跑提示复用主提示：它按 manifest 重建当前阶段与检查点状态，
+                    // 模型据此从检查点继续而不重复已完成的工作。
+                    carried = run_outcome.history;
+                    carried.push(Arc::new(rig_core::message::Message::user(main_prompt(ctx))));
+                }
+                Err(error) => break Err(error),
             }
         };
-        if ctx.control.cancelled() {
-            self.transition(handle, JobState::Cancelled, "cancelled", Some("cancelled"));
-            return Ok(());
-        }
-        if ctx.control.awaiting_confirmation() {
-            self.transition(
-                handle,
-                JobState::AwaitingConfirmation,
-                "awaiting_confirmation",
-                None,
-            );
-            return Ok(());
-        }
-        if ctx.control.pause_requested() {
-            self.transition(handle, JobState::Paused, "paused", None);
-            return Ok(());
-        }
-        let Some(outcome) = outcome else {
-            self.transition(handle, JobState::Paused, "paused", None);
-            return Ok(());
-        };
         match outcome {
-            Ok(outcome) => {
-                ctx.append_session(&json!({
-                    "kind": "main_run",
-                    "phase": phase.as_str(),
-                    "elapsed_ms": handle.started.elapsed().as_millis() as u64,
-                    "tool_calls": outcome.tool_calls,
-                    "usage": {
-                        "input": outcome.usage.input,
-                        "output": outcome.usage.output,
-                        "total": outcome.usage.total,
-                    },
-                    "budget_used": ctx.budget.snapshot().used,
-                }));
-                self.record_usage(handle, outcome.usage);
+            Ok(()) => {
                 if self.verify_complete(ctx) {
                     self.transition(handle, JobState::Completed, "completed", None);
                 } else {
@@ -2008,6 +2055,37 @@ impl TranslationService {
             }
         }
         Ok(())
+    }
+
+    /// 任务推进度的粗粒度快照：直接数磁盘产物（草稿、审查、冻结、发布），
+    /// 只用于判断「续跑是否带来进展」，不是精确度量。
+    fn progress_snapshot(&self, ctx: &JobContext) -> u64 {
+        let chunks = match tools::plan_chunks(ctx) {
+            Ok(chunks) => chunks,
+            Err(_) => return 0,
+        };
+        let mut progress = 0u64;
+        for chunk in &chunks {
+            if tools::read_draft_for_verify(ctx, &chunk.id)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                progress += 4;
+            }
+            if tools::read_review_for_verify(ctx, &chunk.id)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                progress += 2;
+            }
+        }
+        let frozen =
+            ctx.with_artifacts(|artifacts| artifacts.read_constraints().ok().flatten().is_some());
+        let published =
+            ctx.with_artifacts(|artifacts| artifacts.read_result().ok().flatten().is_some());
+        progress + u64::from(frozen) * 8 + u64::from(published) * 16
     }
 
     fn record_usage(&self, handle: &Arc<JobHandle>, usage: TokenUsage) {
@@ -2516,10 +2594,7 @@ fn snapshot_from_manifest(manifest: &crate::agent::Manifest) -> TranslationJobSn
         elapsed_ms,
         preview: Preview::default(),
         message: manifest.state.as_str().into(),
-        error_code: manifest
-            .last_error
-            .as_ref()
-            .map(|error| error.code.clone()),
+        error_code: manifest.last_error.as_ref().map(|error| error.code.clone()),
         seq: 0,
         constraint_version: manifest.constraint_version,
         budget: BudgetSnapshot {
@@ -2605,8 +2680,10 @@ pub fn legacy_pages(
     paths: &AppPaths,
     novel_id: i64,
 ) -> Result<Option<BTreeMap<usize, Vec<legacy::TranslatedLine>>>, String> {
-    Ok(crate::translation::legacy::read_latest_book(&paths.data_dir, novel_id)?
-        .map(|book| book.pages))
+    Ok(
+        crate::translation::legacy::read_latest_book(&paths.data_dir, novel_id)?
+            .map(|book| book.pages),
+    )
 }
 
 /// 判断错误是否为缓存失效（供命令层映射提示）。
@@ -2723,12 +2800,8 @@ mod tests {
     #[tokio::test]
     async fn diagnostic_toggle_is_session_scoped() {
         let (paths, dir) = fixture("diag");
-        let service = TranslationService::for_tests(
-            paths,
-            settings(),
-            Arc::new(NoopSink),
-            Some("k".into()),
-        );
+        let service =
+            TranslationService::for_tests(paths, settings(), Arc::new(NoopSink), Some("k".into()));
         assert!(!service.diagnostic(), "默认关闭");
         assert!(service.set_diagnostic(true));
         assert!(service.diagnostic());
@@ -2777,12 +2850,8 @@ mod tests {
     #[tokio::test]
     async fn invalidate_cache_clears_index_and_bumps_generation_per_call() {
         let (paths, dir) = fixture("gen");
-        let service = TranslationService::for_tests(
-            paths,
-            settings(),
-            Arc::new(NoopSink),
-            Some("k".into()),
-        );
+        let service =
+            TranslationService::for_tests(paths, settings(), Arc::new(NoopSink), Some("k".into()));
         let start = service.generation().get();
         service.invalidate_cache();
         assert_eq!(service.generation().get(), start + 1);
@@ -2795,12 +2864,8 @@ mod tests {
     #[tokio::test]
     async fn operations_on_unknown_job_return_errors_not_panics() {
         let (paths, dir) = fixture("unknown");
-        let service = TranslationService::for_tests(
-            paths,
-            settings(),
-            Arc::new(NoopSink),
-            Some("k".into()),
-        );
+        let service =
+            TranslationService::for_tests(paths, settings(), Arc::new(NoopSink), Some("k".into()));
         assert!(service.snapshot("20260101000000-abcdef").await.is_err());
         assert!(service.preview("nope", "c0001").await.is_err());
         assert!(service.resume("nope").await.is_err());

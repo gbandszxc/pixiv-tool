@@ -658,7 +658,7 @@ mod tests {
             let server = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buffer = [0; 4096];
-                socket.read(&mut buffer).await.unwrap();
+                let _ = socket.read(&mut buffer).await.unwrap();
                 let header = content_length
                     .map(|size| format!("Content-Length: {size}"))
                     .unwrap_or_else(|| "Transfer-Encoding: chunked".to_string());

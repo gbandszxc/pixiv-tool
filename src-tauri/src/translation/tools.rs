@@ -311,8 +311,7 @@ pub fn plan_chunks(ctx: &JobContext) -> Result<Vec<Chunk>, String> {
     let plan = read_plan(ctx).ok_or_else(|| "尚未准备原文（缺少分块计划）".to_string())?;
     let mut chunks = Vec::with_capacity(plan.entries.len());
     for entry in &plan.entries {
-        let chunk =
-            read_chunk(ctx, &entry.id)?.ok_or_else(|| format!("分块缺失：{}", entry.id))?;
+        let chunk = read_chunk(ctx, &entry.id)?.ok_or_else(|| format!("分块缺失：{}", entry.id))?;
         chunks.push(chunk);
     }
     Ok(chunks)
@@ -331,7 +330,9 @@ pub fn plan_ids(ctx: &JobContext) -> Result<Vec<String>, String> {
 // ----------------------------------------------------------------------
 
 fn tool_error(code: &str, message: &str) -> ToolExecutionError {
-    ToolExecutionError::invalid_args(json!({"error": {"code": code, "message": message}}).to_string())
+    ToolExecutionError::invalid_args(
+        json!({"error": {"code": code, "message": message}}).to_string(),
+    )
 }
 
 fn tool_error_with(code: &str, message: &str, extra: Value) -> ToolExecutionError {
@@ -375,7 +376,11 @@ fn arg_str_list(args: &Value, key: &str) -> Result<Vec<String>, ToolExecutionErr
         .ok_or_else(|| tool_error("invalid_args", &format!("缺少数组参数 {key}")))?;
     let mut values = Vec::with_capacity(list.len());
     for item in list {
-        let Some(value) = item.as_str().map(str::trim).filter(|value| !value.is_empty()) else {
+        let Some(value) = item
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
             return Err(tool_error(
                 "invalid_args",
                 &format!("{key} 只能包含非空字符串"),
@@ -708,6 +713,47 @@ fn read_chunk_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
     )
 }
 
+/// 协调者工具结果大小预估器：`read_chunk` 按块字符数（含邻接窗口）估算
+/// 结果 token；其余工具结果都很小，返回 0 不参与单轮预算。
+pub(crate) struct ChunkResultEstimator {
+    ctx: std::sync::Arc<JobContext>,
+}
+
+impl ChunkResultEstimator {
+    pub(crate) fn new(ctx: std::sync::Arc<JobContext>) -> Self {
+        Self { ctx }
+    }
+}
+
+impl crate::agent::ToolResultEstimator for ChunkResultEstimator {
+    fn estimate(&self, tool: &str, args: &str) -> u32 {
+        if tool != "read_chunk" {
+            return 0;
+        }
+        let Ok(args) = serde_json::from_str::<serde_json::Value>(args) else {
+            return 0;
+        };
+        let Some(chunk_id) = args.get("chunk_id").and_then(|value| value.as_str()) else {
+            return 0;
+        };
+        let include_context = args
+            .get("include_context")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let Ok(Some(chunk)) = read_chunk(&self.ctx, chunk_id) else {
+            // 无效参数走工具本身的错误返回（小结果），不参与预算。
+            return 0;
+        };
+        let context_chars = if include_context {
+            chunk.prev_context.chars().count() + chunk.next_context.chars().count()
+        } else {
+            0
+        };
+        // CJK 保守按 1 token/字符 + 10% 余量 + JSON 结构外壳。
+        ((chunk.chars as usize + context_chars) * 11 / 10) as u32 + 128
+    }
+}
+
 #[derive(Deserialize)]
 struct ScanTermArg {
     source_term: String,
@@ -1036,9 +1082,7 @@ fn dispatch_tool(ctx: &std::sync::Arc<JobContext>, kind: DispatchKind) -> Dynami
     DynamicTool::new(
         tool_name(kind.tool_name()),
         match kind {
-            DispatchKind::Translate => {
-                "派发翻译子 Agent 处理指定块，返回每块状态、用量与问题数。"
-            }
+            DispatchKind::Translate => "派发翻译子 Agent 处理指定块，返回每块状态、用量与问题数。",
             DispatchKind::Review => "派发独立审查子 Agent 审查指定块，返回每块结论摘要。",
         },
         json!({
@@ -1214,16 +1258,15 @@ fn rework_targets(
     for id in ids {
         let draft = read_draft(ctx, id).map_err(|error| tool_error("storage", &error))?;
         let review = read_review(ctx, id).map_err(|error| tool_error("storage", &error))?;
-        let needs = draft
-            .as_ref()
-            .is_some_and(|draft| draft.needs_repair && stamped(ctx, "draft", id, versions.translate))
-            || review.as_ref().is_some_and(|review| {
-                stamped(ctx, "review", id, versions.review)
-                    && review.verdict == ReviewVerdict::NeedsFix
-                    && draft
-                        .as_ref()
-                        .is_some_and(|draft| review.draft_version == draft.version)
-            });
+        let needs = draft.as_ref().is_some_and(|draft| {
+            draft.needs_repair && stamped(ctx, "draft", id, versions.translate)
+        }) || review.as_ref().is_some_and(|review| {
+            stamped(ctx, "review", id, versions.review)
+                && review.verdict == ReviewVerdict::NeedsFix
+                && draft
+                    .as_ref()
+                    .is_some_and(|draft| review.draft_version == draft.version)
+        });
         if needs {
             targets.push(id.clone());
         }
@@ -1252,7 +1295,11 @@ async fn dispatch_one_inner(
     let mut split_done = false;
     loop {
         if ctx.control.cancelled() {
-            return Ok(vec![ChunkOutcome::failed(chunk_id, "cancelled", "任务已取消")]);
+            return Ok(vec![ChunkOutcome::failed(
+                chunk_id,
+                "cancelled",
+                "任务已取消",
+            )]);
         }
         if ctx.control.pause_requested() || ctx.control.awaiting_confirmation() {
             return Ok(vec![ChunkOutcome::failed(chunk_id, "paused", "已暂停派发")]);
@@ -1442,7 +1489,10 @@ fn retry_policy(ctx: &JobContext) -> RetryPolicy {
     RetryPolicy::new(
         ctx.settings.translation_agent_retry_limit.clamp(0, 5) as u32,
         ctx.settings.translation_agent_backoff_base_ms.max(1) as u64,
-        (ctx.settings.translation_agent_backoff_max_seconds.clamp(10, 600) as u64) * 1_000,
+        (ctx.settings
+            .translation_agent_backoff_max_seconds
+            .clamp(10, 600) as u64)
+            * 1_000,
     )
 }
 
@@ -1476,7 +1526,13 @@ async fn run_translator(
         role_prompt(Role::Translator),
         TRANSLATOR_TOOL_CONTRACT
     );
-    let prompt = translator_prompt(ctx, &chunk, constraints.as_ref(), draft.as_ref(), review.as_ref());
+    let prompt = translator_prompt(
+        ctx,
+        &chunk,
+        constraints.as_ref(),
+        draft.as_ref(),
+        review.as_ref(),
+    );
     let (max_tokens, params) = ctx
         .model
         .request_params(chunk.chars as usize)
@@ -1527,7 +1583,9 @@ fn translator_prompt(
         chunk.id,
         ctx.target_language,
         ctx.target_language_name,
-        constraints.map(|constraints| constraints.version).unwrap_or(0),
+        constraints
+            .map(|constraints| constraints.version)
+            .unwrap_or(0),
         constraints
             .map(|constraints| safe_text(&constraints.style, 600))
             .unwrap_or_else(|| "（无）".into()),
@@ -1633,10 +1691,7 @@ async fn run_reviewer(
         ctx.target_language,
         ctx.target_language_name,
         draft.version,
-        constraints
-            .as_ref()
-            .map(|item| item.version)
-            .unwrap_or(0),
+        constraints.as_ref().map(|item| item.version).unwrap_or(0),
         constraints
             .as_ref()
             .map(|item| safe_text(&item.style, 600))
@@ -1747,7 +1802,10 @@ fn split_chunk(
         } else {
             head_chars(&texts[1], context_chars)
         };
-        let chars: usize = half.iter().map(|segment| segment.text.chars().count()).sum();
+        let chars: usize = half
+            .iter()
+            .map(|segment| segment.text.chars().count())
+            .sum();
         let derived_chunk = Chunk {
             id: id.clone(),
             order: chunk.order,
@@ -1953,9 +2011,7 @@ fn merge_drafts_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
     )
 }
 
-fn merge_drafts_impl(
-    ctx: &std::sync::Arc<JobContext>,
-) -> Result<ToolOutput, ToolExecutionError> {
+fn merge_drafts_impl(ctx: &std::sync::Arc<JobContext>) -> Result<ToolOutput, ToolExecutionError> {
     let outcome = compute_merge(ctx).map_err(|error| tool_error("merge_failed", &error))?;
     write_merge_report(ctx, &outcome.report).map_err(|error| tool_error("storage", &error))?;
     let versions = phase_versions(ctx);
@@ -2194,15 +2250,17 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                     if !draft_valid {
                         pending_translate.push(chunk.id.clone());
                     }
-                    let review_valid = read_review(&ctx, &chunk.id).ok().flatten().is_some_and(
-                        |review| {
-                            stamped(&ctx, "review", &chunk.id, versions.review)
-                                && draft
-                                    .as_ref()
-                                    .is_some_and(|draft| review.draft_version == draft.version)
-                                && review.verdict == ReviewVerdict::Pass
-                        },
-                    );
+                    let review_valid =
+                        read_review(&ctx, &chunk.id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|review| {
+                                stamped(&ctx, "review", &chunk.id, versions.review)
+                                    && draft
+                                        .as_ref()
+                                        .is_some_and(|draft| review.draft_version == draft.version)
+                                    && review.verdict == ReviewVerdict::Pass
+                            });
                     if !review_valid {
                         pending_review.push(chunk.id.clone());
                     }
@@ -2292,8 +2350,8 @@ fn submit_translation_tool(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> 
                     serde_json::from_value(raw).map_err(|error| {
                         tool_error("invalid_args", &format!("segments 结构无效：{error}"))
                     })?;
-                let existing = read_draft(&ctx, &chunk_id)
-                    .map_err(|error| tool_error("storage", &error))?;
+                let existing =
+                    read_draft(&ctx, &chunk_id).map_err(|error| tool_error("storage", &error))?;
                 let version = existing.as_ref().map(|draft| draft.version).unwrap_or(0) + 1;
                 let draft = Draft {
                     chunk_id: chunk_id.clone(),
@@ -2362,17 +2420,16 @@ fn read_translation_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                 let draft = read_draft(&ctx, &chunk_id)
                     .map_err(|error| tool_error("storage", &error))?
                     .ok_or_else(|| tool_error("draft_missing", "本块还没有译文草稿"))?;
-                let constraints =
-                    read_constraints(&ctx).map_err(|error| tool_error("storage", &error))?.unwrap_or(
-                        Constraints {
-                            version: 0,
-                            terms: Vec::new(),
-                            style: String::new(),
-                            conflicts: Vec::new(),
-                            unresolved: Vec::new(),
-                            frozen: false,
-                        },
-                    );
+                let constraints = read_constraints(&ctx)
+                    .map_err(|error| tool_error("storage", &error))?
+                    .unwrap_or(Constraints {
+                        version: 0,
+                        terms: Vec::new(),
+                        style: String::new(),
+                        conflicts: Vec::new(),
+                        unresolved: Vec::new(),
+                        frozen: false,
+                    });
                 tool_result(json!({
                     "chunk_id": chunk_id,
                     "draft_version": draft.version,
@@ -2716,8 +2773,8 @@ mod tests {
     #[test]
     fn tool_error_payloads_are_structured_and_side_effect_free() {
         let error = tool_error("unknown_chunk", "分块不存在");
-        let payload: Value = serde_json::from_str(&error.model_output().render())
-            .expect("结构化错误是 JSON");
+        let payload: Value =
+            serde_json::from_str(&error.model_output().render()).expect("结构化错误是 JSON");
         assert_eq!(payload["error"]["code"], "unknown_chunk");
         assert_eq!(payload["error"]["message"], "分块不存在");
 
@@ -2738,7 +2795,11 @@ mod tests {
             serde_json::from_str(output.as_text().expect("文本输出")).expect("JSON");
         assert_eq!(payload["truncated"], true);
         assert_eq!(payload["limit"], TOOL_RESULT_TOKEN_LIMIT);
-        assert!(payload["summary"].as_str().is_some_and(|text| !text.is_empty()));
+        assert!(
+            payload["summary"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty())
+        );
 
         let small = tool_result(json!({"chunks": 2})).expect("成功返回");
         let payload: Value = serde_json::from_str(small.as_text().unwrap()).unwrap();
@@ -2750,7 +2811,10 @@ mod tests {
         assert_eq!(PLAN_PATH, "preparation/chunk-plan.json");
         assert_eq!(meta_path("draft", "c0001"), "chunks/c0001.draft.meta.json");
         assert_eq!(meta_path("review", "c0001"), "reviews/c0001.meta.json");
-        assert_eq!(meta_path("scan", "c0001"), "preparation/scan-c0001.meta.json");
+        assert_eq!(
+            meta_path("scan", "c0001"),
+            "preparation/scan-c0001.meta.json"
+        );
         assert_eq!(
             meta_path("global_review", "global"),
             "output/global-review.meta.json"

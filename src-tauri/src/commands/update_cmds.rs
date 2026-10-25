@@ -266,7 +266,7 @@ mod tests {
             let server = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = [0; 4096];
-                socket.read(&mut request).await.unwrap();
+                let _ = socket.read(&mut request).await.unwrap();
                 let headers = if chunked {
                     "Transfer-Encoding: chunked".to_string()
                 } else {
