@@ -920,6 +920,32 @@ async fn full_job_completes_with_stable_page_line_mapping() {
     assert_eq!(manifest["source_language"], "ja");
     assert!(manifest["counts"]["chunks"].as_u64().unwrap() >= 2);
 
+    // 快照必须带分块计划的块 ID：细分后 ID 不连续，前端不能按序号拼。
+    let plan = std::fs::read_to_string(
+        fixture
+            .paths
+            .data_dir
+            .join("translations")
+            .join("v2")
+            .join("5150")
+            .join(&started.job_id)
+            .join("preparation")
+            .join("chunk-plan.json"),
+    )
+    .expect("读取分块计划");
+    let plan: Value = rig_core::serde_json::from_str(&plan).expect("分块计划是 JSON");
+    let expected: Vec<String> = plan["entries"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .filter_map(|entry| entry["id"].as_str().map(str::to_string))
+        .collect();
+    assert!(!expected.is_empty());
+    assert_eq!(
+        done.chunk_ids, expected,
+        "快照 chunk_ids 必须与分块计划顺序一致"
+    );
+
     // 阅读器投影：页行映射与原文一致。
     let result = service
         .result(5150)
