@@ -1919,9 +1919,11 @@ impl TranslationService {
         // 历史投影与最新检查点状态重新拉起；连续无进展达到上限才转 needs_attention。
         // 单次运行的轮次上限（max_turns）只约束一轮，任务级的推进由本循环收敛。
         const MAX_IDLE_CONTINUATIONS: u32 = 3;
+        const MAX_EMPTY_RUNS: u32 = 2;
         let mut carried: Vec<Arc<rig_core::message::Message>> = Vec::new();
         let mut last_progress = self.progress_snapshot(ctx);
         let mut idle_runs: u32 = 0;
+        let mut empty_runs: u32 = 0;
         let mut run_index: u32 = 0;
         // 限流 / 暂时性服务错误的重试计数：与「无进展续跑」分开，按设置的
         // 重试次数与退避策略在任务级重跑整轮，而不是立刻转 needs_attention。
@@ -2026,14 +2028,24 @@ impl TranslationService {
                     } else {
                         idle_runs += 1;
                     }
-                    if idle_runs >= MAX_IDLE_CONTINUATIONS {
+                    // 完全没有工具调用的空转最烧 token 也最无望：连续两轮就收敛，
+                    // 不必等满无进展上限。
+                    if run_outcome.tool_calls == 0 {
+                        empty_runs += 1;
+                    } else {
+                        empty_runs = 0;
+                    }
+                    if idle_runs >= MAX_IDLE_CONTINUATIONS || empty_runs >= MAX_EMPTY_RUNS {
                         log_job(
                             &ctx.scope,
                             "main",
                             phase,
                             None,
                             "continuation_stopped",
-                            &[("runs", &run_index.to_string())],
+                            &[
+                                ("runs", &run_index.to_string()),
+                                ("empty", &empty_runs.to_string()),
+                            ],
                         );
                         break Ok(());
                     }
@@ -2046,13 +2058,18 @@ impl TranslationService {
                         &[
                             ("runs", &run_index.to_string()),
                             ("idle", &idle_runs.to_string()),
+                            ("empty", &empty_runs.to_string()),
                         ],
                     );
                     // 续跑提示直接给出磁盘产物推导出的下一步动作。单纯重放主提示
                     // 会让模型重复「只读状态、不写产物」的空转模式。
                     carried = run_outcome.history;
                     carried.push(Arc::new(rig_core::message::Message::user(
-                        continuation_nudge(ctx, "上一轮回复没有产生任何新的磁盘产物"),
+                        continuation_nudge(
+                            ctx,
+                            "上一轮回复没有产生任何新的磁盘产物",
+                            run_outcome.tool_calls == 0,
+                        ),
                     )));
                 }
                 Err(error) => {
@@ -2089,7 +2106,11 @@ impl TranslationService {
                     }
                     // 失败轮没有可带回的历史；保留上一轮 carried，补一条带动作的提示。
                     carried.push(Arc::new(rig_core::message::Message::user(
-                        continuation_nudge(ctx, "上一轮模型请求被服务端暂时拒绝，已按退避重试"),
+                        continuation_nudge(
+                            ctx,
+                            "上一轮模型请求被服务端暂时拒绝，已按退避重试",
+                            false,
+                        ),
                     )));
                 }
             }
@@ -2626,7 +2647,8 @@ fn language_code(language: legacy::SourceLanguage) -> &'static str {
 
 /// 续跑提示：一轮正常结束但完成校验未通过、或可重试的模型请求失败后注入。
 /// 运行层直接给出磁盘产物推导出的下一步动作，避免模型重复「只读状态、不写产物」。
-fn continuation_nudge(ctx: &JobContext, reason: &str) -> String {
+/// `empty_turn` 表示上一轮完全没有发起工具调用，需要更强的格式要求与参数示例。
+fn continuation_nudge(ctx: &JobContext, reason: &str, empty_turn: bool) -> String {
     let pending = tools::pending_state(ctx);
     let phase = ctx
         .read_manifest()
@@ -2638,6 +2660,13 @@ fn continuation_nudge(ctx: &JobContext, reason: &str) -> String {
          下面的待办清单直接取自磁盘产物，不要再调用 job_status。"
             .to_string(),
     ];
+    if empty_turn {
+        lines.push(
+            "上一轮没有发起任何工具调用。本次回复只允许是工具调用本身：\
+             不要写解释、计划或总结，也不要复述扫描结果——写在回复里不会落盘。"
+                .into(),
+        );
+    }
     let brief = |ids: &[String]| {
         const LIMIT: usize = 24;
         if ids.len() > LIMIT {
@@ -2654,10 +2683,13 @@ fn continuation_nudge(ctx: &JobContext, reason: &str) -> String {
     } else if !pending.pending_scan.is_empty() {
         lines.push(format!(
             "下一步：对未扫描块 {} 逐个调用 read_chunk(chunk_id, true)，单轮最多 2 个；\
-             每读完一块立刻调用 submit_scan(chunk_id, terms, style, notes, confidence)，\
-             terms 每项至少含 source_term 与 locked_translation。",
+             每读完一块立刻调用 submit_scan(...)。",
             brief(&pending.pending_scan)
         ));
+        lines.push(
+            r#"submit_scan 参数示例（字段名固定）：{"chunk_id":"c0001","terms":[{"source_term":"勇者","locked_translation":"勇者","term_type":"角色"}],"style":{"formality":"轻小说口语","narration":"第一人称"},"notes":"","confidence":"high"}。没有专有名词时 terms 传 []；style 不能省略。"#
+                .into(),
+        );
     } else if !pending.constraints_frozen {
         lines.push("下一步：全部块已扫描，立即调用 freeze_constraints() 生成冻结版本。".into());
     } else if !pending.pending_translate.is_empty() {

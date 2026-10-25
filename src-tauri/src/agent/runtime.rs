@@ -1056,6 +1056,7 @@ pub async fn run(req: RunRequest, cancel: CancelToken) -> Result<RunOutcome, Run
             ("output", &outcome.usage.output.to_string()),
             // 空转诊断：没有工具调用却产出长文本，通常是模型把结果写进了回答。
             ("final_chars", &final_text.chars().count().to_string()),
+            ("final", &safe_text(&final_text, 300)),
             (
                 "elapsed_ms",
                 &state.started.elapsed().as_millis().to_string(),
