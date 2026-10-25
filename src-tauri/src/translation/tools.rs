@@ -1509,7 +1509,8 @@ fn terminal_status(ctx: &JobContext) -> &'static str {
     }
 }
 
-fn retry_policy(ctx: &JobContext) -> RetryPolicy {
+/// 运行层重试策略：子任务重试与主 Agent 的可重试失败共用同一组设置。
+pub(crate) fn retry_policy(ctx: &JobContext) -> RetryPolicy {
     RetryPolicy::new(
         ctx.settings.translation_agent_retry_limit.clamp(0, 5) as u32,
         ctx.settings.translation_agent_backoff_base_ms.max(1) as u64,

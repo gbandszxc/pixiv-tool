@@ -32,7 +32,7 @@ use crate::{
     agent::{
         AttemptBudget, BudgetConfig, BudgetTracker, CacheGeneration, CancelToken, EventSink,
         JobCounts, JobEvent, JobId, JobScope, JobState, Phase, Preview, Role, RunError, RunLimits,
-        RunRequest, SafeError, Scheduler, TokenUsage,
+        RunRequest, SafeError, Scheduler, TokenUsage, backoff,
         events::{JobEmitter, log_job, work_event},
         model::providers::{
             ApiFormat, ProviderConfig, request_defaults, resolve_api_format, session_header_for,
@@ -1923,6 +1923,10 @@ impl TranslationService {
         let mut last_progress = self.progress_snapshot(ctx);
         let mut idle_runs: u32 = 0;
         let mut run_index: u32 = 0;
+        // 限流 / 暂时性服务错误的重试计数：与「无进展续跑」分开，按设置的
+        // 重试次数与退避策略在任务级重跑整轮，而不是立刻转 needs_attention。
+        let retry_policy = tools::retry_policy(ctx);
+        let mut provider_retries: u32 = 0;
         let outcome: Result<(), RunError> = loop {
             run_index += 1;
             let request = RunRequest::new(
@@ -2048,10 +2052,46 @@ impl TranslationService {
                     // 会让模型重复「只读状态、不写产物」的空转模式。
                     carried = run_outcome.history;
                     carried.push(Arc::new(rig_core::message::Message::user(
-                        continuation_nudge(ctx),
+                        continuation_nudge(ctx, "上一轮回复没有产生任何新的磁盘产物"),
                     )));
                 }
-                Err(error) => break Err(error),
+                Err(error) => {
+                    let retryable =
+                        matches!(&error, RunError::Provider { class, .. } if class.is_retryable());
+                    if !retryable || !retry_policy.allows(provider_retries) {
+                        break Err(error);
+                    }
+                    let attempt = provider_retries;
+                    provider_retries += 1;
+                    log_job(
+                        &ctx.scope,
+                        "main",
+                        phase,
+                        None,
+                        "run_retry",
+                        &[
+                            ("attempt", &(attempt + 1).to_string()),
+                            ("code", error.code()),
+                        ],
+                    );
+                    if backoff(&retry_policy, attempt, &stop).await.is_none() {
+                        if ctx.control.cancelled() {
+                            self.transition(
+                                handle,
+                                JobState::Cancelled,
+                                "cancelled",
+                                Some("cancelled"),
+                            );
+                        } else {
+                            self.transition(handle, JobState::Paused, "paused", None);
+                        }
+                        return Ok(());
+                    }
+                    // 失败轮没有可带回的历史；保留上一轮 carried，补一条带动作的提示。
+                    carried.push(Arc::new(rig_core::message::Message::user(
+                        continuation_nudge(ctx, "上一轮模型请求被服务端暂时拒绝，已按退避重试"),
+                    )));
+                }
             }
         };
         match outcome {
@@ -2584,20 +2624,16 @@ fn language_code(language: legacy::SourceLanguage) -> &'static str {
     }
 }
 
-/// 主 Agent 的用户提示：只含 Job 摘要（页 / 块计数、语言、阶段、产物摘要）。
-/// 续跑提示：上一轮正常结束但完成校验未通过时注入。运行层直接给出磁盘产物
-/// 推导出的下一步动作，避免模型重复「只读状态、不写产物」的空转模式。
-fn continuation_nudge(ctx: &JobContext) -> String {
+/// 续跑提示：一轮正常结束但完成校验未通过、或可重试的模型请求失败后注入。
+/// 运行层直接给出磁盘产物推导出的下一步动作，避免模型重复「只读状态、不写产物」。
+fn continuation_nudge(ctx: &JobContext, reason: &str) -> String {
     let pending = tools::pending_state(ctx);
     let phase = ctx
         .read_manifest()
         .map(|manifest| manifest.phase.as_str().to_string())
         .unwrap_or_else(|_| "prepare_source".into());
     let mut lines = vec![
-        format!(
-            "续跑指令（运行层生成，优先于此前所有说明）：任务停在「{phase}」阶段，\
-             上一轮回复没有产生任何新的磁盘产物。"
-        ),
+        format!("续跑指令（运行层生成，优先于此前所有说明）：任务停在「{phase}」阶段，{reason}。"),
         "只输出计划、总结或扫描/译文正文都不算完成，本轮回复必须包含工具调用；\
          下面的待办清单直接取自磁盘产物，不要再调用 job_status。"
             .to_string(),
@@ -2645,6 +2681,7 @@ fn continuation_nudge(ctx: &JobContext) -> String {
     lines.join("\n")
 }
 
+/// 主 Agent 的用户提示：只含 Job 摘要（页 / 块计数、语言、阶段、产物摘要）。
 fn main_prompt(ctx: &JobContext) -> String {
     let manifest = ctx
         .read_manifest()

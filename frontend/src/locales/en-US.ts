@@ -536,7 +536,6 @@ export default {
       working: "Working…",
       untitled: "Novel #{id}",
       page: "page {page}",
-      pageUnknown: "page unknown",
       statusBarShort: "Translation task",
       statusBarCountIdle: "{count} translation tasks in background",
       statusBarCountIdleShort: "{count} translation tasks",

@@ -537,7 +537,6 @@ export default {
       working: "处理中…",
       untitled: "小说 #{id}",
       page: "第 {page} 页",
-      pageUnknown: "页码未知",
       statusBarShort: "翻译任务",
       statusBarCountIdle: "后台 {count} 个翻译任务",
       statusBarCountIdleShort: "{count} 个翻译任务",

@@ -2490,6 +2490,54 @@ async fn main_run_continuation_completes_after_idle_end() {
 }
 
 #[tokio::test]
+async fn retryable_provider_error_is_retried_before_giving_up() {
+    let fixture = fixture("provider-retry");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let handler: Handler = Arc::new(move |body: &Value| {
+        if role_of(&system_of(body)) == "main" && counter.fetch_add(1, Ordering::SeqCst) == 0 {
+            // 首次主 Agent 请求返回 429：任务级应退避重试而不是直接转 needs_attention。
+            return Reply::Error(429, json!({"error": {"message": "cell is at capacity"}}));
+        }
+        scripted(body)
+    });
+    let server = MockServer::start(handler).await;
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
+
+    let started = service.start(novel(), false).await.expect("启动成功");
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Cancelled,
+        ],
+    )
+    .await;
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "429 应被退避重试并最终完成：{} error={:?}",
+        done.message,
+        done.error_code
+    );
+    let main_calls = server
+        .requests()
+        .iter()
+        .filter(|body| role_of(&system_of(body)) == "main")
+        .count();
+    assert!(
+        main_calls >= 2,
+        "主 Agent 应至少重试一次，实际 {main_calls} 次请求"
+    );
+}
+
+#[tokio::test]
 async fn bulk_read_chunk_throttled_by_turn_budget_still_completes() {
     let fixture = fixture("throttle");
     // 有状态机：跨压缩保留进度（真实模型依据压缩摘要与检查点继续推进）。

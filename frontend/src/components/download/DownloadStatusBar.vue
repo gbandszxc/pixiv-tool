@@ -39,13 +39,13 @@ function jobTitle(job: TranslationJobSnapshot): string {
 }
 function stateText(job: TranslationJobSnapshot): string { return t(`translation.job.state.${job.state}`); }
 function phaseText(job: TranslationJobSnapshot): string { return t(`translation.job.phase.${job.phase}`); }
-/** 页码只在任务推进中有意义；暂停 / 失败等静止态不显示「页码未知」。 */
+/** 页码是可选信息：整篇任务尚未定位到页面、或处于静止态时都省略，不显示「未知」占位。 */
 function pageText(job: TranslationJobSnapshot): string {
   if (job.state !== "running" && job.state !== "pausing" && job.state !== "awaiting_confirmation") {
     return "";
   }
   const page = job.current?.page;
-  return page != null ? t("translation.job.page", { page }) : t("translation.job.pageUnknown");
+  return page != null ? t("translation.job.page", { page }) : "";
 }
 /** 底栏单任务徽标：标题 + 可选页码 + 状态；页码为空时不留空段。 */
 function badgeText(job: TranslationJobSnapshot): string {

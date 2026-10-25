@@ -521,7 +521,6 @@ export default {
       working: "処理中…",
       untitled: "小説 #{id}",
       page: "{page} ページ目",
-      pageUnknown: "ページ不明",
       statusBarShort: "翻訳タスク",
       statusBarCountIdle: "バックグラウンドで {count} 件の翻訳タスク",
       statusBarCountIdleShort: "{count} 件の翻訳タスク",
