@@ -1667,7 +1667,19 @@ impl TranslationService {
             session_seed: format!("pixiv-tool-novel-{}", manifest.novel_id),
         };
         // 3. 预算：累计用量与手动追加都从 manifest 还原，不因重启清零。
-        let limit = manifest.attempts.limit;
+        //    自动预算旧公式（32 + 16 × 分块数）的任务在恢复时升级到新公式，
+        //    避免升级前创建的任务因旧上限过紧而一恢复就耗尽；自定义值不动。
+        let chunks = manifest.counts.chunks;
+        let legacy_auto = 32u32.saturating_add(16u32.saturating_mul(chunks));
+        let limit = if settings.translation_call_budget == 0 && manifest.attempts.limit == legacy_auto
+        {
+            crate::agent::auto_call_budget(chunks)
+        } else {
+            manifest.attempts.limit
+        };
+        if limit != manifest.attempts.limit {
+            let _ = store.update_manifest(|manifest| manifest.attempts.limit = limit);
+        }
         let budget = Arc::new(BudgetTracker::new(limit));
         for _ in 0..manifest.attempts.model_calls {
             budget.try_consume_call();
