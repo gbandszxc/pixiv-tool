@@ -68,7 +68,8 @@ submit_review(
 硬性要求：
 
 - `verdict` 只能为 `pass` 或 `needs_fix`。
-- `verdict=pass` 时 `issues` 必须为空数组。只要记录了任何问题，`verdict` 必须为 `needs_fix`。
+- `verdict=pass` 允许 `issues` 为空数组，也允许 `issues` 全部为 `minor`（保留记录，供协调者展示或可选修订）；只要存在任意 `major` 或 `critical`，`verdict` 必须为 `needs_fix`，否则工具以 `blocking_issues` 拒绝本次提交。
+- `verdict=needs_fix` 必须至少一条 `major` 或 `critical` 问题；只有 `minor` 建议时提交 `pass`，否则工具以 `minor_only` 拒绝。
 - 每个 `segment_id` 必须来自本次 `read_chunk` 返回的 ID；不得自造、合并、重排或引用其他块的 ID。
 - 块级问题（例如边界重复、整体语气漂移）挂到最直接的受影响 segment；若影响整块，挂到首段或末段，并在 `detail` 写明范围。
 - `detail` 必须包含可核对证据：原文摘录、译文摘录、问题说明、修改方向。不得只写“表达生硬”“建议润色”。
@@ -83,7 +84,7 @@ submit_review(
 | `major` | 明显漏翻、错翻、否定/数量/条件/因果错误、术语错误、指代错位、语义不通、目标语言残留导致不可读、标记结构损坏 |
 | `minor` | 不改变原意的表达不顺、轻微格式偏差、局部润色项；仍须具体到 segment 与证据 |
 
-严重度不决定是否阻塞：任何已记录问题都使 `verdict=needs_fix`。不要为了让块通过而省略确有依据的 `minor`；也不要把个人风格偏好包装成问题。
+严重度决定是否阻塞块级通过：`major` / `critical` 阻塞，必须使 `verdict=needs_fix`；`minor` 不阻塞，可以随 `verdict=pass` 保留，供协调者展示与可选修订。不要为了让块通过而省略确有依据的 `minor`，但也不要把个人风格偏好或可改可不改的润色包装成 `major`。
 
 ## 问题类型
 
@@ -113,7 +114,7 @@ submit_review(
 - 只依据原文、译文与冻结约束判定，不依据翻译子 Agent 的自述。
 - 原文本身有歧义时，先判断译文是否选择了可接受的一种；只有译文明显偏离语境或冻结约束时才记录问题。
 - 术语问题必须引用冻结表中的条目；冻结表未覆盖的新词，按块内一致性与目标语言习惯判断，不要求不存在的“官方译名”。
-- 日译中自然语言区域出现未处理假名、日语语尾、助词、拟声拟态词或片假名专名残留时，必须记录 `target_language_purity` / `japanese_residue` / `onomatopoeia_translation` / `proper_noun_romanization` 中对应类型，并把 `verdict` 设为 `needs_fix`。代码、URL、路径、保留语料示例与用户明确要求保留的引用除外。
+- 日译中自然语言区域出现未处理假名、日语语尾、助词、拟声拟态词或片假名专名残留时，必须记录 `target_language_purity` / `japanese_residue` / `onomatopoeia_translation` / `proper_noun_romanization` 中对应类型。影响可读性或成段残留记为 `major` / `critical` 并使 `verdict=needs_fix`；仅个别可辨识残留且不改变理解的润色项可记为 `minor` 并随 `pass` 保留。代码、URL、路径、保留语料示例与用户明确要求保留的引用除外。
 - 片假名专名检查以字符形态为准，不只看句义；通顺段落中的残留同样记录。
 - 格式检查逐项核对：图片语法与目标、链接 URL 与引用 ID、脚注、代码围栏、inline code、表格列数、HTML/MDX 标签、front matter、Pixiv 受保护标记。
 - 译文语义正确但目标语言不自然时，记录 `fluency` / `chinese_naturalness` 或 `polishing`，修改方向不得扩写、删减或改变事实。

@@ -3,8 +3,8 @@
 //! 工具名、参数与返回严格对齐内置资源（`resources/agent/**`）：
 //! - 协调者：`load_resource` / `prepare_source` / `read_chunk_summary` / `read_chunk` /
 //!   `submit_scan` / `freeze_constraints` / `dispatch_translation` / `dispatch_review` /
-//!   `read_review_summary` / `merge_drafts` / `record_global_review` / `publish` /
-//!   `reset_phase` / `job_status`
+//!   `revise_draft` / `read_review_summary` / `merge_drafts` / `record_global_review` /
+//!   `publish` / `reset_phase` / `job_status`
 //! - 翻译：`load_resource` / `read_chunk` / `submit_translation`
 //! - 审查：`load_resource` / `read_chunk` / `read_translation` / `submit_review`
 //!
@@ -66,12 +66,15 @@ pub const COORDINATOR_TOOL_CONTRACT: &str = "\
 - freeze_constraints() → {version, terms, style, conflicts, unresolved}；
 - dispatch_translation(chunk_ids[]) → 每块 {chunk_id, status, usage, issue_count}；
 - dispatch_review(chunk_ids[]) → 每块 {chunk_id, status, usage, issue_count}；
+- revise_draft(chunk_id, patches:[{segment_id, text}]) → {chunk_id, version, patched, pending_review}；
+  只替换点名的片段，不新增 / 删除 / 重排；修订后旧审查结论失效，必须重新 dispatch_review 复检；
 - read_review_summary(chunk_ids?) → 问题汇总与受影响块；
 - merge_drafts() → {coverage_ok, order_ok, duplicate_ids, missing_ids, markup_issues}；
 - record_global_review(sample_chunk_ids[], notes, passed)；
 - publish() → {published, status, unresolved}；
 - reset_phase(phase) → 使该阶段及下游产物失效；
-- job_status() → 状态、阶段、计数、预算。
+- job_status() → 状态、阶段、计数、预算与待办
+  （pending_scan / pending_translate / pending_rework / pending_review）。
 派发工具返回 status=ok 才计为完成；paused / awaiting_confirmation / fatal 时立即停止派发。";
 
 /// 翻译子 Agent 工具契约。
@@ -89,7 +92,9 @@ pub const REVIEWER_TOOL_CONTRACT: &str = "\
 - read_chunk(chunk_id, include_context) → {segments, context}；
 - read_translation(chunk_id) → {draft_version, segments, constraints_version, terms, style}；
 - submit_review(chunk_id, verdict, issues:[{segment_id, kind, severity, detail}], notes)。
-verdict=pass 时 issues 必须为空；任何已记录问题都使 verdict=needs_fix。
+分级：verdict=pass 允许 issues 为空或全部为 minor（minor 不阻塞，保留供展示与可选修订）；
+存在任意 major / critical 时必须 verdict=needs_fix，且 needs_fix 必须至少一条 major / critical。
+仅有 minor 建议时不要提交 needs_fix，工具会以 minor_only 拒绝。
 输出纪律：读完一块就立即调用 submit_review；不要在回复里写审查分析、逐句评语或问题清单正文。
 每条 detail 不超过 120 字、最多 5 条 issues；notes 不超过 200 字。超长输出会被网关截断并导致本块审查失败。";
 
@@ -467,6 +472,7 @@ pub fn coordinator_tools(ctx: &std::sync::Arc<JobContext>) -> Vec<DynamicTool> {
         freeze_constraints_tool(ctx),
         dispatch_tool(ctx, DispatchKind::Translate),
         dispatch_tool(ctx, DispatchKind::Review),
+        revise_draft_tool(ctx),
         read_review_summary_tool(ctx),
         merge_drafts_tool(ctx),
         record_global_review_tool(ctx),
@@ -1281,7 +1287,77 @@ async fn dispatch_impl(
     }))
 }
 
-/// 返工目标：草稿标了 needs_repair，或审查结论（同版本）为 needs_fix。
+/// 单块完成度判定：`pending_state` / `compute_counts` / `rework_targets` / `job_status`
+/// 共用同一口径，避免"块是否完成 / 是否需要返工"各处不一致。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ChunkGate {
+    /// 草稿带当前 translate 版本戳、通过结构校验、且未标记 needs_repair。
+    pub draft_valid: bool,
+    /// 审查结论带当前 review 版本戳、对应本版草稿、且 verdict=pass。
+    pub review_pass: bool,
+    /// 需要返工：草稿标了 needs_repair（戳有效），或本版草稿的审查结论为 needs_fix。
+    pub needs_rework: bool,
+}
+
+/// 读取磁盘产物并计算单块完成度判定。
+pub(crate) fn chunk_gate(
+    ctx: &JobContext,
+    chunk_id: &str,
+    versions: &PhaseVersions,
+) -> ChunkGate {
+    let chunk = read_chunk(ctx, chunk_id).ok().flatten();
+    let draft = read_draft(ctx, chunk_id).ok().flatten();
+    let review = read_review(ctx, chunk_id).ok().flatten();
+    gate_from(
+        chunk.as_ref(),
+        draft.as_ref(),
+        draft
+            .as_ref()
+            .is_some_and(|_| stamped(ctx, "draft", chunk_id, versions.translate)),
+        review.as_ref(),
+        review
+            .as_ref()
+            .is_some_and(|_| stamped(ctx, "review", chunk_id, versions.review)),
+        Some(&ctx.target_language),
+    )
+}
+
+/// 纯判定函数（不读写磁盘），便于单元测试覆盖各组合。
+fn gate_from(
+    chunk: Option<&Chunk>,
+    draft: Option<&Draft>,
+    draft_stamped: bool,
+    review: Option<&Review>,
+    review_stamped: bool,
+    target_language: Option<&str>,
+) -> ChunkGate {
+    let Some(draft) = draft else {
+        return ChunkGate::default();
+    };
+    let draft_valid = draft_stamped
+        && !draft.needs_repair
+        && chunk.is_some_and(|chunk| {
+            validate_draft_with_language(chunk, draft, target_language).is_ok()
+        });
+    let review_pass = review.is_some_and(|review| {
+        review_stamped
+            && review.draft_version == draft.version
+            && review.verdict == ReviewVerdict::Pass
+    });
+    let needs_rework = (draft_stamped && draft.needs_repair)
+        || review.is_some_and(|review| {
+            review_stamped
+                && review.draft_version == draft.version
+                && review.verdict == ReviewVerdict::NeedsFix
+        });
+    ChunkGate {
+        draft_valid,
+        review_pass,
+        needs_rework,
+    }
+}
+
+/// 返工目标：需要返工的块（与 `chunk_gate.needs_rework` 同一口径）。
 fn rework_targets(
     ctx: &JobContext,
     versions: &PhaseVersions,
@@ -1289,18 +1365,7 @@ fn rework_targets(
 ) -> Result<Vec<String>, ToolExecutionError> {
     let mut targets = Vec::new();
     for id in ids {
-        let draft = read_draft(ctx, id).map_err(|error| tool_error("storage", &error))?;
-        let review = read_review(ctx, id).map_err(|error| tool_error("storage", &error))?;
-        let needs = draft.as_ref().is_some_and(|draft| {
-            draft.needs_repair && stamped(ctx, "draft", id, versions.translate)
-        }) || review.as_ref().is_some_and(|review| {
-            stamped(ctx, "review", id, versions.review)
-                && review.verdict == ReviewVerdict::NeedsFix
-                && draft
-                    .as_ref()
-                    .is_some_and(|draft| review.draft_version == draft.version)
-        });
-        if needs {
+        if chunk_gate(ctx, id, versions).needs_rework {
             targets.push(id.clone());
         }
     }
@@ -2281,6 +2346,8 @@ pub(crate) struct PendingState {
     pub chunk_ids: Vec<String>,
     pub pending_scan: Vec<String>,
     pub pending_translate: Vec<String>,
+    /// 草稿有效但需要返工（审查 needs_fix，或草稿标了 needs_repair）。
+    pub pending_rework: Vec<String>,
     pub pending_review: Vec<String>,
     pub constraints_frozen: bool,
     pub published: bool,
@@ -2297,26 +2364,12 @@ pub(crate) fn pending_state(ctx: &JobContext) -> PendingState {
         if read_scan_for_progress(ctx, &chunk.id).is_none() {
             state.pending_scan.push(chunk.id.clone());
         }
-        let draft = read_draft(ctx, &chunk.id).ok().flatten();
-        let draft_valid = draft.as_ref().is_some_and(|draft| {
-            stamped(ctx, "draft", &chunk.id, versions.translate)
-                && validate_draft_with_language(chunk, draft, Some(&ctx.target_language)).is_ok()
-                && !draft.needs_repair
-        });
-        if !draft_valid {
+        let gate = chunk_gate(ctx, &chunk.id, &versions);
+        if !gate.draft_valid {
             state.pending_translate.push(chunk.id.clone());
-        }
-        let review_valid = read_review(ctx, &chunk.id)
-            .ok()
-            .flatten()
-            .is_some_and(|review| {
-                stamped(ctx, "review", &chunk.id, versions.review)
-                    && draft
-                        .as_ref()
-                        .is_some_and(|draft| review.draft_version == draft.version)
-                    && review.verdict == ReviewVerdict::Pass
-            });
-        if !review_valid {
+        } else if gate.needs_rework {
+            state.pending_rework.push(chunk.id.clone());
+        } else if !gate.review_pass {
             state.pending_review.push(chunk.id.clone());
         }
     }
@@ -2349,9 +2402,11 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                 let PendingState {
                     pending_scan,
                     pending_translate,
+                    pending_rework,
                     pending_review,
                     ..
                 } = pending_state(&ctx);
+                let counts = compute_counts(&ctx);
                 let budget = ctx.budget.snapshot();
                 tool_result(json!({
                     "job_id": ctx.scope.job_id,
@@ -2359,12 +2414,12 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                     "phase": manifest.phase.as_str(),
                     "target_language": ctx.target_language,
                     "counts": {
-                        "pages": manifest.counts.pages,
-                        "chunks": chunks.len(),
-                        "translated": chunks.len().saturating_sub(pending_translate.len()),
-                        "reviewed": chunks.len().saturating_sub(pending_review.len()),
-                        "needs_repair": pending_translate.len(),
-                        "terms": manifest.counts.terms,
+                        "pages": counts.pages,
+                        "chunks": counts.chunks,
+                        "translated": counts.translated,
+                        "reviewed": counts.reviewed,
+                        "needs_repair": counts.needs_repair,
+                        "terms": counts.terms,
                     },
                     "constraint_version": manifest.constraint_version,
                     "budget": {
@@ -2376,6 +2431,7 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                     "chunk_ids": chunks.iter().map(|chunk| chunk.id.clone()).collect::<Vec<_>>(),
                     "pending_scan": pending_scan,
                     "pending_translate": pending_translate,
+                    "pending_rework": pending_rework,
                     "pending_review": pending_review,
                     "awaiting_confirmation": ctx.control.awaiting_confirmation(),
                     "rework_rounds": ctx.control.rework_rounds(),
@@ -2539,12 +2595,228 @@ struct ReviewIssueArg {
     detail: String,
 }
 
+/// 审查分级校验：`minor` 不阻塞，`major` / `critical` 才阻塞块级通过。
+///
+/// - `pass`：允许空 issues 或全部为 minor；出现阻塞级问题即拒绝，避免把
+///   严重度信息藏进 `pass`。
+/// - `needs_fix`：必须至少一条阻塞级问题；只有 minor 建议时提示改交 `pass`，
+///   否则轻微的润色项会让块永远无法通过、反复整块重译。
+fn check_review_grading(
+    verdict: ReviewVerdict,
+    issues: &[Issue],
+) -> Result<(), ToolExecutionError> {
+    let blocking = issues.iter().filter(|issue| issue.is_blocking()).count();
+    match verdict {
+        ReviewVerdict::Pass if blocking > 0 => Err(tool_error_with(
+            "blocking_issues",
+            "存在阻塞级问题，verdict 必须为 needs_fix",
+            json!({"blocking": blocking, "issues": issues.len()}),
+        )),
+        ReviewVerdict::NeedsFix if issues.is_empty() => Err(tool_error(
+            "minor_only",
+            "verdict=needs_fix 时必须至少一条 major/critical 问题；仅有非阻塞建议时应提交 pass",
+        )),
+        ReviewVerdict::NeedsFix if blocking == 0 => Err(tool_error_with(
+            "minor_only",
+            "仅有非阻塞建议时应提交 pass",
+            json!({"blocking": 0, "issues": issues.len()}),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// `revise_draft` 的单条片段补丁。
+#[derive(Deserialize)]
+struct DraftPatchArg {
+    segment_id: String,
+    text: String,
+}
+
+/// 把补丁应用到既有草稿：只替换点名的片段，未点名片段原样保留。
+///
+/// 不新增、删除或重排片段；版本号 +1，并清除上一版审查留下的
+/// `reviewed` / `needs_repair` 标记（新版本必须重新审查）。
+fn apply_draft_patches(
+    existing: &Draft,
+    patches: &[DraftPatchArg],
+) -> Result<Draft, ToolExecutionError> {
+    if patches.is_empty() {
+        return Err(tool_error("invalid_args", "patches 不能为空"));
+    }
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut replacements: BTreeMap<&str, &str> = BTreeMap::new();
+    for patch in patches {
+        let id = patch.segment_id.trim();
+        if id.is_empty() {
+            return Err(tool_error("invalid_args", "patches 的 segment_id 不能为空"));
+        }
+        if !seen.insert(id) {
+            return Err(tool_error_with(
+                "duplicate_segment",
+                "patches 中存在重复 segment_id",
+                json!({"segment_id": id}),
+            ));
+        }
+        if !existing
+            .segments
+            .iter()
+            .any(|segment| segment.id == id)
+        {
+            return Err(tool_error_with(
+                "unknown_segment",
+                "patch 引用了本块草稿之外的片段",
+                json!({"segment_id": id}),
+            ));
+        }
+        if patch.text.trim().is_empty() {
+            return Err(tool_error_with(
+                "empty_translation",
+                "patch text 不能为空",
+                json!({"segment_id": id}),
+            ));
+        }
+        replacements.insert(id, patch.text.as_str());
+    }
+    let segments = existing
+        .segments
+        .iter()
+        .map(|segment| match replacements.get(segment.id.as_str()) {
+            Some(text) => TranslatedSegment {
+                id: segment.id.clone(),
+                text: (*text).to_string(),
+            },
+            None => segment.clone(),
+        })
+        .collect();
+    Ok(Draft {
+        chunk_id: existing.chunk_id.clone(),
+        version: existing.version.saturating_add(1),
+        segments,
+        usage: existing.usage,
+        reviewed: false,
+        needs_repair: false,
+    })
+}
+
+fn revise_draft_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
+    let ctx = ctx.clone();
+    DynamicTool::new(
+        tool_name("revise_draft"),
+        "定点修订指定块的译文：只替换 patches 点名的片段，其余片段原样保留，不新增 / 删除 / 重排。\
+         用于修复审查点名的小范围问题（术语、错译、语气、残留）；修完旧审查结论失效，\
+         必须 dispatch_review([chunk_id]) 复检。问题定位不清或整块方向错误时改用 dispatch_translation。",
+        json!({
+            "type": "object",
+            "properties": {
+                "chunk_id": {"type": "string"},
+                "patches": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {
+                        "segment_id": {"type": "string"},
+                        "text": {"type": "string"}
+                    },
+                    "required": ["segment_id", "text"]
+                }}
+            },
+            "required": ["chunk_id", "patches"]
+        }),
+        move |args: Value| {
+            let ctx = ctx.clone();
+            Box::pin(async move {
+                let chunk_id = arg_str(&args, "chunk_id")?;
+                let constraints =
+                    read_constraints(&ctx).map_err(|error| tool_error("storage", &error))?;
+                match &constraints {
+                    Some(constraints) if constraints.frozen => {}
+                    _ => {
+                        return Err(tool_error(
+                            "constraints_not_frozen",
+                            "必须先调用 freeze_constraints 冻结术语与风格",
+                        ));
+                    }
+                }
+                let plan = read_plan(&ctx)
+                    .ok_or_else(|| tool_error("not_prepared", "尚未准备原文（缺少分块计划）"))?;
+                if !plan.entries.iter().any(|entry| entry.id == chunk_id) {
+                    return Err(tool_error_with(
+                        "unknown_chunk",
+                        "分块不在当前分块计划中",
+                        json!({"chunk_id": chunk_id}),
+                    ));
+                }
+                let chunk = read_chunk(&ctx, &chunk_id)
+                    .map_err(|error| tool_error("invalid_chunk", &error))?
+                    .ok_or_else(|| {
+                        tool_error_with(
+                            "unknown_chunk",
+                            "分块不存在",
+                            json!({"chunk_id": chunk_id}),
+                        )
+                    })?;
+                let existing = read_draft(&ctx, &chunk_id)
+                    .map_err(|error| tool_error("storage", &error))?
+                    .ok_or_else(|| {
+                        tool_error_with(
+                            "draft_missing",
+                            "本块还没有译文草稿，请先 dispatch_translation",
+                            json!({"chunk_id": chunk_id}),
+                        )
+                    })?;
+                let raw = args
+                    .get("patches")
+                    .cloned()
+                    .ok_or_else(|| tool_error("invalid_args", "缺少参数 patches"))?;
+                let patches: Vec<DraftPatchArg> =
+                    serde_json::from_value(raw).map_err(|error| {
+                        tool_error("invalid_args", &format!("patches 结构无效：{error}"))
+                    })?;
+                let draft = apply_draft_patches(&existing, &patches)?;
+                // 先校验再写：补丁把结构弄坏时不产生任何副作用。
+                if let Err(issues) =
+                    validate_draft_with_language(&chunk, &draft, Some(&ctx.target_language))
+                {
+                    let summary: Vec<Value> = issues
+                        .iter()
+                        .take(12)
+                        .map(|issue| {
+                            json!({
+                                "segment_id": issue.segment_id,
+                                "kind": issue.kind,
+                                "severity": severity_str(issue.severity),
+                                "detail": issue.detail,
+                            })
+                        })
+                        .collect();
+                    return Err(tool_error_with(
+                        "draft_invalid",
+                        "修订后的译文未通过结构校验，未写入草稿",
+                        json!({"issues": summary, "issue_count": issues.len()}),
+                    ));
+                }
+                write_draft(&ctx, &draft).map_err(|error| tool_error("storage", &error))?;
+                let versions = phase_versions(&ctx);
+                stamp(&ctx, "draft", &chunk_id, versions.translate);
+                // 旧审查结论无需删除：草稿版本已推进，`chunk_gate.review_pass` 要求
+                // `review.draft_version == draft.version`，旧结论自然失效。
+                let _ = ctx.touch_checkpoint(Phase::Translate);
+                let _ = ctx.refresh_counts();
+                tool_result(json!({
+                    "chunk_id": chunk_id,
+                    "version": draft.version,
+                    "patched": patches.len(),
+                    "pending_review": true,
+                }))
+            })
+        },
+    )
+}
+
 fn submit_review_tool(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> DynamicTool {
     let ctx = ctx.clone();
     let bound = chunk_id.to_string();
     DynamicTool::new(
         tool_name("submit_review"),
-        "提交本块审查结论；verdict=pass 时 issues 必须为空。",
+        "提交本块审查结论；verdict=pass 时 issues 可为空或仅含 minor，存在 major/critical 时必须 needs_fix。",
         json!({
             "type": "object",
             "properties": {
@@ -2632,18 +2904,7 @@ fn submit_review_tool(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> Dynam
                         detail: issue.detail.chars().take(1_000).collect(),
                     });
                 }
-                if verdict == ReviewVerdict::Pass && !issues.is_empty() {
-                    return Err(tool_error(
-                        "verdict_conflict",
-                        "verdict=pass 时 issues 必须为空",
-                    ));
-                }
-                if verdict == ReviewVerdict::NeedsFix && issues.is_empty() {
-                    return Err(tool_error(
-                        "verdict_conflict",
-                        "verdict=needs_fix 时必须给出至少一个具体问题",
-                    ));
-                }
+                check_review_grading(verdict, &issues)?;
                 let review = Review {
                     chunk_id: chunk_id.clone(),
                     draft_version: draft.version,
@@ -2692,29 +2953,15 @@ pub fn compute_counts(ctx: &JobContext) -> crate::agent::JobCounts {
     let mut reviewed = 0u32;
     let mut needs_repair = 0u32;
     for chunk in &chunks {
-        let draft = read_draft(ctx, &chunk.id).ok().flatten();
-        let draft_valid = draft.as_ref().is_some_and(|draft| {
-            stamped(ctx, "draft", &chunk.id, versions.translate)
-                && validate_draft_with_language(chunk, draft, Some(&ctx.target_language)).is_ok()
-        });
-        if draft_valid {
+        let gate = chunk_gate(ctx, &chunk.id, &versions);
+        if gate.draft_valid {
             translated += 1;
         }
-        if draft.as_ref().is_some_and(|draft| draft.needs_repair) {
-            needs_repair += 1;
-        }
-        let review_ok = read_review(ctx, &chunk.id)
-            .ok()
-            .flatten()
-            .is_some_and(|review| {
-                stamped(ctx, "review", &chunk.id, versions.review)
-                    && draft
-                        .as_ref()
-                        .is_some_and(|draft| review.draft_version == draft.version)
-                    && review.verdict == ReviewVerdict::Pass
-            });
-        if review_ok {
+        if gate.review_pass {
             reviewed += 1;
+        }
+        if gate.needs_rework {
+            needs_repair += 1;
         }
     }
     let terms = read_constraints(ctx)
@@ -2829,6 +3076,7 @@ mod tests {
             "freeze_constraints",
             "dispatch_translation",
             "dispatch_review",
+            "revise_draft",
             "read_review_summary",
             "merge_drafts",
             "record_global_review",
@@ -2916,5 +3164,276 @@ mod tests {
         ] {
             assert!(!path.starts_with('/') && !path.contains(".."));
         }
+    }
+
+    // ---- 审查分级 / 定点修订 / 块状态判定 ----
+
+    fn error_payload(error: &ToolExecutionError) -> Value {
+        serde_json::from_str(&error.model_output().render()).expect("结构化错误是 JSON")
+    }
+
+    fn review_issue(segment_id: &str, severity: Severity) -> Issue {
+        Issue {
+            segment_id: segment_id.into(),
+            kind: "fluency".into(),
+            severity,
+            detail: "problem".into(),
+        }
+    }
+
+    #[test]
+    fn minor_issues_do_not_block_pass_but_blocking_issues_do() {
+        let minor = [review_issue("p001-l000-s0", Severity::Minor)];
+        assert!(
+            check_review_grading(ReviewVerdict::Pass, &[]).is_ok(),
+            "pass 允许无问题"
+        );
+        assert!(
+            check_review_grading(ReviewVerdict::Pass, &minor).is_ok(),
+            "pass 允许仅有 minor 建议"
+        );
+
+        for severity in [Severity::Major, Severity::Critical] {
+            let error = check_review_grading(
+                ReviewVerdict::Pass,
+                &[review_issue("p001-l000-s0", severity)],
+            )
+            .expect_err("阻塞级问题不得以 pass 提交");
+            let payload = error_payload(&error);
+            assert_eq!(payload["error"]["code"], "blocking_issues");
+            assert!(payload["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("needs_fix")));
+        }
+    }
+
+    #[test]
+    fn needs_fix_requires_at_least_one_blocking_issue() {
+        let minor = [review_issue("p001-l000-s0", Severity::Minor)];
+        let empty = check_review_grading(ReviewVerdict::NeedsFix, &[])
+            .expect_err("needs_fix 不得为空");
+        assert_eq!(error_payload(&empty)["error"]["code"], "minor_only");
+        let only_minor = check_review_grading(ReviewVerdict::NeedsFix, &minor)
+            .expect_err("仅有 minor 时应提交 pass");
+        assert_eq!(error_payload(&only_minor)["error"]["code"], "minor_only");
+
+        for severity in [Severity::Major, Severity::Critical] {
+            assert!(
+                check_review_grading(
+                    ReviewVerdict::NeedsFix,
+                    &[review_issue("p001-l000-s0", severity)],
+                )
+                .is_ok(),
+                "存在阻塞级问题时 needs_fix 合法"
+            );
+        }
+    }
+
+    fn patched_draft() -> Draft {
+        Draft {
+            chunk_id: "c0001".into(),
+            version: 1,
+            segments: vec![
+                TranslatedSegment {
+                    id: "p001-l000-s0".into(),
+                    text: "第一段".into(),
+                },
+                TranslatedSegment {
+                    id: "p001-l001-s0".into(),
+                    text: "第二段".into(),
+                },
+                TranslatedSegment {
+                    id: "p001-l002-s0".into(),
+                    text: "第三段".into(),
+                },
+            ],
+            usage: artifacts::TokenUsage {
+                input: 7,
+                output: 3,
+                total: 10,
+            },
+            reviewed: true,
+            needs_repair: true,
+        }
+    }
+
+    #[test]
+    fn revise_patches_replace_only_named_segments_and_bump_version() {
+        let existing = patched_draft();
+        let draft = apply_draft_patches(
+            &existing,
+            &[DraftPatchArg {
+                segment_id: "p001-l001-s0".into(),
+                text: "第二段（修订）".into(),
+            }],
+        )
+        .expect("合法补丁应通过");
+
+        assert_eq!(draft.version, existing.version + 1, "版本号递增");
+        assert_eq!(
+            draft
+                .segments
+                .iter()
+                .map(|segment| segment.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["p001-l000-s0", "p001-l001-s0", "p001-l002-s0"],
+            "片段集合与顺序保持不变"
+        );
+        assert_eq!(draft.segments[0].text, "第一段", "未点名片段原样保留");
+        assert_eq!(draft.segments[1].text, "第二段（修订）");
+        assert_eq!(draft.segments[2].text, "第三段", "未点名片段原样保留");
+        assert_eq!(draft.usage, existing.usage, "用量不改写");
+        assert!(!draft.reviewed && !draft.needs_repair, "新版本必须重新审查");
+    }
+
+    #[test]
+    fn revise_patches_reject_invalid_input() {
+        let existing = patched_draft();
+        let cases: [(&str, Vec<DraftPatchArg>); 3] = [
+            ("invalid_args", vec![]),
+            (
+                "duplicate_segment",
+                vec![
+                    DraftPatchArg {
+                        segment_id: "p001-l000-s0".into(),
+                        text: "一".into(),
+                    },
+                    DraftPatchArg {
+                        segment_id: "p001-l000-s0".into(),
+                        text: "二".into(),
+                    },
+                ],
+            ),
+            (
+                "unknown_segment",
+                vec![DraftPatchArg {
+                    segment_id: "p999-l000-s0".into(),
+                    text: "越界".into(),
+                }],
+            ),
+        ];
+        for (code, patches) in cases {
+            let error = apply_draft_patches(&existing, &patches).expect_err("非法补丁应拒绝");
+            assert_eq!(error_payload(&error)["error"]["code"], code);
+        }
+        let empty_text = apply_draft_patches(
+            &existing,
+            &[DraftPatchArg {
+                segment_id: "p001-l000-s0".into(),
+                text: "   ".into(),
+            }],
+        )
+        .expect_err("空白译文应拒绝");
+        assert_eq!(error_payload(&empty_text)["error"]["code"], "empty_translation");
+    }
+
+    fn gate_chunk() -> Chunk {
+        Chunk {
+            id: "c0001".into(),
+            order: 1,
+            segments: vec![SourceSegment {
+                id: "p001-l000-s0".into(),
+                text: "こんにちは".into(),
+                kind: SegmentKind::Text,
+            }],
+            prev_context: String::new(),
+            next_context: String::new(),
+            chars: 5,
+        }
+    }
+
+    fn gate_draft(version: u64, needs_repair: bool) -> Draft {
+        Draft {
+            chunk_id: "c0001".into(),
+            version,
+            segments: vec![TranslatedSegment {
+                id: "p001-l000-s0".into(),
+                text: "你好".into(),
+            }],
+            usage: artifacts::TokenUsage::default(),
+            reviewed: !needs_repair,
+            needs_repair,
+        }
+    }
+
+    fn gate_review(version: u64, verdict: ReviewVerdict) -> Review {
+        Review {
+            chunk_id: "c0001".into(),
+            draft_version: version,
+            verdict,
+            issues: Vec::new(),
+            notes: String::new(),
+        }
+    }
+
+    #[test]
+    fn chunk_gate_shares_one_completion_rule() {
+        let chunk = gate_chunk();
+        let draft = gate_draft(1, false);
+        let review = gate_review(1, ReviewVerdict::Pass);
+        let gate = gate_from(
+            Some(&chunk),
+            Some(&draft),
+            true,
+            Some(&review),
+            true,
+            Some("zh-CN"),
+        );
+        assert_eq!(
+            gate,
+            ChunkGate {
+                draft_valid: true,
+                review_pass: true,
+                needs_rework: false,
+            }
+        );
+
+        // 审查 needs_fix：草稿仍有效，但需要返工而不是重新翻译。
+        let fix = gate_review(1, ReviewVerdict::NeedsFix);
+        let gate = gate_from(
+            Some(&chunk),
+            Some(&draft),
+            true,
+            Some(&fix),
+            true,
+            Some("zh-CN"),
+        );
+        assert!(gate.draft_valid && gate.needs_rework && !gate.review_pass);
+
+        // 草稿标了 needs_repair：draft_valid=false 且需要返工。
+        let repair = gate_draft(1, true);
+        let gate = gate_from(
+            Some(&chunk),
+            Some(&repair),
+            true,
+            Some(&review),
+            true,
+            Some("zh-CN"),
+        );
+        assert!(!gate.draft_valid && gate.needs_rework);
+
+        // 版本戳失效：既不通过也不返工。
+        let gate = gate_from(
+            Some(&chunk),
+            Some(&draft),
+            false,
+            Some(&fix),
+            false,
+            Some("zh-CN"),
+        );
+        assert!(!gate.draft_valid && !gate.review_pass && !gate.needs_rework);
+
+        // 旧审查结论（草稿版本不匹配）不得阻塞通过或触发返工：
+        // revise_draft 推进版本后即靠这一条让旧结论失效。
+        let revised = gate_draft(2, false);
+        let gate = gate_from(
+            Some(&chunk),
+            Some(&revised),
+            true,
+            Some(&fix),
+            true,
+            Some("zh-CN"),
+        );
+        assert!(gate.draft_valid && !gate.needs_rework && !gate.review_pass);
     }
 }

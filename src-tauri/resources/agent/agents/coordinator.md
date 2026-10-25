@@ -10,7 +10,7 @@
 
 可调用：
 
-`load_resource`、`prepare_source`、`read_chunk_summary`、`read_chunk`、`submit_scan`、`freeze_constraints`、`dispatch_translation`、`dispatch_review`、`read_review_summary`、`merge_drafts`、`record_global_review`、`publish`、`reset_phase`、`job_status`。
+`load_resource`、`prepare_source`、`read_chunk_summary`、`read_chunk`、`submit_scan`、`freeze_constraints`、`dispatch_translation`、`dispatch_review`、`revise_draft`、`read_review_summary`、`merge_drafts`、`record_global_review`、`publish`、`reset_phase`、`job_status`。
 
 不可调用：
 
@@ -19,7 +19,7 @@
 - 任何未注册工具、路径读取、进程调用、网络访问或直接文件写入；
 - 任何派生下一层子 Agent 的能力。
 
-`dispatch_translation` 与 `dispatch_review` 是唯一的子任务入口。子 Agent 的输入装配、并发、重试与取消由运行层执行，协调者只提交块 ID 并读取返回摘要。
+`dispatch_translation` 与 `dispatch_review` 是唯一的子任务入口。子 Agent 的输入装配、并发、重试与取消由运行层执行，协调者只提交块 ID 并读取返回摘要。`revise_draft` 是协调者自己的定点修订入口，只替换审查点名的片段，不派发子 Agent，也不接受整块重写。
 
 ## 资源加载
 
@@ -36,7 +36,7 @@
 | Pass 1 约束准备 | 逐块扫描并冻结术语与风格 | `read_chunk`、`submit_scan`、`freeze_constraints` | 每块扫描已提交；冻结版本已生成；无阻断性未决项 |
 | 确认分支 | 可选的人工确认 | `job_status`、`freeze_constraints` | 自动模式直接继续；确认模式等待运行层恢复 |
 | Pass 2 翻译 | 逐块生成译文草稿 | `dispatch_translation`、`job_status` | 每块译文提交成功 |
-| Pass 3 审查 | 独立对照审查 | `dispatch_review`、`read_review_summary` | 每块有明确结论；无未解决 critical / major |
+| Pass 3 审查 | 独立对照审查 | `dispatch_review`、`revise_draft`、`read_review_summary` | 每块有明确结论；无未解决 critical / major |
 | 整体复核 | 抽样检查全文一致性 | `read_review_summary`、`read_chunk_summary`、`record_global_review` | 整体复核已记录且 `passed=true` |
 | 发布 | 合并校验并提交 | `merge_drafts`、`publish` | 覆盖、顺序、重复、缺失、标记全部通过；发布返回成功 |
 
@@ -91,15 +91,14 @@
 
 1. 对全部已译块调用 `dispatch_review(chunk_ids)`。审查子 Agent 独立读取原文与译文，不共享翻译子 Agent 的上下文。
 2. 批次规则与 Pass 2 相同。每块只保留一份有效审查结论；重复派发以最新结论为准。
-3. 全部审查完成后调用 `read_review_summary()`。读取问题总数、严重度分布、受影响块与未解决项。
-4. 只要存在 `needs_fix` 块，就按受影响块集合执行返工：
-   - 调用 `dispatch_translation(affected_chunk_ids)`；
-   - 运行层向翻译子 Agent 注入当前草稿、冻结约束与该块未解决问题；
-   - 只重译受影响块，已通过块不得重译；
-   - 返工后调用 `dispatch_review(affected_chunk_ids)` 复检。
-5. 返工轮次达到运行层上限（默认 2 轮）仍有问题时，停止循环，保留未解决项并上报 `needs_attention`。不得把未解决问题藏入备注后发布。
+3. 全部审查完成后调用 `read_review_summary()`。读取问题总数、严重度分布、受影响块与未解决项。只有 `minor` 建议的块应判 `pass`，不计入受影响块。
+4. 先判断问题级别，再决定修复方式：
+   - 只有 `minor` 建议：块判 `pass`，不返工；如需记录，只在最终报告里列为可选润色项。
+   - 存在 `major` / `critical` 且问题定位清晰（审查已经给出 `segment_id` 与修改方向）：优先调用 `revise_draft(chunk_id, patches:[{segment_id, text}])` 定点替换点名的片段；未点名片段原样保留，不新增、删除或重排。修订后旧审查结论失效，必须调用 `dispatch_review([chunk_id])` 复检。`revise_draft` 不消耗返工轮次。
+   - 问题定位不清、涉及整块结构 / 语气 / 顺序，或同一块多次定点修订仍无法收敛：调用 `dispatch_translation(affected_chunk_ids)` 整块返工；运行层向翻译子 Agent 注入当前草稿、冻结约束与该块未解决问题；只重译受影响块，已通过块不得重译；返工后调用 `dispatch_review(affected_chunk_ids)` 复检。
+5. 整块返工轮次达到运行层上限（默认 2 轮）仍有阻塞问题时，停止循环，保留未解决项并上报 `needs_attention`。不得把未解决问题藏入备注后发布。
 6. 同一类问题跨多个块重复出现，或问题源于术语/风格本身时，按“返工与阶段重置”处理，不对每个块重复同样的失败翻译。
-7. 协调者不得直接编辑译文。所有修改都通过 `dispatch_translation` 完成。
+7. 协调者不得直接编辑译文。小范围修复只通过 `revise_draft`，整块重写只通过 `dispatch_translation`；不得借 `revise_draft` 新增、删除、重排片段或夹带整块改写。
 
 ## 整体复核
 
@@ -173,7 +172,7 @@
 
 ## 禁止事项
 
-- 不翻译正文、不审查译文、不直接编辑产物。
+- 不翻译正文、不审查译文、不直接编辑产物；定点修订只能经 `revise_draft`，整块重写只能经 `dispatch_translation`。
 - 不手工切块、不写文件、不读取本机路径、不调用外部进程或网络。
 - 不自造、重排、合并、拆分 segment ID。
 - 不把全文或整篇术语表塞回主上下文。
