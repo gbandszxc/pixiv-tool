@@ -1390,7 +1390,10 @@ fn plan_dispatch(
 /// 共用同一口径，避免"块是否完成 / 是否需要返工"各处不一致。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ChunkGate {
-    /// 草稿带当前 translate 版本戳、通过结构校验、且未标记 needs_repair。
+    /// 草稿存在、带当前 translate 版本戳、通过结构校验。
+    ///
+    /// 不含 `needs_repair`：该标记只表示草稿待返工，草稿本身仍然有效；
+    /// 否则待修块会被误判成「未翻译」，`pending_rework` 永远为空。
     pub draft_valid: bool,
     /// 审查结论带当前 review 版本戳、对应本版草稿、且 verdict=pass。
     pub review_pass: bool,
@@ -1434,7 +1437,6 @@ fn gate_from(
         return ChunkGate::default();
     };
     let draft_valid = draft_stamped
-        && !draft.needs_repair
         && chunk.is_some_and(|chunk| {
             validate_draft_with_language(chunk, draft, target_language).is_ok()
         });
@@ -3592,7 +3594,7 @@ mod tests {
         );
         assert!(gate.draft_valid && gate.needs_rework && !gate.review_pass);
 
-        // 草稿标了 needs_repair：draft_valid=false 且需要返工。
+        // 草稿标了 needs_repair：草稿仍然有效（待返工，而非未翻译），且需要返工。
         let repair = gate_draft(1, true);
         let gate = gate_from(
             Some(&chunk),
@@ -3602,7 +3604,7 @@ mod tests {
             true,
             Some("zh-CN"),
         );
-        assert!(!gate.draft_valid && gate.needs_rework);
+        assert!(gate.draft_valid && gate.needs_rework);
 
         // 版本戳失效：既不通过也不返工。
         let gate = gate_from(

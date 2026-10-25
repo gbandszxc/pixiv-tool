@@ -85,17 +85,19 @@
 
 - 新增一个从磁盘产物计算的块状态判定 `chunk_gate`，由三个可同时观察的布尔标记组成，
   不作为互斥枚举：
-  - `draft_valid`：草稿带当前 `translate` 阶段版本戳、结构校验通过且未标 `needs_repair`；
+  - `draft_valid`：草稿存在、带当前 `translate` 阶段版本戳且结构校验通过。
+    `needs_repair` 不参与该判定——它只表示草稿待返工，草稿本身仍然有效（可复用译文、
+    可继续审查）；把它算作失效会让待修块退化成「未翻译」，`pending_rework` 永远为空；
   - `review_pass`：审查带当前 `review` 阶段版本戳、`draft_version` 等于当前草稿版本且
     `verdict=pass`（可带 `minor`）；
   - `needs_rework`：当前版本草稿标了 `needs_repair`，或当前版本审查为 `needs_fix`
     （此时必含 `major` / `critical`）。
 - `chunk_gate` 是以下判定的唯一来源，不再各处各写一套：
-  - `job_status` 与续跑指令的待办按优先级归属：`pending_translate` = `!draft_valid`；
-    `pending_rework` = `draft_valid && needs_rework`；`pending_review` =
-    `draft_valid && !needs_rework && !review_pass`；
-  - 进度计数：`translated` = `draft_valid`，`reviewed` = `review_pass`，
-    `needs_repair` = `needs_rework`；
+  - `job_status` 与续跑指令的待办按优先级归属：`pending_translate` = `!draft_valid`
+    （无草稿或结构损坏）；`pending_rework` = `draft_valid && needs_rework`；
+    `pending_review` = `draft_valid && !needs_rework && !review_pass`；
+  - 进度计数：`translated` = `draft_valid`（待修块仍计入已译，`needs_repair` 单列）、
+    `reviewed` = `review_pass`、`needs_repair` = `needs_rework`；
   - 返工目标集合（`needs_rework`）；
   - 完成判据（`draft_valid && review_pass`）与收尾错误码定位。
 

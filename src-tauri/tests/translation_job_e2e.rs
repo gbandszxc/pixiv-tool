@@ -31,9 +31,11 @@ use pixiv_tool_lib::{
     settings::Settings,
     translation::{
         NovelInput,
-        artifacts::{Issue, JobArtifacts, PublishStatus, Review, ReviewVerdict, Severity},
+        artifacts::{
+            Chunk, Draft, Issue, JobArtifacts, PublishStatus, Review, ReviewVerdict, Severity,
+        },
         service::{ConstraintEdit, ConstraintTermEdit, StoreIo, TranslationService},
-        source::parse_source,
+        source::{SegmentKind, parse_source},
     },
 };
 use rig_core::serde_json::{Value, json};
@@ -152,6 +154,27 @@ impl MockServer {
         self.requests()
             .iter()
             .filter(|body| role_of(&system_of(body)) == "translator")
+            .count()
+    }
+
+    /// 翻译子 Agent 的运行次数（一次派发 = 一段新会话）。
+    ///
+    /// 子 Agent 一次运行会发多个请求（读块 / 提交 / 收尾），第一个请求还没有任何
+    /// 工具调用，用它精确统计「派发了几次」，比裸请求数更能证明没有整块重译。
+    fn translator_runs_for(&self, chunk_id: &str) -> usize {
+        self.requests()
+            .iter()
+            .filter(|body| {
+                role_of(&system_of(body)) == "translator"
+                    && user_of(body).contains(&format!("chunk_id: {chunk_id}"))
+                    && !body["messages"].as_array().is_some_and(|messages| {
+                        messages.iter().any(|message| {
+                            message["tool_calls"]
+                                .as_array()
+                                .is_some_and(|calls| !calls.is_empty())
+                        })
+                    })
+            })
             .count()
     }
 
@@ -635,11 +658,26 @@ fn translator_next(calls: &[(String, Value)], results: &BTreeMap<String, Value>)
 
 /// 审查子 Agent：read_chunk → read_translation → submit_review(pass) → 结束。
 fn reviewer_next(calls: &[(String, Value)], results: &BTreeMap<String, Value>) -> Reply {
-    let chunk_id = results
-        .get("read_chunk")
-        .and_then(|value| value["chunk_id"].as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| "c0001".to_string());
+    reviewer_next_with(calls, results, |chunk_id, _version, _translation| {
+        json!({
+            "chunk_id": chunk_id,
+            "verdict": "pass",
+            "issues": [],
+            "notes": "逐片段对照通过",
+        })
+    })
+}
+
+/// 审查子 Agent 的公共读取序列：先读原文与译文，再由 `verdict_for` 决定结论。
+///
+/// `verdict_for` 收到（块 ID、当前草稿版本、`read_translation` 的工具结果），
+/// 与真实模型一样只依据读到的内容作判断。
+fn reviewer_next_with(
+    calls: &[(String, Value)],
+    results: &BTreeMap<String, Value>,
+    verdict_for: impl Fn(&str, u64, &Value) -> Value,
+) -> Reply {
+    let chunk_id = reviewer_chunk_id(results);
     if !called(calls, "read_chunk") {
         return tool_call_stream(
             "r1",
@@ -655,19 +693,59 @@ fn reviewer_next(calls: &[(String, Value)], results: &BTreeMap<String, Value>) -
         );
     }
     if !called(calls, "submit_review") {
-        let review = json!({
-            "chunk_id": chunk_id,
-            "verdict": "pass",
-            "issues": [],
-            "notes": "逐片段对照通过",
-        });
+        let translation = results
+            .get("read_translation")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let version = translation["draft_version"].as_u64().unwrap_or(1);
+        let review = verdict_for(&chunk_id, version, &translation);
         return tool_call_stream("r3", "submit_review", &review.to_string());
     }
     text_stream("reviewed")
 }
 
+/// 本次审查的块 ID：首轮取 user prompt 里的提示，之后取 read_chunk 的结果。
+fn reviewer_chunk_id(results: &BTreeMap<String, Value>) -> String {
+    results
+        .get("chunk_id_hint")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            results
+                .get("read_chunk")
+                .and_then(|value| value["chunk_id"].as_str())
+        })
+        .unwrap_or("c0001")
+        .to_string()
+}
+
+/// 审查点名的片段：优先普通文本（补丁可安全整体替换），否则退回首个片段。
+fn review_target_segment(results: &BTreeMap<String, Value>) -> String {
+    let picked = results
+        .get("read_chunk")
+        .and_then(|value| value["segments"].as_array())
+        .and_then(|segments| {
+            segments
+                .iter()
+                .find(|segment| segment["kind"] == "text")
+                .or_else(|| segments.first())
+        });
+    picked
+        .and_then(|segment| segment["id"].as_str())
+        .unwrap_or("p001-l001-s0")
+        .to_string()
+}
+
 /// 通用脚本：按角色分派；`hint` 从 user prompt 取 chunk_id 供首轮使用。
 fn scripted(body: &Value) -> Reply {
+    scripted_roles(body, reviewer_next, main_next)
+}
+
+/// 与 [`scripted`] 同构，但审查 / 协调者脚本可替换（翻译子 Agent 固定）。
+fn scripted_roles(
+    body: &Value,
+    reviewer: fn(&[(String, Value)], &BTreeMap<String, Value>) -> Reply,
+    main: fn(&[(String, Value)], &BTreeMap<String, Value>) -> Reply,
+) -> Reply {
     // 上下文压缩的摘要请求不带工具定义：返回一次性 JSON 摘要。
     let has_tools = body["tools"]
         .as_array()
@@ -679,29 +757,24 @@ fn scripted(body: &Value) -> Reply {
     }
     let system = system_of(body);
     let (calls, mut results) = tool_history(body);
+    let hint = user_of(body)
+        .split("chunk_id: ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(|id| id.trim().to_string());
     if role_of(&system) == "translator" {
-        let hint = user_of(body)
-            .split("chunk_id: ")
-            .nth(1)
-            .and_then(|rest| rest.split_whitespace().next())
-            .map(|id| id.trim().to_string());
         if let Some(id) = hint {
             results.insert("chunk_id_hint".into(), json!(id));
         }
         return translator_next(&calls, &results);
     }
     if role_of(&system) == "reviewer" {
-        let hint = user_of(body)
-            .split("chunk_id: ")
-            .nth(1)
-            .and_then(|rest| rest.split_whitespace().next())
-            .map(|id| id.trim().to_string());
         if let Some(id) = hint {
-            results.insert("read_chunk".into(), json!({"chunk_id": id}));
+            results.insert("chunk_id_hint".into(), json!(id));
         }
-        return reviewer_next(&calls, &results);
+        return reviewer(&calls, &results);
     }
-    main_next(&calls, &results)
+    main(&calls, &results)
 }
 
 // ---------------------------------------------------------------------------
@@ -1999,7 +2072,13 @@ async fn issues_command_aggregates_reviews_and_excludes_passed_chunks() {
         "通过块不得进入 unresolved：{:?}",
         view.unresolved_chunks
     );
-    assert_eq!(view.reviewed, view.total, "基础流程每块都有审查记录");
+    // c0001 已被翻成 needs_fix：按 ADR 0038，reviewed 只统计结论为 pass 的块
+    // （与进度计数 `reviewed = review_pass` 同一口径）。
+    assert_eq!(
+        view.reviewed + 1,
+        view.total,
+        "只有 pass 的块计入 reviewed"
+    );
     assert!(view.total >= 2);
     for issue in &view.issues {
         assert!(issue.detail.chars().count() <= 301, "detail 必须限长");
@@ -2808,4 +2887,674 @@ struct BulkState {
     merged: bool,
     global_reviewed: bool,
     published: bool,
+}
+
+// ---------------------------------------------------------------------------
+// 15. 审查分级、局部修订与按块返工（ADR 0038 端到端回归）
+// ---------------------------------------------------------------------------
+
+/// 读取 Job 全部块产物（chunks / drafts / reviews）。
+fn read_artifacts(paths: &AppPaths, novel_id: i64, job_id: &str) -> (Vec<Chunk>, Vec<Draft>, Vec<Review>) {
+    let manifest: pixiv_tool_lib::agent::Manifest =
+        serde_json::from_value(manifest_of(paths, novel_id, job_id)).expect("manifest 可解析");
+    pixiv_tool_lib::translation::service::read_job_artifacts(paths, &manifest).expect("读取产物")
+}
+
+/// 与翻译子 Agent 脚本一致的预期译文（用于证明未点名的片段没有被改动）。
+fn translator_output(kind: SegmentKind, source: &str) -> String {
+    match kind {
+        SegmentKind::Markup => source.to_string(),
+        SegmentKind::Chapter => "[chapter:中文标题]".to_string(),
+        SegmentKind::Ruby => "[rb:汉字>hanzi]呀".to_string(),
+        SegmentKind::Text => "这是本段的中文译文".to_string(),
+    }
+}
+
+fn planned_chunk_ids(results: &BTreeMap<String, Value>) -> Vec<String> {
+    results
+        .get("prepare_source")
+        .and_then(|value| value["chunk_ids"].as_array())
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Pass 0～1：准备原文、逐块 read_chunk + submit_scan、冻结约束。
+///
+/// 已全部完成时返回 `None`。与 [`main_next`] 的前半段同一套动作，只是少了
+/// Pass 2 之后的自适应逻辑，便于各回归场景只替换「返工怎么处理」。
+fn main_prepare(calls: &[(String, Value)], results: &BTreeMap<String, Value>) -> Option<Reply> {
+    let chunk_ids = planned_chunk_ids(results);
+    if !called(calls, "prepare_source") {
+        return Some(tool_call_stream("m1", "prepare_source", "{}"));
+    }
+    let scanned: Vec<String> = calls
+        .iter()
+        .filter(|(tool, _)| tool == "submit_scan")
+        .filter_map(|(_, args)| args["chunk_id"].as_str().map(str::to_string))
+        .collect();
+    for chunk_id in &chunk_ids {
+        if !scanned.contains(chunk_id) {
+            let read = calls.iter().any(|(tool, args)| {
+                tool == "read_chunk" && args["chunk_id"].as_str() == Some(chunk_id.as_str())
+            });
+            if !read {
+                return Some(tool_call_stream(
+                    "m2",
+                    "read_chunk",
+                    &json!({"chunk_id": chunk_id, "include_context": true}).to_string(),
+                ));
+            }
+            let scan = json!({
+                "chunk_id": chunk_id,
+                "terms": [{
+                    "source_term": "勇者",
+                    "locked_translation": "勇士",
+                    "term_type": "character",
+                    "notes": "主角称谓",
+                }],
+                "style": {"text_type": "小说", "formality": "书面语，对白偏口语"},
+                "notes": "叙述视角为第三人称",
+                "confidence": "high",
+            });
+            return Some(tool_call_stream("m3", "submit_scan", &scan.to_string()));
+        }
+    }
+    if !called(calls, "freeze_constraints") {
+        return Some(tool_call_stream("m4", "freeze_constraints", "{}"));
+    }
+    None
+}
+
+/// 审查：`c0001` 以 `pass` + 一条 `minor` 通过，其余块 `pass` 且无问题。
+fn reviewer_minor_pass(
+    calls: &[(String, Value)],
+    results: &BTreeMap<String, Value>,
+) -> Reply {
+    reviewer_next_with(calls, results, |chunk_id, _version, _translation| {
+        if chunk_id == "c0001" {
+            json!({
+                "chunk_id": chunk_id,
+                "verdict": "pass",
+                "issues": [{
+                    "segment_id": review_target_segment(results),
+                    "kind": "style",
+                    "severity": "minor",
+                    "detail": "表达可再润色，不改变原意",
+                }],
+                "notes": "覆盖与事实核对通过，仅一条润色建议",
+            })
+        } else {
+            json!({
+                "chunk_id": chunk_id,
+                "verdict": "pass",
+                "issues": [],
+                "notes": "逐片段对照通过",
+            })
+        }
+    })
+}
+
+/// 审查：`c0002` 的首版草稿（v1）判 `needs_fix` + 一条 `major`，修订后（v2）通过。
+fn reviewer_fix_then_pass(
+    calls: &[(String, Value)],
+    results: &BTreeMap<String, Value>,
+) -> Reply {
+    reviewer_next_with(calls, results, |chunk_id, version, _translation| {
+        if chunk_id == "c0002" && version < 2 {
+            json!({
+                "chunk_id": chunk_id,
+                "verdict": "needs_fix",
+                "issues": [{
+                    "segment_id": review_target_segment(results),
+                    "kind": "mistranslation",
+                    "severity": "major",
+                    "detail": "术语与冻结约束不一致，需要定点修复",
+                }],
+                "notes": "存在阻塞级问题",
+            })
+        } else {
+            json!({
+                "chunk_id": chunk_id,
+                "verdict": "pass",
+                "issues": [],
+                "notes": "复检通过",
+            })
+        }
+    })
+}
+
+/// 审查：`c0002` 每轮都判 `needs_fix` + 一条 `major`；`c0001` 正常通过。
+fn reviewer_always_fix(
+    calls: &[(String, Value)],
+    results: &BTreeMap<String, Value>,
+) -> Reply {
+    reviewer_next_with(calls, results, |chunk_id, _version, _translation| {
+        if chunk_id == "c0002" {
+            json!({
+                "chunk_id": chunk_id,
+                "verdict": "needs_fix",
+                "issues": [{
+                    "segment_id": review_target_segment(results),
+                    "kind": "mistranslation",
+                    "severity": "major",
+                    "detail": "术语与冻结约束不一致，整块仍未收敛",
+                }],
+                "notes": "仍有阻塞级问题",
+            })
+        } else {
+            json!({
+                "chunk_id": chunk_id,
+                "verdict": "pass",
+                "issues": [],
+                "notes": "逐片段对照通过",
+            })
+        }
+    })
+}
+
+/// 审查汇总里第一条阻塞问题的（块, 片段）。
+fn blocking_issue_target(results: &BTreeMap<String, Value>) -> Option<(String, String)> {
+    let summary = results.get("read_review_summary")?;
+    for chunk in summary["chunks"].as_array()? {
+        if chunk["verdict"].as_str() != Some("needs_fix") {
+            continue;
+        }
+        let chunk_id = chunk["chunk_id"].as_str()?.to_string();
+        let segment_id = chunk["issues"].as_array()?.first()?["segment_id"]
+            .as_str()?
+            .to_string();
+        return Some((chunk_id, segment_id));
+    }
+    None
+}
+
+/// 协调者：首轮派发 → 首轮审查 → 读汇总 → `revise_draft` 定点修复 → 复检 → 收尾发布。
+///
+/// 一次派发翻译、一次整块重译都没有；修复只通过 `revise_draft` 完成。
+fn main_next_revise(calls: &[(String, Value)], results: &BTreeMap<String, Value>) -> Reply {
+    if let Some(reply) = main_prepare(calls, results) {
+        return reply;
+    }
+    let chunk_ids = planned_chunk_ids(results);
+    if call_count(calls, "dispatch_translation") == 0 {
+        return tool_call_stream(
+            "m6",
+            "dispatch_translation",
+            &json!({"chunk_ids": chunk_ids}).to_string(),
+        );
+    }
+    if call_count(calls, "dispatch_review") == 0 {
+        return tool_call_stream(
+            "m7",
+            "dispatch_review",
+            &json!({"chunk_ids": chunk_ids}).to_string(),
+        );
+    }
+    if !called(calls, "read_review_summary") {
+        return tool_call_stream("m9", "read_review_summary", "{}");
+    }
+    let Some((chunk_id, segment_id)) = blocking_issue_target(results) else {
+        return text_stream("审查汇总里没有可定位的阻塞问题，停止继续修复");
+    };
+    if !called(calls, "revise_draft") {
+        let patch = json!({
+            "chunk_id": chunk_id,
+            "patches": [{"segment_id": segment_id, "text": "定点修订后的译文"}],
+        });
+        return tool_call_stream("m13", "revise_draft", &patch.to_string());
+    }
+    // 修订推进了草稿版本，旧审查失效：必须复检同一块。
+    if call_count(calls, "dispatch_review") == 1 {
+        return tool_call_stream(
+            "m7",
+            "dispatch_review",
+            &json!({"chunk_ids": [chunk_id]}).to_string(),
+        );
+    }
+    if !called(calls, "merge_drafts") {
+        return tool_call_stream("m10", "merge_drafts", "{}");
+    }
+    if !called(calls, "record_global_review") {
+        let review = json!({
+            "sample_chunk_ids": chunk_ids,
+            "notes": "术语、风格、对白、纯净度、标记五项已核",
+            "passed": true,
+        });
+        return tool_call_stream("m11", "record_global_review", &review.to_string());
+    }
+    if !called(calls, "publish") {
+        return tool_call_stream("m12", "publish", "{}");
+    }
+    text_stream("done")
+}
+
+/// 最新一次派发里是否有块被返工额度拒绝。
+fn rework_limit_reported(results: &BTreeMap<String, Value>) -> bool {
+    results
+        .get("dispatch_translation")
+        .and_then(|value| value["chunks"].as_array())
+        .is_some_and(|chunks| {
+            chunks
+                .iter()
+                .any(|chunk| chunk["status"] == "rework_limit")
+        })
+}
+
+/// 协调者：按 `job_status` 待办推进；返工额度用尽由运行层收尾（见
+/// [`exhausted_after_rework_limit`]），这里只负责正常阶段。
+fn main_next_rework_exhausted(
+    calls: &[(String, Value)],
+    results: &BTreeMap<String, Value>,
+) -> Reply {
+    if let Some(reply) = main_prepare(calls, results) {
+        return reply;
+    }
+    let last_was_status = calls
+        .last()
+        .map(|(tool, _)| tool == "job_status")
+        .unwrap_or(false);
+    if !last_was_status {
+        return tool_call_stream("m5", "job_status", "{}");
+    }
+    let status = results.get("job_status").cloned().unwrap_or(Value::Null);
+    let pending = |key: &str| -> Vec<String> {
+        status[key]
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let pending_translate = pending("pending_translate");
+    let pending_rework = pending("pending_rework");
+    let pending_review = pending("pending_review");
+    if !pending_translate.is_empty() {
+        return tool_call_stream(
+            "m6",
+            "dispatch_translation",
+            &json!({"chunk_ids": pending_translate}).to_string(),
+        );
+    }
+    if !pending_rework.is_empty() {
+        return tool_call_stream(
+            "m6",
+            "dispatch_translation",
+            &json!({"chunk_ids": pending_rework}).to_string(),
+        );
+    }
+    if !pending_review.is_empty() {
+        return tool_call_stream(
+            "m7",
+            "dispatch_review",
+            &json!({"chunk_ids": pending_review}).to_string(),
+        );
+    }
+    text_stream("没有剩余待办块")
+}
+
+/// 返工额度用尽后的协调者行为：每轮续跑先查一次 `job_status`，再如实上报。
+///
+/// 不能连续两轮只回文本：运行层会把「空轮 + 有说明」收敛成 `model_declined`，
+/// 掩盖真实卡点。这里模拟真实模型「查看状态 → 报告用户」的收尾。
+fn exhausted_after_rework_limit(body: &Value) -> Option<Reply> {
+    let has_tools = body["tools"]
+        .as_array()
+        .is_some_and(|tools| !tools.is_empty());
+    if !has_tools || role_of(&system_of(body)) != "main" {
+        return None;
+    }
+    let (_, results) = tool_history(body);
+    if !rework_limit_reported(&results) {
+        return None;
+    }
+    // 新一轮续跑的第一个请求以 user 提示结尾；先查状态，再在下一个回合上报。
+    let last_is_user = body["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .is_some_and(|message| message["role"] == "user");
+    if last_is_user {
+        Some(tool_call_stream("m5", "job_status", "{}"))
+    } else {
+        Some(text_stream(
+            "返工额度已用尽，按未解决项上报需要人工处理。",
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 场景 1：minor-only 可以交付
+// ---------------------------------------------------------------------------
+
+/// 保护「审查分级放行」：`pass` 携带的 `minor` 不计入未解决、不阻塞发布。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn minor_only_review_still_publishes() {
+    let fixture = fixture("minor-pass");
+    let handler: Handler =
+        Arc::new(|body: &Value| scripted_roles(body, reviewer_minor_pass, main_next));
+    let server = MockServer::start(handler).await;
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
+
+    let started = service.start(novel(), false).await.expect("启动");
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Cancelled,
+        ],
+    )
+    .await;
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "仅 minor 建议不得阻断交付：{} error={:?}",
+        done.message,
+        done.error_code
+    );
+
+    // 正式产物齐全：合并稿、阅读器结果与 manifest 终态。
+    let dir = job_dir(&fixture.paths, 5150, &started.job_id);
+    assert!(
+        dir.join("output/merged.md").is_file(),
+        "交付必须产出合并稿"
+    );
+    assert!(
+        dir.join("output/result.json").is_file(),
+        "交付必须产出正式结果"
+    );
+    assert_eq!(
+        manifest_of(&fixture.paths, 5150, &started.job_id)["state"],
+        "completed"
+    );
+    let result = service.result(5150).await.unwrap().expect("应有正式结果");
+    assert_eq!(result.status, PublishStatus::Complete);
+    assert_eq!(result.unresolved, 0, "minor 不计入未解决项");
+
+    // novel_translation_issues 视图：带 minor 的块计入 reviewed，但不属于 unresolved。
+    let view = service.issues(&started.job_id).await.expect("问题汇总可读");
+    assert!(view.total >= 2, "夹具至少两块");
+    assert_eq!(
+        view.reviewed, view.total,
+        "pass（可带 minor）的块都应计入 reviewed"
+    );
+    assert!(
+        view.issues
+            .iter()
+            .any(|issue| issue.chunk_id == "c0001" && issue.severity == Severity::Minor),
+        "minor 建议仍应被记录：{:?}",
+        view.issues
+    );
+    assert!(
+        !view
+            .unresolved_chunks
+            .contains(&"c0001".to_string()),
+        "只有 minor 的块不得进入 unresolved：{:?}",
+        view.unresolved_chunks
+    );
+
+    let (_, drafts, reviews) = read_artifacts(&fixture.paths, 5150, &started.job_id);
+    let draft = drafts
+        .iter()
+        .find(|draft| draft.chunk_id == "c0001")
+        .expect("c0001 有草稿");
+    assert!(draft.reviewed, "pass 的块草稿必须标记已审查");
+    let review = reviews
+        .iter()
+        .find(|review| review.chunk_id == "c0001")
+        .expect("c0001 有审查");
+    assert_eq!(review.verdict, ReviewVerdict::Pass);
+    assert!(
+        review
+            .issues
+            .iter()
+            .all(|issue| issue.severity == Severity::Minor),
+        "pass 携带的问题只能是 minor"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 场景 2：revise_draft 定点修复后交付
+// ---------------------------------------------------------------------------
+
+/// 保护「局部修订替代整块重译」：只替换审查点名的片段，其余片段原样保留，
+/// 草稿版本递增使旧审查失效，复检通过后正常交付。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revise_draft_fixes_pointed_segment_without_retranslating() {
+    let fixture = fixture("revise");
+    let handler: Handler = Arc::new(|body: &Value| {
+        scripted_roles(body, reviewer_fix_then_pass, main_next_revise)
+    });
+    let server = MockServer::start(handler).await;
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
+
+    let started = service.start(novel(), false).await.expect("启动");
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::Completed,
+            JobState::NeedsAttention,
+            JobState::Cancelled,
+        ],
+    )
+    .await;
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "定点修复后应完成交付：{} error={:?}",
+        done.message,
+        done.error_code
+    );
+
+    // 没有第二次整块翻译：c0002 只派发过一次翻译子 Agent。
+    assert_eq!(
+        server.translator_runs_for("c0002"),
+        1,
+        "定点修复不得触发整块重译（请求 {} 次）",
+        server.translator_requests_for("c0002")
+    );
+
+    let (chunks, drafts, reviews) = read_artifacts(&fixture.paths, 5150, &started.job_id);
+    let chunk = chunks
+        .iter()
+        .find(|chunk| chunk.id == "c0002")
+        .expect("c0002 块存在");
+    let draft = drafts
+        .iter()
+        .find(|draft| draft.chunk_id == "c0002")
+        .expect("c0002 有草稿");
+    let review = reviews
+        .iter()
+        .find(|review| review.chunk_id == "c0002")
+        .expect("c0002 有审查");
+
+    assert_eq!(draft.version, 2, "revise_draft 必须把草稿版本推到 2");
+    assert_eq!(review.draft_version, 2, "复检必须针对修订后的版本");
+    assert_eq!(review.verdict, ReviewVerdict::Pass);
+    assert_eq!(
+        draft.segments.len(),
+        chunk.segments.len(),
+        "定点修订不得增删片段"
+    );
+
+    let patched_id = chunk
+        .segments
+        .iter()
+        .find(|segment| segment.kind == SegmentKind::Text)
+        .expect("c0002 含普通文本片段")
+        .id
+        .clone();
+    let mut patched_seen = false;
+    for (source, translated) in chunk.segments.iter().zip(&draft.segments) {
+        assert_eq!(source.id, translated.id, "片段顺序不得改变");
+        if source.id == patched_id {
+            assert_eq!(
+                translated.text, "定点修订后的译文",
+                "被审查点名的片段应被替换"
+            );
+            patched_seen = true;
+        } else {
+            assert_eq!(
+                translated.text,
+                translator_output(source.kind, &source.text),
+                "未被点名的片段必须保持原译：{}",
+                source.id
+            );
+        }
+    }
+    assert!(patched_seen, "审查点名的片段必须出现在草稿里");
+
+    // 合并稿与正式结果同样存在，说明修复后走完了正常收尾。
+    let dir = job_dir(&fixture.paths, 5150, &started.job_id);
+    assert!(dir.join("output/merged.md").is_file());
+    let result = service.result(5150).await.unwrap().expect("应有正式结果");
+    assert_eq!(result.status, PublishStatus::Complete);
+}
+
+// ---------------------------------------------------------------------------
+// 场景 3：按块返工额度耗尽给出正确错误码
+// ---------------------------------------------------------------------------
+
+/// 保护「按块额度 + 收尾错误码」：某块反复不收敛只耗尽自己的额度，
+/// 收尾报 `rework_exhausted`（step=review），其余块照常通过审查。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn per_chunk_rework_exhaustion_reports_rework_exhausted() {
+    let fixture = fixture("rework-exhausted");
+    let handler: Handler = Arc::new(|body: &Value| {
+        if let Some(reply) = exhausted_after_rework_limit(body) {
+            return reply;
+        }
+        scripted_roles(body, reviewer_always_fix, main_next_rework_exhausted)
+    });
+    let server = MockServer::start(handler).await;
+    let mut settings = settings_for(&server);
+    // 每块只允许一次整块返工，减少测试轮次。
+    settings.translation_agent_rework_rounds = 1;
+    let service = service(&fixture.paths, settings, Arc::new(RecordingSink::new()));
+
+    let started = service.start(novel(), false).await.expect("启动");
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::NeedsAttention,
+            JobState::Completed,
+            JobState::Cancelled,
+        ],
+    )
+    .await;
+    assert_eq!(
+        done.state,
+        JobState::NeedsAttention,
+        "额度耗尽后不得冒充完成：{}",
+        done.message
+    );
+
+    // 额度 1：首轮翻译 + 一次重译；第三次派发被拒绝，不再发翻译请求。
+    assert_eq!(
+        server.translator_runs_for("c0002"),
+        2,
+        "额度用尽后不得继续整块重译（请求 {} 次）",
+        server.translator_requests_for("c0002")
+    );
+    assert_eq!(
+        server.translator_runs_for("c0001"),
+        1,
+        "另一块只翻译一次"
+    );
+    assert!(
+        server.requests_containing("rework_limit") > 0,
+        "协调者必须收到 rework_limit 的工具结果"
+    );
+
+    // 块级隔离：c0001 正常通过审查并标记 reviewed，未解决的只有 c0002。
+    let (_, drafts, reviews) = read_artifacts(&fixture.paths, 5150, &started.job_id);
+    let good_draft = drafts
+        .iter()
+        .find(|draft| draft.chunk_id == "c0001")
+        .expect("c0001 有草稿");
+    assert!(good_draft.reviewed, "正常块应完成审查");
+    let good_review = reviews
+        .iter()
+        .find(|review| review.chunk_id == "c0001")
+        .expect("c0001 有审查");
+    assert_eq!(good_review.verdict, ReviewVerdict::Pass);
+
+    let bad_review = reviews
+        .iter()
+        .find(|review| review.chunk_id == "c0002")
+        .expect("c0002 有审查");
+    assert_eq!(bad_review.verdict, ReviewVerdict::NeedsFix);
+    assert!(
+        bad_review
+            .issues
+            .iter()
+            .any(|issue| issue.severity == Severity::Major)
+    );
+
+    let view = service.issues(&started.job_id).await.expect("问题汇总可读");
+    assert!(
+        view.unresolved_chunks.contains(&"c0002".to_string()),
+        "未收敛块应保留在未解决清单：{:?}",
+        view.unresolved_chunks
+    );
+    assert!(
+        !view.unresolved_chunks.contains(&"c0001".to_string()),
+        "通过块不得被拖入未解决清单：{:?}",
+        view.unresolved_chunks
+    );
+
+    // 未发布：没有合并稿，也没有正式结果。
+    let dir = job_dir(&fixture.paths, 5150, &started.job_id);
+    assert!(
+        !dir.join("output/merged.md").is_file(),
+        "未收敛的任务不得产出合并稿"
+    );
+    assert!(
+        service.result(5150).await.unwrap().is_none(),
+        "未收敛的任务不得产出正式结果"
+    );
+
+    // 收尾错误码：额度用尽的阻塞块必须报 rework_exhausted / review，
+    // 而不是笼统的 incomplete_translate 或整体复核。
+    let manifest = manifest_of(&fixture.paths, 5150, &started.job_id);
+    assert_eq!(manifest["state"], "needs_attention");
+    assert_eq!(
+        done.error_code.as_deref(),
+        Some("rework_exhausted"),
+        "快照错误码应指向返工耗尽：{:?}（manifest={:?}）",
+        done.error_code,
+        manifest
+    );
+    assert_eq!(
+        manifest["last_error"]["code"], "rework_exhausted",
+        "实际 last_error：{:?}",
+        manifest["last_error"]
+    );
+    assert_eq!(
+        manifest["last_error"]["step"], "review",
+        "错误必须落在真实卡住的审查阶段：{:?}",
+        manifest["last_error"]
+    );
+    assert_ne!(
+        manifest["last_error"]["code"], "incomplete_global_review",
+        "块级审查失败不得再报整体复核"
+    );
 }

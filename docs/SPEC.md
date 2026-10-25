@@ -428,14 +428,15 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   照常进行；不再设全局返工轮次上限。用户手动 `resume` 清空全部块的计数（暂停、取消、
   限流自动重试与自动续跑不清）。总成本仍受累计调用预算与并发闸门约束（ADR 0038）。
 - **块状态判定**：`chunk_gate` 从磁盘产物计算，由三个可同时观察的布尔标记组成——
-  `draft_valid`（草稿带当前 `translate` 版本戳、结构校验通过且未标 `needs_repair`）、
-  `review_pass`（审查带当前 `review` 版本戳、对应本版草稿且 `verdict=pass`，可带
-  `minor`）、`needs_rework`（当前版本草稿标了 `needs_repair`，或当前版本审查为
-  `needs_fix`）。`job_status` 与续跑指令的待办按优先级归属：`pending_translate` =
-  `!draft_valid`、`pending_rework` = `draft_valid && needs_rework`、`pending_review` =
+  `draft_valid`（草稿存在、带当前 `translate` 版本戳且结构校验通过；`needs_repair`
+  只表示待返工，不使草稿失效）、`review_pass`（审查带当前 `review` 版本戳、对应本版
+  草稿且 `verdict=pass`，可带 `minor`）、`needs_rework`（当前版本草稿标了
+  `needs_repair`，或当前版本审查为 `needs_fix`）。`job_status` 与续跑指令的待办按
+  优先级归属：`pending_translate` = `!draft_valid`（无草稿或结构损坏）、
+  `pending_rework` = `draft_valid && needs_rework`、`pending_review` =
   `draft_valid && !needs_rework && !review_pass`；进度计数 `translated` =
-  `draft_valid`、`reviewed` = `review_pass`、`needs_repair` = `needs_rework`；返工目标
-  与完成判据共用该判定，不再各自实现（ADR 0038）。
+  `draft_valid`（待修块仍计入已译）、`reviewed` = `review_pass`、`needs_repair` =
+  `needs_rework`；返工目标与完成判据共用该判定，不再各自实现（ADR 0038）。
 - **完成判据与收尾**：全部块 `draft_valid && review_pass`、整体复核通过、合并校验通过
   且正式结果为 `complete` 才完成；`minor` 不参与判定。收尾计数从磁盘按 `chunk_gate`
   重算并写回快照 / manifest，不再沿用在途内存里的陈旧值。收尾与 `needs_attention`

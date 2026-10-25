@@ -3680,6 +3680,105 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// 真实链路：审查工具写入 `needs_fix` 后，草稿标记 `needs_repair=true`，
+    /// 该块必须落在 `pending_rework`（而不是被当成未翻译），额度耗尽时收尾
+    /// 判据返回 `rework_exhausted`。
+    #[tokio::test]
+    async fn needs_fix_from_review_tool_lands_in_pending_rework() {
+        let mut s = settings();
+        s.translation_agent_rework_rounds = 0;
+        let (_service, handle, _scope, dir) = job_fixture("real-rework", s);
+        // 审查前的正常状态：草稿已提交、尚未审查。
+        tools::seed_for_tests(
+            &handle.ctx,
+            &[(
+                Chunk {
+                    id: "c0001".into(),
+                    order: 1,
+                    segments: vec![crate::translation::source::SourceSegment {
+                        id: "p001-l000-s0".into(),
+                        text: "こんにちは".into(),
+                        kind: crate::translation::source::SegmentKind::Text,
+                    }],
+                    prev_context: String::new(),
+                    next_context: String::new(),
+                    chars: 5,
+                },
+                Some(Draft {
+                    chunk_id: "c0001".into(),
+                    version: 1,
+                    segments: vec![crate::translation::artifacts::TranslatedSegment {
+                        id: "p001-l000-s0".into(),
+                        text: "你好".into(),
+                    }],
+                    usage: crate::translation::artifacts::TokenUsage::default(),
+                    reviewed: false,
+                    needs_repair: false,
+                }),
+                None,
+            )],
+        );
+        handle.ctx.with_artifacts(|artifacts| {
+            artifacts
+                .write_constraints(&Constraints {
+                    version: 1,
+                    terms: Vec::new(),
+                    style: String::new(),
+                    conflicts: Vec::new(),
+                    unresolved: Vec::new(),
+                    frozen: true,
+                })
+                .unwrap();
+        });
+
+        // 走审查子 Agent 的工具提交结论：needs_fix + major。
+        let submit_review = tools::reviewer_tools(&handle.ctx, "c0001")
+            .into_iter()
+            .find(|tool| tool.name().as_str() == "submit_review")
+            .expect("审查工具存在");
+        submit_review
+            .run(json!({
+                "chunk_id": "c0001",
+                "verdict": "needs_fix",
+                "issues": [{
+                    "segment_id": "p001-l000-s0",
+                    "kind": "mistranslation",
+                    "severity": "major",
+                    "detail": "人称错误",
+                }],
+                "notes": "",
+            }))
+            .await
+            .expect("提交审查结论");
+
+        let draft = tools::read_draft_for_verify(&handle.ctx, "c0001")
+            .expect("读草稿")
+            .expect("草稿存在");
+        assert!(draft.needs_repair, "审查结论同步到草稿标记");
+
+        let pending = tools::pending_state(&handle.ctx);
+        assert_eq!(pending.pending_rework, ["c0001"], "待修块进入返工队列");
+        assert!(
+            pending.pending_translate.is_empty(),
+            "needs_repair 不应让草稿失效：{:?}",
+            pending.pending_translate
+        );
+        assert!(pending.pending_review.is_empty());
+
+        let counts = tools::compute_counts(&handle.ctx);
+        assert_eq!(counts.translated, 1, "待修块仍计入已译");
+        assert_eq!(counts.needs_repair, 1, "待修单列");
+        assert_eq!(counts.reviewed, 0, "needs_fix 不计入已审");
+
+        let (code, phase, message) =
+            TranslationService::incomplete_stage(&handle.ctx).expect("可定位阶段");
+        assert_eq!(code, "rework_exhausted");
+        assert_eq!(phase, Phase::Review, "step 反映真实阶段");
+        assert!(message.contains("返工额度已用尽"), "得到 {message}");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn incomplete_stage_prefers_incomplete_review_while_quota_remains() {
         let mut s = settings();
