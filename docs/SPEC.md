@@ -413,7 +413,10 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
 - **模型契约**：沿用三协议（Chat Completions 默认 / Responses / Anthropic Messages，
   ADR 0020）、URL 与端点推导、系统代理、单请求超时（默认 600s，ADR 0023）、禁重定向、
   opencode 会话头（按小说 `pixiv-tool-novel-<novel_id>`，ADR 0021）、思考参数按协议
-  归一化（ADR 0032）、输出上限分档与默认思考（ADR 0033）。生成请求固定流式
+  归一化（ADR 0032）、输出上限分档与默认思考（ADR 0033）。审查子任务固定以
+  `reasoning_effort=low` 运行，并在契约里要求「读完一块就提交 `submit_review`、
+  不写分析正文、detail ≤ 120 字、issues ≤ 5 条」——网关常见 8~10k 输出封顶，
+  审查的长思考会把结构化输出挤到 `finish_reason=Length`。生成请求固定流式
   （ADR 0025）；自动重试只用于明确未发送的连接失败与可重试的限流 / 暂时性错误，
   已发送但结果未知默认不自动重放，避免重复计费。Rig 只负责协议编解码与工具循环，
   HTTP 仍走 wreq，凭据头、代理、超时与错误脱敏与旧实现逐字对齐。

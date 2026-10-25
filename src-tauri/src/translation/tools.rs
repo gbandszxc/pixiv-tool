@@ -89,7 +89,9 @@ pub const REVIEWER_TOOL_CONTRACT: &str = "\
 - read_chunk(chunk_id, include_context) → {segments, context}；
 - read_translation(chunk_id) → {draft_version, segments, constraints_version, terms, style}；
 - submit_review(chunk_id, verdict, issues:[{segment_id, kind, severity, detail}], notes)。
-verdict=pass 时 issues 必须为空；任何已记录问题都使 verdict=needs_fix。";
+verdict=pass 时 issues 必须为空；任何已记录问题都使 verdict=needs_fix。
+输出纪律：读完一块就立即调用 submit_review；不要在回复里写审查分析、逐句评语或问题清单正文。
+每条 detail 不超过 120 字、最多 5 条 issues；notes 不超过 200 字。超长输出会被网关截断并导致本块审查失败。";
 
 // ----------------------------------------------------------------------
 // 分块计划与阶段版本
@@ -1734,10 +1736,15 @@ async fn run_reviewer(
             .map(|item| serde_json::to_string(&relevant_terms(&chunk, item)).unwrap_or_default())
             .unwrap_or_else(|| "[]".into()),
     );
-    let (max_tokens, params) = ctx
+    let (max_tokens, mut params) = ctx
         .model
         .request_params((chunk.chars as usize).saturating_mul(2))
         .map_err(RunError::Internal)?;
+    // 审查是结构化输出任务：长思考只会挤占网关常见的 8~10k 输出封顶，
+    // 让 submit_review 因为 finish_reason=Length 失败。审查降低思考强度。
+    if let Some(object) = params.as_mut().and_then(Value::as_object_mut) {
+        object.insert("reasoning_effort".into(), json!("low"));
+    }
     let request = RunRequest::new(
         Role::Reviewer,
         system,
