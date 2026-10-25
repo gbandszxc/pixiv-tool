@@ -403,7 +403,7 @@ impl JobContext {
         }
     }
 
-    /// 子运行的事件出口：子运行的终态不能冒充 Job 终态。
+    /// 运行层（主会话与子任务）的事件出口：统一归一化为预览，不推进 Job 状态机。
     pub fn run_sink(&self) -> Arc<dyn EventSink> {
         Arc::new(JobProgressSink {
             emitter: self.emitter.clone(),
@@ -507,7 +507,12 @@ impl JobContext {
     }
 }
 
-/// 运行层事件过滤：Running 与预览原样通过，终态改写为 Running。
+/// 运行层事件归一化：所有运行层事件都只作为「预览」上报。
+///
+/// Job 的阶段 / 状态 / 错误由 [`TranslationService`] 的状态机统一推进；
+/// 子任务与主会话的终态都不能冒充 Job 终态，也不能用运行层自己的阶段覆盖
+/// Job 阶段（ADR 0037）。终态事件清空该角色的预览文本，作为「本轮结束」占位，
+/// 让事件合并器把界面让给其他仍在生成的角色。
 struct JobProgressSink {
     emitter: Arc<JobEmitter>,
 }
@@ -516,6 +521,14 @@ impl EventSink for JobProgressSink {
     fn emit(&self, mut event: JobEvent) {
         if !matches!(event.state, JobState::Running) {
             event.state = JobState::Running;
+            event.preview = event.preview.cleared_text();
+            event.message = "preview".into();
+            event.error_code = None;
+        } else if event.message != "preview" {
+            // run_start 等运行层杂项同样只作为空占位事件。
+            event.preview = event.preview.cleared_text();
+            event.message = "preview".into();
+            event.error_code = None;
         }
         self.emitter.emit(event);
     }
@@ -720,7 +733,6 @@ struct JobRuntime {
     counts: JobCounts,
     current: Option<crate::agent::CurrentWork>,
     usage: TokenUsage,
-    preview: Preview,
     message: String,
     error_code: Option<String>,
     constraint_version: u64,
@@ -1087,7 +1099,6 @@ impl TranslationService {
                 counts,
                 current: None,
                 usage: TokenUsage::default(),
-                preview: Preview::default(),
                 message: "queued".into(),
                 error_code: None,
                 constraint_version: 0,
@@ -1332,6 +1343,10 @@ impl TranslationService {
     }
 
     fn handle_snapshot(&self, handle: &Arc<JobHandle>) -> TranslationJobSnapshot {
+        // 事件侧的预览 / 归属 / seq 在锁外读取，避免与运行层发事件形成嵌套等待。
+        let preview = handle.ctx.emitter.last_preview();
+        let preview_current = handle.ctx.emitter.last_current();
+        let seq = handle.ctx.emitter.seq();
         let runtime = handle
             .runtime
             .lock()
@@ -1349,13 +1364,13 @@ impl TranslationService {
             state: runtime.state,
             phase: runtime.phase,
             counts: runtime.counts,
-            current: runtime.current.clone(),
+            current: preview_current.or_else(|| runtime.current.clone()),
             usage: runtime.usage,
             elapsed_ms: handle.started.elapsed().as_millis() as u64,
-            preview: runtime.preview.clone(),
+            preview,
             message: runtime.message.clone(),
             error_code: runtime.error_code.clone(),
-            seq: handle.ctx.emitter.seq(),
+            seq,
             constraint_version,
             budget: BudgetSnapshot {
                 used: budget.used,
@@ -1729,7 +1744,6 @@ impl TranslationService {
                 counts: manifest.counts,
                 current: None,
                 usage,
-                preview: Preview::default(),
                 message: "resumed".into(),
                 error_code: manifest.last_error.as_ref().map(|error| error.code.clone()),
                 constraint_version: manifest.constraint_version,

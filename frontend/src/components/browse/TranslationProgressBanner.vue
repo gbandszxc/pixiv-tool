@@ -56,13 +56,25 @@ const usageText = computed(() => {
   return total > 0 ? t("translation.job.usage", { tokens: total.toLocaleString() }) : "";
 });
 
-/** 预览文本：正文摘要优先，否则思考尾窗；都按 60 字符截断。 */
+/** 预览文本：正文摘要优先，否则思考；都取尾部 60 字符（ADR 0030 / 0037）。 */
 function clip(text: string): string {
-  const value = text.trim();
-  return value.length > 60 ? `${value.slice(0, 60)}…` : value;
+  const chars = Array.from(text.trim());
+  return chars.length > 60 ? `…${chars.slice(-60).join("")}` : chars.join("");
 }
 const summaryLine = computed(() => clip(props.job.preview?.summary ?? ""));
 const reasoningLine = computed(() => (summaryLine.value ? "" : clip(props.job.preview?.reasoning ?? "")));
+/** 预览归属标签：只标子任务，主会话不标。 */
+const ownerLabel = computed(() => {
+  const owner = props.job.preview?.owner;
+  if (!owner || owner.role === "main") return "";
+  const agent =
+    owner.role === "translator"
+      ? t("translation.job.agentTranslator")
+      : t("translation.job.agentReviewer");
+  return owner.chunk_id
+    ? t("translation.job.previewOwner", { agent, chunk: owner.chunk_id })
+    : agent;
+});
 /** 预览文本只在推进 / 暂停态展示；失败与中断态的残留文本（模型最后的话）有误导性。 */
 const previewLine = computed(() => {
   if (!["running", "pausing", "awaiting_confirmation", "paused"].includes(props.job.state)) {
@@ -70,6 +82,10 @@ const previewLine = computed(() => {
   }
   return summaryLine.value || reasoningLine.value;
 });
+/** 悬停全文：带归属前缀，和行内展示保持一致。 */
+const previewTitle = computed(() =>
+  ownerLabel.value ? `${ownerLabel.value} ${previewLine.value}` : previewLine.value,
+);
 /** 「后台继续」只属于仍在推进的任务；暂停 / 失败 / 完成不应显示这句提示。 */
 const backgroundHint = computed(() =>
   !previewLine.value && (props.job.state === "running" || props.job.state === "pausing")
@@ -129,8 +145,9 @@ onBeforeUnmount(() => {
       v-if="reasoningLine"
       class="progress-reasoning"
       aria-hidden="true"
-      :title="reasoningLine"
+      :title="previewTitle"
     >
+      <span v-if="ownerLabel" class="progress-owner">{{ ownerLabel }}</span>
       <span class="progress-reasoning-label">{{ t("translation.progressReasoning") }}</span>{{ reasoningLine }}
     </code>
     <code
@@ -139,11 +156,15 @@ onBeforeUnmount(() => {
       class="progress-summary"
       :class="{ 'is-overflow': overflow }"
       aria-hidden="true"
-      :title="previewLine"
+      :title="previewTitle"
     >
       <span class="progress-summary-track">
-        <span ref="textEl" class="progress-summary-text">{{ previewLine || backgroundHint }}</span>
-        <span v-if="overflow" class="progress-summary-text progress-summary-clone" aria-hidden="true">{{ previewLine }}</span>
+        <span ref="textEl" class="progress-summary-text">
+          <span v-if="ownerLabel" class="progress-owner">{{ ownerLabel }}</span>{{ previewLine || backgroundHint }}
+        </span>
+        <span v-if="overflow" class="progress-summary-text progress-summary-clone" aria-hidden="true">
+          <span v-if="ownerLabel" class="progress-owner">{{ ownerLabel }}</span>{{ previewLine }}
+        </span>
       </span>
     </code>
   </div>
@@ -192,6 +213,12 @@ onBeforeUnmount(() => {
 
 .progress-reasoning-label {
   margin-right: var(--space-xs);
+  font-weight: 600;
+}
+
+.progress-owner {
+  margin-right: var(--space-xs);
+  color: var(--ink-subtle);
   font-weight: 600;
 }
 

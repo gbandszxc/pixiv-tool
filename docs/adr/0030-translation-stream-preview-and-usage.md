@@ -91,3 +91,10 @@ DeepSeek 系网关（实测 `opencode-go/deepseek-v4.1-flash`）的思考帧形�
   分帧合并与缓存 token 口径）、`stream_options` 注入与高级 JSON 覆盖断言；`translation_summary.rs`
   摘要扫描器「任意字符串值」语义与思考尾窗滚动裁剪单测；浏览器验收（`/tests/translation.html`）
   分步驱动事件流，覆盖思考期显示、正文到达即取代（末句不驻留）、完成态用量回显与进度区退场。
+
+## 修订（2026-10-25）：整篇 Job 的预览归属
+
+ADR 0035 的整篇 Job 不再复用本文的单页预览实现：运行层预览的归属（主会话 / 翻译 / 审查）、
+240 字符尾窗、并发子任务的稳定展示与 Job 阶段隔离见
+[ADR 0037](0037-translation-preview-ownership-and-stability.md)。本文描述的三协议增量分类、
+usage 解析与 v1 单页行为继续有效。

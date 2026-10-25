@@ -245,10 +245,15 @@ pub struct CurrentWork {
 }
 
 /// 生成内容预览（仅用于界面实时展示，不落盘、不写日志正文）。
+///
+/// `owner` 标明这段内容由哪个角色、哪一块流式产出：主会话与并发子任务共用
+/// 同一个 Job 预览槽位，界面据此决定展示对象（ADR 0037）。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Preview {
     pub summary: String,
     pub reasoning: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<CurrentWork>,
 }
 
 impl Preview {
@@ -259,6 +264,15 @@ impl Preview {
     /// 预览字节数，用于节流判断。
     pub fn len_bytes(&self) -> usize {
         self.summary.len() + self.reasoning.len()
+    }
+
+    /// 清空文本但保留归属（用于「该角色本轮生成结束」的占位信号）。
+    pub fn cleared_text(&self) -> Self {
+        Self {
+            summary: String::new(),
+            reasoning: String::new(),
+            owner: self.owner.clone(),
+        }
     }
 }
 

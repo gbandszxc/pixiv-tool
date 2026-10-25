@@ -112,6 +112,8 @@ export interface JobCurrent {
 export interface JobPreview {
   summary: string;
   reasoning: string;
+  /** 预览归属：主会话 / 翻译子任务 / 审查子任务（ADR 0037）。 */
+  owner?: JobCurrent;
 }
 
 /** 调用预算快照。 */
@@ -479,8 +481,8 @@ const MOCK_STEPS: { at: number; patch: Partial<TranslationJobSnapshot> }[] = [
   { at: 400, patch: { state: "running", phase: "prepare_source", message: "prepare_source" } },
   { at: 900, patch: { state: "running", phase: "prepare_constraints", preview: { summary: "克制、留白的叙事文风", reasoning: "" } } },
   { at: 1500, patch: { state: "running", phase: "translate", current: { page: 1, chunk_id: "c0001", role: "translator" }, counts: { ...MOCK_COUNTS, translated: 1 } } },
-  { at: 2200, patch: { state: "running", phase: "translate", current: { page: 1, chunk_id: "c0002", role: "translator" }, counts: { ...MOCK_COUNTS, translated: 3, terms: 5 }, usage: { input: 8200, output: 1900, total: 10100 }, preview: { summary: "星光洒落在回家的路上，她的脚步很轻。", reasoning: "第一句保留原文的句读节奏…" } } },
-  { at: 3000, patch: { state: "running", phase: "review", current: { page: 2, chunk_id: "c0005", role: "reviewer" }, counts: { ...MOCK_COUNTS, translated: 6, reviewed: 3, terms: 5 }, usage: { input: 16400, output: 4200, total: 20600 }, preview: { summary: "", reasoning: "核对术语与语气…" } } },
+  { at: 2200, patch: { state: "running", phase: "translate", current: { page: 1, chunk_id: "c0002", role: "translator" }, counts: { ...MOCK_COUNTS, translated: 3, terms: 5 }, usage: { input: 8200, output: 1900, total: 10100 }, preview: { summary: "星光洒落在回家的路上，她的脚步很轻。", reasoning: "第一句保留原文的句读节奏…", owner: { page: 1, chunk_id: "c0002", role: "translator" } } } },
+  { at: 3000, patch: { state: "running", phase: "review", current: { page: 2, chunk_id: "c0005", role: "reviewer" }, counts: { ...MOCK_COUNTS, translated: 6, reviewed: 3, terms: 5 }, usage: { input: 16400, output: 4200, total: 20600 }, preview: { summary: "", reasoning: "核对术语与语气…", owner: { page: 2, chunk_id: "c0005", role: "reviewer" } } } },
   { at: 3800, patch: { state: "running", phase: "publish", counts: { ...MOCK_COUNTS, translated: 6, reviewed: 6, terms: 5 }, usage: { input: 21800, output: 5600, total: 27400 } } },
   { at: 4400, patch: { state: "completed", phase: "publish", message: "completed", preview: { summary: "", reasoning: "" } } },
 ];

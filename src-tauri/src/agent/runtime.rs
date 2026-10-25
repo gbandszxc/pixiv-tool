@@ -36,8 +36,12 @@ use crate::agent::{
     recovery::classify_http,
 };
 
-/// 预览事件的最小间隔（events 层还有 300ms 的合并窗口）。
+/// 预览事件的最小间隔（events 层还有 150ms 的合并窗口）。
 const PREVIEW_EMIT_INTERVAL: Duration = Duration::from_millis(120);
+
+/// 预览文本只保留最近 240 字符（界面再取尾部 60 字符展示）。
+/// 逐轮累积会让同一槽位同时容纳多轮内容，尾窗保证滚动的始终是最新生成。
+const PREVIEW_TAIL_CHARS: usize = 240;
 
 /// 单轮工具结果预算中为压缩后历史保留的空间上限：
 /// 与压缩器的实际保留量对齐（近期历史保留区 + 摘要），避免预算把
@@ -51,6 +55,14 @@ fn history_reserve(budget: &BudgetConfig) -> u32 {
 const MIN_TURN_TOOL_TOKENS: u32 = 1_024;
 /// 紧急截断后单个工具结果保留的 token 上限。
 const TRUNCATED_RESULT_TOKENS: u32 = 512;
+
+fn push_preview_tail(target: &mut String, text: &str) {
+    target.push_str(text);
+    let len = target.chars().count();
+    if len > PREVIEW_TAIL_CHARS {
+        *target = target.chars().skip(len - PREVIEW_TAIL_CHARS).collect();
+    }
+}
 
 /// 计算单轮工具结果的累计 token 预算：可用输入扣掉固定开销与历史保留，
 /// 保证「预算内的结果 + 固定开销 + 压缩到保留区内的历史」装得下可用输入。
@@ -207,6 +219,8 @@ pub struct RunRequest {
     pub scheduler: Option<Arc<Scheduler>>,
     /// 事件与日志使用的阶段。
     pub phase: Phase,
+    /// 预览归属（角色 / 页 / 块）；主会话为空，子任务标记具体块。
+    pub current: Option<CurrentWork>,
     /// 本次运行使用的输出上限；`None` 取 [`BudgetConfig::output_limit`]。
     pub max_tokens: Option<u64>,
     /// 调用方按协议归一化后的请求扩展字段（不含凭据与保留字段）。
@@ -239,6 +253,7 @@ impl RunRequest {
             limits,
             sink,
             scope,
+            current: None,
             budget: None,
             budget_config: BudgetConfig::default(),
             compaction: None,
@@ -284,6 +299,12 @@ impl RunRequest {
 
     pub fn with_phase(mut self, phase: Phase) -> Self {
         self.phase = phase;
+        self
+    }
+
+    /// 标记本次运行的预览归属（子任务传页 / 块，主会话通常不传）。
+    pub fn with_current_work(mut self, current: Option<CurrentWork>) -> Self {
+        self.current = current;
         self
     }
 
@@ -337,6 +358,8 @@ struct RunState {
     stop_code: Mutex<Option<String>>,
     preview: Mutex<Preview>,
     last_preview_emit: Mutex<Option<Instant>>,
+    /// 本运行的预览归属；预览事件据此标明来源（ADR 0037）。
+    current: Option<CurrentWork>,
     compaction_cache: Mutex<Option<CompactionCache>>,
     /// 单轮已批准的工具结果预估 token；每次模型调用前清零。
     turn_result_tokens: AtomicU32,
@@ -375,8 +398,9 @@ impl RunState {
         CompletionCallAction::stop(code)
     }
 
-    fn emit(&self, state: JobState, preview: Preview, message: &str, error_code: Option<&str>) {
-        let event = runtime_event(
+    fn emit(&self, state: JobState, mut preview: Preview, message: &str, error_code: Option<&str>) {
+        preview.owner = self.current.clone();
+        let mut event = runtime_event(
             &self.scope,
             state,
             self.phase,
@@ -385,6 +409,7 @@ impl RunState {
             message,
             error_code,
         );
+        event.current = self.current.clone();
         self.sink.emit(event);
     }
 
@@ -422,27 +447,24 @@ impl RunState {
     fn append_preview(&self, text: &str, reasoning: bool) {
         if let Ok(mut preview) = self.preview.lock() {
             if reasoning {
-                preview.reasoning.push_str(text);
+                push_preview_tail(&mut preview.reasoning, text);
             } else {
-                preview.summary.push_str(text);
+                push_preview_tail(&mut preview.summary, text);
             }
-            // 预览只用于界面；限制内存占用，不在这里截断业务产物。
-            const MAX_PREVIEW_BYTES: usize = 32 * 1024;
-            if preview.summary.len() > MAX_PREVIEW_BYTES {
-                let tail: String = preview
-                    .summary
-                    .chars()
-                    .rev()
-                    .take(MAX_PREVIEW_BYTES / 4)
-                    .collect::<String>()
-                    .chars()
-                    .rev()
-                    .collect();
-                preview.summary = tail;
-            }
-            if preview.reasoning.len() > MAX_PREVIEW_BYTES {
-                preview.reasoning.clear();
-            }
+            preview.owner = self.current.clone();
+        }
+    }
+
+    /// 清空预览并（可选）立刻发一条空占位事件。
+    ///
+    /// 空的预览事件是「该角色这一轮生成结束」的标记：事件合并器据此把界面
+    /// 让给其他仍在流式输出的角色，而不是让最后一句文本一直占着槽位。
+    fn reset_preview(&self, notify: bool) {
+        if let Ok(mut preview) = self.preview.lock() {
+            *preview = Preview::default();
+        }
+        if notify {
+            self.maybe_emit_preview(true);
         }
     }
 
@@ -498,7 +520,10 @@ impl AgentHook for RuntimeHooks {
             return state.stop("cancelled");
         }
 
-        // 新一轮模型调用：清空上一轮的工具结果预算累计，并记录上下文快照
+        // 新一轮模型调用：预览只反映本轮生成。上一轮的正文 / 思考不跨轮累积，
+        // 空占位事件同时把界面槽位让给仍在流式输出的其他角色。
+        state.reset_preview(true);
+        // 清空上一轮的工具结果预算累计，并记录上下文快照
         // （run 成功结束后据此组装带回历史）。
         state.turn_result_tokens.store(0, Ordering::SeqCst);
         if let Ok(mut snapshot) = state.last_context.lock() {
@@ -692,6 +717,8 @@ impl AgentHook for RuntimeHooks {
     }
 
     async fn on_dispatch(&self, _ctx: &HookContext, event: DispatchEvent<'_>) -> DispatchAction {
+        // 模型已结束本轮发言、转入工具执行：清空本轮预览，避免开场白一直占着槽位。
+        self.state.reset_preview(true);
         if let Some(name) = event.tool_name() {
             // 单轮工具结果预算：预估值超出本轮剩余额度时跳过该调用，模型会
             // 收到跳过原因并在下一轮分批读取，而不是把上下文一次性拉爆。
@@ -918,6 +945,7 @@ pub async fn run(req: RunRequest, cancel: CancelToken) -> Result<RunOutcome, Run
         stop_code: Mutex::new(None),
         preview: Mutex::new(Preview::default()),
         last_preview_emit: Mutex::new(None),
+        current: req.current.clone(),
         compaction_cache: Mutex::new(None),
         turn_result_tokens: AtomicU32::new(0),
         result_estimator: req.result_estimator.clone(),
@@ -1066,8 +1094,16 @@ pub async fn run(req: RunRequest, cancel: CancelToken) -> Result<RunOutcome, Run
     state.emit(
         JobState::Completed,
         Preview {
-            summary: final_text.chars().take(2_000).collect(),
+            summary: final_text
+                .chars()
+                .rev()
+                .take(PREVIEW_TAIL_CHARS)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect(),
             reasoning: String::new(),
+            owner: None,
         },
         "completed",
         None,
@@ -1204,5 +1240,27 @@ pub fn current_work(role: Role, page: Option<u32>, chunk_id: Option<String>) -> 
         page,
         chunk_id,
         role,
+    }
+}
+
+#[cfg(test)]
+mod preview_tail_tests {
+    use super::{PREVIEW_TAIL_CHARS, push_preview_tail};
+
+    #[test]
+    fn preview_keeps_only_the_tail_window() {
+        let mut text = String::new();
+        push_preview_tail(&mut text, "开头");
+        push_preview_tail(&mut text, &"长".repeat(300));
+        assert_eq!(text.chars().count(), PREVIEW_TAIL_CHARS);
+        assert!(text.starts_with('长') && text.ends_with('长'));
+    }
+
+    #[test]
+    fn preview_tail_does_not_split_characters() {
+        let mut text = String::new();
+        push_preview_tail(&mut text, &"😀".repeat(300));
+        assert_eq!(text.chars().count(), PREVIEW_TAIL_CHARS);
+        assert!(text.chars().all(|ch| ch == '😀'));
     }
 }

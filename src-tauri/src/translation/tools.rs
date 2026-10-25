@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     agent::{
-        CancelToken, FailureClass, Phase, Role, RunError, RunRequest, TokenUsage,
+        CancelToken, CurrentWork, FailureClass, Phase, Role, RunError, RunRequest, TokenUsage,
         budget::{TOOL_RESULT_TOKEN_LIMIT, estimate_tokens, truncate_to_tokens},
         events::{safe_text, warn_job},
         recovery::{RetryPolicy, backoff},
@@ -1544,6 +1544,19 @@ fn classify_run_error(error: &RunError) -> FailureClass {
     }
 }
 
+/// 子任务的预览归属：页码取本块首个片段（块不跨页），块 ID 直接使用。
+fn chunk_current_work(chunk: &Chunk, role: Role) -> CurrentWork {
+    runtime::current_work(
+        role,
+        chunk
+            .segments
+            .first()
+            .and_then(|segment| parse_segment_id(&segment.id))
+            .map(|(page, _, _)| page),
+        Some(chunk.id.clone()),
+    )
+}
+
 async fn run_translator(
     ctx: &std::sync::Arc<JobContext>,
     chunk_id: &str,
@@ -1583,6 +1596,7 @@ async fn run_translator(
         ctx.scope.clone(),
     )
     .with_phase(Phase::Translate)
+    .with_current_work(Some(chunk_current_work(&chunk, Role::Translator)))
     .with_budget(ctx.budget.clone())
     .with_budget_config(ctx.budget_config.clone())
     .with_compaction(
@@ -1756,6 +1770,7 @@ async fn run_reviewer(
         ctx.scope.clone(),
     )
     .with_phase(Phase::Review)
+    .with_current_work(Some(chunk_current_work(&chunk, Role::Reviewer)))
     .with_budget(ctx.budget.clone())
     .with_budget_config(ctx.budget_config.clone())
     .with_compaction(

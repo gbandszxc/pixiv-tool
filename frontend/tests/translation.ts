@@ -280,7 +280,7 @@ async function run() {
     counts: { pages: 2, chunks: 3, translated: 1, reviewed: 0, needs_repair: 0, terms: 4 },
     current: { page: 2, chunk_id: "c0002", role: "translator" },
     usage: { input: 8213, output: 1764, total: 9977 },
-    preview: { summary: "星光洒落在回家的路上，她的脚步很轻。", reasoning: "" },
+    preview: { summary: "星光洒落在回家的路上，她的脚步很轻。", reasoning: "", owner: { page: 2, chunk_id: "c0002", role: "translator" } },
   });
   await settle();
   assert(status().includes("翻译中"), "运行中状态摘要更新");
@@ -292,7 +292,13 @@ async function run() {
   assert(popover()!.textContent?.includes("用量 9,977 tokens"), "状态 tab 显示 token 用量");
   assert(popover()!.textContent?.includes("已用 1′12″"), "状态 tab 显示已用时间");
   assert(popover()!.querySelector(".progress-summary"), "状态 tab 有流式摘要行");
+  assert(popover()!.textContent?.includes("翻译 c0002"), "预览行标注子任务归属与块");
   assert(!popover()!.querySelector(".progress-reasoning"), "有正文摘要时不显示思考行");
+  // 尾部窗口：只展示最新生成的 60 字符。
+  emitJob({ preview: { summary: `最旧的开头${"中间".repeat(80)}最新结尾`, reasoning: "" } });
+  await settle();
+  assert(!popover()!.textContent?.includes("最旧的开头"), "预览不再冻结在最早的开头");
+  assert(popover()!.textContent?.includes("最新结尾"), "预览展示最新生成的尾部");
   // 思考期：无摘要时显示思考尾窗。
   emitJob({ preview: { summary: "", reasoning: "核对术语与语气…" } });
   await settle();

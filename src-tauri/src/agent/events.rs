@@ -7,6 +7,7 @@
 //! 关闭前调用 [`JobEmitter::flush`]。
 
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -14,7 +15,9 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-use crate::agent::{CurrentWork, JobCounts, JobId, JobScope, JobState, Phase, Preview, TokenUsage};
+use crate::agent::{
+    CurrentWork, JobCounts, JobId, JobScope, JobState, Phase, Preview, Role, TokenUsage,
+};
 
 /// Tauri 事件名（前端订阅）。
 pub const JOB_EVENT_NAME: &str = "translation://job";
@@ -125,6 +128,24 @@ impl EventSink for RecordingSink {
     }
 }
 
+/// 子任务预览槽位：同一角色同一块共用一个槽。
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct PreviewKey {
+    role: Role,
+    chunk_id: String,
+}
+
+struct SubPreview {
+    preview: Preview,
+    at: tokio::time::Instant,
+}
+
+/// 子任务焦点保持时长：期间只跟随同一个块。
+///
+/// 并发子任务各自逐帧输出，若按「最后一条事件」直接接管，界面会以 150ms 级
+/// 频率在几块之间乱跳。焦点块结束时才让给其他仍在输出的块（ADR 0037）。
+const SUB_FOCUS_HOLD: Duration = Duration::from_secs(5);
+
 #[derive(Default)]
 struct EmitState {
     seq: u64,
@@ -134,12 +155,153 @@ struct EmitState {
     last_counts: JobCounts,
     last_preview_bytes: usize,
     pending: Option<JobEvent>,
+    /// 主会话最近一段非空预览。
+    main_preview: Preview,
+    /// 主会话当前是否在生成（空占位事件会把它置为 false）。
+    main_active: bool,
+    /// 并发子任务的最近预览，按角色 + 块分槽。
+    sub_slots: HashMap<PreviewKey, SubPreview>,
+    /// 当前展示的子任务块；在该块生成结束前不切换。
+    sub_focus: Option<PreviewKey>,
+    /// Job 阶段只由进度 / 状态事件推进，运行层预览不参与。
+    job_phase: Option<Phase>,
+    /// 最近一次实际下发的预览（无活跃生成时兜底，避免进度事件逐帧清空）。
+    display: Preview,
+}
+
+/// 事件整理结果：判断按预览节流还是按普通进度节流。
+struct Prepared {
+    /// 事件本身是否为运行层预览（`message == "preview"`）。
+    is_preview: bool,
+    /// 是否为「该角色本轮生成结束」的空占位标记。
+    marker: bool,
 }
 
 impl EmitState {
     fn next_seq(&mut self) -> u64 {
         self.seq = self.seq.saturating_add(1);
         self.seq
+    }
+
+    /// 把事件里的预览归入对应槽位，并盖上下发时要展示的预览。
+    ///
+    /// 运行层事件（含主会话与子任务）都由 [`crate::translation::service::JobProgressSink`]
+    /// 归一化为 `message == "preview"`；进度 / 状态事件才会推进 `job_phase`。
+    fn prepare(&mut self, event: &mut JobEvent, now: tokio::time::Instant) -> Prepared {
+        let is_preview = event.message == "preview";
+        let incoming = std::mem::take(&mut event.preview);
+        let marker = is_preview && incoming.is_empty();
+        if is_preview || !incoming.is_empty() {
+            self.route(incoming, now);
+        }
+
+        if !is_preview {
+            self.job_phase = Some(event.phase);
+        }
+
+        let mut display = self.select_display(now);
+        if display.is_empty() && !self.display.is_empty() {
+            // 所有角色都刚结束一轮：保留上一段文本，直到新的生成接管。
+            display = self.display.clone();
+        }
+        event.preview = display.clone();
+        self.display = display;
+
+        if is_preview {
+            if let Some(phase) = self.job_phase {
+                event.phase = phase;
+            }
+        }
+        if !event.state.is_terminal() {
+            // 当前工作位置跟随实际展示的预览；主会话不标块。
+            event.current = event
+                .preview
+                .owner
+                .clone()
+                .filter(|owner| owner.role != Role::Main);
+        }
+
+        Prepared { is_preview, marker }
+    }
+
+    fn route(&mut self, incoming: Preview, now: tokio::time::Instant) {
+        match incoming.owner.as_ref().map(|owner| owner.role) {
+            Some(Role::Main) | None => {
+                if incoming.is_empty() {
+                    self.main_preview = Preview::default();
+                    self.main_active = false;
+                } else {
+                    self.main_preview = incoming;
+                    self.main_active = true;
+                }
+            }
+            Some(role) => {
+                let key = PreviewKey {
+                    role,
+                    chunk_id: incoming
+                        .owner
+                        .as_ref()
+                        .and_then(|owner| owner.chunk_id.clone())
+                        .unwrap_or_default(),
+                };
+                if incoming.is_empty() {
+                    self.sub_slots.remove(&key);
+                    if self.sub_focus.as_ref() == Some(&key) {
+                        self.sub_focus = None;
+                    }
+                } else {
+                    self.sub_slots.insert(
+                        key.clone(),
+                        SubPreview {
+                            preview: incoming,
+                            at: now,
+                        },
+                    );
+                    if self.sub_focus.is_none() {
+                        self.sub_focus = Some(key);
+                    }
+                }
+            }
+        }
+    }
+
+    fn select_display(&mut self, now: tokio::time::Instant) -> Preview {
+        if self.main_active && !self.main_preview.is_empty() {
+            return self.main_preview.clone();
+        }
+        // 焦点块仍在生成中则保持不动；超过保持窗口视为残留，重新选择。
+        if let Some(key) = self.sub_focus.clone() {
+            match self.sub_slots.get(&key) {
+                Some(slot) if now.saturating_duration_since(slot.at) <= SUB_FOCUS_HOLD => {
+                    return slot.preview.clone();
+                }
+                _ => self.sub_focus = None,
+            }
+        }
+        if let Some((key, slot)) = self.sub_slots.iter().max_by_key(|(_, slot)| slot.at) {
+            self.sub_focus = Some(key.clone());
+            return slot.preview.clone();
+        }
+        if !self.main_preview.is_empty() {
+            return self.main_preview.clone();
+        }
+        Preview::default()
+    }
+
+    /// 分配 `seq`、补齐 Job 元数据并记录节流基准；返回可直接下发的事件。
+    fn seal(&mut self, event: &mut JobEvent) -> u64 {
+        let seq = self.next_seq();
+        event.seq = seq;
+        if event.counts.is_zero() {
+            event.counts = self.last_counts;
+        }
+        self.last_counts = event.counts;
+        self.last_state = Some(event.state);
+        self.last_phase = Some(event.phase);
+        self.last_sent = Some(tokio::time::Instant::now());
+        self.last_preview_bytes = event.preview.len_bytes();
+        self.pending = None;
+        seq
     }
 }
 
@@ -189,23 +351,29 @@ impl JobEmitter {
         self.state.lock().map(|state| state.seq).unwrap_or(0)
     }
 
+    /// 最近一次下发的预览（快照 / 刷新回填用）。
+    pub fn last_preview(&self) -> Preview {
+        self.state
+            .lock()
+            .map(|state| state.display.clone())
+            .unwrap_or_default()
+    }
+
+    /// 最近一次下发预览的归属；主会话预览返回 `None`。
+    pub fn last_current(&self) -> Option<CurrentWork> {
+        self.last_preview()
+            .owner
+            .filter(|owner| owner.role != Role::Main)
+    }
+
     /// 立即发送一条事件（跳过节流），返回分配的 `seq`。
     pub fn emit_now(&self, mut event: JobEvent) -> u64 {
         let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
-        let seq = state.next_seq();
-        event.seq = seq;
+        state.prepare(&mut event, tokio::time::Instant::now());
+        let seq = state.seal(&mut event);
         event.job_id = self.scope.job_id.clone();
         event.novel_id = self.scope.novel_id;
         event.elapsed_ms = self.started.elapsed().as_millis() as u64;
-        if event.counts.is_zero() {
-            event.counts = state.last_counts;
-        }
-        state.last_counts = event.counts;
-        state.last_state = Some(event.state);
-        state.last_phase = Some(event.phase);
-        state.last_sent = Some(tokio::time::Instant::now());
-        state.last_preview_bytes = event.preview.len_bytes();
-        state.pending = None;
         drop(state);
         self.sink.emit(event);
         seq
@@ -217,22 +385,28 @@ impl JobEmitter {
             let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
             state.pending.take()
         };
-        if let Some(event) = pending {
-            self.emit_now(event);
-        }
+        let Some(mut event) = pending else { return };
+        let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        let seq = state.seal(&mut event);
+        event.job_id = self.scope.job_id.clone();
+        event.novel_id = self.scope.novel_id;
+        event.elapsed_ms = self.started.elapsed().as_millis() as u64;
+        drop(state);
+        self.sink.emit(event);
+        let _ = seq;
     }
 
     /// 判定并处理一条事件：立即发送、合并等待或丢弃。
     fn accept(&self, mut event: JobEvent) {
         let now = tokio::time::Instant::now();
         let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
-        event.job_id = self.scope.job_id.clone();
-        event.novel_id = self.scope.novel_id;
+        let prepared = state.prepare(&mut event, now);
 
         let immediate = state.last_state != Some(event.state)
             || state.last_phase != Some(event.phase)
             || event.state.is_terminal()
-            || event.error_code.is_some();
+            || event.error_code.is_some()
+            || prepared.marker;
 
         if immediate {
             state.pending = Some(event);
@@ -246,7 +420,7 @@ impl JobEmitter {
             .map(|last| now.saturating_duration_since(last))
             .unwrap_or(self.progress_interval);
 
-        if !event.preview.is_empty() {
+        if prepared.is_preview {
             let bytes = event.preview.len_bytes();
             let grew = bytes.saturating_sub(state.last_preview_bytes) >= self.preview_bytes;
             if elapsed >= self.preview_interval || grew {
@@ -526,6 +700,7 @@ mod tests {
                 Preview {
                     summary: text.to_owned(),
                     reasoning: String::new(),
+                    owner: None,
                 },
                 "preview",
                 None,
@@ -568,6 +743,7 @@ mod tests {
             Preview {
                 summary: "stream".into(),
                 reasoning: String::new(),
+                owner: None,
             },
             "preview",
             None,
@@ -585,5 +761,133 @@ mod tests {
         assert!(!text.contains('\t'));
         let long = safe_text(&"a".repeat(300), 10);
         assert_eq!(long.chars().count(), 11, "限长后附加省略号");
+    }
+
+    fn owner(role: Role, chunk: &str) -> Option<CurrentWork> {
+        Some(CurrentWork {
+            page: Some(1),
+            chunk_id: Some(chunk.into()),
+            role,
+        })
+    }
+
+    fn owned_preview(role: Role, chunk: &str, text: &str, phase: Phase) -> JobEvent {
+        runtime_event(
+            &scope(),
+            JobState::Running,
+            phase,
+            TokenUsage::default(),
+            Preview {
+                summary: text.into(),
+                reasoning: String::new(),
+                owner: owner(role, chunk),
+            },
+            "preview",
+            None,
+        )
+    }
+
+    fn empty_owned_preview(role: Role, chunk: &str) -> JobEvent {
+        runtime_event(
+            &scope(),
+            JobState::Running,
+            role.default_phase(),
+            TokenUsage::default(),
+            Preview {
+                summary: String::new(),
+                reasoning: String::new(),
+                owner: owner(role, chunk),
+            },
+            "preview",
+            None,
+        )
+    }
+
+    #[test]
+    fn main_preview_wins_and_subtask_fills_the_gap() {
+        let (emitter, sink) = emitter();
+        let emitter = emitter.with_windows(Duration::ZERO, Duration::ZERO, 1);
+        emitter.emit(progress(JobCounts::default()));
+        emitter.emit(owned_preview(Role::Main, "", "主会话", Phase::Translate));
+        emitter.emit(owned_preview(
+            Role::Translator,
+            "c0002",
+            "子任务译文",
+            Phase::Translate,
+        ));
+        assert_eq!(
+            sink.last().unwrap().preview.summary,
+            "主会话",
+            "主会话在生成时不被子任务抢走"
+        );
+
+        // 主会话本轮结束（空占位）：子任务接管；主会话重新输出时立刻夺回。
+        emitter.emit(owned_preview(Role::Main, "", "", Phase::Translate));
+        assert_eq!(sink.last().unwrap().preview.summary, "子任务译文");
+        assert_eq!(
+            sink.last()
+                .unwrap()
+                .current
+                .as_ref()
+                .unwrap()
+                .chunk_id
+                .as_deref(),
+            Some("c0002")
+        );
+
+        emitter.emit(owned_preview(
+            Role::Main,
+            "",
+            "主会话继续",
+            Phase::Translate,
+        ));
+        assert_eq!(sink.last().unwrap().preview.summary, "主会话继续");
+        assert!(sink.last().unwrap().current.is_none(), "主会话预览不标块");
+    }
+
+    #[test]
+    fn subtask_preview_sticks_to_the_focused_chunk() {
+        let (emitter, sink) = emitter();
+        let emitter = emitter.with_windows(Duration::ZERO, Duration::ZERO, 1);
+        emitter.emit(progress(JobCounts::default()));
+        emitter.emit(owned_preview(
+            Role::Translator,
+            "c0001",
+            "第一块",
+            Phase::Translate,
+        ));
+        emitter.emit(owned_preview(
+            Role::Translator,
+            "c0002",
+            "第二块",
+            Phase::Translate,
+        ));
+        assert_eq!(
+            sink.last().unwrap().preview.summary,
+            "第一块",
+            "并发子任务不逐帧抢占同一行"
+        );
+
+        // 焦点块结束：让给仍在输出的另一块。
+        emitter.emit(empty_owned_preview(Role::Translator, "c0001"));
+        assert_eq!(sink.last().unwrap().preview.summary, "第二块");
+    }
+
+    #[test]
+    fn subtask_preview_does_not_override_job_phase() {
+        let (emitter, sink) = emitter();
+        let emitter = emitter.with_windows(Duration::ZERO, Duration::ZERO, 1);
+        emitter.emit(progress(JobCounts::default()));
+        emitter.emit(owned_preview(
+            Role::Reviewer,
+            "c0005",
+            "审查中",
+            Phase::Review,
+        ));
+        assert_eq!(
+            sink.last().unwrap().phase,
+            Phase::Translate,
+            "子任务的运行阶段不能改写 Job 阶段"
+        );
     }
 }

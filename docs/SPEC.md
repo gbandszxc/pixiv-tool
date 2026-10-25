@@ -114,8 +114,9 @@ Tauri IPC 直接调 Rust 命令，抓取进度经 `task://progress` / `task://do
   事件、再拉 `novel_translation_jobs` 快照，按每 Job 单调 `seq` 丢弃重复或迟到事件
   （快照序号落后于已应用事件时保留事件版本），避免「先读快照再订阅」的空窗丢事件；
   页面重新可见时重连并重拉快照。普通进度在传输层按 ≥5s 合并，生成预览按「距上次
-  ≥300ms 或累计新增 ≥2048B」节流（任一满足即发），阶段切换、状态变化与终态立即
-  flush。旧 `novel_translate_page` 的 IPC Channel 进度协议已随命令移除而作废。
+  ≥150ms 或累计新增 ≥1024B」节流（任一满足即发），阶段切换、状态变化与终态立即
+  flush；主会话与并发子任务的预览在合并器里分槽，每次下发都带当前主导生成者的预览
+  （ADR 0037）。旧 `novel_translate_page` 的 IPC Channel 进度协议已随命令移除而作废。
 - **安全边界**：无网络监听面；IPC 仅限本 webview。
   主窗生产 CSP 限制脚本为自身资源（Tauri 注入脚本由构建阶段补充 hash），
   禁止 object 与表单提交；开发 CSP 仅额外允许本机 Vite HMR WebSocket。
@@ -368,6 +369,10 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   （默认 4，1~16）、同时活跃小说数（默认 2，1~8）；实际并发取全局与单小说的较小值。
   等待子任务、执行工具与暂停期间不持有模型请求许可，压缩摘要请求同样经过全局闸门；
   一本长篇不能占满全部槽位。同一小说仍串行，不同小说可并行。
+- **实时预览**：主会话与子任务的正文 / 思考增量只进界面预览，不落盘、不写日志；
+  每个角色的预览每轮只保留最近 240 字符，模型调用开始与工具派发时以空占位让出槽位。
+  并发子任务按「角色 + 块」分槽，主会话生成时优先，否则粘滞跟随当前焦点块，焦点块
+  结束后再让给仍在输出的块；预览事件不改写 Job 阶段 / 错误（ADR 0037）。
 - **预算**：整篇维护累计模型尝试预算，未显式配置时按 `64 + 32 × 初始分块数` 自动计算
   （`translation_call_budget = 0`）；父任务、子任务、压缩摘要、传输重试与返工共享。
   预算随检查点与 manifest 持久化，恢复、再次派生或细分都不重置。恢复时若
@@ -962,7 +967,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 维护组按缓存与日志直排分区，显示分类/总大小、确认后清理动作和最近日志；分类冗长说明收进分类旁帮助图标（HelpTooltip），路径不直接回显——由 `components/settings/CopyPathButton.vue` 复制图标承载，悬停/聚焦 tooltip 显示完整路径，点击写入剪贴板并以 Snackbar 提示、图标短暂切换为对勾。14px 标题与 12px 辅助文字沿用既有 token；日志为可聚焦的等宽纯文本滚动区，最多 240px 高，不对轮询使用 aria-live。位于末尾时跟随新日志，手动向上阅读时保留位置；空缓存/日志禁用清理，读取失败保留快照与重试；维护页关闭即停止轮询，语义及安全边界见 §9 / ADR 0027。视觉细节见 DESIGN.md / .impeccable/design.json。
 
-小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式经 `--translation-ink` 与纸面墨色混色——浅色主题 primary 75%、深色主题 25%，保 4.5:1 对比度且与原文异色）。原分页底栏的 SVG 翻译图标点击弹出 **384px 浮层**，头部显示「整篇作品 · N 页 · M 块」、8px 状态点与 12px 状态摘要（`role="status" aria-live="polite"`，唯一播报区）；下方为四个页签：**状态**（阶段、已译/已审/待修/总块、进度条、当前页/块、已用时间、token 用量与单行流式预览——思考与摘要共用一行，思考期 ink-subtle 静态 ellipsis、正文摘要到达即取代（ink-muted，溢出 marquee），末尾思考不驻留、思考期间亦持续有内容在动，见 ADR 0030）、**术语与风格**（等待确认时可编辑术语与译注并「确认并继续」，否则只读展示冻结版本、冲突与未解决项）、**预览**（块列表 + 选中块原文/译文对照，未译块与未审查块明确标示，邻接上下文可读）、**问题**（审查问题按未解决块优先、严重度排序，只显示块/片段定位与说明）。底部常驻显示模式切换（原文 / 译文 / 双语，secondary-container 选中）与动作区（开始 / 重新翻译、继续、暂停、取消；同一时刻只显示当前状态可用的动作）。关闭浮层（Esc / 外部点击）只关面板、不取消任务；重新进入或从底栏 / 侧栏回到在途小说时自动展开一次。打开焦点进入面板、关闭回到图标，Tab 条支持 ←/→/Home/End。状态摘要是唯一 aria-live 区，进度、已用、字节、token 与逐帧预览不播报。设置页「小说翻译」一级按服务连接（接口协议 / API URL / API Key）与模型和语言（模型 ID / 目标语言）直排，另有启动前确认、检测可用与「高级设置」入口（摘要 + 错误计数）；模型 ID 在「获取模型」成功后原位变为下拉（选项含获取结果与当前值，可切回手动输入），「检测可用」以绿色/红色文字区分成败；目标语言默认「跟随界面语言」（选项回显当前界面语言名），可手动指定白名单内的语言；接口协议默认 Chat Completions，切换后 URL 帮助与占位、模型列表和探测草稿同步换协议，已存凭据在 Key 标签行以中性胶囊回显「已保存」/「保存时清除」，清除动作与 Key 字段同行、窄窗换行；原文语言与目标语言一致时只回显「无需翻译」提示（灰色指示点、不算失败），按钮变为「仍然翻译」可强制走完整流程；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠。浮层与二级设置页的视觉细节详见 DESIGN.md 与结构化伴随视图。
+小说翻译复用既有视觉角色：原文 ink，逐段译文 primary（纸色模式经 `--translation-ink` 与纸面墨色混色——浅色主题 primary 75%、深色主题 25%，保 4.5:1 对比度且与原文异色）。原分页底栏的 SVG 翻译图标点击弹出 **384px 浮层**，头部显示「整篇作品 · N 页 · M 块」、8px 状态点与 12px 状态摘要（`role="status" aria-live="polite"`，唯一播报区）；下方为四个页签：**状态**（阶段、已译/已审/待修/总块、进度条、当前页/块、已用时间、token 用量与单行流式预览——思考与摘要共用一行，思考期 ink-subtle 静态 ellipsis、正文摘要到达即取代（ink-muted，溢出 marquee），末尾思考不驻留、思考期间亦持续有内容在动；子任务预览带「翻译 / 审查 + 块 ID」归属前缀，文本只展示最新尾部 60 字符；主会话生成时优先、否则粘滞跟随当前并发子任务块，结束后让位，避免逐帧跳块，见 ADR 0030 / 0037）、**术语与风格**（等待确认时可编辑术语与译注并「确认并继续」，否则只读展示冻结版本、冲突与未解决项）、**预览**（块列表 + 选中块原文/译文对照，未译块与未审查块明确标示，邻接上下文可读）、**问题**（审查问题按未解决块优先、严重度排序，只显示块/片段定位与说明）。底部常驻显示模式切换（原文 / 译文 / 双语，secondary-container 选中）与动作区（开始 / 重新翻译、继续、暂停、取消；同一时刻只显示当前状态可用的动作）。关闭浮层（Esc / 外部点击）只关面板、不取消任务；重新进入或从底栏 / 侧栏回到在途小说时自动展开一次。打开焦点进入面板、关闭回到图标，Tab 条支持 ←/→/Home/End。状态摘要是唯一 aria-live 区，进度、已用、字节、token 与逐帧预览不播报。设置页「小说翻译」一级按服务连接（接口协议 / API URL / API Key）与模型和语言（模型 ID / 目标语言）直排，另有启动前确认、检测可用与「高级设置」入口（摘要 + 错误计数）；模型 ID 在「获取模型」成功后原位变为下拉（选项含获取结果与当前值，可切回手动输入），「检测可用」以绿色/红色文字区分成败；目标语言默认「跟随界面语言」（选项回显当前界面语言名），可手动指定白名单内的语言；接口协议默认 Chat Completions，切换后 URL 帮助与占位、模型列表和探测草稿同步换协议，已存凭据在 Key 标签行以中性胶囊回显「已保存」/「保存时清除」，清除动作与 Key 字段同行、窄窗换行；原文语言与目标语言一致时只回显「无需翻译」提示（灰色指示点、不算失败），按钮变为「仍然翻译」可强制走完整流程；≤800px 收缩进度滑杆、≤600px 底栏分两行避免重叠。浮层与二级设置页的视觉细节详见 DESIGN.md 与结构化伴随视图。
 
 所有纵向数据滚动区共用 PgUp/PgDn 输入规则（§6.1.1），优先鼠标区域、回退键盘焦点，保留控件原生按键与模态隔离；全屏胶卷与图片区分别滚屏 / 切作品页。样式及交互规则与 DESIGN.md / .impeccable/design.json 保持一致。
 
@@ -1257,7 +1262,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `settings_get` / `settings_save(settings)` | 配置读写（白名单 48 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_start(novel, force)` | 启动或加入整篇翻译 Job；novel=`{novel_id,title,tags,description,content}`（content ≤ 8MB，非法 id / 空内容拒绝）。启动前校验设置、URL、模型与 Key，任何失败不创建 Job；原文已是目标语言且 `force=false` 时返回 `already_target_language:true` 与未落库的空快照。同一作品、原文版本、目标语言重复启动加入既有 Job，`force=true` 新建。返回 `{job: TranslationJobSnapshot, already_target_language}`，命令立即返回、后台 tokio 继续执行。目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言（ADR 0018） |
 | `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
-| `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；任务不存在或清单损坏返回可读错误 |
+| `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；任务不存在或清单损坏返回可读错误 |
 | `novel_translation_result(novelId)` | 阅读器投影：优先已完成且状态为 `complete` 的 v2 Job，否则回退 v1 旧缓存并标记 `partial`；无结果返回 null。返回 `{novel_id,job_id,target_language,pages:{页码:[{line,text}]},status:"complete"|"partial"|"needs_attention",unresolved}` |
 | `novel_translation_confirm(jobId, terms, style)` | 确认术语与风格（等待确认时由浮层提交）。terms 为 `[{source_term,locked_translation,term_type?,aliases?,notes?}]`；确认后约束版本 +1、清除冲突与未解决项并继续。任务不存在 / 已删除返回错误 |
 | `novel_translation_pause(jobId)` | 停止派发并停在最近检查点（`queued`/`running` → `pausing` → `paused`）；等待确认时要求先确认或取消；其它状态拒绝 |
@@ -1356,7 +1361,7 @@ translation://job {
   state, phase, counts{pages,chunks,translated,reviewed,needs_repair,terms},
   current{page?,chunk_id?,role} | null,
   usage{input,output,total}, elapsed_ms,
-  preview{summary,reasoning},
+  preview{summary,reasoning,owner{page?,chunk_id?,role}?},
   message, error_code?
 }
 ```
@@ -1365,8 +1370,12 @@ translation://job {
 `constraint_version` / `budget` / `target_language` / `already_target_language` /
 `chunk_ids`，前端由既有快照补齐）。每个 Job 的 `seq` 从 1 单调递增；
 前端先订阅、再拉 `novel_translation_jobs` 快照，事件 `seq ≤` 本地已应用序号时丢弃，快照
-序号落后时保留事件版本。普通进度按 ≥5s 合并，生成预览按「≥300ms 或累计新增 ≥2048B」
-节流；阶段切换、状态变化、错误与终态立即发送，并在阶段结束 / 终态 flush。`message`
+序号落后时保留事件版本。普通进度按 ≥5s 合并，生成预览按「≥150ms 或累计新增 ≥1024B」
+节流；阶段切换、状态变化、错误与终态立即发送，并在阶段结束 / 终态 flush。`preview`
+的 `owner` 标明内容来自主会话还是某个翻译 / 审查子任务（ADR 0037）：运行层预览每轮
+只保留最近 240 字符，主会话在生成时优先展示，否则展示当前焦点子任务块并在其结束后
+让位；预览事件不改写 Job 的 `phase` / `error_code`。快照的 `preview` / `current` 取
+合并器最后一次下发的值。`message`
 与 `error_code` 只含安全摘要，不含原文、译文、提示词或凭据。任务启动（0 进度）、
 每篇/每页成功或失败即推送抓取事件（skipped 不发）；TasksView 订阅后刷新列表，同时保留
 2s 轮询兜底。任务列表以浅层响应式的完整快照替换：事件、轮询和任务操作触发的查询共享
@@ -1611,6 +1620,8 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0033 | 翻译输出上限按输入分档、默认开启思考 | [adr/0033-translation-dynamic-output-cap-and-default-thinking.md](adr/0033-translation-dynamic-output-cap-and-default-thinking.md) |
 | 0034 | Rig 通用 Agent 内核与 Rust 1.99.1 工具链 | [adr/0034-rig-agent-kernel-and-rust-toolchain.md](adr/0034-rig-agent-kernel-and-rust-toolchain.md) |
 | 0035 | 整篇小说 Agent 翻译（Job 化，取代 ADR 0017 的单页两轮与文件布局） | [adr/0035-whole-novel-agent-translation.md](adr/0035-whole-novel-agent-translation.md) |
+| 0036 | 翻译运行层窗口防护与任务续跑 | [adr/0036-translation-runtime-guard-and-continuation.md](adr/0036-translation-runtime-guard-and-continuation.md) |
+| 0037 | 翻译预览的归属、尾窗与稳定展示 | [adr/0037-translation-preview-ownership-and-stability.md](adr/0037-translation-preview-ownership-and-stability.md) |
 
 ADR 按需追加，不强制一次性写完。
 

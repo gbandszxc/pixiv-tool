@@ -24,7 +24,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 - 改登录、凭据存储、多账号 → §4.1 §5.3 + 受影响 ADR
 - 改任务事件 / payload → §3.2 + §7.1；改限速 / 超时 / 并发 → §4.3
 - 改 `src-tauri/src/agent/**`（运行层 / Rig 接入 / 工具循环 / 压缩 / 调度）→ `docs/SPEC.md` §3 / §4.3 / §7 + ADR 0034
-- 改 `src-tauri/src/translation/**` 或 `src-tauri/src/translation_legacy.rs`（翻译 Pipeline / 校验 / 缓存）→ `docs/SPEC.md` §3 / §4.3 / §5 / §9 / §10 + ADR 0035
+- 改 `src-tauri/src/translation/**` 或 `src-tauri/src/translation_legacy.rs`（翻译 Pipeline / 校验 / 缓存）→ `docs/SPEC.md` §3 / §4.3 / §5 / §9 / §10 + ADR 0035；改预览归属 / 事件合并 → 加读 ADR 0037
 - 改主题、色板、token、组件规则 → §6.3 + `DESIGN.md` **与** `.impeccable/design.json`（同批，三者保持一致）
 - 改构建 / 打包 / 工具链 / 图标流程 / Rig 版本或 feature → §8 + `docs/PACKAGING.md` + ADR 0034
 - 改 `src-tauri/src/pixiv/**` 或 `commands/browse_api_cmds.rs` 的端点调用 / 参数 / 解析 → `docs/PIXIV-API.md`（§维护矩阵）与 `src-tauri/tests/pixiv_api/` 对应用例同批更新；pixiv 侧行为变化先用 `./dev.ps1 test-live` 定位
@@ -62,7 +62,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 | `docs/SPEC.md` | 项目规格：范围 / 技术栈 / 架构 / 数据模型 / IPC 命令 / 风险登记 | 任何行为、契约、参数、目录职责变化（对照「硬约束 1」） |
 | `DESIGN.md` | 前端视觉与交互规范真相源：色彩 / 字号 / 间距 / 圆角 / 层级 / 动效 / 组件 | 改 token、组件规则或视觉方向时，与 `.impeccable/design.json` 同批更新 |
 | `.impeccable/design.json` | `DESIGN.md` 的结构化伴随视图（impeccable 工具消费） | 与 `DESIGN.md` 一一对应，同上 |
-| `docs/adr/` | 架构决策记录，当前 `0001` ~ `0036` | 满足「新开 ADR 触发条件」时追加；编号连续，旧档不删 |
+| `docs/adr/` | 架构决策记录，当前 `0001` ~ `0037` | 满足「新开 ADR 触发条件」时追加；编号连续，旧档不删 |
 | `docs/PACKAGING.md` | 打包 / 分发 / 构建环境 / 三平台图标 / macOS 签名 | 改构建命令、工具链、Tauri 权限声明、图标流程、发布或签名策略 |
 | `docs/PIXIV-API.md` | pixiv 接口契约事实源（端点 / 参数 / 分页 / 实现与测试映射 / 维护矩阵） | 任何 pixiv 端点、参数、响应解析、分页语义变化时，与代码、`src-tauri/tests/pixiv_api/` 同批更新 |
 | `docs/research/` | 外部接口调研证据档案（pixiv 只读浏览 API 等） | 补充新的抓包 / 实测证据；契约或分页语义变化改 `docs/PIXIV-API.md` 并回填勘误 |
@@ -71,9 +71,9 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 | `PRODUCT.md` | 产品定位、目标用户、范围边界 | 产品定位或用户可见范围变化 |
 | `.scratch/` · `.archive/pywebview-era/` | **非项目文档**：本机 issue tracker / 旧栈归档，被 `.gitignore` 忽略 | 不维护、不索引，换台机器 clone 不到 |
 
-**ADR 速查**：`0008` 是现行架构基座（Tauri 2 全量重构），`0009` / `0010` / `0011` / `0012` / `0013` / `0014` / `0015` / `0016` / `0017` / `0018` / `0020` / `0021` / `0022` / `0023` / `0024` / `0025` / `0026` / `0027` / `0028` / `0029` / `0030` / `0031` / `0032` / `0033` / `0034` / `0035` / `0036` 是最新决策（webview 登录回退 / 多账号 / 登录窗未登录态 / 浏览模式 / 移除内嵌浏览器 / 浏览访问历史持久化 / 核心导航与非模态下载工作区 / 应用内更新下载与安装引导 / 小说单页两轮翻译与共享设定集（已由 0035 取代） / 翻译目标语言与语言一致快速返回 / 翻译三协议支持 / opencode 网关会话标识头 / 浏览模式发表评论与回复 / 翻译单请求超时可配置 / 翻译设定集冲突保留既有值 / 翻译生成请求改用流式 / 浏览模式发表官方表情 / 缓存与日志维护及脱敏诊断 / 图片缓存上限可配置与分区淘汰 / 翻译实时进度事件流与后台续跑 / 翻译浮窗流式展示思考过程与 token 用量 / 多小说并行后台翻译与底栏任务选择 / 思考参数按协议归一化 / 输出上限分档与默认思考 / Rig 通用 Agent 内核与 Rust 1.99.1 工具链 / 整篇小说 Agent 翻译 / 翻译运行层窗口防护与任务续跑）。`0001` / `0004` / `0005` 描述的是已废弃的 pywebview 旧栈，读其结论、不读其实现。
+**ADR 速查**：`0008` 是现行架构基座（Tauri 2 全量重构），`0009` / `0010` / `0011` / `0012` / `0013` / `0014` / `0015` / `0016` / `0017` / `0018` / `0020` / `0021` / `0022` / `0023` / `0024` / `0025` / `0026` / `0027` / `0028` / `0029` / `0030` / `0031` / `0032` / `0033` / `0034` / `0035` / `0036` / `0037` 是最新决策（webview 登录回退 / 多账号 / 登录窗未登录态 / 浏览模式 / 移除内嵌浏览器 / 浏览访问历史持久化 / 核心导航与非模态下载工作区 / 应用内更新下载与安装引导 / 小说单页两轮翻译与共享设定集（已由 0035 取代） / 翻译目标语言与语言一致快速返回 / 翻译三协议支持 / opencode 网关会话标识头 / 浏览模式发表评论与回复 / 翻译单请求超时可配置 / 翻译设定集冲突保留既有值 / 翻译生成请求改用流式 / 浏览模式发表官方表情 / 缓存与日志维护及脱敏诊断 / 图片缓存上限可配置与分区淘汰 / 翻译实时进度事件流与后台续跑 / 翻译浮窗流式展示思考过程与 token 用量 / 多小说并行后台翻译与底栏任务选择 / 思考参数按协议归一化 / 输出上限分档与默认思考 / Rig 通用 Agent 内核与 Rust 1.99.1 工具链 / 整篇小说 Agent 翻译 / 翻译运行层窗口防护与任务续跑 / 翻译预览的归属、尾窗与稳定展示）。`0001` / `0004` / `0005` 描述的是已废弃的 pywebview 旧栈，读其结论、不读其实现。
 
-**开工顺序**：任何改动先读 `docs/SPEC.md`；改前端加读 `DESIGN.md`；改打包加读 `docs/PACKAGING.md`；改浏览 / 接口层加读 `docs/PIXIV-API.md`；改浏览模式加读 `docs/research/pixiv-browse-api.md` + ADR 0012；改 Agent 运行层或整篇翻译加读 ADR 0034 / 0035 / 0036；本次 ticket 在 `.scratch/pixiv-tool-v1/issues/<NN>-<slug>.md`。
+**开工顺序**：任何改动先读 `docs/SPEC.md`；改前端加读 `DESIGN.md`；改打包加读 `docs/PACKAGING.md`；改浏览 / 接口层加读 `docs/PIXIV-API.md`；改浏览模式加读 `docs/research/pixiv-browse-api.md` + ADR 0012；改 Agent 运行层或整篇翻译加读 ADR 0034 / 0035 / 0036 / 0037；本次 ticket 在 `.scratch/pixiv-tool-v1/issues/<NN>-<slug>.md`。
 
 ---
 
@@ -93,7 +93,8 @@ ADR `0017` 的单页两轮与共享设定集文件布局已被取代（旧档保
 （`docs/adr/0027-storage-maintenance-diagnostics.md`）；图片缓存上限可配置与
 三档分区淘汰见 ADR `0028`（`docs/adr/0028-image-cache-limit-and-partitioned-eviction.md`）；
 v1 单页翻译的实时进度事件流（progress Channel JSON 事件）与后台续跑见 ADR `0029`
-（`docs/adr/0029-translation-progress-events.md`）；整篇 Job 的事件契约见 ADR `0035`。
+（`docs/adr/0029-translation-progress-events.md`）；整篇 Job 的事件契约见 ADR `0035`，
+预览归属与稳定展示见 ADR `0037`。
 翻译浮窗流式展示思考过程与 token 用量（`stream_options` 注入与高级 JSON 覆盖）见 ADR `0030`
 （`docs/adr/0030-translation-stream-preview-and-usage.md`）；多小说并行后台翻译
 （锁粒度降为按小说 + 缓存清理读写门）与底部状态栏多任务选择菜单见 ADR `0031`
@@ -104,7 +105,9 @@ v1 单页翻译的实时进度事件流（progress Channel JSON 事件）与后�
 分档（16k/32k/64k）与默认开启思考见 ADR `0033`
 （`docs/adr/0033-translation-dynamic-output-cap-and-default-thinking.md`）。
 翻译运行层单轮工具结果预算、紧急截断与任务续跑见 ADR `0036`
-（`docs/adr/0036-translation-runtime-guard-and-continuation.md`）。
+（`docs/adr/0036-translation-runtime-guard-and-continuation.md`）。翻译预览的归属
+（主会话 / 翻译 / 审查 + 块）、240 字符尾窗与并发子任务的稳定展示见 ADR `0037`
+（`docs/adr/0037-translation-preview-ownership-and-stability.md`）。
 Vite 6.4.3+ 与当时 Rust 1.88 最低版本见 ADR `0019`
 （`docs/adr/0019-security-patched-toolchain.md`）；现行 Rust 1.99.1 基线、
 Rig 0.45 与自定义 wreq 传输见 ADR `0034`
