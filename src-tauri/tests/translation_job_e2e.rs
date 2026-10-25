@@ -2419,6 +2419,9 @@ async fn main_run_continuation_completes_after_idle_end() {
     let fixture = fixture("continuation");
     let main_calls = Arc::new(AtomicUsize::new(0));
     let counter = main_calls.clone();
+    // 收集续跑轮的请求体，断言运行层注入了明确的下一步指令。
+    let continuation_bodies = Arc::new(Mutex::new(Vec::<String>::new()));
+    let seen = continuation_bodies.clone();
     let handler: Handler = Arc::new(move |body: &Value| {
         if body["tools"]
             .as_array()
@@ -2430,6 +2433,9 @@ async fn main_run_continuation_completes_after_idle_end() {
                 if n == 2 {
                     // 第一轮运行里模型输出纯文本收工（不再调用工具）。
                     return text_stream("当前阶段已准备完毕，本轮先汇报到这里。");
+                }
+                if n >= 3 {
+                    seen.lock().unwrap().push(body.to_string());
                 }
             }
         }
@@ -2470,6 +2476,16 @@ async fn main_run_continuation_completes_after_idle_end() {
         runs.len() >= 2,
         "应至少两次主运行记录，实际 {}：{runs:?}",
         runs.len()
+    );
+
+    let bodies = continuation_bodies.lock().unwrap().join("\n");
+    assert!(
+        bodies.contains("续跑指令"),
+        "续跑轮应收到运行层生成的明确指令：{bodies}"
+    );
+    assert!(
+        bodies.contains("必须包含工具调用"),
+        "续跑指令应禁止只输出文本：{bodies}"
     );
 }
 

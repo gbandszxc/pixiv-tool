@@ -2044,10 +2044,12 @@ impl TranslationService {
                             ("idle", &idle_runs.to_string()),
                         ],
                     );
-                    // 续跑提示复用主提示：它按 manifest 重建当前阶段与检查点状态，
-                    // 模型据此从检查点继续而不重复已完成的工作。
+                    // 续跑提示直接给出磁盘产物推导出的下一步动作。单纯重放主提示
+                    // 会让模型重复「只读状态、不写产物」的空转模式。
                     carried = run_outcome.history;
-                    carried.push(Arc::new(rig_core::message::Message::user(main_prompt(ctx))));
+                    carried.push(Arc::new(rig_core::message::Message::user(
+                        continuation_nudge(ctx),
+                    )));
                 }
                 Err(error) => break Err(error),
             }
@@ -2583,6 +2585,66 @@ fn language_code(language: legacy::SourceLanguage) -> &'static str {
 }
 
 /// 主 Agent 的用户提示：只含 Job 摘要（页 / 块计数、语言、阶段、产物摘要）。
+/// 续跑提示：上一轮正常结束但完成校验未通过时注入。运行层直接给出磁盘产物
+/// 推导出的下一步动作，避免模型重复「只读状态、不写产物」的空转模式。
+fn continuation_nudge(ctx: &JobContext) -> String {
+    let pending = tools::pending_state(ctx);
+    let phase = ctx
+        .read_manifest()
+        .map(|manifest| manifest.phase.as_str().to_string())
+        .unwrap_or_else(|_| "prepare_source".into());
+    let mut lines = vec![
+        format!(
+            "续跑指令（运行层生成，优先于此前所有说明）：任务停在「{phase}」阶段，\
+             上一轮回复没有产生任何新的磁盘产物。"
+        ),
+        "只输出计划、总结或扫描/译文正文都不算完成，本轮回复必须包含工具调用；\
+         下面的待办清单直接取自磁盘产物，不要再调用 job_status。"
+            .to_string(),
+    ];
+    let brief = |ids: &[String]| {
+        const LIMIT: usize = 24;
+        if ids.len() > LIMIT {
+            format!("{} 等 {} 个块", ids[..LIMIT].join("、"), ids.len())
+        } else {
+            format!("{}（共 {} 个）", ids.join("、"), ids.len())
+        }
+    };
+    if pending.chunk_ids.is_empty() {
+        lines.push(
+            "下一步：调用 prepare_source() 建立分块计划；返回数量为 0 时上报需要人工处理。"
+                .into(),
+        );
+    } else if !pending.pending_scan.is_empty() {
+        lines.push(format!(
+            "下一步：对未扫描块 {} 逐个调用 read_chunk(chunk_id, true)，单轮最多 2 个；\
+             每读完一块立刻调用 submit_scan(chunk_id, terms, style, notes, confidence)，\
+             terms 每项至少含 source_term 与 locked_translation。",
+            brief(&pending.pending_scan)
+        ));
+    } else if !pending.constraints_frozen {
+        lines.push("下一步：全部块已扫描，立即调用 freeze_constraints() 生成冻结版本。".into());
+    } else if !pending.pending_translate.is_empty() {
+        lines.push(format!(
+            "下一步：调用 dispatch_translation([...]) 派发未译块 {}，按并发与预算分批。",
+            brief(&pending.pending_translate)
+        ));
+    } else if !pending.pending_review.is_empty() {
+        lines.push(format!(
+            "下一步：调用 dispatch_review([...]) 派发未审块 {}。",
+            brief(&pending.pending_review)
+        ));
+    } else if !pending.published {
+        lines.push(
+            "下一步：调用 merge_drafts() 核对覆盖与顺序，然后 record_global_review(...) 与 publish()。"
+                .into(),
+        );
+    } else {
+        lines.push("全部产物已落盘，等待运行层校验；如仍有未决项，按错误码处理对应阶段。".into());
+    }
+    lines.join("\n")
+}
+
 fn main_prompt(ctx: &JobContext) -> String {
     let manifest = ctx
         .read_manifest()
@@ -2611,7 +2673,9 @@ fn main_prompt(ctx: &JobContext) -> String {
          约束：{}\n\
          检查点：已译 {}/{}，已审 {}/{}；可用分块 {} 个\n\
          {}\n\
-         请先调用 job_status 读取当前状态与待办块，再从检查点继续；不要重复已完成的工作，也不要把原文读回上下文。",
+         请先调用 job_status 读取当前状态与待办块，再从检查点继续；不要重复已完成的工作，也不要把原文读回上下文。\n\
+         推进靠工具调用：在任务完成或需要人工介入之前，每次回复都必须发起工具调用；\
+         计划、总结或扫描/译文正文写在普通文本里不会落盘，也不算完成。",
         manifest.counts.pages,
         chunks.len(),
         ctx.target_language,

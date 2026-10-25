@@ -307,6 +307,9 @@ struct CompactionCache {
     original_len: usize,
 }
 
+/// 末次模型调用时的（历史投影, prompt）快照。
+type LastModelContext = Mutex<Option<(Vec<Arc<Message>>, Arc<Message>)>>;
+
 struct RunState {
     scope: JobScope,
     role: Role,
@@ -339,7 +342,7 @@ struct RunState {
     turn_result_tokens: AtomicU32,
     result_estimator: Option<Arc<dyn ToolResultEstimator>>,
     /// 末次模型调用时的（历史, prompt）快照；run 成功后据此组装带回历史。
-    last_context: Mutex<Option<(Vec<Arc<Message>>, Arc<Message>)>>,
+    last_context: LastModelContext,
 }
 
 impl RunState {
@@ -991,8 +994,6 @@ pub async fn run(req: RunRequest, cancel: CancelToken) -> Result<RunOutcome, Run
             }
         }
     }
-    drop(stream);
-
     if let Some(Err(error)) = outcome {
         return finish_error(&state, error);
     }
@@ -1053,6 +1054,8 @@ pub async fn run(req: RunRequest, cancel: CancelToken) -> Result<RunOutcome, Run
             ("tool_calls", &outcome.tool_calls.to_string()),
             ("input", &outcome.usage.input.to_string()),
             ("output", &outcome.usage.output.to_string()),
+            // 空转诊断：没有工具调用却产出长文本，通常是模型把结果写进了回答。
+            ("final_chars", &final_text.chars().count().to_string()),
             (
                 "elapsed_ms",
                 &state.started.elapsed().as_millis().to_string(),

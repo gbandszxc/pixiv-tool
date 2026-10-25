@@ -781,12 +781,26 @@ fn submit_scan_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
     let ctx = ctx.clone();
     DynamicTool::new(
         tool_name("submit_scan"),
-        "提交单块扫描结果（术语、风格、说明与置信度）；同块重复提交为幂等替换。",
+        "提交单块扫描结果（术语、风格、说明与置信度）；同块重复提交为幂等替换。\
+         扫描结果必须通过本工具写入，写在普通回复里不算完成。",
         json!({
             "type": "object",
             "properties": {
                 "chunk_id": {"type": "string"},
-                "terms": {"type": "array", "items": {"type": "object"}},
+                "terms": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source_term": {"type": "string"},
+                            "locked_translation": {"type": "string"},
+                            "term_type": {"type": "string"},
+                            "aliases": {"type": "array", "items": {"type": "string"}},
+                            "notes": {"type": "string"}
+                        },
+                        "required": ["source_term", "locked_translation"]
+                    }
+                },
                 "style": {},
                 "notes": {"type": "string"},
                 "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
@@ -2229,6 +2243,65 @@ fn reset_phase_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
     )
 }
 
+/// 磁盘产物推导出的待办清单。`job_status` 与续跑提示共用同一套判定，
+/// 避免模型在续跑时凭历史回忆猜测剩余工作。
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PendingState {
+    pub chunk_ids: Vec<String>,
+    pub pending_scan: Vec<String>,
+    pub pending_translate: Vec<String>,
+    pub pending_review: Vec<String>,
+    pub constraints_frozen: bool,
+    pub published: bool,
+}
+
+pub(crate) fn pending_state(ctx: &JobContext) -> PendingState {
+    let versions = phase_versions(ctx);
+    let chunks = plan_chunks(ctx).unwrap_or_default();
+    let mut state = PendingState {
+        chunk_ids: chunks.iter().map(|chunk| chunk.id.clone()).collect(),
+        ..PendingState::default()
+    };
+    for chunk in &chunks {
+        if read_scan_for_progress(ctx, &chunk.id).is_none() {
+            state.pending_scan.push(chunk.id.clone());
+        }
+        let draft = read_draft(ctx, &chunk.id).ok().flatten();
+        let draft_valid = draft.as_ref().is_some_and(|draft| {
+            stamped(ctx, "draft", &chunk.id, versions.translate)
+                && validate_draft_with_language(chunk, draft, Some(&ctx.target_language)).is_ok()
+                && !draft.needs_repair
+        });
+        if !draft_valid {
+            state.pending_translate.push(chunk.id.clone());
+        }
+        let review_valid = read_review(ctx, &chunk.id)
+            .ok()
+            .flatten()
+            .is_some_and(|review| {
+                stamped(ctx, "review", &chunk.id, versions.review)
+                    && draft
+                        .as_ref()
+                        .is_some_and(|draft| review.draft_version == draft.version)
+                    && review.verdict == ReviewVerdict::Pass
+            });
+        if !review_valid {
+            state.pending_review.push(chunk.id.clone());
+        }
+    }
+    state.constraints_frozen = ctx.with_artifacts(|artifacts| {
+        artifacts
+            .read_constraints()
+            .ok()
+            .flatten()
+            .is_some_and(|constraints| constraints.frozen)
+    });
+    state.published = ctx.with_artifacts(|artifacts| {
+        artifacts.read_result().ok().flatten().is_some()
+    });
+    state
+}
+
 fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
     let ctx = ctx.clone();
     DynamicTool::new(
@@ -2241,48 +2314,13 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                 let manifest = ctx
                     .read_manifest()
                     .map_err(|error| tool_error("storage", &error))?;
-                let versions = phase_versions(&ctx);
                 let chunks = plan_chunks(&ctx).unwrap_or_default();
-                let mut pending_scan = Vec::new();
-                let mut pending_translate = Vec::new();
-                let mut pending_review = Vec::new();
-                for chunk in &chunks {
-                    let scan_valid = read_scan(&ctx, &chunk.id)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|_| stamped(&ctx, "scan", &chunk.id, versions.prepare_constraints));
-                    if !scan_valid {
-                        pending_scan.push(chunk.id.clone());
-                    }
-                    let draft = read_draft(&ctx, &chunk.id).ok().flatten();
-                    let draft_valid = draft.as_ref().is_some_and(|draft| {
-                        stamped(&ctx, "draft", &chunk.id, versions.translate)
-                            && validate_draft_with_language(
-                                chunk,
-                                draft,
-                                Some(&ctx.target_language),
-                            )
-                            .is_ok()
-                            && !draft.needs_repair
-                    });
-                    if !draft_valid {
-                        pending_translate.push(chunk.id.clone());
-                    }
-                    let review_valid =
-                        read_review(&ctx, &chunk.id)
-                            .ok()
-                            .flatten()
-                            .is_some_and(|review| {
-                                stamped(&ctx, "review", &chunk.id, versions.review)
-                                    && draft
-                                        .as_ref()
-                                        .is_some_and(|draft| review.draft_version == draft.version)
-                                    && review.verdict == ReviewVerdict::Pass
-                            });
-                    if !review_valid {
-                        pending_review.push(chunk.id.clone());
-                    }
-                }
+                let PendingState {
+                    pending_scan,
+                    pending_translate,
+                    pending_review,
+                    ..
+                } = pending_state(&ctx);
                 let budget = ctx.budget.snapshot();
                 tool_result(json!({
                     "job_id": ctx.scope.job_id,
