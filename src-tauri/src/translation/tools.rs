@@ -32,7 +32,7 @@ use crate::{
     agent::{
         CancelToken, CurrentWork, FailureClass, Phase, Role, RunError, RunRequest, TokenUsage,
         budget::{TOOL_RESULT_TOKEN_LIMIT, estimate_tokens, truncate_to_tokens},
-        events::{safe_text, warn_job},
+        events::{log_job, safe_text, warn_job},
         recovery::{RetryPolicy, backoff},
         resources::{load_resource, role_prompt, system_prompt},
         runtime,
@@ -1173,77 +1173,13 @@ async fn dispatch_impl(
         }
     }
     let versions = phase_versions(ctx);
-
-    // 返工轮次：仅在存在待修块时计一轮，达到上限即拒绝继续重译。
-    if kind == DispatchKind::Translate {
-        let targets = rework_targets(ctx, &versions, &ids)?;
-        if !targets.is_empty() {
-            let limit = ctx.settings.translation_agent_rework_rounds.clamp(0, 5) as u32;
-            if ctx.control.rework_rounds() >= limit {
-                return Err(tool_error_with(
-                    "rework_limit",
-                    "返工轮次已用尽，请按未解决项上报需要处理",
-                    json!({"affected": targets}),
-                ));
-            }
-            ctx.control.bump_rework();
-        }
-    }
-
-    // 逐块决定是否需要请求模型（已完成且有效的块直接复用）。
-    let mut planned: Vec<String> = Vec::new();
-    let mut outcomes: Vec<ChunkOutcome> = Vec::new();
-    for id in ids {
-        let chunk = match read_chunk(ctx, &id).map_err(|error| tool_error("storage", &error))? {
-            Some(chunk) => chunk,
-            None => {
-                outcomes.push(ChunkOutcome::failed(&id, "failed", "分块缺失"));
-                continue;
-            }
-        };
-        let draft = read_draft(ctx, &id).map_err(|error| tool_error("storage", &error))?;
-        let review = read_review(ctx, &id).map_err(|error| tool_error("storage", &error))?;
-        let draft_valid = draft.as_ref().is_some_and(|draft| {
-            stamped(ctx, "draft", &id, versions.translate)
-                && validate_draft_with_language(&chunk, draft, Some(&ctx.target_language)).is_ok()
-        });
-        let review_valid = review.as_ref().is_some_and(|review| {
-            stamped(ctx, "review", &id, versions.review)
-                && draft
-                    .as_ref()
-                    .is_some_and(|draft| review.draft_version == draft.version)
-        });
-        match kind {
-            DispatchKind::Translate => {
-                let needs = !draft_valid
-                    || draft.as_ref().is_some_and(|draft| draft.needs_repair)
-                    || (review_valid
-                        && review
-                            .as_ref()
-                            .is_some_and(|review| review.verdict == ReviewVerdict::NeedsFix));
-                if needs {
-                    planned.push(id);
-                } else {
-                    outcomes.push(ChunkOutcome::ok(
-                        &id,
-                        draft
-                            .as_ref()
-                            .map(|draft| agent_usage(draft.usage))
-                            .unwrap_or_default(),
-                        0,
-                        true,
-                    ));
-                }
-            }
-            DispatchKind::Review => {
-                if review_valid {
-                    outcomes.push(ChunkOutcome::ok(&id, TokenUsage::default(), 0, true));
-                } else {
-                    planned.push(id);
-                }
-            }
-        }
-    }
+    let DispatchPlan {
+        planned,
+        mut outcomes,
+        rework_used,
+        rework_cap,
+        rework_exhausted,
+    } = plan_dispatch(ctx, kind, ids, &versions)?;
     if !planned.is_empty() {
         let gate = ctx.dispatch_gate.clone();
         let futures: Vec<_> = planned
@@ -1273,6 +1209,38 @@ async fn dispatch_impl(
         }
     }
     outcomes.sort_by(|left, right| left.chunk_id.cmp(&right.chunk_id));
+    // 只记录块 ID / 计数 / 预算，不含原文、译文。
+    let affected: Vec<String> = outcomes
+        .iter()
+        .filter(|outcome| !outcome.reused)
+        .map(|outcome| outcome.chunk_id.clone())
+        .collect();
+    let affected_text = affected.join(",");
+    let budget = ctx.budget.snapshot();
+    let budget_used = budget.used.to_string();
+    let budget_limit = budget.limit.to_string();
+    let rework_detail = rework_used
+        .iter()
+        .map(|id| format!("{id}={}/{}", ctx.control.rework_rounds(id), rework_cap))
+        .collect::<Vec<_>>()
+        .join(",");
+    let rework_limit_text = rework_cap.to_string();
+    let rework_exhausted_text = rework_exhausted.join(",");
+    log_job(
+        &ctx.scope,
+        "coordinator",
+        kind.phase(),
+        None,
+        kind.tool_name(),
+        &[
+            ("affected", &affected_text),
+            ("budget_used", &budget_used),
+            ("budget_limit", &budget_limit),
+            ("rework", &rework_detail),
+            ("rework_limit", &rework_limit_text),
+            ("rework_exhausted", &rework_exhausted_text),
+        ],
+    );
     // 只有全局性错误才让整批 fatal。单块结果未知（unknown_outcome）只标记该块，
     // 其余块照常返回——否则一次网络抖动就会让协调者重派整批，反复烧调用预算。
     let fatal = outcomes
@@ -1285,6 +1253,137 @@ async fn dispatch_impl(
         "fatal": fatal,
         "chunks": outcomes,
     }))
+}
+
+/// 一次派发的规划结果（副作用已在规划中落到 `Control` 的按块返工计数上）。
+struct DispatchPlan {
+    /// 真正需要请求模型的块。
+    planned: Vec<String>,
+    /// 无需请求即可直接返回的块（复用 / 缺失 / 返工额度用尽）。
+    outcomes: Vec<ChunkOutcome>,
+    /// 本批消耗了返工额度的块。
+    rework_used: Vec<String>,
+    /// 本批因额度用尽被拒的块。
+    rework_exhausted: Vec<String>,
+    /// 当前每块额度（用于日志与返回）。
+    rework_cap: u32,
+}
+
+#[cfg(test)]
+impl DispatchPlan {
+    fn planned(&self) -> &[String] {
+        &self.planned
+    }
+
+    fn rework_used(&self) -> &[String] {
+        &self.rework_used
+    }
+
+    fn rework_exhausted(&self) -> &[String] {
+        &self.rework_exhausted
+    }
+
+    /// 某块在本次规划中的直接结果状态（未出现在 `outcomes` 中返回 `None`）。
+    fn outcome_status(&self, chunk_id: &str) -> Option<&'static str> {
+        self.outcomes
+            .iter()
+            .find(|outcome| outcome.chunk_id == chunk_id)
+            .map(|outcome| outcome.status)
+    }
+}
+
+/// 逐块规划「是否派发 / 是否消耗返工额度」。
+///
+/// 返工轮次按块计费：只有「本身就需要返工」的块消耗额度，首次翻译与
+/// `revise_draft` 都不消耗。单块额度用尽只让该块返回 `rework_limit`，
+/// 不影响同批其他块；也不会升级为 fatal（fatal 只由 permanent /
+/// `budget_exhausted` 触发）。
+fn plan_dispatch(
+    ctx: &JobContext,
+    kind: DispatchKind,
+    ids: Vec<String>,
+    versions: &PhaseVersions,
+) -> Result<DispatchPlan, ToolExecutionError> {
+    let rework_cap = rework_limit(ctx);
+    let rework_set: BTreeSet<String> = if kind == DispatchKind::Translate {
+        rework_targets(ctx, versions, &ids)?.into_iter().collect()
+    } else {
+        BTreeSet::new()
+    };
+    let mut plan = DispatchPlan {
+        planned: Vec::new(),
+        outcomes: Vec::new(),
+        rework_used: Vec::new(),
+        rework_exhausted: Vec::new(),
+        rework_cap,
+    };
+    for id in ids {
+        let chunk = match read_chunk(ctx, &id).map_err(|error| tool_error("storage", &error))? {
+            Some(chunk) => chunk,
+            None => {
+                plan.outcomes
+                    .push(ChunkOutcome::failed(&id, "failed", "分块缺失"));
+                continue;
+            }
+        };
+        let draft = read_draft(ctx, &id).map_err(|error| tool_error("storage", &error))?;
+        let review = read_review(ctx, &id).map_err(|error| tool_error("storage", &error))?;
+        let draft_valid = draft.as_ref().is_some_and(|draft| {
+            stamped(ctx, "draft", &id, versions.translate)
+                && validate_draft_with_language(&chunk, draft, Some(&ctx.target_language)).is_ok()
+        });
+        let review_valid = review.as_ref().is_some_and(|review| {
+            stamped(ctx, "review", &id, versions.review)
+                && draft
+                    .as_ref()
+                    .is_some_and(|draft| review.draft_version == draft.version)
+        });
+        match kind {
+            DispatchKind::Translate => {
+                let needs = !draft_valid
+                    || draft.as_ref().is_some_and(|draft| draft.needs_repair)
+                    || (review_valid
+                        && review
+                            .as_ref()
+                            .is_some_and(|review| review.verdict == ReviewVerdict::NeedsFix));
+                if !needs {
+                    plan.outcomes.push(ChunkOutcome::ok(
+                        &id,
+                        draft
+                            .as_ref()
+                            .map(|draft| agent_usage(draft.usage))
+                            .unwrap_or_default(),
+                        0,
+                        true,
+                    ));
+                    continue;
+                }
+                let is_rework = rework_set.contains(&id);
+                if is_rework && !ctx.control.try_reserve_rework(&id, rework_cap) {
+                    plan.rework_exhausted.push(id.clone());
+                    plan.outcomes.push(ChunkOutcome::failed(
+                        &id,
+                        "rework_limit",
+                        "该块返工轮次已用尽，可手动继续任务后重试",
+                    ));
+                    continue;
+                }
+                if is_rework {
+                    plan.rework_used.push(id.clone());
+                }
+                plan.planned.push(id);
+            }
+            DispatchKind::Review => {
+                if review_valid {
+                    plan.outcomes
+                        .push(ChunkOutcome::ok(&id, TokenUsage::default(), 0, true));
+                } else {
+                    plan.planned.push(id);
+                }
+            }
+        }
+    }
+    Ok(plan)
 }
 
 /// 单块完成度判定：`pending_state` / `compute_counts` / `rework_targets` / `job_status`
@@ -1370,6 +1469,13 @@ fn rework_targets(
         }
     }
     Ok(targets)
+}
+
+/// 每块允许的返工轮次（设置值，钳制到 0~5）。
+///
+/// 派发检查、`job_status` 与收尾判据共用同一口径，避免三处对「额度是多少」不一致。
+pub(crate) fn rework_limit(ctx: &JobContext) -> u32 {
+    ctx.settings.translation_agent_rework_rounds.clamp(0, 5) as u32
 }
 
 /// 处理单个块：重试、缩块、取消与暂停。
@@ -2010,7 +2116,9 @@ fn read_review_summary_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                     _ => plan_ids(&ctx).map_err(|error| tool_error("not_prepared", &error))?,
                 };
                 let (mut critical, mut major, mut minor) = (0u32, 0u32, 0u32);
+                let (mut verdict_pass, mut verdict_needs_fix) = (0u32, 0u32);
                 let mut affected = Vec::new();
+                let mut unresolved = Vec::new();
                 let mut per_chunk = Vec::new();
                 for id in &ids {
                     let review =
@@ -2025,8 +2133,20 @@ fn read_review_summary_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                                     Severity::Minor => minor += 1,
                                 }
                             }
-                            if review.verdict == ReviewVerdict::NeedsFix {
-                                affected.push(id.clone());
+                            match review.verdict {
+                                ReviewVerdict::Pass => verdict_pass += 1,
+                                ReviewVerdict::NeedsFix => {
+                                    verdict_needs_fix += 1;
+                                    affected.push(id.clone());
+                                }
+                            }
+                            // 与 `chunk_gate` 同口径：needs_fix 或存在 blocking
+                            // （critical / major）才算未解决；pass 携带的 minor
+                            // 只展示，不计入未解决。
+                            if review.verdict == ReviewVerdict::NeedsFix
+                                || review.issues.iter().any(Issue::is_blocking)
+                            {
+                                unresolved.push(id.clone());
                             }
                             per_chunk.push(json!({
                                 "chunk_id": id,
@@ -2041,6 +2161,22 @@ fn read_review_summary_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                         }
                     }
                 }
+                let unresolved_text = unresolved.join(",");
+                log_job(
+                    &ctx.scope,
+                    "coordinator",
+                    Phase::Review,
+                    None,
+                    "review_summary",
+                    &[
+                        ("verdict_pass", &verdict_pass.to_string()),
+                        ("verdict_needs_fix", &verdict_needs_fix.to_string()),
+                        ("critical", &critical.to_string()),
+                        ("major", &major.to_string()),
+                        ("minor", &minor.to_string()),
+                        ("unresolved", &unresolved_text),
+                    ],
+                );
                 tool_result(json!({
                     "total": critical + major + minor,
                     "critical": critical,
@@ -2434,8 +2570,10 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                     "pending_rework": pending_rework,
                     "pending_review": pending_review,
                     "awaiting_confirmation": ctx.control.awaiting_confirmation(),
-                    "rework_rounds": ctx.control.rework_rounds(),
-                    "rework_limit": ctx.settings.translation_agent_rework_rounds,
+                    "rework_by_chunk": ctx.control.rework_map(),
+                    "rework_limit": rework_limit(&ctx),
+                    // 兼容旧前端：所有块已用轮次的最大值。
+                    "rework_rounds": ctx.control.max_rework_rounds(),
                     "split_depth": ctx.settings.translation_agent_split_depth,
                 }))
             })
@@ -2947,7 +3085,8 @@ fn submit_review_tool(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> Dynam
 
 /// 依据产物重新计算计数（不含预算）。
 pub fn compute_counts(ctx: &JobContext) -> crate::agent::JobCounts {
-    let chunks = plan_chunks(ctx).unwrap_or_default();
+    let plan = plan_chunks(ctx);
+    let chunks = plan.clone().unwrap_or_default();
     let versions = phase_versions(ctx);
     let mut translated = 0u32;
     let mut reviewed = 0u32;
@@ -2969,13 +3108,23 @@ pub fn compute_counts(ctx: &JobContext) -> crate::agent::JobCounts {
         .flatten()
         .map(|constraints| constraints.terms.len() as u32)
         .unwrap_or(0);
-    let pages = ctx
-        .read_manifest()
-        .map(|manifest| manifest.counts.pages)
-        .unwrap_or(0);
+    let manifest = ctx.read_manifest().ok();
+    let (pages, chunk_count) = match &manifest {
+        Some(manifest) => (
+            manifest.counts.pages,
+            // 计划尚未落盘时保留启动时的估算块数，避免状态切换把计数清成 0。
+            plan.as_ref()
+                .map(|chunks| chunks.len() as u32)
+                .unwrap_or(manifest.counts.chunks),
+        ),
+        None => (
+            0,
+            plan.as_ref().map(|chunks| chunks.len() as u32).unwrap_or(0),
+        ),
+    };
     crate::agent::JobCounts {
         pages,
-        chunks: chunks.len() as u32,
+        chunks: chunk_count,
         translated,
         reviewed,
         needs_repair,
@@ -3001,6 +3150,49 @@ pub fn merge_report(ctx: &JobContext) -> Option<MergeReport> {
 /// 供测试 / 诊断读取全部块 ID。
 pub fn all_chunk_ids(ctx: &JobContext) -> Vec<String> {
     list_chunks(ctx).unwrap_or_default()
+}
+
+/// 测试夹具：写入分块计划、扫描记录、草稿与审查结论，并打上当前阶段版本戳。
+///
+/// 只给单测用；`None` 表示该阶段产物缺失。
+#[cfg(test)]
+pub(crate) fn seed_for_tests(ctx: &JobContext, entries: &[(Chunk, Option<Draft>, Option<Review>)]) {
+    let versions = phase_versions(ctx);
+    let mut plan = ChunkPlan {
+        version: versions.prepare_source,
+        entries: Vec::with_capacity(entries.len()),
+    };
+    for (index, (chunk, draft, review)) in entries.iter().enumerate() {
+        write_chunk(ctx, chunk).expect("写入分块");
+        plan.entries.push(PlanEntry {
+            id: chunk.id.clone(),
+            order: index as u32 + 1,
+            parent: None,
+            depth: 0,
+        });
+        // 默认写入扫描记录：完成判据先检查扫描阶段，缺扫描会让后续阶段无法定位。
+        write_scan(
+            ctx,
+            &ScanNote {
+                chunk_id: chunk.id.clone(),
+                terms: Vec::new(),
+                style: String::new(),
+                notes: String::new(),
+                confidence: Confidence::High,
+            },
+        )
+        .expect("写入扫描记录");
+        stamp(ctx, "scan", &chunk.id, versions.prepare_constraints);
+        if let Some(draft) = draft {
+            write_draft(ctx, draft).expect("写入草稿");
+            stamp(ctx, "draft", &chunk.id, versions.translate);
+        }
+        if let Some(review) = review {
+            write_review(ctx, review).expect("写入审查");
+            stamp(ctx, "review", &chunk.id, versions.review);
+        }
+    }
+    write_plan(ctx, &plan).expect("写入分块计划");
 }
 
 /// 完成判据用：读单块草稿（只按计划内的块判定）。
@@ -3435,5 +3627,128 @@ mod tests {
             Some("zh-CN"),
         );
         assert!(gate.draft_valid && !gate.needs_rework && !gate.review_pass);
+    }
+
+    /// 两块的夹具：`c0001` 需返工（needs_fix），`c0002` 是首次翻译（无草稿）。
+    fn rework_fixture(
+        tag: &str,
+        rework_limit: i64,
+    ) -> (std::sync::Arc<JobContext>, std::path::PathBuf) {
+        let (ctx, dir) = empty_fixture(tag, rework_limit);
+        let fresh_chunk = Chunk {
+            id: "c0002".into(),
+            order: 2,
+            segments: vec![SourceSegment {
+                id: "p002-l000-s0".into(),
+                text: "さようなら".into(),
+                kind: SegmentKind::Text,
+            }],
+            prev_context: String::new(),
+            next_context: String::new(),
+            chars: 5,
+        };
+        seed_for_tests(
+            &ctx,
+            &[
+                (
+                    gate_chunk(),
+                    Some(gate_draft(1, false)),
+                    Some(gate_review(1, ReviewVerdict::NeedsFix)),
+                ),
+                (fresh_chunk, None, None),
+            ],
+        );
+        (ctx, dir)
+    }
+
+    /// 空 Job 夹具：只有目录与设置，产物由测试自己写入。
+    fn empty_fixture(
+        tag: &str,
+        rework_limit: i64,
+    ) -> (std::sync::Arc<JobContext>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("pixiv-tools-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = crate::paths::AppPaths {
+            data_dir: dir.clone(),
+            config_dir: dir.join("config"),
+            logs_dir: dir.join("logs"),
+        };
+        let settings = crate::settings::Settings {
+            translation_api_url: "http://127.0.0.1:9/v1".into(),
+            translation_model: "mock".into(),
+            translation_target_language: "zh-CN".into(),
+            translation_agent_rework_rounds: rework_limit,
+            ..crate::settings::Settings::default()
+        };
+        let scope = crate::agent::JobScope {
+            novel_id: 1,
+            job_id: format!("20260101000000-{tag}"),
+            generation: 0,
+        };
+        let generation = crate::agent::CacheGeneration::new(0);
+        let store = std::sync::Arc::new(
+            crate::agent::storage::JobStore::create_guarded(&paths, &scope, generation).unwrap(),
+        );
+        let ctx = crate::translation::service::test_job_context(&paths, &settings, &scope, store);
+        (ctx, dir)
+    }
+
+    #[test]
+    fn rework_quota_is_per_chunk_and_does_not_block_other_chunks() {
+        // 额度 1：c0001 第一次返工可派发，第二次用尽；c0002 是首次翻译，不受限。
+        let (ctx, dir) = rework_fixture("rw-quota", 1);
+        let versions = phase_versions(&ctx);
+
+        let plan = plan_dispatch(
+            &ctx,
+            DispatchKind::Translate,
+            vec!["c0001".into()],
+            &versions,
+        )
+        .expect("规划成功");
+        assert_eq!(plan.planned(), ["c0001".to_string()]);
+        assert_eq!(plan.rework_used(), ["c0001".to_string()]);
+        assert!(plan.rework_exhausted().is_empty());
+        assert_eq!(ctx.control.rework_rounds("c0001"), 1);
+
+        let plan = plan_dispatch(
+            &ctx,
+            DispatchKind::Translate,
+            vec!["c0001".into()],
+            &versions,
+        )
+        .expect("规划成功");
+        assert!(plan.planned().is_empty(), "额度用尽不再请求模型");
+        assert_eq!(plan.rework_exhausted(), ["c0001".to_string()]);
+        assert_eq!(plan.outcome_status("c0001"), Some("rework_limit"));
+
+        // 同批 B 块（首次翻译）仍可派发：块级隔离。
+        let plan = plan_dispatch(
+            &ctx,
+            DispatchKind::Translate,
+            vec!["c0001".into(), "c0002".into()],
+            &versions,
+        )
+        .expect("规划成功");
+        assert_eq!(plan.planned(), ["c0002".to_string()]);
+        assert_eq!(plan.rework_exhausted(), ["c0001".to_string()]);
+        assert_eq!(ctx.control.rework_rounds("c0001"), 1, "拒绝时不再记账");
+        assert_eq!(ctx.control.rework_rounds("c0002"), 0, "首次翻译不消耗额度");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn review_dispatch_never_consumes_rework_quota() {
+        // 只有草稿、没有审查结论：审查需要派发，但不消耗返工额度。
+        let (ctx, dir) = empty_fixture("rw-review", 0);
+        seed_for_tests(&ctx, &[(gate_chunk(), Some(gate_draft(1, false)), None)]);
+        let versions = phase_versions(&ctx);
+        let plan = plan_dispatch(&ctx, DispatchKind::Review, vec!["c0001".into()], &versions)
+            .expect("规划成功");
+        assert_eq!(plan.planned(), ["c0001".to_string()]);
+        assert!(plan.rework_used().is_empty());
+        assert!(ctx.control.rework_map().is_empty(), "审查不消耗返工额度");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

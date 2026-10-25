@@ -178,7 +178,9 @@ pub struct Control {
     pause: AtomicBool,
     awaiting_confirmation: AtomicBool,
     confirmed: AtomicBool,
-    rework_rounds: std::sync::atomic::AtomicU32,
+    /// 按块的返工轮次：只统计 `dispatch_translation` 对「待返工块」的派发。
+    /// 首次翻译与 `revise_draft` 不计；用户手动恢复任务时清空。
+    rework_rounds: StdMutex<BTreeMap<String, u32>>,
     reset_notes: StdMutex<Vec<String>>,
     stop: StdMutex<CancelToken>,
     pub cancel: CancelToken,
@@ -247,12 +249,59 @@ impl Control {
         self.confirmed.load(Ordering::SeqCst)
     }
 
-    pub fn bump_rework(&self) -> u32 {
-        self.rework_rounds.fetch_add(1, Ordering::SeqCst) + 1
+    /// 单块返工轮次 +1，返回累计值（允许超过上限，便于诊断）。
+    pub fn bump_rework(&self, chunk_id: &str) -> u32 {
+        let mut rounds = self
+            .rework_rounds
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let used = rounds.entry(chunk_id.to_string()).or_insert(0);
+        *used = used.saturating_add(1);
+        *used
     }
 
-    pub fn rework_rounds(&self) -> u32 {
-        self.rework_rounds.load(Ordering::SeqCst)
+    /// 单块已用返工轮次。
+    pub fn rework_rounds(&self, chunk_id: &str) -> u32 {
+        self.rework_rounds
+            .lock()
+            .map(|rounds| rounds.get(chunk_id).copied().unwrap_or(0))
+            .unwrap_or(0)
+    }
+
+    /// 额度未用尽则记一轮并返回 `true`；已用尽返回 `false`（不记账）。
+    ///
+    /// 派发工具逐块调用本方法：A 块额度用尽只拒绝 A，不影响同批其他块。
+    pub fn try_reserve_rework(&self, chunk_id: &str, limit: u32) -> bool {
+        let mut rounds = self
+            .rework_rounds
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let used = rounds.entry(chunk_id.to_string()).or_insert(0);
+        if *used >= limit {
+            return false;
+        }
+        *used = used.saturating_add(1);
+        true
+    }
+
+    /// 所有块已用轮次的最大值（兼容旧前端的整体字段）。
+    pub fn max_rework_rounds(&self) -> u32 {
+        self.rework_map().values().copied().max().unwrap_or(0)
+    }
+
+    /// 按块返工计数快照。
+    pub fn rework_map(&self) -> BTreeMap<String, u32> {
+        self.rework_rounds
+            .lock()
+            .map(|rounds| rounds.clone())
+            .unwrap_or_default()
+    }
+
+    /// 清空全部块的返工计数（仅用户手动恢复任务时调用）。
+    pub fn clear_rework(&self) {
+        if let Ok(mut rounds) = self.rework_rounds.lock() {
+            rounds.clear();
+        }
     }
 
     pub fn note_reset(&self, phase: Phase, reason: &str) {
@@ -1569,6 +1618,13 @@ impl TranslationService {
             Some(handle) => handle,
             None => self.rehydrate(job_id)?,
         };
+        self.resume_prepare(&handle)?;
+        self.spawn_supervisor(handle);
+        Ok(())
+    }
+
+    /// 恢复校验与状态重置（不含拉起 supervisor），便于单测覆盖控制位口径。
+    fn resume_prepare(&self, handle: &Arc<JobHandle>) -> Result<(), String> {
         let state = handle
             .runtime
             .lock()
@@ -1605,8 +1661,10 @@ impl TranslationService {
         handle.ctx.control.resume();
         // 用户显式恢复 = 接受重新请求上次结果未知的块。
         handle.ctx.clear_unknown_blocks();
-        self.transition(&handle, JobState::Queued, "resumed", None);
-        self.spawn_supervisor(handle);
+        // 用户显式恢复 = 重置按块的返工额度（自动续跑 / 暂停恢复 / 限流重试
+        // 都不清空，避免额度被悄悄刷新）。
+        handle.ctx.control.clear_rework();
+        self.transition(handle, JobState::Queued, "resumed", None);
         Ok(())
     }
 
@@ -2201,26 +2259,37 @@ impl TranslationService {
                     // 模型最后一轮的说明（常见于内容审核拒绝）直接附到用户可见原因：
                     // 比笼统的 incomplete 更能解释「为什么不动」。
                     let excerpt = crate::agent::events::safe_text(&last_stop_text, 200);
-                    let (code, base) = Self::incomplete_stage(ctx)
-                        .map(|(stage, message)| (format!("incomplete_{stage}"), message))
+                    let (stage_code, stage_phase, base) = Self::incomplete_stage(ctx)
                         .unwrap_or_else(|| {
                             (
-                                "incomplete".into(),
-                                "模型结束运行但完成条件未满足".into(),
+                                "incomplete",
+                                phase,
+                                "模型结束运行但完成条件未满足".to_string(),
                             )
                         });
-                    let (code, message) = if empty_runs >= MAX_EMPTY_RUNS && !excerpt.is_empty() {
-                        ("model_declined".to_string(), format!("模型未调用工具即结束：{excerpt}"))
-                    } else if excerpt.is_empty() {
-                        (code, base)
-                    } else {
-                        (code, format!("{base}；模型说明：{excerpt}"))
-                    };
+                    // 错误码与 step 都反映真实卡住的阶段（如 rework_exhausted → review）。
+                    let (code, message, step_phase) =
+                        if empty_runs >= MAX_EMPTY_RUNS && !excerpt.is_empty() {
+                            (
+                                "model_declined".to_string(),
+                                format!("模型未调用工具即结束：{excerpt}"),
+                                phase,
+                            )
+                        } else if excerpt.is_empty() {
+                            (stage_code.to_string(), base, stage_phase)
+                        } else {
+                            (
+                                stage_code.to_string(),
+                                format!("{base}；模型说明：{excerpt}"),
+                                stage_phase,
+                            )
+                        };
                     let _ = ctx.update_manifest(|manifest| {
+                        manifest.phase = step_phase;
                         manifest.last_error = Some(SafeError {
                             code: code.clone(),
                             message: message.clone(),
-                            step: phase.as_str().into(),
+                            step: step_phase.as_str().into(),
                         });
                     });
                     self.transition(handle, JobState::NeedsAttention, &message, Some(&code));
@@ -2248,11 +2317,18 @@ impl TranslationService {
     }
 
     /// 完成校验未通过时，按磁盘产物定位卡住的阶段与用户可读原因。
-    /// 返回 `None` 表示定位失败（保持笼统的 incomplete）。
-    fn incomplete_stage(ctx: &JobContext) -> Option<(&'static str, String)> {
+    ///
+    /// 返回 `(错误码, 真实阶段, 用户可读原因)`；`None` 表示定位失败（保持笼统的
+    /// incomplete）。块级判定与 `dispatch_translation` / 续跑提示共用
+    /// [`tools::chunk_gate`]，避免「工具认为已完成、收尾却判未完成」。
+    fn incomplete_stage(ctx: &JobContext) -> Option<(&'static str, Phase, String)> {
         let chunks = tools::plan_chunks(ctx).ok()?;
         if chunks.is_empty() {
-            return Some(("prepare", "原文尚未完成分块".into()));
+            return Some((
+                "incomplete_prepare",
+                Phase::PrepareSource,
+                "原文尚未完成分块".into(),
+            ));
         }
         let scanned = chunks
             .iter()
@@ -2260,7 +2336,8 @@ impl TranslationService {
             .count();
         if scanned < chunks.len() {
             return Some((
-                "scan",
+                "incomplete_scan",
+                Phase::PrepareSource,
                 format!("还有 {} 个分块未完成扫描", chunks.len() - scanned),
             ));
         }
@@ -2272,36 +2349,57 @@ impl TranslationService {
                 .is_some_and(|constraints| constraints.frozen)
         });
         if !frozen {
-            return Some(("constraints", "术语与风格尚未冻结".into()));
-        }
-        let drafted = chunks
-            .iter()
-            .filter(|chunk| {
-                tools::read_draft_for_verify(ctx, &chunk.id)
-                    .ok()
-                    .flatten()
-                    .is_some()
-            })
-            .count();
-        if drafted < chunks.len() {
             return Some((
-                "translate",
-                format!("还有 {} 个分块未翻译", chunks.len() - drafted),
+                "incomplete_constraints",
+                Phase::PrepareConstraints,
+                "术语与风格尚未冻结".into(),
             ));
         }
-        let reviewed = chunks
-            .iter()
-            .filter(|chunk| {
-                tools::read_review_for_verify(ctx, &chunk.id)
-                    .ok()
-                    .flatten()
-                    .is_some()
-            })
-            .count();
-        if reviewed < chunks.len() {
+        let versions = tools::phase_versions(ctx);
+        let mut pending_translate = Vec::new();
+        let mut pending_rework = Vec::new();
+        let mut pending_review = Vec::new();
+        for chunk in &chunks {
+            let gate = tools::chunk_gate(ctx, &chunk.id, &versions);
+            if !gate.draft_valid {
+                pending_translate.push(chunk.id.clone());
+            } else if gate.needs_rework {
+                pending_rework.push(chunk.id.clone());
+            } else if !gate.review_pass {
+                pending_review.push(chunk.id.clone());
+            }
+        }
+        if !pending_translate.is_empty() {
             return Some((
-                "review",
-                format!("还有 {} 个分块未审查通过", chunks.len() - reviewed),
+                "incomplete_translate",
+                Phase::Translate,
+                format!("还有 {} 个分块未翻译", pending_translate.len()),
+            ));
+        }
+        if !pending_rework.is_empty() || !pending_review.is_empty() {
+            let limit = tools::rework_limit(ctx);
+            let rounds = ctx.control.rework_map();
+            let all_exhausted = !pending_rework.is_empty()
+                && pending_rework
+                    .iter()
+                    .all(|id| rounds.get(id).copied().unwrap_or(0) >= limit);
+            if all_exhausted {
+                return Some((
+                    "rework_exhausted",
+                    Phase::Review,
+                    format!(
+                        "仍有 {} 块存在 major/critical 且返工额度已用尽，可手动继续后重试",
+                        pending_rework.len()
+                    ),
+                ));
+            }
+            return Some((
+                "incomplete_review",
+                Phase::Review,
+                format!(
+                    "还有 {} 个分块未通过审查",
+                    pending_rework.len() + pending_review.len()
+                ),
             ));
         }
         let global_passed = ctx.with_artifacts(|artifacts| {
@@ -2312,9 +2410,17 @@ impl TranslationService {
                 .is_some_and(|global| global.passed)
         });
         if !global_passed {
-            return Some(("global_review", "整体复核未完成或未通过".into()));
+            return Some((
+                "incomplete_global_review",
+                Phase::GlobalReview,
+                "整体复核未完成或未通过".into(),
+            ));
         }
-        Some(("publish", "合并或发布未完成".into()))
+        Some((
+            "incomplete_publish",
+            Phase::Publish,
+            "合并或发布未完成".into(),
+        ))
     }
 
     /// 任务推进度的粗粒度快照：直接数磁盘产物（草稿、审查、冻结、发布），
@@ -2437,12 +2543,15 @@ impl TranslationService {
             .read_manifest()
             .map(|manifest| manifest.phase)
             .unwrap_or(Phase::PrepareSource);
-        let (counts, usage, constraint_version) = {
+        // 收尾计数以磁盘产物为准：内存 counts 只在 refresh_counts 时更新，
+        // 子 Agent 直接写产物时容易落后，不能作为 manifest / 事件的真相源。
+        let counts = tools::compute_counts(&handle.ctx);
+        let (usage, constraint_version) = {
             let runtime = handle
                 .runtime
                 .lock()
                 .unwrap_or_else(|error| error.into_inner());
-            (runtime.counts, runtime.usage, runtime.constraint_version)
+            (runtime.usage, runtime.constraint_version)
         };
         {
             let mut runtime = handle
@@ -2451,6 +2560,7 @@ impl TranslationService {
                 .unwrap_or_else(|error| error.into_inner());
             runtime.state = state;
             runtime.phase = phase;
+            runtime.counts = counts;
             runtime.message = message.to_string();
             runtime.error_code = error_code.map(str::to_string);
         }
@@ -2467,6 +2577,25 @@ impl TranslationService {
                 });
             }
         });
+        // 只记录状态 / 阶段 / 计数 / 错误码，不含原文、译文与预览正文。
+        let translated = counts.translated.to_string();
+        let reviewed = counts.reviewed.to_string();
+        let needs_repair = counts.needs_repair.to_string();
+        log_job(
+            &handle.ctx.scope,
+            "service",
+            phase,
+            None,
+            "job_transition",
+            &[
+                ("state", state.as_str()),
+                ("phase", phase.as_str()),
+                ("translated", &translated),
+                ("reviewed", &reviewed),
+                ("needs_repair", &needs_repair),
+                ("code", error_code.unwrap_or("")),
+            ],
+        );
         let mut event = work_event(
             &handle.ctx.scope,
             state,
@@ -2631,8 +2760,14 @@ fn issues_view(io: &dyn ArtifactIo, plan_ids: &[String]) -> Result<IssuesView, S
         let Some(review) = artifacts.read_review(chunk_id)? else {
             continue;
         };
-        reviewed = reviewed.saturating_add(1);
-        if review.verdict != ReviewVerdict::Pass || !review.issues.is_empty() {
+        // `reviewed` 只统计结论为 pass 的块；pass 携带的 minor 建议只展示，
+        // 不计入未解决。
+        if review.verdict == ReviewVerdict::Pass {
+            reviewed = reviewed.saturating_add(1);
+        }
+        if review.verdict == ReviewVerdict::NeedsFix
+            || review.issues.iter().any(|issue| issue.is_blocking())
+        {
             unresolved.insert(chunk_id.clone());
         }
         for issue in &review.issues {
@@ -2784,6 +2919,30 @@ fn continuation_nudge(ctx: &JobContext, reason: &str, empty_turn: bool) -> Strin
             "下一步：调用 dispatch_translation([...]) 派发未译块 {}，按并发与预算分批。",
             brief(&pending.pending_translate)
         ));
+    } else if !pending.pending_rework.is_empty() {
+        let limit = tools::rework_limit(ctx);
+        let rounds = ctx.control.rework_map();
+        let exhausted: Vec<String> = pending
+            .pending_rework
+            .iter()
+            .filter(|id| rounds.get(*id).copied().unwrap_or(0) >= limit)
+            .cloned()
+            .collect();
+        lines.push(format!(
+            "下一步：块 {} 存在 major/critical 审查问题，需要返工。优先调用 \
+             revise_draft(chunk_id, patches=[{{\"segment_id\":\"...\",\"text\":\"...\"}}]) \
+             修复审查点名的片段（不消耗返工额度），随后 dispatch_review([chunk_id]) 复检；\
+             只有整块结构损坏或大面积漏翻时，才调用 dispatch_translation([chunk_id]) 整块重译。",
+            brief(&pending.pending_rework)
+        ));
+        if !exhausted.is_empty() {
+            lines.push(format!(
+                "注意：块 {} 的整块重译返工额度已用尽，dispatch_translation 会直接返回 \
+                 rework_limit；不要重复调用以免空转。若 revise_draft 无法修复，如实上报\
+                 需要用户手动继续任务后重试。",
+                brief(&exhausted)
+            ));
+        }
     } else if !pending.pending_review.is_empty() {
         lines.push(format!(
             "下一步：调用 dispatch_review([...]) 派发未审块 {}。",
@@ -3051,6 +3210,51 @@ pub fn is_cache_invalid(error: &str) -> bool {
         || error.contains("缓存已清理")
 }
 
+/// 单测用 Job 上下文装配（不启动 supervisor、不触网）。
+#[cfg(test)]
+pub(crate) fn test_job_context(
+    paths: &AppPaths,
+    settings: &Settings,
+    scope: &JobScope,
+    store: Arc<JobStore>,
+) -> Arc<JobContext> {
+    let scheduler = Arc::new(Scheduler::new(&crate::agent::RuntimeConfig::from_settings(
+        settings,
+    )));
+    let emitter = Arc::new(JobEmitter::new(Arc::new(NoopSink), scope.clone()));
+    let model = ModelConfig {
+        format: "chat_completions".into(),
+        base_url: settings.translation_api_url.clone(),
+        model: "mock".into(),
+        key: "test-key".into(),
+        extra_json: json!({}),
+        timeout_seconds: 60,
+        session_seed: format!("pixiv-tool-test-{}", scope.job_id),
+    };
+    Arc::new(JobContext {
+        scope: scope.clone(),
+        store: store.clone(),
+        paths: paths.clone(),
+        settings: settings.clone(),
+        target_language: "zh-CN".into(),
+        target_language_name: "简体中文".into(),
+        source_language: "ja".into(),
+        budget: Arc::new(BudgetTracker::new(64)),
+        budget_config: BudgetConfig::from_settings(settings),
+        scheduler,
+        model,
+        emitter,
+        control: Control::default(),
+        confirm_before_start: false,
+        manifest_lock: StdMutex::new(()),
+        journal_lock: StdMutex::new(()),
+        dispatch_gate: Arc::new(Semaphore::new(2)),
+        usage: StdMutex::new(TokenUsage::default()),
+        unknown_blocked: StdMutex::new(BTreeSet::new()),
+        io: StoreIo::new(store),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3073,6 +3277,65 @@ mod tests {
             translation_target_language: "zh-CN".into(),
             ..Settings::default()
         }
+    }
+
+    /// 单测 Job 夹具：真实 JobStore + 测试上下文 + 已注册的 handle。
+    fn job_fixture(
+        tag: &str,
+        settings: Settings,
+    ) -> (
+        TranslationService,
+        Arc<JobHandle>,
+        JobScope,
+        std::path::PathBuf,
+    ) {
+        let (paths, dir) = fixture(tag);
+        let generation = CacheGeneration::new(0);
+        let service = TranslationService::for_tests_with_generation(
+            paths.clone(),
+            settings.clone(),
+            Arc::new(NoopSink),
+            Some("k".into()),
+            generation.clone(),
+        );
+        let scope = JobScope {
+            novel_id: 1,
+            job_id: format!("20260101000000-{tag}"),
+            generation: generation.get(),
+        };
+        let store = Arc::new(JobStore::create_guarded(&paths, &scope, generation).unwrap());
+        store
+            .write_atomic(
+                "source/input.json",
+                &serde_json::to_vec(&json!({
+                    "title": "t",
+                    "tags": [],
+                    "description": "",
+                    "content": "本文",
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let ctx = test_job_context(&paths, &settings, &scope, store);
+        let handle = Arc::new(JobHandle {
+            ctx,
+            started: Instant::now(),
+            runtime: StdMutex::new(JobRuntime {
+                state: JobState::Paused,
+                phase: Phase::Translate,
+                counts: JobCounts::default(),
+                current: None,
+                usage: TokenUsage::default(),
+                message: "paused".into(),
+                error_code: None,
+                constraint_version: 0,
+            }),
+            running: AtomicBool::new(false),
+        });
+        if let Ok(mut jobs) = service.inner.jobs.lock() {
+            jobs.insert(scope.job_id.clone(), handle.clone());
+        }
+        (service, handle, scope, dir)
     }
 
     #[test]
@@ -3105,11 +3368,45 @@ mod tests {
     }
 
     #[test]
+    fn control_rework_counter_is_per_chunk_and_clearable() {
+        let control = Control::default();
+        assert_eq!(control.rework_rounds("c0001"), 0);
+        assert_eq!(control.rework_map().len(), 0, "初始无任何块计数");
+
+        assert_eq!(control.bump_rework("c0001"), 1);
+        assert_eq!(control.bump_rework("c0001"), 2);
+        assert_eq!(control.bump_rework("c0002"), 1);
+        assert_eq!(control.rework_rounds("c0001"), 2);
+        assert_eq!(control.rework_rounds("c0002"), 1);
+        assert_eq!(control.rework_rounds("c0003"), 0, "未出现的块按 0 计");
+
+        assert_eq!(control.max_rework_rounds(), 2, "兼容字段取最大值");
+        assert_eq!(
+            control.rework_map(),
+            BTreeMap::from([("c0001".to_string(), 2), ("c0002".to_string(), 1)])
+        );
+
+        control.clear_rework();
+        assert_eq!(control.rework_rounds("c0001"), 0);
+        assert_eq!(control.max_rework_rounds(), 0);
+        assert!(control.rework_map().is_empty());
+    }
+
+    #[test]
+    fn control_try_reserve_rework_stops_at_limit_per_chunk() {
+        let control = Control::default();
+        assert!(control.try_reserve_rework("c0001", 2));
+        assert!(control.try_reserve_rework("c0001", 2));
+        assert!(!control.try_reserve_rework("c0001", 2), "额度用尽");
+        assert_eq!(control.rework_rounds("c0001"), 2, "拒绝时不记账");
+        // 另一块不受影响：块级隔离。
+        assert!(control.try_reserve_rework("c0002", 2));
+        assert_eq!(control.rework_rounds("c0002"), 1);
+    }
+
+    #[test]
     fn control_rework_counter_and_reset_notes_are_recorded() {
         let control = Control::default();
-        assert_eq!(control.rework_rounds(), 0);
-        assert_eq!(control.bump_rework(), 1);
-        assert_eq!(control.bump_rework(), 2);
         control.note_reset(Phase::Translate, "译文方向整体错误");
         let notes = control.reset_notes();
         assert_eq!(notes.len(), 1);
@@ -3239,5 +3536,305 @@ mod tests {
         assert!(is_cache_invalid("Job 目录不存在或不可用"));
         assert!(is_cache_invalid("翻译缓存已清理，任务不可恢复"));
         assert!(!is_cache_invalid("模型返回 429"));
+    }
+
+    /// 夹具里的两块：`c0001` needs_fix（待返工），`c0002` 已通过审查。
+    fn seed_rework_job(handle: &Arc<JobHandle>) {
+        let pass_draft = Draft {
+            chunk_id: "c0002".into(),
+            version: 1,
+            segments: vec![crate::translation::artifacts::TranslatedSegment {
+                id: "p002-l000-s0".into(),
+                text: "再见".into(),
+            }],
+            usage: crate::translation::artifacts::TokenUsage::default(),
+            reviewed: true,
+            needs_repair: false,
+        };
+        let rework_draft = Draft {
+            chunk_id: "c0001".into(),
+            version: 1,
+            segments: vec![crate::translation::artifacts::TranslatedSegment {
+                id: "p001-l000-s0".into(),
+                text: "你好".into(),
+            }],
+            usage: crate::translation::artifacts::TokenUsage::default(),
+            reviewed: true,
+            needs_repair: false,
+        };
+        let chunk = |id: &str, order: u32, segment: &str, text: &str| Chunk {
+            id: id.into(),
+            order,
+            segments: vec![crate::translation::source::SourceSegment {
+                id: segment.into(),
+                text: text.into(),
+                kind: crate::translation::source::SegmentKind::Text,
+            }],
+            prev_context: String::new(),
+            next_context: String::new(),
+            chars: text.chars().count() as u32,
+        };
+        let review = |id: &str, verdict, issues| Review {
+            chunk_id: id.into(),
+            draft_version: 1,
+            verdict,
+            issues,
+            notes: String::new(),
+        };
+        tools::seed_for_tests(
+            &handle.ctx,
+            &[
+                (
+                    chunk("c0001", 1, "p001-l000-s0", "こんにちは"),
+                    Some(rework_draft),
+                    Some(review(
+                        "c0001",
+                        ReviewVerdict::NeedsFix,
+                        vec![crate::translation::artifacts::Issue {
+                            segment_id: "p001-l000-s0".into(),
+                            kind: "mistranslation".into(),
+                            severity: Severity::Major,
+                            detail: "人称错误".into(),
+                        }],
+                    )),
+                ),
+                (
+                    chunk("c0002", 2, "p002-l000-s0", "さようなら"),
+                    Some(pass_draft),
+                    Some(review("c0002", ReviewVerdict::Pass, Vec::new())),
+                ),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn resume_clears_per_chunk_rework_quota() {
+        let (service, handle, _scope, dir) = job_fixture("resume-rework", settings());
+        handle.ctx.control.bump_rework("c0001");
+        handle.ctx.control.bump_rework("c0001");
+        handle.ctx.block_unknown("c0002");
+        assert_eq!(handle.ctx.control.rework_rounds("c0001"), 2);
+
+        service.resume_prepare(&handle).expect("可恢复");
+
+        assert!(
+            handle.ctx.control.rework_map().is_empty(),
+            "手动恢复清空按块返工计数"
+        );
+        assert!(
+            !handle.ctx.is_unknown_blocked("c0002"),
+            "未知结果标记一并清空"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn transition_writes_fresh_counts_into_manifest() {
+        let (service, handle, _scope, dir) = job_fixture("transition-counts", settings());
+        seed_rework_job(&handle);
+        // 内存 counts 刻意留空，模拟「子 Agent 直接写产物、内存计数落后」。
+        assert!(handle.runtime.lock().unwrap().counts.is_zero());
+
+        service.transition(&handle, JobState::Paused, "paused", None);
+
+        let runtime_counts = handle.runtime.lock().unwrap().counts;
+        assert_eq!(runtime_counts.chunks, 2, "收尾按磁盘产物重算");
+        assert_eq!(runtime_counts.translated, 2, "两块都有有效草稿");
+        assert_eq!(runtime_counts.reviewed, 1, "只有 pass 计入已审");
+        assert_eq!(runtime_counts.needs_repair, 1, "needs_fix 计入待修");
+
+        let manifest = handle.ctx.read_manifest().expect("读 manifest");
+        assert_eq!(manifest.counts, runtime_counts, "manifest 与内存同一口径");
+        assert_eq!(manifest.state, JobState::Paused);
+        // 块计数不清零：计划存在时按计划数；这里两块都已落盘。
+        assert_ne!(manifest.counts.chunks, 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn incomplete_stage_reports_rework_exhausted_when_quota_is_used_up() {
+        let mut s = settings();
+        s.translation_agent_rework_rounds = 0;
+        let (_service, handle, _scope, dir) = job_fixture("incomplete-rw", s);
+        seed_rework_job(&handle);
+        handle.ctx.with_artifacts(|artifacts| {
+            artifacts
+                .write_constraints(&Constraints {
+                    version: 1,
+                    terms: Vec::new(),
+                    style: String::new(),
+                    conflicts: Vec::new(),
+                    unresolved: Vec::new(),
+                    frozen: true,
+                })
+                .unwrap();
+        });
+
+        // 额度 0：待返工块的额度天然已用尽。
+        let (code, phase, message) =
+            TranslationService::incomplete_stage(&handle.ctx).expect("可定位阶段");
+        assert_eq!(code, "rework_exhausted");
+        assert_eq!(phase, Phase::Review, "step 反映真实阶段");
+        assert!(message.contains("返工额度已用尽"), "得到 {message}");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn incomplete_stage_prefers_incomplete_review_while_quota_remains() {
+        let mut s = settings();
+        s.translation_agent_rework_rounds = 2;
+        let (_service, handle, _scope, dir) = job_fixture("incomplete-review", s);
+        seed_rework_job(&handle);
+        handle.ctx.with_artifacts(|artifacts| {
+            artifacts
+                .write_constraints(&Constraints {
+                    version: 1,
+                    terms: Vec::new(),
+                    style: String::new(),
+                    conflicts: Vec::new(),
+                    unresolved: Vec::new(),
+                    frozen: true,
+                })
+                .unwrap();
+        });
+
+        let (code, phase, message) =
+            TranslationService::incomplete_stage(&handle.ctx).expect("可定位阶段");
+        assert_eq!(code, "incomplete_review");
+        assert_eq!(phase, Phase::Review);
+        assert!(message.contains("未通过审查"), "得到 {message}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn continuation_nudge_points_rework_at_revise_draft_first() {
+        let mut s = settings();
+        s.translation_agent_rework_rounds = 2;
+        let (_service, handle, _scope, dir) = job_fixture("nudge-rework", s);
+        seed_rework_job(&handle);
+        handle.ctx.with_artifacts(|artifacts| {
+            artifacts
+                .write_constraints(&Constraints {
+                    version: 1,
+                    terms: Vec::new(),
+                    style: String::new(),
+                    conflicts: Vec::new(),
+                    unresolved: Vec::new(),
+                    frozen: true,
+                })
+                .unwrap();
+        });
+
+        let nudge = continuation_nudge(&handle.ctx, "上一轮没有推进", false);
+        assert!(nudge.contains("revise_draft"), "得到 {nudge}");
+        assert!(nudge.contains("dispatch_review"), "返工后必须复检");
+        assert!(nudge.contains("c0001"), "列出待返工块");
+        assert!(
+            !nudge.contains("额度已用尽"),
+            "额度未用尽时不提返工上限：{nudge}"
+        );
+        assert!(nudge.contains("本轮回复必须包含工具调用"), "既有约束保留");
+
+        // 额度用尽后追加「不要重复调用」的引导。
+        handle.ctx.control.bump_rework("c0001");
+        handle.ctx.control.bump_rework("c0001");
+        let nudge = continuation_nudge(&handle.ctx, "上一轮没有推进", false);
+        assert!(nudge.contains("额度已用尽"), "得到 {nudge}");
+        assert!(nudge.contains("不要重复调用"), "避免模型空转");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn issues_view_counts_only_pass_as_reviewed_and_ignores_pass_minor() {
+        let (service, handle, _scope, dir) = job_fixture("issues-view", settings());
+        // c0001: pass + minor（应计入 reviewed，但不计入 unresolved）
+        // c0002: needs_fix + major（计入 unresolved）
+        let draft = |id: &str, segment: &str, text: &str| Draft {
+            chunk_id: id.into(),
+            version: 1,
+            segments: vec![crate::translation::artifacts::TranslatedSegment {
+                id: segment.into(),
+                text: text.into(),
+            }],
+            usage: crate::translation::artifacts::TokenUsage::default(),
+            reviewed: true,
+            needs_repair: false,
+        };
+        let chunk = |id: &str, order: u32, segment: &str, text: &str| Chunk {
+            id: id.into(),
+            order,
+            segments: vec![crate::translation::source::SourceSegment {
+                id: segment.into(),
+                text: text.into(),
+                kind: crate::translation::source::SegmentKind::Text,
+            }],
+            prev_context: String::new(),
+            next_context: String::new(),
+            chars: text.chars().count() as u32,
+        };
+        tools::seed_for_tests(
+            &handle.ctx,
+            &[
+                (
+                    chunk("c0001", 1, "p001-l000-s0", "おはよう"),
+                    Some(draft("c0001", "p001-l000-s0", "早上好")),
+                    Some(Review {
+                        chunk_id: "c0001".into(),
+                        draft_version: 1,
+                        verdict: ReviewVerdict::Pass,
+                        issues: vec![crate::translation::artifacts::Issue {
+                            segment_id: "p001-l000-s0".into(),
+                            kind: "style".into(),
+                            severity: Severity::Minor,
+                            detail: "可更口语".into(),
+                        }],
+                        notes: String::new(),
+                    }),
+                ),
+                (
+                    chunk("c0002", 2, "p002-l000-s0", "おやすみ"),
+                    Some(draft("c0002", "p002-l000-s0", "晚安")),
+                    Some(Review {
+                        chunk_id: "c0002".into(),
+                        draft_version: 1,
+                        verdict: ReviewVerdict::NeedsFix,
+                        issues: vec![crate::translation::artifacts::Issue {
+                            segment_id: "p002-l000-s0".into(),
+                            kind: "mistranslation".into(),
+                            severity: Severity::Major,
+                            detail: "语境错误".into(),
+                        }],
+                        notes: String::new(),
+                    }),
+                ),
+            ],
+        );
+
+        let view = service
+            .inner
+            .jobs
+            .lock()
+            .unwrap()
+            .get("20260101000000-issues-view")
+            .map(|handle| {
+                let plan_ids = plan_ids_from_store(&handle.ctx.store);
+                handle
+                    .ctx
+                    .with_artifacts(|artifacts| issues_view(artifacts.io(), &plan_ids))
+                    .unwrap()
+            })
+            .expect("夹具已注册");
+
+        assert_eq!(view.reviewed, 1, "只有 pass 计入已审");
+        assert_eq!(view.total, 2);
+        assert_eq!(
+            view.unresolved_chunks,
+            vec!["c0002".to_string()],
+            "pass + minor 不算未解决"
+        );
+        assert_eq!(view.issues.len(), 2, "minor 仍返回给前端展示");
+        assert_eq!(view.affected_chunks, ["c0001", "c0002"]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

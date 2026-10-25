@@ -131,8 +131,10 @@ pub fn publish_status_with_language(
         }
         match review.verdict {
             ReviewVerdict::Pass => {
-                // 通过结论不应携带任何问题。
-                if !review.issues.is_empty() {
+                // 通过结论可以携带 minor 建议（展示 / 可选修订），只有
+                // critical / major 阻断发布。submit_review 已在入口拒绝
+                // pass + blocking，这里再做一次确定性兜底。
+                if review.issues.iter().any(is_blocking) {
                     return PublishStatus::NeedsAttention;
                 }
             }
@@ -425,6 +427,59 @@ mod tests {
             publish_status(&chunks, &drafts, &reviews, None),
             PublishStatus::NeedsAttention
         );
+    }
+
+    #[test]
+    fn pass_with_only_minor_issues_publishes() {
+        let chunks = vec![chunk("c0001", 1, "p001-l000-s0", "正文")];
+        let drafts = vec![valid_draft("c0001", "p001-l000-s0", "译文")];
+        let mut review = pass_review("c0001");
+        review.issues = vec![Issue {
+            segment_id: "p001-l000-s0".into(),
+            kind: "style".into(),
+            severity: Severity::Minor,
+            detail: "语序可更自然".into(),
+        }];
+        let global = GlobalReview {
+            passed: true,
+            sample_chunk_ids: vec!["c0001".into()],
+            notes: String::new(),
+        };
+
+        // pass + minor 是允许的通过结论：minor 只展示，不阻塞发布。
+        assert_eq!(
+            publish_status(&chunks, &drafts, &[review.clone()], Some(&global)),
+            PublishStatus::Complete
+        );
+        // 早发布投影同样放行。
+        let pages = reviewed_pages(&chunks, &drafts, &[review]);
+        assert_eq!(pages.ready, BTreeSet::from([1]));
+    }
+
+    #[test]
+    fn pass_with_blocking_issue_needs_attention() {
+        // submit_review 已在入口拒绝 pass + blocking；这里验证发布层的确定性兜底。
+        for severity in [Severity::Major, Severity::Critical] {
+            let chunks = vec![chunk("c0001", 1, "p001-l000-s0", "正文")];
+            let drafts = vec![valid_draft("c0001", "p001-l000-s0", "译文")];
+            let mut review = pass_review("c0001");
+            review.issues = vec![Issue {
+                segment_id: "p001-l000-s0".into(),
+                kind: "mistranslation".into(),
+                severity,
+                detail: "情节错误".into(),
+            }];
+            let global = GlobalReview {
+                passed: true,
+                sample_chunk_ids: vec!["c0001".into()],
+                notes: String::new(),
+            };
+            assert_eq!(
+                publish_status(&chunks, &drafts, &[review], Some(&global)),
+                PublishStatus::NeedsAttention,
+                "{severity:?} 必须阻断发布"
+            );
+        }
     }
 
     #[test]
