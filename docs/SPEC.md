@@ -357,7 +357,8 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
 - **阶段**：`prepare_source`（注册整篇原文，建立页 / 行 / 片段映射，按语义边界与字符
   预算切块并生成前后邻接窗口）→ `prepare_constraints`（逐块扫描术语、人物关系、风格
   与对白，聚合并冻结约束版本）→ `translate`（按块派发翻译子 Agent）→ `review`（独立
-  审查子 Agent 对照原文、译文与冻结约束）→ `repair`（只返工受影响块并复检）→
+  审查子 Agent 对照原文、译文与冻结约束）→ `repair`（局部问题用 `revise_draft` 定点
+  修订，必要时只返工受影响块并复检）→
   `global_review`（主 Agent 读取摘要与抽样，不把全文塞回上下文）→ `publish`（校验块
   覆盖、审查结论与合并报告后写正式结果）。模型声明完成不构成完成条件，由 Rust 工具
   按实际产物与审查状态校验。
@@ -394,27 +395,74 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   任务级推进不受单轮轮次上限约束，总量仍受调用预算与模型尝试上限约束。续跑指令按磁盘
   产物直接给出下一步动作与待办块 ID，并声明「只输出文本不算完成、本轮必须包含工具调用」，
   扫描阶段附 `submit_scan` 的最小参数示例，不再让模型自行调用 `job_status` 猜测进度；
-  `job_status` 的 `pending_scan` / `pending_translate` / `pending_review` 与续跑指令
+  `job_status` 的 `pending_scan` / `pending_translate` / `pending_review` /
+  `pending_rework` 与续跑指令
   共用同一套磁盘判定。`run_done` 记录最终回答字符数与前 300 字符，供空转诊断（ADR 0036）。
 - **恢复分类**：明确未发送的连接失败有限重试；限流与暂时性服务错误（如 `429` / 上游容量
   不足）在任务级按设置的 `retry_limit` 与退避策略重跑整轮并尊重 `Retry-After`，重试次数
   用尽才转 `needs_attention`；鉴权 / 余额 / 模型不存在 / 配置不兼容直接暂停并提示修正；
   已发送但结果未知默认不自动重放；输入超限先压缩或细分；输出截断缩块重做；工具参数 /
-  结构错误有限纠正；质检问题只返工受影响块。
+  结构错误有限纠正；质检问题优先 `revise_draft` 定点修订，必要时只返工受影响块。
 - **派发结果与未知块**：`dispatch_translation` / `dispatch_review` 按块返回
   `status=ok|permanent|budget_exhausted|unknown_outcome|...`；只有 `permanent` /
   `budget_exhausted` 这类全局错误把整批标为 `fatal`，单块 `unknown_outcome` 只标记该块
   并继续返回其他块。结果未知且不自动重放的块会被记住，后续派发直接短路为
   `unknown_outcome`（不再重复请求），用户手动恢复任务时清空该记忆。
+- **审查分级**：`submit_review` 的 `verdict=pass` 允许携带 `minor` 问题；只有
+  `major` / `critical` 阻塞。`verdict=needs_fix` 必须至少一条 `major` / `critical`；
+  `pass` 含阻塞级问题以 `blocking_issues` 拒绝，`needs_fix` 只有 `minor`（或 issues
+  为空）以 `minor_only` 拒绝，提示改交 `pass`，均不落盘。阻塞判定只看当前草稿版本的
+  当前审查版本；`minor` 不进入待修清单、不消耗返工额度、不阻止整体复核与发布
+  （ADR 0038）。
+- **局部修订**：协调者用 `revise_draft(chunk_id, patches=[{segment_id,text}])` 只替换
+  点名片段，未点名片段保持原样（须在约束冻结后调用）；`patches` 非空、`segment_id`
+  必须属于该块且不重复，未知 / 重复 / 跨块片段与空文本整批拒绝（`unknown_segment` /
+  `duplicate_segment` / `empty_translation`），不产生部分写入；提交前重新做覆盖、顺序、
+  空值、目标语言与标记保真校验，失败以 `draft_invalid` 拒绝且不写盘。成功后草稿版本
+  +1、旧审查因版本不匹配失效，返回 `{chunk_id,version,patched,pending_review:true}`，
+  块回到待审。该工具不派发翻译子 Agent、不消耗返工额度；整块结构损坏或大面积漏翻仍走
+  `dispatch_translation` 重译。它是 Agent 工具，不是 IPC 命令（ADR 0038）。
+- **按块返工额度**：`translation_agent_rework_rounds`（默认 2，0~5）是**每块**额度，
+  按 `rework_by_chunk` 记录；只有实际重新派发重译的块各自 +1，首次翻译与
+  `revise_draft` 不计数。某块用尽后该块的返工派发以 `rework_limit` 单独失败，其余块
+  照常进行；不再设全局返工轮次上限。用户手动 `resume` 清空全部块的计数（暂停、取消、
+  限流自动重试与自动续跑不清）。总成本仍受累计调用预算与并发闸门约束（ADR 0038）。
+- **块状态判定**：`chunk_gate` 从磁盘产物计算，由三个可同时观察的布尔标记组成——
+  `draft_valid`（草稿带当前 `translate` 版本戳、结构校验通过且未标 `needs_repair`）、
+  `review_pass`（审查带当前 `review` 版本戳、对应本版草稿且 `verdict=pass`，可带
+  `minor`）、`needs_rework`（当前版本草稿标了 `needs_repair`，或当前版本审查为
+  `needs_fix`）。`job_status` 与续跑指令的待办按优先级归属：`pending_translate` =
+  `!draft_valid`、`pending_rework` = `draft_valid && needs_rework`、`pending_review` =
+  `draft_valid && !needs_rework && !review_pass`；进度计数 `translated` =
+  `draft_valid`、`reviewed` = `review_pass`、`needs_repair` = `needs_rework`；返工目标
+  与完成判据共用该判定，不再各自实现（ADR 0038）。
+- **完成判据与收尾**：全部块 `draft_valid && review_pass`、整体复核通过、合并校验通过
+  且正式结果为 `complete` 才完成；`minor` 不参与判定。收尾计数从磁盘按 `chunk_gate`
+  重算并写回快照 / manifest，不再沿用在途内存里的陈旧值。收尾与 `needs_attention`
+  日志记录各块返工轮次、返工预算 `used` / `limit`、受影响块 ID、`verdict` 分布与
+  `critical` / `major` / `minor` 计数（不含正文）。`job_status` 返回 `pending_rework`、
+  `rework_by_chunk`、`rework_rounds`（最大值）与 `rework_limit`。
+- **审查 / 返工错误码**：
+
+  | 错误码 | 语义 |
+  |---|---|
+  | `incomplete_review` | 运行结束仍有块没有有效审查（缺失、版本不匹配或审查未通过） |
+  | `rework_exhausted` | 仍有 `major` / `critical` 阻塞，且相关块返工额度已用尽，额度内无法收敛 |
+  | `rework_limit` | 工具级拒绝：单块返工额度用尽，其他块仍可继续 |
+  | `incomplete_global_review` | 只表示整体复核缺失或未通过，不再用于块级审查失败 |
+
+  收尾未完成时按磁盘产物定位：审查未完成 → `incomplete_review`；审查完成但仍有
+  阻塞问题且额度用尽 → `rework_exhausted`，不再误报 `incomplete_global_review`。
 - **暂停 / 取消 / 确认**：暂停停止派发并停在最近检查点；取消立即传播取消信号并保留
   已提交产物；两者都不清预算与重试记录。`translation_confirm_before_start` 开启时在
   冻结约束后进入 `awaiting_confirmation`，浮层可修改术语与风格后「确认并继续」。
 - **子 Agent 与工具**：默认一层，主 Agent 可派发翻译 / 审查子 Agent，二者不再派生。
-  工具按角色白名单注册（主 Agent：加载资源、准备原文、读取块摘要 / 内容、提交扫描、
-  冻结约束、派发翻译 / 审查、读取审查摘要、合并草稿、记录整体复核、发布、按依赖重置
-  阶段、查询任务状态；翻译：读取指定块、提交该块译文；审查：读取块与译文、提交审查
-  结论）；未注册工具、路径参数与越权调用一律拒绝。工具结果设长度 / token 上限，超出
-  时由调用方分页或改传产物引用，不用静默截断掩盖缺失。
+  工具按角色白名单注册（主 Agent 15 个：加载资源、准备原文、读取块摘要 / 内容、提交
+  扫描、冻结约束、派发翻译 / 审查、局部修订草稿（`revise_draft`）、读取审查摘要、
+  合并草稿、记录整体复核、发布、按依赖重置阶段、查询任务状态；翻译 3 个：加载资源、
+  读取指定块、提交该块译文；审查 4 个：加载资源、读取指定块与译文、提交审查结论）；
+  未注册工具、路径参数与越权调用一律拒绝。工具结果设长度 / token 上限，超出时由调用方
+  分页或改传产物引用，不用静默截断掩盖缺失。
 - **模型契约**：沿用三协议（Chat Completions 默认 / Responses / Anthropic Messages，
   ADR 0020）、URL 与端点推导、系统代理、单请求超时（默认 600s，ADR 0023）、禁重定向、
   opencode 会话头（按小说 `pixiv-tool-novel-<novel_id>`，ADR 0021）、思考参数按协议
@@ -441,7 +489,7 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
 | 同时活跃小说 | 2（1~8） |
 | 单请求超时 | 600s（30~3600，`translation_timeout_seconds`） |
 | 自动网络重试 | 2 次（0~5），退避 1s 起、上限 120s，尊重 `Retry-After` |
-| 质检返工 / 超限细分 | 2 轮（0~5）/ 3 层（0~5） |
+| 每块质检返工 / 超限细分 | 2 轮（0~5）/ 3 层（0~5） |
 | 单子任务轮次 / 主 Agent 无进展上限 | 24（4~128）/ 8 轮（3~32） |
 | 分块 | 目标 3000 字符（500~100000）、上限 6000 字符（1000~200000）、邻接前后各 600 字符 |
 | 未知模型上下文 / 预算输出上限 | 131072（16384~2097152）/ 16384（1024~262144，且不超过上下文；默认分块下的实际请求上限同为 16384）。1.2.x 存量配置中的旧默认 32768 在加载期一次性迁移到 131072 |
@@ -779,7 +827,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   | `translation_agent_retry_limit` | 2 | 0~5 | 自动网络重试次数（不含首次） |
   | `translation_agent_backoff_base_ms` | 1000 | 500~30000 | 自动退避基础延迟（毫秒） |
   | `translation_agent_backoff_max_seconds` | 120 | 10~600 | 自动退避上限（秒） |
-  | `translation_agent_rework_rounds` | 2 | 0~5 | 质检返工轮数（修复 + 复检） |
+  | `translation_agent_rework_rounds` | 2 | 0~5 | 每块质检返工轮数（修复 + 复检，按块独立计数；手动继续时清零） |
   | `translation_agent_split_depth` | 3 | 0~5 | 超限细分深度 |
   | `translation_agent_tool_corrections` | 2 | 0~3 | 工具参数 / 结构纠正次数 |
   | `translation_agent_max_turns` | 24 | 4~128 | 单子任务模型轮次 |
@@ -1262,7 +1310,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `settings_get` / `settings_save(settings)` | 配置读写（白名单 48 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_start(novel, force)` | 启动或加入整篇翻译 Job；novel=`{novel_id,title,tags,description,content}`（content ≤ 8MB，非法 id / 空内容拒绝）。启动前校验设置、URL、模型与 Key，任何失败不创建 Job；原文已是目标语言且 `force=false` 时返回 `already_target_language:true` 与未落库的空快照。同一作品、原文版本、目标语言重复启动加入既有 Job，`force=true` 新建。返回 `{job: TranslationJobSnapshot, already_target_language}`，命令立即返回、后台 tokio 继续执行。目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言（ADR 0018） |
 | `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
-| `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；任务不存在或清单损坏返回可读错误 |
+| `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；任务不存在或清单损坏返回可读错误 |
 | `novel_translation_result(novelId)` | 阅读器投影：优先已完成且状态为 `complete` 的 v2 Job，否则回退 v1 旧缓存并标记 `partial`；无结果返回 null。返回 `{novel_id,job_id,target_language,pages:{页码:[{line,text}]},status:"complete"|"partial"|"needs_attention",unresolved}` |
 | `novel_translation_confirm(jobId, terms, style)` | 确认术语与风格（等待确认时由浮层提交）。terms 为 `[{source_term,locked_translation,term_type?,aliases?,notes?}]`；确认后约束版本 +1、清除冲突与未解决项并继续。任务不存在 / 已删除返回错误 |
 | `novel_translation_pause(jobId)` | 停止派发并停在最近检查点（`queued`/`running` → `pausing` → `paused`）；等待确认时要求先确认或取消；其它状态拒绝 |
@@ -1271,7 +1319,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `novel_translation_delete(jobId)` | 删除整个 Job 目录（含 chunks / sessions / checkpoints / temporary / output 全部中间产物）；运行中拒绝，需先暂停或取消；清单损坏时提示通过清理翻译缓存处理 |
 | `novel_translation_preview(jobId, chunkId)` | 浮层预览：`{chunk_id,order,segments,translated,context_prev,context_next,draft_version,reviewed,needs_repair,review?}`；segments 含 `{id,page,line,text,kind}`，translated 为 `[{id,text}]`；未译块返回空译文列表，不伪造 |
 | `novel_translation_constraints(jobId)` | 约束只读视图：`{version,terms,style,conflicts,unresolved,frozen,awaiting_confirmation}`；约束尚未生成时返回明确错误，可与运行中 Job 并发调用 |
-| `novel_translation_issues(jobId)` | 审查问题只读视图：`{issues,affected_chunks,unresolved_chunks,reviewed,total}`；每条问题含块 / 片段定位、严重度与说明，不含原文或译文 |
+| `novel_translation_issues(jobId)` | 审查问题只读视图：`{issues,affected_chunks,unresolved_chunks,reviewed,total}`；每条问题含块 / 片段定位、严重度与说明，不含原文或译文；`unresolved_chunks` 只统计仍有 `major` / `critical` 阻塞的块，`minor` 问题照常列出但不计入未解决（ADR 0038） |
 | `novel_translation_diagnostics()` | 诊断摘要 `{generation,active,jobs,by_state}`（缓存世代、活跃 Job 数、Job 总数与按状态计数），不含正文 |
 | `translation_set_diagnostic(enabled)` | 会话级详细诊断开关：开启后放行 `agent` target 的 DEBUG（工具 / 请求 / 子任务起止与长度），仅本次运行有效、重启复位；返回生效状态。不输出原文、译文、提示词、Key 或 Cookie |
 | `translation_diagnostic_status()` | 当前诊断开关状态，供设置页回显 |
@@ -1368,7 +1416,9 @@ translation://job {
 
 `translation://job` 与 `novel_translation_status` 的快照同构（事件缺
 `constraint_version` / `budget` / `target_language` / `already_target_language` /
-`chunk_ids`，前端由既有快照补齐）。每个 Job 的 `seq` 从 1 单调递增；
+`chunk_ids` / `pending_rework` / `rework_by_chunk` / `rework_rounds`，前端由既有快照
+补齐；旧消费者忽略未知字段，旧快照缺新字段时前端按空列表 / 0 兜底，ADR 0038）。每个
+Job 的 `seq` 从 1 单调递增；
 前端先订阅、再拉 `novel_translation_jobs` 快照，事件 `seq ≤` 本地已应用序号时丢弃，快照
 序号落后时保留事件版本。普通进度按 ≥5s 合并，生成预览按「≥150ms 或累计新增 ≥1024B」
 节流；阶段切换、状态变化、错误与终态立即发送，并在阶段结束 / 终态 flush。`preview`
@@ -1533,7 +1583,7 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 - **维护**：设置维护组显示日志总大小、目录复制和确认后清理；清理截断当前及遗留轮转普通 .log 文件，后续日志继续追加。最近 200 行每 2 秒轮询，大小每 10 秒统计，仅维护页可见时执行，读取上限 64KiB。缓存显示译文/图片分类与总大小、目录复制、确认后清理；翻译运行时禁止清理译文，清理后阅读器同步去除旧回显。不删除下载作品、数据库或凭据（ADR 0027）。
 - **翻译诊断**：HTTP 错误正文读取上限 64KiB，仅记录 code/type/message/param/request_id；流内错误保留同样的原始错误诊断，截断/提前结束/超时/连接失败记录成因。Key、Cookie 等凭据与 URL 脱敏，字符串限 4096 字并压平控制字符。非 JSON 错误正文只记格式与大小，模型 JSON 解析错误只记类别/行列/字节数；不记录请求、小说原文、生成正文或完整响应，界面仍显示概括错误（ADR 0027）。
 - **Agent 日志固定键**：`novel=<id> job=<job_id> agent=<main|translator|reviewer> phase=<prepare_source|prepare_constraints|translate|review|repair|global_review|publish> chunk=<c0001|-> event=<事件> k=v…`（`agent/events.rs::log_line`）。`novel` / `job` / `agent` / `phase` 恒有，`chunk` 无分块时为 `-`；字段值经安全清洗、限长，只放计数、耗时、原因码与状态。标题不作主键，默认不记录小说标题或内容。
-- **级别与密度**：INFO 记录排队 / 启动 / 终态、阶段起止与统计、子任务批次、确认 / 暂停 / 恢复 / 取消、缓存清理与每次压缩起止；执行中按小说至多每 5 秒聚合一次进展摘要，只在计数变化时输出；WARN 记录重试、截断、缩块、返工、预算临近 / 耗尽、结果未知与压缩失败（带原因码与下一动作）；ERROR 记录不可恢复的运行 / 存储失败（失败步骤、错误码、安全诊断）；DEBUG 仅在详细诊断开启时输出单个工具 / 请求 / 子任务的起止、耗时与长度，不输出正文或工具原始参数。
+- **级别与密度**：INFO 记录排队 / 启动 / 终态、阶段起止与统计、子任务批次、确认 / 暂停 / 恢复 / 取消、缓存清理与每次压缩起止；执行中按小说至多每 5 秒聚合一次进展摘要，只在计数变化时输出；WARN 记录重试、截断、缩块、返工、预算临近 / 耗尽、结果未知与压缩失败（带原因码与下一动作）；终态统计含各块返工轮次、返工预算 `used` / `limit`、受影响块 ID 与 `verdict` / 严重度分布（ADR 0038）；ERROR 记录不可恢复的运行 / 存储失败（失败步骤、错误码、安全诊断）；DEBUG 仅在详细诊断开启时输出单个工具 / 请求 / 子任务的起止、耗时与长度，不输出正文或工具原始参数。
 - **诊断开关**：设置二级「诊断」页的详细诊断只对本次应用运行生效，不写 `settings.json`，重启复位为关闭；开启时只把 `agent` target 的日志门限放到 DEBUG，不放大依赖库噪声。`RUST_LOG` 显式注入时尊重开发者设置、不覆盖门限。
 - **禁止记录**：原文、译文、提示词、压缩摘要正文、API Key、Cookie、完整请求头或工具原始参数；压缩记录只含估算计数、耗时、保留范围与结果。
 
@@ -1622,6 +1672,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0035 | 整篇小说 Agent 翻译（Job 化，取代 ADR 0017 的单页两轮与文件布局） | [adr/0035-whole-novel-agent-translation.md](adr/0035-whole-novel-agent-translation.md) |
 | 0036 | 翻译运行层窗口防护与任务续跑 | [adr/0036-translation-runtime-guard-and-continuation.md](adr/0036-translation-runtime-guard-and-continuation.md) |
 | 0037 | 翻译预览的归属、尾窗与稳定展示 | [adr/0037-translation-preview-ownership-and-stability.md](adr/0037-translation-preview-ownership-and-stability.md) |
+| 0038 | 翻译审查收敛与按块返工（审查分级、`revise_draft`、每块额度、`chunk_gate`） | [adr/0038-translation-review-convergence.md](adr/0038-translation-review-convergence.md) |
 
 ADR 按需追加，不强制一次性写完。
 
