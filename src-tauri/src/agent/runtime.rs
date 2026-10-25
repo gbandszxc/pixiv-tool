@@ -39,8 +39,13 @@ use crate::agent::{
 /// 预览事件的最小间隔（events 层还有 300ms 的合并窗口）。
 const PREVIEW_EMIT_INTERVAL: Duration = Duration::from_millis(120);
 
-/// 单轮工具结果预算中为压缩后历史保留的空间。
-const TURN_HISTORY_RESERVE_TOKENS: u32 = 2_048;
+/// 单轮工具结果预算中为压缩后历史保留的空间上限：
+/// 与压缩器的实际保留量对齐（近期历史保留区 + 摘要），避免预算把
+/// 压缩后仍会占用的空间高估为可用。
+fn history_reserve(budget: &BudgetConfig) -> u32 {
+    budget.recent_tokens.min(8_192) + budget.summary_tokens
+}
+
 /// 单轮工具结果预算地板：防止极小窗口把预算压到 0 后模型完全读不到任何块。
 /// 超出地板的调用会被跳过，提示中说明需要调大窗口或调小块大小。
 const MIN_TURN_TOOL_TOKENS: u32 = 1_024;
@@ -52,7 +57,7 @@ const TRUNCATED_RESULT_TOKENS: u32 = 512;
 pub fn turn_tool_budget(budget: &BudgetConfig, overhead_tokens: u32) -> u32 {
     available_input(budget.context_window, budget.output_limit)
         .saturating_sub(overhead_tokens)
-        .saturating_sub(TURN_HISTORY_RESERVE_TOKENS)
+        .saturating_sub(history_reserve(budget))
         .max(MIN_TURN_TOOL_TOKENS)
 }
 
@@ -595,7 +600,7 @@ impl AgentHook for RuntimeHooks {
             // 历史中较早的工具结果正文作为最后防线；截断后的投影写回压缩缓存。
             // 目标留出历史保留量作缓冲，吸收截断估算与消息结构的误差。
             let target = available_input(config.context_window, config.output_limit)
-                .saturating_sub(TURN_HISTORY_RESERVE_TOKENS);
+                .saturating_sub(history_reserve(&config));
             let (truncated, count) =
                 emergency_truncate(&projection, input_est, target, TRUNCATED_RESULT_TOKENS);
             if count > 0 {

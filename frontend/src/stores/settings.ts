@@ -87,7 +87,7 @@ const fields = (key: TranslationAgentIntKey) => ({
 
 /** 与后端 TRANSLATION_AGENT_INT_RULES 逐项一致（顺序即分类内字段顺序）。 */
 export const TRANSLATION_AGENT_INT_RULES: readonly TranslationAgentIntRule[] = [
-  { key: "translation_agent_context_window", default: 32_768, min: 16_384, max: 2_097_152, step: 1_024, unit: "tokens", category: "model", ...fields("translation_agent_context_window") },
+  { key: "translation_agent_context_window", default: 131_072, min: 16_384, max: 2_097_152, step: 1_024, unit: "tokens", category: "model", ...fields("translation_agent_context_window") },
   { key: "translation_agent_output_cap", default: 16_384, min: 1_024, max: 262_144, step: 1_024, unit: "tokens", category: "model", ...fields("translation_agent_output_cap") },
   { key: "translation_timeout_seconds", default: 600, min: 30, max: 3_600, step: 30, unit: "seconds", category: "model", ...fields("translation_timeout_seconds") },
   { key: "translation_agent_compact_percent", default: 75, min: 50, max: 90, step: 1, unit: "percent", category: "model", ...fields("translation_agent_compact_percent") },

@@ -1107,13 +1107,14 @@ mod tests {
             summary_tokens: 2_048,
             call_budget: 0,
         };
-        // 32k 窗口扣掉输出上限与安全余量后空间很小：16 128 − 8 238 − 2 048。
-        assert_eq!(turn_tool_budget(&small, 8_238), 5_842);
+        // 32k 窗口扣掉输出上限与安全余量后空间很小：
+        // 16 128 − 8 238 −（4 096 近期保留 + 2 048 摘要）。
+        assert_eq!(turn_tool_budget(&small, 8_238), 1_746);
         let large = BudgetConfig {
             context_window: 65_536,
             ..small
         };
-        // 48 896（可用输入）− 8 238（固定开销）− 2 048（历史保留）。
-        assert_eq!(turn_tool_budget(&large, 8_238), 38_610);
+        // 48 896（可用输入）− 8 238（固定开销）− 6 144（历史保留）。
+        assert_eq!(turn_tool_budget(&large, 8_238), 34_514);
     }
 }

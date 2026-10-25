@@ -424,7 +424,7 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
 | 质检返工 / 超限细分 | 2 轮（0~5）/ 3 层（0~5） |
 | 单子任务轮次 / 主 Agent 无进展上限 | 24（4~128）/ 8 轮（3~32） |
 | 分块 | 目标 3000 字符（500~100000）、上限 6000 字符（1000~200000）、邻接前后各 600 字符 |
-| 未知模型上下文 / 预算输出上限 | 32768（16384~2097152）/ 16384（1024~262144，且不超过上下文；默认分块下的实际请求上限同为 16384） |
+| 未知模型上下文 / 预算输出上限 | 131072（16384~2097152）/ 16384（1024~262144，且不超过上下文；默认分块下的实际请求上限同为 16384）。1.2.x 存量配置中的旧默认 32768 在加载期一次性迁移到 131072 |
 | 压缩触发 / 近期历史 / 摘要目标 | 可用输入预算 75%（50~90%）/ 4096 / 2048 tokens |
 | 累计调用预算 | 0 = 自动 `32 + 16 × 初始分块数`（1~1000000 可自定义） |
 
@@ -666,7 +666,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "translation_agent_tool_corrections": 2,
   "translation_agent_max_turns": 24,
   "translation_agent_stall_limit": 8,
-  "translation_agent_context_window": 32768,
+  "translation_agent_context_window": 131072,
   "translation_agent_output_cap": 16384,
   "translation_agent_compact_percent": 75,
   "translation_agent_recent_history_tokens": 4096,
@@ -764,7 +764,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   | `translation_agent_tool_corrections` | 2 | 0~3 | 工具参数 / 结构纠正次数 |
   | `translation_agent_max_turns` | 24 | 4~128 | 单子任务模型轮次 |
   | `translation_agent_stall_limit` | 8 | 3~32 | 主 Agent 无进展上限（轮） |
-  | `translation_agent_context_window` | 32768 | 16384~2097152 | 未知模型上下文窗口（token） |
+  | `translation_agent_context_window` | 131072 | 16384~2097152 | 未知模型上下文窗口（token）；旧默认 32768 加载期迁移 |
   | `translation_agent_output_cap` | 16384 | 1024~262144 | 预算器使用的单请求输出上限（且不超过上下文窗口）；实际请求上限仍按分块输入分档，高级 JSON 显式值优先 |
   | `translation_agent_compact_percent` | 75 | 50~90 | 自动压缩触发（可用输入预算百分比） |
   | `translation_agent_recent_history_tokens` | 4096 | 512~131072 | 保留近期历史（token） |

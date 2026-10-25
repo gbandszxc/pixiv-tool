@@ -103,7 +103,7 @@ pub struct Settings {
     pub translation_agent_max_turns: i64,
     /// 主 Agent 无进展上限（轮），默认 8，区间 3~32。
     pub translation_agent_stall_limit: i64,
-    /// 未知模型上下文窗口（token），默认 32768，区间 16384~2097152。
+    /// 未知模型上下文窗口（token），默认 131072，区间 16384~2097152。
     pub translation_agent_context_window: i64,
     /// 单请求输出上限（token），默认 16384，区间 1024~262144，且不超过上下文窗口。
     pub translation_agent_output_cap: i64,
@@ -168,7 +168,7 @@ impl Default for Settings {
             translation_agent_tool_corrections: 2,
             translation_agent_max_turns: 24,
             translation_agent_stall_limit: 8,
-            translation_agent_context_window: 32_768,
+            translation_agent_context_window: 131_072,
             translation_agent_output_cap: 16_384,
             translation_agent_compact_percent: 75,
             translation_agent_recent_history_tokens: 4_096,
@@ -338,7 +338,7 @@ pub const TRANSLATION_AGENT_INT_RULES: &[TranslationIntRule] = &[
     },
     TranslationIntRule {
         key: "translation_agent_context_window",
-        default: 32_768,
+        default: 131_072,
         min: 16_384,
         max: 2_097_152,
         label: "未知模型上下文窗口",
@@ -550,6 +550,11 @@ impl Settings {
                     && !NOVEL_BG_COLORS.contains(&settings.novel_bg_color.as_str())
                 {
                     settings.novel_bg_color = String::new();
+                }
+                // 翻译上下文窗口：32768 是 1.2.x 的旧默认值，一次性升级到 131072；
+                // 显式改过其他值的用户不受影响（可在设置中改回）。
+                if settings.translation_agent_context_window == 32_768 {
+                    settings.translation_agent_context_window = 131_072;
                 }
                 // 翻译接口协议：白名单外的值（含手改 settings.json）回落默认 Chat Completions。
                 if !crate::translation::TRANSLATION_API_FORMATS
@@ -1538,7 +1543,7 @@ mod tests {
         assert_eq!(settings.translation_agent_tool_corrections, 2);
         assert_eq!(settings.translation_agent_max_turns, 24);
         assert_eq!(settings.translation_agent_stall_limit, 8);
-        assert_eq!(settings.translation_agent_context_window, 32_768);
+        assert_eq!(settings.translation_agent_context_window, 131_072);
         assert_eq!(settings.translation_agent_output_cap, 16_384);
         assert_eq!(settings.translation_agent_compact_percent, 75);
         assert_eq!(settings.translation_agent_recent_history_tokens, 4_096);
@@ -1568,7 +1573,7 @@ mod tests {
         .unwrap();
         let settings = Settings::load_or_init(&dir);
         assert_eq!(settings.translation_agent_global_concurrency, 4);
-        assert_eq!(settings.translation_agent_context_window, 32_768);
+        assert_eq!(settings.translation_agent_context_window, 131_072);
         // 交叉冲突（目标 > 上限）整组回落默认。
         assert_eq!(settings.translation_agent_chunk_target_chars, 3_000);
         assert_eq!(settings.translation_agent_chunk_max_chars, 6_000);

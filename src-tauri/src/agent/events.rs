@@ -22,9 +22,9 @@ pub const JOB_EVENT_NAME: &str = "translation://job";
 /// 普通进度的最小发送间隔。
 pub const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 /// 生成预览的最小发送间隔。
-pub const PREVIEW_INTERVAL: Duration = Duration::from_millis(300);
+pub const PREVIEW_INTERVAL: Duration = Duration::from_millis(150);
 /// 生成预览累计新增字节达到该值立即发送。
-pub const PREVIEW_BYTES: usize = 2048;
+pub const PREVIEW_BYTES: usize = 1024;
 
 /// 一次 Job 状态 / 进度事件（冻结结构，前端快照同构）。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
