@@ -1918,7 +1918,9 @@ impl TranslationService {
         // 续跑循环：一次运行正常结束但完成校验未通过时，带着上次运行的压缩后
         // 历史投影与最新检查点状态重新拉起；连续无进展达到上限才转 needs_attention。
         // 单次运行的轮次上限（max_turns）只约束一轮，任务级的推进由本循环收敛。
-        const MAX_IDLE_CONTINUATIONS: u32 = 3;
+        // 无进展续跑上限：每轮都带整段上下文，两轮仍未推进就交给用户判断，
+        // 避免模型拒绝或反复空转时持续消耗额度。
+        const MAX_IDLE_CONTINUATIONS: u32 = 2;
         const MAX_EMPTY_RUNS: u32 = 2;
         let mut carried: Vec<Arc<rig_core::message::Message>> = Vec::new();
         let mut last_progress = self.progress_snapshot(ctx);
@@ -2125,27 +2127,23 @@ impl TranslationService {
                 if self.verify_complete(ctx) {
                     self.transition(handle, JobState::Completed, "completed", None);
                 } else {
-                    // 模型连续零工具调用后给出的说明（常见于内容审核拒绝）直接作为
-                    // 用户可见原因：比笼统的 incomplete 更能解释「为什么不动」。
-                    let declined = empty_runs >= MAX_EMPTY_RUNS && !last_stop_text.trim().is_empty();
-                    let (code, message) = if declined {
-                        (
-                            "model_declined".to_string(),
-                            format!(
-                                "模型未调用工具即结束：{}",
-                                crate::agent::events::safe_text(&last_stop_text, 240)
-                            ),
-                        )
+                    // 模型最后一轮的说明（常见于内容审核拒绝）直接附到用户可见原因：
+                    // 比笼统的 incomplete 更能解释「为什么不动」。
+                    let excerpt = crate::agent::events::safe_text(&last_stop_text, 200);
+                    let (code, base) = Self::incomplete_stage(ctx)
+                        .map(|(stage, message)| (format!("incomplete_{stage}"), message))
+                        .unwrap_or_else(|| {
+                            (
+                                "incomplete".into(),
+                                "模型结束运行但完成条件未满足".into(),
+                            )
+                        });
+                    let (code, message) = if empty_runs >= MAX_EMPTY_RUNS && !excerpt.is_empty() {
+                        ("model_declined".to_string(), format!("模型未调用工具即结束：{excerpt}"))
+                    } else if excerpt.is_empty() {
+                        (code, base)
                     } else {
-                        // 按产物状态细分卡住的阶段，避免统一 incomplete 让用户无从判断。
-                        Self::incomplete_stage(ctx)
-                            .map(|(stage, message)| (format!("incomplete_{stage}"), message))
-                            .unwrap_or_else(|| {
-                                (
-                                    "incomplete".into(),
-                                    "模型结束运行但完成条件未满足".into(),
-                                )
-                            })
+                        (code, format!("{base}；模型说明：{excerpt}"))
                     };
                     let _ = ctx.update_manifest(|manifest| {
                         manifest.last_error = Some(SafeError {
