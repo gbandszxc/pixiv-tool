@@ -248,9 +248,11 @@ function severityLabel(severity: string): string {
 
 // ===== 预览 =====
 
-const chunkIds = computed(() =>
-  Array.from({ length: Math.min(chunks.value, 200) }, (_, index) => `c${String(index + 1).padStart(4, "0")}`)
-);
+const chunkIds = computed(() => {
+  if (job.value?.chunk_ids?.length) return job.value.chunk_ids;
+  // 旧快照（无计划字段）回退到序号；细分后的任务会因此漏块，仅作兼容。
+  return Array.from({ length: Math.min(chunks.value, 200) }, (_, index) => `c${String(index + 1).padStart(4, "0")}`);
+});
 const previews = ref(new Map<string, ChunkPreview>());
 const failedPreviews = ref(new Set<string>());
 const loadingPreviews = ref(new Set<string>());
@@ -410,6 +412,23 @@ watch(() => job.value?.constraint_version, (next, previous) => {
   constraints.value = null;
   if (tab.value === "terms") void loadConstraints();
 });
+
+// 进度计数变化说明有块完成翻译 / 审查：丢弃旧预览缓存并重新预取，
+// 否则早期读到的「未译」会一直留在列表里，与顶部计数矛盾。
+watch(
+  () => {
+    const counts = job.value?.counts;
+    return counts ? `${counts.translated}:${counts.reviewed}:${counts.needs_repair}` : "";
+  },
+  (next, previous) => {
+    if (next === previous || !previews.value.size) return;
+    previewToken += 1;
+    previews.value = new Map();
+    failedPreviews.value = new Set();
+    if (!chunkIds.value.includes(selectedChunk.value)) selectedChunk.value = chunkIds.value[0] ?? "";
+    if (open.value) void prefetchChunks();
+  },
+);
 
 // 等待确认：已打开面板时切到术语 tab（用户关闭时不强制重开）。
 watch(awaiting, (value) => {

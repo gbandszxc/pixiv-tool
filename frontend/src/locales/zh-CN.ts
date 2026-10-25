@@ -333,7 +333,7 @@ export default {
       categoryModified: "本组已修改 {count} 项",
       diagnosticsMeta: "仅本次运行",
       extraBudgetHint: "高级 JSON 与后台请求参数逐字段合并：同名字段覆盖默认值，其余字段原样新增。model、messages、system/instructions、stream、工具与凭据字段由应用写入，不能覆盖；扩展参数同样受输出上限与调用预算约束。",
-      budgetAuto: "0 = 自动（32 + 16 × 分块数）",
+      budgetAuto: "0 = 自动（64 + 32 × 分块数）",
       budgetManual: "按自定义上限执行，手动恢复或再细分不会重置",
       replayEnable: "允许自动重放",
       units: {

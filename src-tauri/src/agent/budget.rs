@@ -119,9 +119,11 @@ pub fn available_input(window: u32, output_cap: u32) -> u32 {
         .saturating_sub(SAFETY_MARGIN_TOKENS)
 }
 
-/// 自动调用预算：`32 + 16 × 初始分块数`。
+/// 自动调用预算：`64 + 32 × 初始分块数`。
+/// 每个块至少要经历扫描、翻译、审查，再加上主 Agent 调度、压缩摘要与
+/// 失败重派，单块的真实调用量远高于 16；留足余量避免正常任务被预算截断。
 pub fn auto_call_budget(chunks: u32) -> u32 {
-    32u32.saturating_add(16u32.saturating_mul(chunks))
+    64u32.saturating_add(32u32.saturating_mul(chunks))
 }
 
 /// 按 token 估算截断文本（用于摘要长度上限），返回不超过 `limit` 的文本。
@@ -298,9 +300,9 @@ mod tests {
 
     #[test]
     fn auto_budget_formula_and_zero_means_auto_only_at_config_level() {
-        assert_eq!(auto_call_budget(0), 32);
-        assert_eq!(auto_call_budget(3), 80);
-        assert_eq!(auto_call_budget(10), 192);
+        assert_eq!(auto_call_budget(0), 64);
+        assert_eq!(auto_call_budget(3), 160);
+        assert_eq!(auto_call_budget(10), 384);
         assert_eq!(BudgetConfig::default().call_budget, 0);
     }
 

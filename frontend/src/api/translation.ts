@@ -142,6 +142,8 @@ export interface TranslationJobSnapshot {
   /** 原文已是目标语言、未创建 Job（仅 start 响应可能为 true）。 */
   already_target_language: boolean;
   target_language: string;
+  /** 分块计划的块 ID（顺序即合并顺序）；细分后 ID 不连续，不能按序号拼。 */
+  chunk_ids?: string[];
 }
 
 /** 任务列表（seq = 所有 Job 的最大事件序号）。 */
@@ -542,7 +544,7 @@ async function mockStartJob(novel: NovelTranslationInput, _force: boolean): Prom
     error_code: null,
     seq: 0,
     constraint_version: 1,
-    budget: { used: 0, limit: 32 + 16 * MOCK_COUNTS.chunks, remaining: 32 + 16 * MOCK_COUNTS.chunks, manual_extra: 0 },
+    budget: { used: 0, limit: 64 + 32 * MOCK_COUNTS.chunks, remaining: 64 + 32 * MOCK_COUNTS.chunks, manual_extra: 0 },
     already_target_language: false,
     target_language: "zh-CN",
   };

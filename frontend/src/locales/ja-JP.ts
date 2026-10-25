@@ -317,7 +317,7 @@ export default {
       categoryModified: "このグループは {count} 件変更",
       diagnosticsMeta: "今回の実行のみ",
       extraBudgetHint: "詳細 JSON はリクエスト本文にフィールド単位でマージされます。同名のキーは既定値を上書きし、それ以外はそのまま追加されます。model、messages、system/instructions、stream、ツール、認証情報の各フィールドはアプリが書き込むため上書きできません。拡張パラメーターも出力上限と実行予算の対象です。",
-      budgetAuto: "0 = 自動（32 + 16 × 分割数）",
+      budgetAuto: "0 = 自動（64 + 32 × 分割数）",
       budgetManual: "指定した上限で実行します。手動の再開や再分割ではリセットされません",
       replayEnable: "自動再送を許可",
       units: {

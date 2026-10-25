@@ -119,7 +119,7 @@ pub struct Settings {
     pub translation_agent_chunk_max_chars: i64,
     /// 邻接参考窗口（前后各多少字符），默认 600，区间 0~20000。
     pub translation_agent_context_chars: i64,
-    /// 整篇累计模型尝试预算；0 = 自动公式（32 + 16 × 初始分块数），
+    /// 整篇累计模型尝试预算；0 = 自动公式（64 + 32 × 初始分块数），
     /// 自定义正整数区间 1~1000000。
     pub translation_call_budget: i64,
     /// 请求结果未知时是否自动重放；默认关闭（可能重复计费）。

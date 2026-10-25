@@ -332,7 +332,7 @@ export default {
       categoryModified: "{count} changed in this group",
       diagnosticsMeta: "This run only",
       extraBudgetHint: "Advanced JSON is merged into the request field by field: same-name keys override defaults and other keys pass through. model, messages, system/instructions, stream, tools and credential fields are written by the app and cannot be overridden; extra parameters still count against the output cap and call budget.",
-      budgetAuto: "0 = automatic (32 + 16 × chunks)",
+      budgetAuto: "0 = automatic (64 + 32 × chunks)",
       budgetManual: "Uses the custom limit; manual recovery or re-splitting does not reset it",
       replayEnable: "Allow automatic replay",
       units: {

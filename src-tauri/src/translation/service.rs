@@ -347,6 +347,9 @@ pub struct JobContext {
     pub dispatch_gate: Arc<Semaphore>,
     /// 本 Job 累计用量（跨多次运行）。
     usage: StdMutex<TokenUsage>,
+    /// 结果未知且按设置不自动重放的块：再次派发直接跳过，避免续跑时反复
+    /// 重发同一请求；用户手动恢复时清空。
+    unknown_blocked: StdMutex<BTreeSet<String>>,
     /// 产物访问器（持有 `Arc<JobStore>`，与上下文同寿命）。
     io: StoreIo,
 }
@@ -375,6 +378,28 @@ impl JobContext {
             max_no_progress: self.settings.translation_agent_stall_limit.clamp(3, 32) as u32,
             max_tool_corrections: self.settings.translation_agent_tool_corrections.clamp(0, 3)
                 as u32,
+        }
+    }
+
+    /// 该块上次结果未知且按设置不自动重放：再次派发直接跳过。
+    pub fn is_unknown_blocked(&self, chunk_id: &str) -> bool {
+        self.unknown_blocked
+            .lock()
+            .map(|set| set.contains(chunk_id))
+            .unwrap_or(false)
+    }
+
+    /// 标记块结果未知；后续派发不再自动请求，直到用户手动恢复任务。
+    pub fn block_unknown(&self, chunk_id: &str) {
+        if let Ok(mut set) = self.unknown_blocked.lock() {
+            set.insert(chunk_id.to_string());
+        }
+    }
+
+    /// 用户显式恢复任务时清空，允许重新请求这些块。
+    pub fn clear_unknown_blocks(&self) {
+        if let Ok(mut set) = self.unknown_blocked.lock() {
+            set.clear();
         }
     }
 
@@ -529,6 +554,10 @@ pub struct TranslationJobSnapshot {
     /// 原文已是目标语言、未创建 Job。
     pub already_target_language: bool,
     pub target_language: String,
+    /// 分块计划的块 ID（顺序即合并顺序）。细分后 ID 不再连续，前端不能按
+    /// 序号拼 ID；缺失时为空，由前端回退到旧行为。
+    #[serde(default)]
+    pub chunk_ids: Vec<String>,
 }
 
 /// 任务列表。
@@ -914,6 +943,7 @@ impl TranslationService {
                 budget: BudgetSnapshot::default(),
                 already_target_language: true,
                 target_language: target_code.to_string(),
+                chunk_ids: Vec::new(),
             });
         }
 
@@ -1045,6 +1075,7 @@ impl TranslationService {
             journal_lock: StdMutex::new(()),
             dispatch_gate,
             usage: StdMutex::new(TokenUsage::default()),
+            unknown_blocked: StdMutex::new(BTreeSet::new()),
             io: StoreIo::new(store),
         });
         let handle = Arc::new(JobHandle {
@@ -1126,7 +1157,8 @@ impl TranslationService {
             return Ok(self.handle_snapshot(&handle));
         }
         let (manifest, corrupt) = self.find_manifest(job_id)?;
-        let mut snapshot = snapshot_from_manifest(&manifest);
+        let job_dir = v2_job_dir(&self.inner.paths.data_dir, manifest.novel_id, job_id);
+        let mut snapshot = snapshot_from_manifest(&manifest, plan_chunk_ids_at(&job_dir));
         if corrupt {
             snapshot.message = "corrupt".into();
             snapshot.error_code = Some("corrupt_manifest".into());
@@ -1168,15 +1200,20 @@ impl TranslationService {
                         .unwrap_or_default();
                     match read_manifest_at(&job.path()) {
                         Some(manifest) => {
-                            by_id.insert(job_id, snapshot_from_manifest(&manifest));
+                            by_id.insert(
+                                job_id,
+                                snapshot_from_manifest(&manifest, plan_chunk_ids_at(&job.path())),
+                            );
                         }
                         None => {
-                            let mut snapshot =
-                                snapshot_from_manifest(&crate::agent::Manifest::new(&JobScope {
+                            let mut snapshot = snapshot_from_manifest(
+                                &crate::agent::Manifest::new(&JobScope {
                                     novel_id,
                                     job_id: job_id.clone(),
                                     generation: self.inner.generation.get(),
-                                }));
+                                }),
+                                Vec::new(),
+                            );
                             snapshot.state = JobState::Interrupted;
                             snapshot.error_code = Some("corrupt_manifest".into());
                             snapshot.message = "corrupt".into();
@@ -1328,6 +1365,11 @@ impl TranslationService {
             },
             already_target_language: false,
             target_language: handle.ctx.target_language.clone(),
+            chunk_ids: tools::plan_chunks(&handle.ctx)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|chunk| chunk.id)
+                .collect(),
         }
     }
 
@@ -1546,6 +1588,8 @@ impl TranslationService {
             return Err("任务缺少原文记录，无法从检查点恢复；请重新启动翻译".into());
         }
         handle.ctx.control.resume();
+        // 用户显式恢复 = 接受重新请求上次结果未知的块。
+        handle.ctx.clear_unknown_blocks();
         self.transition(&handle, JobState::Queued, "resumed", None);
         self.spawn_supervisor(handle);
         Ok(())
@@ -1656,6 +1700,7 @@ impl TranslationService {
             journal_lock: StdMutex::new(()),
             dispatch_gate,
             usage: StdMutex::new(usage),
+            unknown_blocked: StdMutex::new(BTreeSet::new()),
             io: StoreIo::new(Arc::new(
                 JobStore::open_guarded(&self.inner.paths, &scope, self.inner.generation.clone())
                     .map_err(|error| error.to_string())?,
@@ -2836,7 +2881,29 @@ fn read_manifest_at(path: &std::path::Path) -> Option<crate::agent::Manifest> {
     Some(manifest)
 }
 
-fn snapshot_from_manifest(manifest: &crate::agent::Manifest) -> TranslationJobSnapshot {
+/// v2 任务目录：`data/translations/v2/<novel_id>/<job_id>`。
+fn v2_job_dir(data_dir: &std::path::Path, novel_id: i64, job_id: &str) -> std::path::PathBuf {
+    data_dir
+        .join("translations")
+        .join("v2")
+        .join(novel_id.to_string())
+        .join(job_id)
+}
+
+/// 从任务目录读取分块计划的块 ID。细分后 ID 不再连续，只能以计划为准。
+fn plan_chunk_ids_at(job_dir: &std::path::Path) -> Vec<String> {
+    let Ok(bytes) = std::fs::read(job_dir.join("preparation").join("chunk-plan.json")) else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<tools::ChunkPlan>(&bytes)
+        .map(|plan| plan.entries.into_iter().map(|entry| entry.id).collect())
+        .unwrap_or_default()
+}
+
+fn snapshot_from_manifest(
+    manifest: &crate::agent::Manifest,
+    chunk_ids: Vec<String>,
+) -> TranslationJobSnapshot {
     let elapsed_ms = chrono::DateTime::parse_from_rfc3339(&manifest.created_at)
         .ok()
         .map(|created| {
@@ -2871,6 +2938,7 @@ fn snapshot_from_manifest(manifest: &crate::agent::Manifest) -> TranslationJobSn
         },
         already_target_language: false,
         target_language: manifest.target_language.clone(),
+        chunk_ids,
     }
 }
 

@@ -1244,6 +1244,14 @@ async fn dispatch_impl(
                 let ctx = ctx.clone();
                 let gate = gate.clone();
                 async move {
+                    // 结果未知且不自动重放的块：直接返回，避免续跑时反复重发同一请求。
+                    if ctx.is_unknown_blocked(&id) {
+                        return Ok(vec![ChunkOutcome::failed(
+                            &id,
+                            "unknown_outcome",
+                            "上次请求结果未知，未自动重放；手动恢复任务后可重试",
+                        )]);
+                    }
                     let _permit = gate.acquire_owned().await;
                     dispatch_one(&ctx, kind, &id).await
                 }
@@ -1257,12 +1265,11 @@ async fn dispatch_impl(
         }
     }
     outcomes.sort_by(|left, right| left.chunk_id.cmp(&right.chunk_id));
-    let fatal = outcomes.iter().any(|outcome| {
-        matches!(
-            outcome.status,
-            "permanent" | "budget_exhausted" | "unknown_outcome"
-        )
-    });
+    // 只有全局性错误才让整批 fatal。单块结果未知（unknown_outcome）只标记该块，
+    // 其余块照常返回——否则一次网络抖动就会让协调者重派整批，反复烧调用预算。
+    let fatal = outcomes
+        .iter()
+        .any(|outcome| matches!(outcome.status, "permanent" | "budget_exhausted"));
     let paused = outcomes.iter().any(|outcome| outcome.status == "paused");
     let _ = ctx.refresh_counts();
     tool_result(json!({
@@ -1406,6 +1413,7 @@ async fn dispatch_one_inner(
                     }
                     FailureClass::UnknownOutcome => {
                         if !ctx.settings.translation_agent_replay_unknown {
+                            ctx.block_unknown(chunk_id);
                             return Ok(vec![ChunkOutcome::failed(
                                 chunk_id,
                                 "unknown_outcome",
