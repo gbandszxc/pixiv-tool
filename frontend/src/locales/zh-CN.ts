@@ -842,7 +842,7 @@ export default {
       localSortLike: "点赞数",
       localSortBookmark: "收藏数",
       localSortView: "浏览数",
-      countsLoading: "正在获取本页计数 {done}/{total}…",
+      countsLoading: "正在获取本页计数（{total} 项）…",
       countsFailed: "计数获取失败，缺失项排在末尾",
     },
     novel: {

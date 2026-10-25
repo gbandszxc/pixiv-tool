@@ -799,7 +799,7 @@ export default {
       localSortLike: "いいね！数",
       localSortBookmark: "ブックマーク数",
       localSortView: "閲覧数",
-      countsLoading: "このページの件数データを取得中 {done}/{total}…",
+      countsLoading: "このページの件数データを取得中（{total} 件）…",
       countsFailed: "件数データを取得できませんでした。未取得の作品は末尾に表示します",
     },
     novel: {

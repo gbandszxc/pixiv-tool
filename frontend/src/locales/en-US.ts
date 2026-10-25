@@ -842,7 +842,7 @@ export default {
       localSortLike: "Likes",
       localSortBookmark: "Bookmarks",
       localSortView: "Views",
-      countsLoading: "Loading counts {done}/{total}…",
+      countsLoading: "Loading counts for {total} items…",
       countsFailed: "Failed to load counts; items without data are placed last",
     },
     novel: {

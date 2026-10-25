@@ -19,7 +19,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  * - 本页排序：维度（点赞/收藏/浏览）下拉 + 升降方向切换（SortDirectionToggle），
  *   仅对当前显示页 20 条本地排序；
  *   优先复用列表已有计数（小说自带收藏数），仅所选维度缺失时经 browse_work_counts
- *   分批补取（全局限速），会话内缓存 + 进度提示，缺失项垫底。
+ *   整页一次性补取（全局限速），补齐后只重排一次，缺失项垫底。
  */
 import { computed, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter, type LocationQuery } from "vue-router";
@@ -198,8 +198,9 @@ const MAX_COUNT_ENTRIES = 5000;
 /** 缓存版本：普通 Map 非响应式，写入后自增以驱动 sortedItems 重算。 */
 const countsVersion = ref(0);
 const countsLoading = ref(false);
-const countsDone = ref(0);
 const countsTotal = ref(0);
+/** 已完成计数补取的页面代次（seq）。未完成前保持接口顺序，避免计数分批到达引起多次重排。 */
+const countsResolvedSeq = ref(-1);
 /** 补取期间又来了新页请求：本轮结束后补跑一次。 */
 let countsPending = false;
 
@@ -214,8 +215,9 @@ function missingCountItems(): BrowseWorkItem[] {
 }
 
 /**
- * 分批补取当前显示页计数（每批 10 个，进度可见）。
- * 单项请求失败由后端跳过 → 该条计数缺失、排序垫底；整批网络失败提示并保留缺失。
+ * 补取当前显示页缺失计数：整页一次 IPC（后端逐项请求详情，全局限速排队）。
+ * 只有整页计数返回后才重排一次，避免分批到达导致顺序多次变化。
+ * 整批失败提示并保留缺失；缺失项在重排时垫底。
  */
 async function ensureCounts(): Promise<void> {
   if (countsLoading.value) {
@@ -228,26 +230,22 @@ async function ensureCounts(): Promise<void> {
   const requestSeq = seq;
   countsLoading.value = true;
   countsTotal.value = missing.length;
-  countsDone.value = 0;
   try {
-    for (let i = 0; i < missing.length; i += 10) {
-      if (requestSeq !== seq || !sortKey.value) break;
-      const batch = missing.slice(i, i + 10);
-      const data = await browseWorkCounts(requestKind, batch.map((it) => it.id));
-      for (const it of batch) {
-        const counts = data.counts[String(it.id)];
-        if (!counts) continue;
-        countsCache.set(countKey(it), counts);
-        if (countsCache.size > MAX_COUNT_ENTRIES) {
-          countsCache.delete(countsCache.keys().next().value!);
-        }
+    const data = await browseWorkCounts(requestKind, missing.map((it) => it.id));
+    for (const it of missing) {
+      const counts = data.counts[String(it.id)];
+      if (!counts) continue;
+      countsCache.set(countKey(it), counts);
+      if (countsCache.size > MAX_COUNT_ENTRIES) {
+        countsCache.delete(countsCache.keys().next().value!);
       }
-      countsVersion.value += 1;
-      countsDone.value = Math.min(i + batch.length, missing.length);
     }
   } catch (err) {
     notify(errorMessage(err) || t("browse.search.countsFailed"));
   } finally {
+    // 无论成功与否都解除等待：失败时按已知计数重排一次，缺失项垫底。
+    countsVersion.value += 1;
+    countsResolvedSeq.value = requestSeq;
     countsLoading.value = false;
     if (countsPending) {
       countsPending = false;
@@ -262,13 +260,20 @@ function metricOf(item: BrowseWorkItem, key: SortKey): number | null {
   return counts?.[field] ?? item[field] ?? null;
 }
 
-/** 展示条目：默认 = 接口顺序；计数缺失项恒垫底。 */
+/**
+ * 展示条目：默认 = 接口顺序；选中所选维度后，等整页计数补齐再一次性重排
+ * （缺失项恒垫底）。计数未就绪期间保持接口顺序，避免中途多次跳序。
+ */
 const sortedItems = computed<BrowseWorkItem[]>(() => {
   void countsVersion.value; // 建立响应式依赖（countsCache 为普通 Map）
   const key = sortKey.value;
-  if (!key) return items.value;
+  const raw = items.value;
+  if (!key) return raw;
+  const awaiting =
+    countsResolvedSeq.value !== seq && raw.some((it) => metricOf(it, key) === null);
+  if (awaiting) return raw;
   const sign = sortDir.value === "desc" ? -1 : 1;
-  return [...items.value].sort((a, b) => {
+  return [...raw].sort((a, b) => {
     const av = metricOf(a, key);
     const bv = metricOf(b, key);
     if (av === null && bv === null) return 0;
@@ -527,7 +532,7 @@ const typeTabs = computed(() => [
         {{ t("browse.search.total", { count: total }) }}
       </p>
       <span v-if="countsLoading" class="counts-progress" role="status">
-        {{ t("browse.search.countsLoading", { done: countsDone, total: countsTotal }) }}
+        {{ t("browse.search.countsLoading", { total: countsTotal }) }}
       </span>
     </div>
 
