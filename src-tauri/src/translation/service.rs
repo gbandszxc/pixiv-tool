@@ -2066,6 +2066,10 @@ impl TranslationService {
         };
         let mut progress = 0u64;
         for chunk in &chunks {
+            // 扫描是 Pass 1 的主要工作量，计入进展避免扫描中途的续跑被误判无进展。
+            if tools::read_scan_for_progress(ctx, &chunk.id).is_some() {
+                progress += 1;
+            }
             if tools::read_draft_for_verify(ctx, &chunk.id)
                 .ok()
                 .flatten()

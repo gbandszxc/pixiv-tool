@@ -713,6 +713,16 @@ fn read_chunk_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
     )
 }
 
+/// 读取有效扫描记录（存在且带当前约束阶段版本戳），供续跑进展快照使用。
+pub(crate) fn read_scan_for_progress(ctx: &JobContext, chunk_id: &str) -> Option<()> {
+    let versions = phase_versions(ctx);
+    read_scan(ctx, chunk_id)
+        .ok()
+        .flatten()
+        .filter(|_| stamped(ctx, "scan", chunk_id, versions.prepare_constraints))
+        .map(|_| ())
+}
+
 /// 协调者工具结果大小预估器：`read_chunk` 按块字符数（含邻接窗口）估算
 /// 结果 token；其余工具结果都很小，返回 0 不参与单轮预算。
 pub(crate) struct ChunkResultEstimator {
@@ -2233,9 +2243,17 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                     .map_err(|error| tool_error("storage", &error))?;
                 let versions = phase_versions(&ctx);
                 let chunks = plan_chunks(&ctx).unwrap_or_default();
+                let mut pending_scan = Vec::new();
                 let mut pending_translate = Vec::new();
                 let mut pending_review = Vec::new();
                 for chunk in &chunks {
+                    let scan_valid = read_scan(&ctx, &chunk.id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|_| stamped(&ctx, "scan", &chunk.id, versions.prepare_constraints));
+                    if !scan_valid {
+                        pending_scan.push(chunk.id.clone());
+                    }
                     let draft = read_draft(&ctx, &chunk.id).ok().flatten();
                     let draft_valid = draft.as_ref().is_some_and(|draft| {
                         stamped(&ctx, "draft", &chunk.id, versions.translate)
@@ -2287,6 +2305,7 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                         "manual_extra": budget.manual_extra,
                     },
                     "chunk_ids": chunks.iter().map(|chunk| chunk.id.clone()).collect::<Vec<_>>(),
+                    "pending_scan": pending_scan,
                     "pending_translate": pending_translate,
                     "pending_review": pending_review,
                     "awaiting_confirmation": ctx.control.awaiting_confirmation(),

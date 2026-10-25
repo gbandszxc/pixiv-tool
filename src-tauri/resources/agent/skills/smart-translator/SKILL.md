@@ -63,7 +63,7 @@ resource_id: skill:smart-translator
 | `record_global_review` | `record_global_review(sample_chunk_ids[], notes, passed)` | 协调者 |
 | `publish` | `publish()` → `{published, status, unresolved}` | 协调者 |
 | `reset_phase` | `reset_phase(phase)` → 使该阶段及下游产物失效 | 协调者 |
-| `job_status` | `job_status()` → 状态、阶段、计数、预算 | 协调者 |
+| `job_status` | `job_status()` → 状态、阶段、计数、预算与待办（`pending_scan` / `pending_translate` / `pending_review`） | 协调者 |
 | `read_translation` | `read_translation(chunk_id)` → 译文、冻结约束版本、相关术语与风格 | 审查 |
 | `submit_translation` | `submit_translation(chunk_id, segments:[{id, text}])` | 翻译 |
 | `submit_review` | `submit_review(chunk_id, verdict, issues:[{segment_id, kind, severity, detail}], notes)` | 审查 |
@@ -138,6 +138,8 @@ resource_id: skill:smart-translator
 对全部块调用一次 `read_chunk_summary(chunk_ids)`。摘要包含每块的术语、风格与问题计数，不含全文。用摘要建立块级索引，供 Pass 1、整体复核与失败定位使用。
 
 调用 `job_status()` 记录阶段、计数与预算。每进入一个阶段、每次大批量派发前重新读取。
+
+`pending_scan` / `pending_translate` / `pending_review` 是当前待办块的权威清单：从检查点继续或压缩后记忆模糊时，以它为准决定下一批 `read_chunk` / `submit_scan` / 派发，不依赖历史回忆，也不重复处理不在清单中的块。
 
 ### 5.3 格式与标记
 
