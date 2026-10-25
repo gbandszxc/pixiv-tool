@@ -95,6 +95,15 @@ export const useTranslationStore = defineStore("translation", () => {
 
   /** 事件时间戳：估算「已用」时在快照 elapsed_ms 上补上两次事件之间的间隔。 */
   const receivedAt = new Map<string, number>();
+  /**
+   * jobId → 停止累加时的耗时（毫秒）。
+   *
+   * 后端快照没有「结束时间」字段，只有 elapsed_ms；任务一旦离开 running，
+   * 就在首次观察到该非 running 快照时把它当时的 elapsed_ms 记下来并冻结展示，
+   * 这样重新打开浮层、切换 tab 或多日后回看都不会继续增长。
+   * 再次进入 running（暂停后继续）时清除，回到 running 的补时逻辑。
+   */
+  const frozenElapsed = new Map<string, number>();
   /** 本地已应用的最大 seq（快照落后时不回退）。 */
   const seqByJob = new Map<string, number>();
   /** `${jobId}:${chunkId}` → 预览（非响应式，组件自持展示状态）。 */
@@ -170,6 +179,9 @@ export const useTranslationStore = defineStore("translation", () => {
     const previous = jobs.value.get(snapshot.job_id);
     jobs.value.set(snapshot.job_id, snapshot);
     receivedAt.set(snapshot.job_id, Date.now());
+    // 耗时只在 running 状态累加：一旦观察到非 running 快照，冻结当时的 elapsed_ms。
+    if (snapshot.state === "running") frozenElapsed.delete(snapshot.job_id);
+    else if (!frozenElapsed.has(snapshot.job_id)) frozenElapsed.set(snapshot.job_id, snapshot.elapsed_ms);
 
     const novelId = snapshot.novel_id;
     const currentId = activeByNovel.value.get(novelId);
@@ -224,6 +236,7 @@ export const useTranslationStore = defineStore("translation", () => {
         jobs.value.delete(jobId);
         seqByJob.delete(jobId);
         receivedAt.delete(jobId);
+        frozenElapsed.delete(jobId);
       }
     }
     for (const [novelId, jobId] of [...activeByNovel.value.entries()]) {
@@ -247,6 +260,7 @@ export const useTranslationStore = defineStore("translation", () => {
     constraintsCache.clear();
     seqByJob.clear();
     receivedAt.clear();
+    frozenElapsed.clear();
     novelTitles.value.clear();
   }
 
@@ -304,19 +318,22 @@ export const useTranslationStore = defineStore("translation", () => {
     return novelTitles.value.get(novelId) ?? "";
   }
 
-  /** 已用时间：活跃任务的快照 elapsed_ms 补上最近一次事件到现在的间隔。 */
+  /**
+   * 已用时间：只有 running 状态才在快照 elapsed_ms 上补上最近一次事件到现在的间隔。
+   * 其余状态（暂停 / 待确认 / 需要处理 / 终态）返回冻结值，不再随时间增长。
+   */
   function elapsedFor(job: TranslationJobSnapshot): number {
-    if (!isActiveJobState(job.state)) return job.elapsed_ms;
+    if (job.state !== "running") return frozenElapsed.get(job.job_id) ?? job.elapsed_ms;
     const stamp = receivedAt.get(job.job_id);
     return stamp ? job.elapsed_ms + Math.max(0, now.value - stamp) : job.elapsed_ms;
   }
 
-  /** 有活跃任务时每秒推进一次 now，供状态栏「已用」自走。 */
+  /** 有 running 任务时每秒推进一次 now，供状态栏与浮层「已用」自走；其余状态已冻结。 */
   watchEffect(() => {
-    const active = activeJobs.value.length > 0;
-    if (active && ticker === null) {
+    const ticking = activeJobs.value.some((job) => job.state === "running");
+    if (ticking && ticker === null) {
       ticker = window.setInterval(() => { now.value = Date.now(); }, 1000);
-    } else if (!active && ticker !== null) {
+    } else if (!ticking && ticker !== null) {
       window.clearInterval(ticker);
       ticker = null;
     }

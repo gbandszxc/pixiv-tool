@@ -605,6 +605,15 @@ function mockPreview(jobId: string, chunkId: string): ChunkPreview {
   const order = Math.max(1, Number.parseInt(chunkId.replace(/\D/g, ""), 10) || 1);
   const translatedCount = job?.counts.translated ?? 0;
   const translated = order <= translatedCount;
+  const reviewed = (job?.counts.reviewed ?? 0) >= order;
+  const needsRepair = (job?.counts.needs_repair ?? 0) > 0 && order === translatedCount;
+  const segmentId = `p00${mockChunkSegments(order)[1].page}-l001-s0`;
+  // 浏览器 mock：通过块带一条 minor 建议、待修块带一条 major，便于视觉验收两种口径。
+  const review: ChunkPreview["review"] = !reviewed
+    ? null
+    : needsRepair
+      ? { verdict: "needs_fix", notes: "", issues: [{ segment_id: segmentId, kind: "terminology", severity: "major", detail: "术语未按冻结译名输出。" }] }
+      : { verdict: "pass", notes: "", issues: order === 2 ? [{ segment_id: segmentId, kind: "style", severity: "minor", detail: "语气可以更贴近前后段落。" }] : [] };
   return {
     chunk_id: chunkId,
     order,
@@ -613,9 +622,9 @@ function mockPreview(jobId: string, chunkId: string): ChunkPreview {
     context_prev: order > 1 ? "上一块的结尾上下文。" : "",
     context_next: "下一块的开头上下文。",
     draft_version: translated ? 1 : 0,
-    reviewed: (job?.counts.reviewed ?? 0) >= order,
-    needs_repair: (job?.counts.needs_repair ?? 0) > 0 && order === translatedCount,
-    review: null,
+    reviewed,
+    needs_repair: needsRepair,
+    review,
   };
 }
 

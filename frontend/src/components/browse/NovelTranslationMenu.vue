@@ -246,6 +246,11 @@ function severityLabel(severity: string): string {
   return (SEVERITIES as readonly string[]).includes(severity) ? t(`translation.job.severity.${severity}`) : severity;
 }
 
+/** 问题处置口径：minor 只是建议，major / critical 才是待修。 */
+function issueStatusLabel(severity: string): string {
+  return severity === "minor" ? t("translation.job.issueStatus.suggestion") : t("translation.job.issueStatus.repair");
+}
+
 // ===== 预览 =====
 
 const chunkIds = computed(() => {
@@ -306,6 +311,25 @@ async function prefetchChunks(): Promise<void> {
 const selectedPreview = computed(() => previews.value.get(selectedChunk.value) ?? null);
 const selectedFailure = computed(() => failedPreviews.value.has(selectedChunk.value));
 const selectedLoading = computed(() => loadingPreviews.value.has(selectedChunk.value));
+
+/**
+ * 已通过块的建议条数：审查结论为 pass 的块可能附带 minor issues，
+ * 它们不是待修项，只在通过标签上提示数量。
+ */
+const selectedSuggestionCount = computed(() => {
+  const preview = selectedPreview.value;
+  const review = preview?.review;
+  if (!preview?.reviewed || !review || review.verdict !== "pass") return 0;
+  return review.issues.filter((issue) => issue.severity === "minor").length;
+});
+const reviewedBadgeText = computed(() => {
+  const preview = selectedPreview.value;
+  if (!preview?.reviewed) return t("translation.job.notReviewed");
+  if (selectedSuggestionCount.value > 0) {
+    return t("translation.job.reviewedWithSuggestions", { count: selectedSuggestionCount.value });
+  }
+  return t("translation.job.reviewed");
+});
 
 function translatedFor(preview: ChunkPreview, segmentId: string): string {
   return preview.translated?.find((item) => item.id === segmentId)?.text ?? "";
@@ -669,7 +693,7 @@ onBeforeUnmount(() => {
                 <div class="chunk-badges">
                   <span class="chunk-badge">{{ t('translation.job.chunkOrder', { order: selectedPreview.order }) }}</span>
                   <span class="chunk-badge" :class="{ ok: selectedPreview.reviewed }">
-                    {{ selectedPreview.reviewed ? t('translation.job.reviewed') : t('translation.job.notReviewed') }}
+                    {{ reviewedBadgeText }}
                   </span>
                   <span v-if="selectedPreview.needs_repair" class="chunk-badge warn">{{ t('translation.job.needsRepair') }}</span>
                 </div>
@@ -710,7 +734,7 @@ onBeforeUnmount(() => {
               <ul class="issue-list">
                 <li v-for="(issue, index) in sortedIssues" :key="index" class="issue-row">
                   <div class="issue-head">
-                    <span class="issue-severity" :class="`is-${issue.severity}`">{{ severityLabel(issue.severity) }}</span>
+                    <span class="issue-severity" :class="`is-${issue.severity}`" :title="severityLabel(issue.severity)">{{ issueStatusLabel(issue.severity) }}</span>
                     <span v-if="chunkOf(issue)" class="issue-chunk">{{ chunkOf(issue) }}</span>
                     <span v-if="segmentOf(issue)" class="issue-segment">{{ segmentOf(issue) }}</span>
                   </div>
