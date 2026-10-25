@@ -477,6 +477,7 @@ export default {
         incomplete_review: "Some chunks have not passed review",
         incomplete_global_review: "Global review is not finished or not passed",
         incomplete_publish: "Merge or publish is not finished",
+        model_declined: "The model declined or stopped without calling tools",
       },
       statusBarTaskTime: "elapsed {time}",
       termsUnavailable: "No term data available",

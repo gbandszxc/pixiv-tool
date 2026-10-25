@@ -462,6 +462,7 @@ export default {
         incomplete_review: "未レビューのチャンクがあります",
         incomplete_global_review: "全体レビューが未完了または未合格です",
         incomplete_publish: "マージまたは公開が未完了です",
+        model_declined: "モデルが拒否、またはツールを呼ばずに終了しました",
       },
       statusBarTaskTime: "経過 {time}",
       termsUnavailable: "用語データがありません",

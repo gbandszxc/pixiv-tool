@@ -2538,6 +2538,44 @@ async fn retryable_provider_error_is_retried_before_giving_up() {
 }
 
 #[tokio::test]
+async fn zero_tool_turns_surface_the_model_message_as_reason() {
+    let fixture = fixture("declined");
+    // 模型每轮都只回文本（内容审核拒绝的典型形态）：两轮后应停止并把原因透出。
+    let handler: Handler =
+        Arc::new(|_body: &Value| text_stream("我无法继续处理这篇内容，涉及未成年角色的露骨描写。"));
+    let server = MockServer::start(handler).await;
+    let service = service(
+        &fixture.paths,
+        settings_for(&server),
+        Arc::new(RecordingSink::new()),
+    );
+
+    let started = service.start(novel(), false).await.expect("启动成功");
+    let done = wait_for(
+        &service,
+        &started.job_id,
+        &[
+            JobState::NeedsAttention,
+            JobState::Completed,
+            JobState::Cancelled,
+        ],
+    )
+    .await;
+    assert_eq!(done.state, JobState::NeedsAttention);
+    assert_eq!(
+        done.error_code.as_deref(),
+        Some("model_declined"),
+        "零工具调用的收敛应使用 model_declined：{:?}",
+        done.error_code
+    );
+    assert!(
+        done.message.contains("无法继续处理"),
+        "应把模型说明作为用户可见原因：{}",
+        done.message
+    );
+}
+
+#[tokio::test]
 async fn bulk_read_chunk_throttled_by_turn_budget_still_completes() {
     let fixture = fixture("throttle");
     // 有状态机：跨压缩保留进度（真实模型依据压缩摘要与检查点继续推进）。

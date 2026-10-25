@@ -1924,6 +1924,8 @@ impl TranslationService {
         let mut last_progress = self.progress_snapshot(ctx);
         let mut idle_runs: u32 = 0;
         let mut empty_runs: u32 = 0;
+        // 最后一轮正常结束时的模型回答：零工具调用收敛时作为用户可见原因。
+        let mut last_stop_text = String::new();
         let mut run_index: u32 = 0;
         // 限流 / 暂时性服务错误的重试计数：与「无进展续跑」分开，按设置的
         // 重试次数与退避策略在任务级重跑整轮，而不是立刻转 needs_attention。
@@ -2018,6 +2020,9 @@ impl TranslationService {
                         "budget_used": ctx.budget.snapshot().used,
                     }));
                     self.record_usage(handle, run_outcome.usage);
+                    if !run_outcome.text.trim().is_empty() {
+                        last_stop_text = run_outcome.text.clone();
+                    }
                     if self.verify_complete(ctx) {
                         break Ok(());
                     }
@@ -2120,15 +2125,28 @@ impl TranslationService {
                 if self.verify_complete(ctx) {
                     self.transition(handle, JobState::Completed, "completed", None);
                 } else {
-                    // 按产物状态细分卡住的阶段，避免统一 incomplete 让用户无从判断。
-                    let (code, message) = Self::incomplete_stage(ctx)
-                        .map(|(stage, message)| (format!("incomplete_{stage}"), message))
-                        .unwrap_or_else(|| {
-                            (
-                                "incomplete".into(),
-                                "模型结束运行但完成条件未满足".into(),
-                            )
-                        });
+                    // 模型连续零工具调用后给出的说明（常见于内容审核拒绝）直接作为
+                    // 用户可见原因：比笼统的 incomplete 更能解释「为什么不动」。
+                    let declined = empty_runs >= MAX_EMPTY_RUNS && !last_stop_text.trim().is_empty();
+                    let (code, message) = if declined {
+                        (
+                            "model_declined".to_string(),
+                            format!(
+                                "模型未调用工具即结束：{}",
+                                crate::agent::events::safe_text(&last_stop_text, 240)
+                            ),
+                        )
+                    } else {
+                        // 按产物状态细分卡住的阶段，避免统一 incomplete 让用户无从判断。
+                        Self::incomplete_stage(ctx)
+                            .map(|(stage, message)| (format!("incomplete_{stage}"), message))
+                            .unwrap_or_else(|| {
+                                (
+                                    "incomplete".into(),
+                                    "模型结束运行但完成条件未满足".into(),
+                                )
+                            })
+                    };
                     let _ = ctx.update_manifest(|manifest| {
                         manifest.last_error = Some(SafeError {
                             code: code.clone(),

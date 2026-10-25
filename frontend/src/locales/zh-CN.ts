@@ -478,6 +478,7 @@ export default {
         incomplete_review: "还有分块未审查通过",
         incomplete_global_review: "整体复核未完成或未通过",
         incomplete_publish: "合并或发布未完成",
+        model_declined: "模型拒绝或未调用工具即结束",
       },
       statusBarTaskTime: "已用 {time}",
       termsUnavailable: "暂无术语数据",
