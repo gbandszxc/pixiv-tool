@@ -918,11 +918,21 @@ impl TranslationService {
         }
 
         // 2. 同一小说、同一原文版本、同一目标语言：加入既有 Job。
+        //    加入的是失败 / 暂停 / 中断的任务时，用户意图明确是继续翻译：自动恢复。
+        //    恢复校验（世代、资源版本）不通过时保留原状态返回，不阻断启动语义。
         if !force
             && let Some(existing_job_id) =
                 self.find_reusable_job(novel.novel_id, &source.input_hash, target_code)?
         {
-            return self.snapshot(&existing_job_id).await;
+            let snapshot = self.snapshot(&existing_job_id).await?;
+            if matches!(
+                snapshot.state,
+                JobState::NeedsAttention | JobState::Paused | JobState::Interrupted
+            ) && self.resume(&existing_job_id).await.is_ok()
+            {
+                return self.snapshot(&existing_job_id).await;
+            }
+            return Ok(snapshot);
         }
 
         // 3. 新 Job：先估算块数与预算，再创建目录。
@@ -2019,21 +2029,23 @@ impl TranslationService {
                 if self.verify_complete(ctx) {
                     self.transition(handle, JobState::Completed, "completed", None);
                 } else {
-                    let error = ctx
-                        .read_manifest()
-                        .ok()
-                        .and_then(|manifest| manifest.last_error)
-                        .unwrap_or_else(|| SafeError {
-                            code: "incomplete".into(),
-                            message: "模型结束运行但完成条件未满足".into(),
+                    // 按产物状态细分卡住的阶段，避免统一 incomplete 让用户无从判断。
+                    let (code, message) = Self::incomplete_stage(ctx)
+                        .map(|(stage, message)| (format!("incomplete_{stage}"), message))
+                        .unwrap_or_else(|| {
+                            (
+                                "incomplete".into(),
+                                "模型结束运行但完成条件未满足".into(),
+                            )
+                        });
+                    let _ = ctx.update_manifest(|manifest| {
+                        manifest.last_error = Some(SafeError {
+                            code: code.clone(),
+                            message: message.clone(),
                             step: phase.as_str().into(),
                         });
-                    self.transition(
-                        handle,
-                        JobState::NeedsAttention,
-                        "incomplete",
-                        Some(&error.code),
-                    );
+                    });
+                    self.transition(handle, JobState::NeedsAttention, &message, Some(&code));
                 }
             }
             Err(error) => {
@@ -2055,6 +2067,76 @@ impl TranslationService {
             }
         }
         Ok(())
+    }
+
+    /// 完成校验未通过时，按磁盘产物定位卡住的阶段与用户可读原因。
+    /// 返回 `None` 表示定位失败（保持笼统的 incomplete）。
+    fn incomplete_stage(ctx: &JobContext) -> Option<(&'static str, String)> {
+        let chunks = tools::plan_chunks(ctx).ok()?;
+        if chunks.is_empty() {
+            return Some(("prepare", "原文尚未完成分块".into()));
+        }
+        let scanned = chunks
+            .iter()
+            .filter(|chunk| tools::read_scan_for_progress(ctx, &chunk.id).is_some())
+            .count();
+        if scanned < chunks.len() {
+            return Some((
+                "scan",
+                format!("还有 {} 个分块未完成扫描", chunks.len() - scanned),
+            ));
+        }
+        let frozen = ctx.with_artifacts(|artifacts| {
+            artifacts
+                .read_constraints()
+                .ok()
+                .flatten()
+                .is_some_and(|constraints| constraints.frozen)
+        });
+        if !frozen {
+            return Some(("constraints", "术语与风格尚未冻结".into()));
+        }
+        let drafted = chunks
+            .iter()
+            .filter(|chunk| {
+                tools::read_draft_for_verify(ctx, &chunk.id)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
+            .count();
+        if drafted < chunks.len() {
+            return Some((
+                "translate",
+                format!("还有 {} 个分块未翻译", chunks.len() - drafted),
+            ));
+        }
+        let reviewed = chunks
+            .iter()
+            .filter(|chunk| {
+                tools::read_review_for_verify(ctx, &chunk.id)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
+            .count();
+        if reviewed < chunks.len() {
+            return Some((
+                "review",
+                format!("还有 {} 个分块未审查通过", chunks.len() - reviewed),
+            ));
+        }
+        let global_passed = ctx.with_artifacts(|artifacts| {
+            artifacts
+                .read_global_review()
+                .ok()
+                .flatten()
+                .is_some_and(|global| global.passed)
+        });
+        if !global_passed {
+            return Some(("global_review", "整体复核未完成或未通过".into()));
+        }
+        Some(("publish", "合并或发布未完成".into()))
     }
 
     /// 任务推进度的粗粒度快照：直接数磁盘产物（草稿、审查、冻结、发布），

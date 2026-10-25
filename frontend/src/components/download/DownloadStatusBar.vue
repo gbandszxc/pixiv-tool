@@ -39,9 +39,26 @@ function jobTitle(job: TranslationJobSnapshot): string {
 }
 function stateText(job: TranslationJobSnapshot): string { return t(`translation.job.state.${job.state}`); }
 function phaseText(job: TranslationJobSnapshot): string { return t(`translation.job.phase.${job.phase}`); }
+/** 页码只在任务推进中有意义；暂停 / 失败等静止态不显示「页码未知」。 */
 function pageText(job: TranslationJobSnapshot): string {
+  if (job.state !== "running" && job.state !== "pausing" && job.state !== "awaiting_confirmation") {
+    return "";
+  }
   const page = job.current?.page;
   return page != null ? t("translation.job.page", { page }) : t("translation.job.pageUnknown");
+}
+/** 底栏单任务徽标：标题 + 可选页码 + 状态；页码为空时不留空段。 */
+function badgeText(job: TranslationJobSnapshot): string {
+  const page = pageText(job);
+  const head = page ? `${jobTitle(job)} · ${page}` : jobTitle(job);
+  return `${head} · ${stateText(job)}`;
+}
+/** 任务选择菜单行：状态 · 阶段 · 已用；页码为空时省略该段。 */
+function pickerMeta(job: TranslationJobSnapshot): string {
+  const page = pageText(job);
+  return page
+    ? t("translation.job.statusBarTaskMeta", { page, state: stateText(job), phase: phaseText(job), time: elapsedText(job) })
+    : `${stateText(job)} · ${phaseText(job)} · ${t("translation.job.statusBarTaskTime", { time: elapsedText(job) })}`;
 }
 /** 已用时间：分′秒″；活跃任务在 store 的 1s ticker 上自走。 */
 function elapsedText(job: TranslationJobSnapshot): string {
@@ -91,11 +108,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
     <button
       v-if="jobs.length === 1"
       class="status-translation"
-      :aria-label="t('translation.statusBarBackTo') + '：' + t('translation.job.statusBarSingle', { title: jobTitle(jobs[0]), page: pageText(jobs[0]), state: stateText(jobs[0]) })"
-      :title="t('translation.job.statusBarSingle', { title: jobTitle(jobs[0]), page: pageText(jobs[0]), state: stateText(jobs[0]) })"
+      :aria-label="t('translation.statusBarBackTo') + '：' + badgeText(jobs[0])"
+      :title="badgeText(jobs[0])"
       @click="goToNovel(jobs[0].novel_id)"
     >
-      <span class="translation-full">{{ t('translation.job.statusBarSingle', { title: jobTitle(jobs[0]), page: pageText(jobs[0]), state: stateText(jobs[0]) }) }}</span>
+      <span class="translation-full">{{ badgeText(jobs[0]) }}</span>
       <span class="translation-short">{{ t('translation.job.statusBarShort') }}</span>
     </button>
     <!-- 多任务：计数入口 + 上方任务选择菜单（同一浮层配方） -->
@@ -111,7 +128,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
           <span class="picker-dot" :class="`is-${job.state}`" aria-hidden="true"></span>
           <span class="picker-body">
             <span class="picker-name">{{ jobTitle(job) }}</span>
-            <span class="picker-meta">{{ t('translation.job.statusBarTaskMeta', { page: pageText(job), state: stateText(job), phase: phaseText(job), time: elapsedText(job) }) }}</span>
+            <span class="picker-meta">{{ pickerMeta(job) }}</span>
           </span>
         </button>
       </div>

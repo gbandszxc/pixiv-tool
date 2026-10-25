@@ -64,9 +64,11 @@ function clip(text: string): string {
 const summaryLine = computed(() => clip(props.job.preview?.summary ?? ""));
 const reasoningLine = computed(() => (summaryLine.value ? "" : clip(props.job.preview?.reasoning ?? "")));
 const previewLine = computed(() => summaryLine.value || reasoningLine.value);
-/** 「后台继续」只属于仍在推进的任务；完成/暂停/失败不应显示这句提示。 */
+/** 「后台继续」只属于仍在推进的任务；暂停 / 失败 / 完成不应显示这句提示。 */
 const backgroundHint = computed(() =>
-  !previewLine.value && isActiveJobState(props.job.state) ? t("translation.progressBackgroundHint") : "",
+  !previewLine.value && (props.job.state === "running" || props.job.state === "pausing")
+    ? t("translation.progressBackgroundHint")
+    : "",
 );
 
 // ===== 摘要 marquee：仅单行溢出时滚动（思考态静态省略） =====

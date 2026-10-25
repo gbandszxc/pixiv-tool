@@ -110,6 +110,20 @@ const errorCode = computed(() => {
   if (!current?.error_code) return "";
   return current.state === "needs_attention" || current.state === "interrupted" ? current.error_code : "";
 });
+/** 错误码的可读描述：有本地化映射时显示描述并附原始码，否则原样显示。 */
+const errorCodeText = computed(() => {
+  const code = errorCode.value;
+  if (!code) return "";
+  const key = `translation.job.errorCodes.${code}`;
+  const desc = t(key);
+  return desc === key ? code : `${desc}（${code}）`;
+});
+/** 失败 / 中断时显示后端给出的可读原因（如「还有 2 个分块未翻译」）。 */
+const failureMessage = computed(() => {
+  const current = job.value;
+  if (!current?.message) return "";
+  return current.state === "needs_attention" || current.state === "interrupted" ? current.message : "";
+});
 
 const partialNotice = computed(() => {
   if (props.resultStatus === "complete") return "";
@@ -510,7 +524,8 @@ onBeforeUnmount(() => {
           <TranslationProgressBanner v-if="job" :job="job" />
           <p v-else class="panel-empty">{{ t('translation.job.notStarted') }}</p>
           <p v-if="partialNotice" class="panel-notice">{{ partialNotice }}</p>
-          <p v-if="errorCode" class="panel-error-code">{{ t('translation.job.errorCode', { code: errorCode }) }}</p>
+          <p v-if="failureMessage" class="panel-notice">{{ failureMessage }}</p>
+          <p v-if="errorCode" class="panel-error-code">{{ t('translation.job.errorCode', { code: errorCodeText }) }}</p>
           <p v-if="actionError" class="panel-error" role="alert">{{ actionError }}</p>
         </section>
 
