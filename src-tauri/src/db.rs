@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     done        INTEGER DEFAULT 0,
     skipped     INTEGER DEFAULT 0,
     failed_ids  TEXT DEFAULT '[]',
+    pages       TEXT NOT NULL DEFAULT '[]',
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     error       TEXT
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS illustrations (
     illust_type INTEGER DEFAULT 0,
     page_count  INTEGER DEFAULT 1,
     saved_paths TEXT DEFAULT '[]',
+    saved_pages TEXT NOT NULL DEFAULT '[]',
     captured_at TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'ok'
 );
@@ -123,12 +125,14 @@ pub struct TaskRow {
     pub done: i64,
     pub skipped: i64,
     pub failed_ids: String,
+    /// 选中的 0 起页码（JSON 数组文本，空数组 = 全部页）。
+    pub pages: String,
     pub created_at: String,
     pub updated_at: String,
     pub error: Option<String>,
 }
 
-/// illustrations 表整行（saved_paths 是原始 JSON 文本）。
+/// illustrations 表整行（saved_paths / saved_pages 是原始 JSON 文本）。
 #[derive(Debug, Clone, Serialize)]
 pub struct IllustrationRow {
     pub artwork_id: i64,
@@ -138,6 +142,8 @@ pub struct IllustrationRow {
     pub illust_type: i64,
     pub page_count: i64,
     pub saved_paths: String,
+    /// 已保存页码（0 起升序），与 saved_paths 同序一一对应。
+    pub saved_pages: String,
     pub captured_at: String,
     pub status: String,
 }
@@ -224,7 +230,8 @@ impl Default for NovelInsert {
     }
 }
 
-/// illustrations 插入参数（INSERT OR REPLACE）。saved_paths 是 JSON 数组文本。
+/// illustrations 插入参数（INSERT OR REPLACE）。saved_paths / saved_pages 是
+/// JSON 数组文本，二者同序一一对应（saved_pages 为 0 起页码升序）。
 #[derive(Debug, Clone)]
 pub struct IllustrationInsert {
     pub artwork_id: i64,
@@ -234,6 +241,7 @@ pub struct IllustrationInsert {
     pub illust_type: i64,
     pub page_count: i64,
     pub saved_paths: String,
+    pub saved_pages: String,
     pub captured_at: String,
     pub status: String,
 }
@@ -248,6 +256,7 @@ impl Default for IllustrationInsert {
             illust_type: 0,
             page_count: 1,
             saved_paths: "[]".into(),
+            saved_pages: "[]".into(),
             captured_at: String::new(),
             status: "ok".into(),
         }
@@ -262,6 +271,8 @@ pub struct TaskInsert {
     pub source_id: String,
     pub category: String,
     pub status: String,
+    /// 选中的 0 起页码（JSON 数组文本；空数组 = 全部页）。
+    pub pages: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -274,6 +285,7 @@ impl Default for TaskInsert {
             source_id: String::new(),
             category: "novel".into(),
             status: "pending".into(),
+            pages: "[]".into(),
             created_at: String::new(),
             updated_at: String::new(),
         }
@@ -335,6 +347,52 @@ fn placeholders(n: usize) -> String {
     vec!["?"; n].join(",")
 }
 
+/// 表是否存在某列（`PRAGMA table_info`，用于轻量迁移）。
+fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(names.iter().any(|c| c == column))
+}
+
+/// 已存页码归一（纯函数，读取出口使用，不写回）：
+/// `saved_pages` 为空/非法 JSON 时按 `saved_paths` 推断——ugoira（illust_type==2）
+/// 为 `[0]`，普通作品为 `[0..len)`；`saved_paths` 也非法时返回 `[]`。
+pub(crate) fn normalize_saved_pages(
+    saved_pages: &str,
+    saved_paths: &str,
+    illust_type: i64,
+) -> String {
+    let parsed: Option<Vec<i64>> = match serde_json::from_str::<JsonValue>(saved_pages) {
+        Ok(JsonValue::Array(items)) => Some(
+            items
+                .iter()
+                .filter_map(|v| v.as_i64())
+                .filter(|p| *p >= 0)
+                .collect(),
+        ),
+        // 合法 JSON 但不是数组 → 视作非法
+        _ => None,
+    };
+    if let Some(pages) = parsed {
+        // 非空数组直接采用（去重升序，保证与 saved_paths 语义一致）
+        if !pages.is_empty() {
+            let mut pages = pages;
+            pages.sort_unstable();
+            pages.dedup();
+            return serde_json::to_string(&pages).unwrap_or_else(|_| "[]".into());
+        }
+    }
+    let paths: Vec<JsonValue> = serde_json::from_str(saved_paths).unwrap_or_default();
+    let inferred: Vec<i64> = if illust_type == 2 {
+        vec![0]
+    } else {
+        (0..paths.len() as i64).collect()
+    };
+    serde_json::to_string(&inferred).unwrap_or_else(|_| "[]".into())
+}
+
 /// serde_json::Value → rusqlite 值（数组/对象序列化为 JSON 文本）。
 fn json_to_sql(value: &JsonValue) -> SqlValue {
     match value {
@@ -387,15 +445,23 @@ impl Db {
             conn.execute_batch(SCHEMA_SQL)?;
             // 轻量迁移：旧库的 tasks 表没有 category 列（CREATE TABLE IF NOT
             // EXISTS 不会补列，需要显式 ALTER）。
-            let has_category: bool = conn
-                .prepare("PRAGMA table_info(tasks)")?
-                .query_map([], |row| row.get::<_, String>(1))?
-                .collect::<Result<Vec<String>, _>>()?
-                .iter()
-                .any(|c| c == "category");
-            if !has_category {
+            if !has_column(conn, "tasks", "category")? {
                 conn.execute(
                     "ALTER TABLE tasks ADD COLUMN category TEXT NOT NULL DEFAULT 'novel'",
+                    [],
+                )?;
+            }
+            // 按页下载：tasks.pages 记录任务选中的页码集合（重试/重启可见）
+            if !has_column(conn, "tasks", "pages")? {
+                conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN pages TEXT NOT NULL DEFAULT '[]'",
+                    [],
+                )?;
+            }
+            // 已存页码：与 saved_paths 同序一一对应
+            if !has_column(conn, "illustrations", "saved_pages")? {
+                conn.execute(
+                    "ALTER TABLE illustrations ADD COLUMN saved_pages TEXT NOT NULL DEFAULT '[]'",
                     [],
                 )?;
             }
@@ -609,8 +675,8 @@ impl Db {
             conn.execute(
                 "INSERT OR REPLACE INTO illustrations
                  (artwork_id, title, author_id, author_name, illust_type, page_count,
-                  saved_paths, captured_at, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                  saved_paths, saved_pages, captured_at, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     row.artwork_id,
                     row.title,
@@ -619,6 +685,7 @@ impl Db {
                     row.illust_type,
                     row.page_count,
                     row.saved_paths,
+                    row.saved_pages,
                     row.captured_at,
                     row.status,
                 ],
@@ -949,14 +1016,16 @@ impl Db {
     pub fn insert_task(&self, row: &TaskInsert) -> Result<(), String> {
         self.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO tasks (task_id, source_type, source_id, category, status, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO tasks
+                 (task_id, source_type, source_id, category, status, pages, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     row.task_id,
                     row.source_type,
                     row.source_id,
                     row.category,
                     row.status,
+                    row.pages,
                     row.created_at,
                     row.updated_at,
                 ],
@@ -1101,14 +1170,19 @@ fn novel_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NovelRow> {
 }
 
 fn illustration_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<IllustrationRow> {
+    let saved_paths: String = row.get("saved_paths")?;
+    let illust_type: i64 = row.get("illust_type")?;
+    let saved_pages: String = row.get("saved_pages")?;
     Ok(IllustrationRow {
         artwork_id: row.get("artwork_id")?,
         title: row.get("title")?,
         author_id: row.get("author_id")?,
         author_name: row.get("author_name")?,
-        illust_type: row.get("illust_type")?,
+        illust_type,
         page_count: row.get("page_count")?,
-        saved_paths: row.get("saved_paths")?,
+        // 旧行 saved_pages 为空/非法 → 按 saved_paths 推断（只影响读取，不写回）
+        saved_pages: normalize_saved_pages(&saved_pages, &saved_paths, illust_type),
+        saved_paths,
         captured_at: row.get("captured_at")?,
         status: row.get("status")?,
     })
@@ -1125,6 +1199,7 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
         done: row.get("done")?,
         skipped: row.get("skipped")?,
         failed_ids: row.get("failed_ids")?,
+        pages: row.get("pages")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
         error: row.get("error")?,
@@ -1400,6 +1475,145 @@ mod tests {
             db.list_history("manga", 1, 10, None).unwrap_err(),
             "未知历史分类: manga"
         );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn normalize_saved_pages_infers_from_saved_paths() {
+        // 新列空 → 按 saved_paths 长度推断 [0..len)
+        assert_eq!(
+            normalize_saved_pages("[]", r#"["a","b","c"]"#, 0),
+            "[0,1,2]"
+        );
+        // 非法 JSON → 同样推断
+        assert_eq!(
+            normalize_saved_pages("not-json", r#"["a","b"]"#, 1),
+            "[0,1]"
+        );
+        // ugoira（illust_type == 2）→ 只 [0]
+        assert_eq!(normalize_saved_pages("", r#"["a.zip"]"#, 2), "[0]");
+        // saved_paths 也非法 → 空
+        assert_eq!(normalize_saved_pages("", "bad", 0), "[]");
+        // 已有合法非空数组 → 原样（去重升序）
+        assert_eq!(normalize_saved_pages("[2,0,2]", r#"["a","b","c"]"#, 0), "[0,2]");
+    }
+
+    #[test]
+    fn saved_pages_roundtrip_and_legacy_rows() {
+        let (db, dir) = temp_db("saved-pages");
+        // 新写入：saved_pages 原样读出
+        db.insert_illustration(&IllustrationInsert {
+            artwork_id: 1,
+            title: "T".into(),
+            saved_paths: r#"["/a/p0.png","/a/p2.png"]"#.into(),
+            saved_pages: "[0,2]".into(),
+            captured_at: now_iso(),
+            ..Default::default()
+        })
+        .unwrap();
+        let row = db.get_illustration(1).unwrap();
+        assert_eq!(row.saved_pages, "[0,2]");
+        // 旧行（直接写 SQL 模拟缺列值）→ 读取出口按 saved_paths 推断
+        db.insert_illustration(&IllustrationInsert {
+            artwork_id: 2,
+            title: "T".into(),
+            illust_type: 2,
+            saved_paths: r#"["/a/u.zip"]"#.into(),
+            saved_pages: String::new(),
+            captured_at: now_iso(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(db.get_illustration(2).unwrap().saved_pages, "[0]");
+        let (rows, _) = db
+            .list_illustrations(&IllustrationFilter {
+                page: 1,
+                page_size: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        let row1 = rows.iter().find(|r| r.artwork_id == 1).unwrap();
+        assert_eq!(row1.saved_pages, "[0,2]", "list 出口同样归一");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn task_pages_column_persists() {
+        let (db, dir) = temp_db("task-pages");
+        db.insert_task(&TaskInsert {
+            task_id: "p1".into(),
+            source_type: "single".into(),
+            source_id: "1".into(),
+            category: "illustration".into(),
+            pages: "[0,2]".into(),
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(db.get_task("p1").unwrap().unwrap().pages, "[0,2]");
+        // 未指定时默认空数组（= 全部页）
+        db.insert_task(&TaskInsert {
+            task_id: "p2".into(),
+            source_type: "single".into(),
+            source_id: "1".into(),
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(db.get_task("p2").unwrap().unwrap().pages, "[]");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn legacy_tables_gain_new_columns() {
+        let dir = std::env::temp_dir().join(format!(
+            "pixiv-tool-db-test-legacy-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.db");
+        {
+            // 旧库：illustrations 无 saved_pages、tasks 无 pages
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE illustrations (
+                    artwork_id INTEGER PRIMARY KEY, title TEXT NOT NULL,
+                    author_id INTEGER NOT NULL, author_name TEXT,
+                    illust_type INTEGER DEFAULT 0, page_count INTEGER DEFAULT 1,
+                    saved_paths TEXT DEFAULT '[]', captured_at TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'ok');
+                 CREATE TABLE tasks (
+                    task_id TEXT PRIMARY KEY, source_type TEXT NOT NULL,
+                    source_id TEXT NOT NULL, category TEXT NOT NULL DEFAULT 'novel',
+                    status TEXT NOT NULL DEFAULT 'pending', total INTEGER DEFAULT 0,
+                    done INTEGER DEFAULT 0, skipped INTEGER DEFAULT 0,
+                    failed_ids TEXT DEFAULT '[]', created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL, error TEXT);
+                 INSERT INTO illustrations
+                    (artwork_id, title, author_id, saved_paths, captured_at)
+                 VALUES (9, 'legacy', 1, '[\"/a/p0.png\",\"/a/p1.png\"]',
+                         '2026-01-01T00:00:00+00:00');",
+            )
+            .unwrap();
+        }
+        // 迁移后：新列存在且旧行按 saved_paths 推断页码
+        let db = Db::open(&path).unwrap();
+        let row = db.get_illustration(9).unwrap();
+        assert_eq!(row.saved_pages, "[0,1]", "旧行按 saved_paths 推断页码");
+        assert_eq!(db.get_illustration(9).unwrap().saved_paths, r#"["/a/p0.png","/a/p1.png"]"#);
+        // tasks.pages 默认 '[]'
+        db.insert_task(&TaskInsert {
+            task_id: "t".into(),
+            source_type: "single".into(),
+            source_id: "1".into(),
+            created_at: now_iso(),
+            updated_at: now_iso(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(db.get_task("t").unwrap().unwrap().pages, "[]");
         cleanup(&dir);
     }
 

@@ -71,13 +71,15 @@ export const useTaskStore = defineStore("tasks", () => {
     return stopMonitor;
   }
 
-  async function createTask(sourceType: string, sourceId: string, formats: string[], category = "novel") {
+  /** pages：仅单篇插画的部分页下载使用（0 起页码）；省略 = 全页。 */
+  async function createTask(sourceType: string, sourceId: string, formats: string[], category = "novel", pages?: number[]) {
     // 业务失败时返回 { error }（旧 200+error 风格），由调用方判断。
     return invoke<TaskMutationResult>("task_create", {
       sourceType,
       sourceId,
       formats,
       category,
+      ...(pages ? { pages } : {}),
     });
   }
 

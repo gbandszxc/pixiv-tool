@@ -146,7 +146,7 @@ pixiv-tool/
 │  ├─ resources/agent/          # 内置 Agent 资源：prompts/、agents/（coordinator/translator/reviewer）、skills/smart-translator/
 │  ├─ tests/                    # pixiv_api/（pixiv 接口测试唯一入口）/ agent_protocol_wire.rs / agent_runtime.rs / translation_job_e2e.rs / smoke_commands.rs
 │  └─ src/
-│     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、pixiv-img 协议、关闭确认、翻译恢复）
+│     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、pixiv-img / pixiv-ugoira 协议、dialog 插件、关闭确认、翻译恢复）
 │     ├─ state.rs               # AppState：paths/settings/db/cookies/tasks/accounts/translation_service
 │     ├─ agent/                 # 通用 Agent 内核：runtime / scheduler / budget / compaction / recovery / events / resources / storage / model（Rig wire + wreq 传输）
 │     ├─ translation/           # 整篇翻译 Job：service / source / chunking / artifacts / tools / validation / publish / legacy
@@ -155,12 +155,13 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 与 translation/ 共 79 个 #[tauri::command]（translation 18 / auth 6 / browse_api 22 / tasks 9 / settings 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 8 / app 1 / update 4）
+│     ├─ commands/              # 与 translation/ 共 81 个 #[tauri::command]（translation 18 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 9 / app 1 / update 4）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
 │     ├─ cookies.rs             # keyring CookieStore
 │     ├─ accounts.rs            # 多账号索引（accounts.json）+ 每账号凭据条目
 │     ├─ image_proxy.rs         # pixiv-img 协议核心（磁盘缓存 + CDN 并发闸门 + 同 URL 在途合并 + immutable 长缓存响应头）
+│     ├─ ugoira.rs              # ugoira 帧管线：ugoira_meta → 取 zip（src 600×600 优先）→ 白名单解包到 `<data>/cache/img/ugoira/<id>/` → pixiv-ugoira 协议 URL（帧目录最多保留 12 个作品）
 │     ├─ saucenao.rs            # SauceNAO 以图识图客户端（file/url 两通道搜索、响应解析、错误分类；契约见 §7，接口调研见 docs/research/saucenao-api.md）
 │     ├─ menu_bar.rs            # Windows 菜单栏默认隐藏 / Alt 唤出（AcceleratorKeyPressed + WM_EXITMENULOOP 收回）
 │     └─ paths.rs / platform.rs / logging.rs
@@ -168,7 +169,7 @@ pixiv-tool/
 │  ├─ src/
 │  │  ├─ views/                 # ToolsView（下载页签壳）/ TasksView / HistoryView / SaucenaoView（以图识图）
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark/History/Me + Work/Series/Author/Novel
-│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/（核心导航 / PageBackButton）download/（共用下载表单 / 状态栏）settings/（SettingsPanel / SettingsDialog / TranslationAdvancedPanel / TranslationAgentFields / sections.ts）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / NovelContent / NovelTranslationMenu / TranslationProgressBanner / SectionTabs / RelatedGrid）
+│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/（核心导航 / PageBackButton）download/（共用下载表单 / 状态栏）settings/（SettingsPanel / SettingsDialog / TranslationAdvancedPanel / TranslationAgentFields / sections.ts）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / CopyWorkId / PageDownloadPicker / NovelContent / NovelTranslationMenu / TranslationProgressBanner / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history/translation，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
@@ -675,6 +676,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   done        INTEGER DEFAULT 0,
   skipped     INTEGER DEFAULT 0,
   failed_ids  TEXT DEFAULT '[]',           -- JSON array of novel_id / artwork_id
+  pages       TEXT NOT NULL DEFAULT '[]',  -- 部分页下载的 0 起页码集合（JSON array；重试复制）
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
   error       TEXT
@@ -689,6 +691,7 @@ CREATE TABLE illustrations (
   illust_type INTEGER DEFAULT 0,           -- 0=插画 1=漫画 2=ugoira
   page_count  INTEGER DEFAULT 1,
   saved_paths TEXT DEFAULT '[]',           -- JSON array of 文件路径
+  saved_pages TEXT NOT NULL DEFAULT '[]',  -- JSON array of 0 起页码，与 saved_paths 同序一一对应
   captured_at TEXT NOT NULL,
   status      TEXT NOT NULL DEFAULT 'ok'
 );
@@ -709,6 +712,15 @@ CREATE TABLE IF NOT EXISTS browse_history (
 );
 CREATE INDEX IF NOT EXISTS idx_browse_history_visited ON browse_history(visited_at DESC);
 ```
+
+**轻量迁移**：`Db::open` 先按 `PRAGMA table_info(<表>)` 探测列是否存在，缺失即
+`ALTER TABLE` 补齐（旧库升级不需要重建表）：
+
+- `tasks.pages`（`TEXT NOT NULL DEFAULT '[]'`）：部分页下载的 0 起页码集合，任务创建时
+  写入、失败项重试原样复制，重启后仍可见；
+- `illustrations.saved_pages`（`TEXT NOT NULL DEFAULT '[]'`）：已保存页的 0 起页码，
+  与 `saved_paths` 同序一一对应。旧行该列为空 / 非法 JSON 时按 `saved_paths` 长度推断
+  连续页码（ugoira 推断为 `[0]`），**只在读取出口归一、不写回**；ugoira 恒 `[0]`。
 
 ### 5.2 配置文件
 
@@ -1066,7 +1078,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   端点与响应结构的契约事实源为 `docs/PIXIV-API.md`（`docs/research/pixiv-browse-api.md`
   为 2026-10-01 调研证据档案，保留当日字段细节与失效端点勘误）。
   唯一例外是首页 street 流（POST，需 csrf token，见 ADR 0012 §3）。
-- **IPC 契约**：浏览相关 25 个命令（浏览端点 22 + 浏览访问历史 3，§7）。浏览端点返回体统一
+- **IPC 契约**：浏览相关 26 个命令（浏览端点 23 = browse_api 22 + ugoira 1，加浏览访问历史 3，§7）。浏览端点返回体统一
   `BrowseWorkItem` 卡片结构（id/kind/title/author/cover/page_count/x_restrict/tags/series…），
   浏览访问历史返回 `browse_history_list` 的分页行（§7）；前端契约类型与
   mock 层在 `frontend/src/api/browse.ts`（非 Tauri 环境返回确定性样例数据，供浏览器
@@ -1157,7 +1169,19 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   R-18 遮罩态不可聚焦、`tabindex=-1`），右下角「第 N / M 页」深色胶囊徽标跟随滚动，舞台可聚焦
   （Esc 退出浮层后焦点回到舞台）、↑/↓ 原生滚动；舞台滚动条与右侧信息列同配方：6px 常显、
   thumb 为 outline 派生色（40% / hover 60%）；滚动区右侧留 6px 内边距（与信息列同配方），
-  图片与滚动条不贴靠，左侧满幅不缩进。ugoira 仍只显示封面帧 + 说明行。
+  图片与滚动条不贴靠，左侧满幅不缩进。
+- **ugoira（动图）播放**：详情页拉到帧后舞台主图改为**应用内帧轮播**——后端
+  `browse_ugoira_frames`（§7）经 `ugoira_meta` 取 zip（`src` 600×600 优先，回退
+  `originalSrc`、`zip_urls.original`）并按 frames 白名单解包到
+  `<data>/cache/img/ugoira/<id>/`（manifest 记 zip URL 与帧表，命中直接复用；目录按
+  mtime 最多保留 12 个作品），返回的每帧 `src` 为自定义协议 `pixiv-ugoira`
+  （Windows `http://pixiv-ugoira.localhost/<id>/<file>`，其它平台
+  `pixiv-ugoira://localhost/<id>/<file>`，`Cache-Control: no-store`；路径首段必须是正整数
+  id、文件名与写入侧同一净化规则，违规 400、缺失 404）。前端单 `<img>` 换 src、逐帧预载、
+  按每帧 `delay` 用 `setTimeout` 递归调度（下限 20ms，跳过未就绪帧），舞台右下角
+  32px 胶囊（播放/暂停 + 「第 N / M 帧」）；`prefers-reduced-motion` 初始暂停、
+  KeepAlive 停用清计时器、R-18 遮罩期间停播。无帧 / 加载中 / 失败退回封面帧 + 说明行
+  （加载中旋转图标、失败给重试并保留「去 Pixiv 查看动画」兜底文案）。
 - **小说阅读器**：整页固定 100vh 三行 flex——顶栏（非 sticky，天然贴窗口上边）/ 中间唯一
   滚动层（`flex:1; min-height:0; overflow-y:auto`，6px 细滚动条）/ 底栏 AppPagination
   （`variant="reader"`）；顶底栏贴窗口上下边、只有中间层滚动。正文列默认不限宽，仅
@@ -1201,6 +1225,21 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   `docs/PIXIV-API.md`）。
   描述（插画/漫画 `illustComment`、小说 `description`）统一转为纯文本，解码实体、
   保留换行与段落、去除脚本/样式等非正文，不执行/挂载外部 HTML；空简介/标签不占位。
+- **详情页 pid 复制（`CopyWorkId`）**：详情页右栏信息区（小说为信息头）显示一行
+  `pid` + 作品 id 数字——12px/600 `--ink-muted` 标签 + 13px `--ink` `tabular-nums` 数字 +
+  14px lucide `copy` / `check`（stroke 2）图标；点击复制 id 到剪贴板，成功 snackbar
+  「已复制 pid …」并把图标瞬时切为 `check`（约 1.6s 复原），失败给统一通知；用原生
+  `<button>`（`md-icon-button` 的 40px 高度会撑高紧凑信息行），`aria-label` 与 `title`
+  同文案，`focus-visible` 为 primary 2px 外环。放在右栏信息区、不占顶栏动作位。
+- **多 P 按页下载选择器（`PageDownloadPicker`）**：仅多页插画/漫画详情渲染（单页与
+  ugoira 整块不渲染，避免无谓的已下载查询）。方形缩略图网格
+  `repeat(auto-fill, minmax(56px,1fr))`、`--radius-control` 圆角；序号为左上角 11px 胶囊角标，
+  已下载页叠 11px「已下载」胶囊；选中态 = 2px primary 描边 + 右上角 16px 实心圆勾
+  （不只靠颜色区分）。工具行为「全选」（优先未下载页）/「清空」文本按钮 +
+  「已选 N / M 页」回显，底部 `md-filled-button`「下载所选 N 页」调 `task_create` 带
+  `pages`（0 起页码），任务完成后刷新「已下载」标记；组件无卡片外框（标题 + 网格 +
+  动作行，纵向 `--space-md` 分隔）。窄窗（≤959px）信息列变为流式块，选择器自然落到
+  图片下方、整宽铺开。
 - **详情页顶栏与面板（查看器 / 阅读器共用）**：顶栏带文案的动作保持 40px 胶囊（收藏），
   图标动作统一 `md-icon-button`（40×40、无描边、20px lucide 官方路径线性图标，stroke 2），
   顺序为「收藏 / 评论 / 返填表单 / 在浏览器中打开」；**不再用只有图标的
@@ -1241,7 +1280,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   浏览历史 / 排行榜 / 系列分集 / 小说阅读器）统一收敛到 `components/common/AppPagination`
   （历史、任务、浏览历史为 default 变体，排行榜走未知总页数模式，系列与阅读器为
   `variant="reader"`）；游标 / 无限滚动调用点不使用该组件。
-- **V1 限制**：浏览支持作品收藏与作者关注（ADR 0016）；无点赞/发评论；ugoira 显示封面帧；小说内嵌图中
+- **V1 限制**：浏览支持作品收藏与作者关注（ADR 0016）；无点赞/发评论；ugoira 在应用内播放帧轮播（ADR 0039）；小说内嵌图中
   `[pixivimage:illustId]` 插图引用（现行 pixiv 编辑器已不产出，实测见
   `docs/research/pixiv-browse-api.md` §7.2）与未收录 id 显示占位块，`[uploadedimage:]`
   正常出图；评论只在详情页面板内按需加载（只读，无评论/回复发布）。
@@ -1323,7 +1362,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `auth_accounts_list` | 已保存账号列表：`{active, accounts:[{user_id,pixiv_id,name,profile_img,avatar_file,avatar_url?,saved_at}]}` |
 | `auth_account_switch(userId)` | 切换当前账号：目标条目写入 default → 索引 active → 会话缓存失效；目标凭据缺失/失效 → Err；存在非终态抓取任务时返回可选 `warning` |
 | `tasks_list(category?)` | 任务列表（按小说/插画过滤） |
-| `task_create(sourceType, sourceId, formats, category)` | 创建抓取任务，后台 tokio 运行 |
+| `task_create(sourceType, sourceId, formats, category, pages?)` | 创建抓取任务，后台 tokio 运行。`pages`（0 起页码数组，可选）仅在 `category=illustration` 且 `sourceType=single` 生效：去重升序后只下选中页，空数组 / 含负数 → `{"error":"页码必须是非负整数"}`；其它组合忽略。与既有 `saved_paths` / `saved_pages` 按页求差集合并，写入 `tasks.pages` 供重试复制 |
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
@@ -1358,6 +1397,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
 | `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位 |
+| `illust_saved_pages(artworkId)` | 已保存页查询：返回 `{pages:[0,2], ugoira:false}`（0 起页码升序）；无记录 → `{"pages":[],"ugoira":false}`，ugoira 有记录 → `{"pages":[0],"ugoira":true}`；详情页按页下载选择器据此标记「已下载」 |
 | `browse_home_feed` | 首页推荐流（street POST + csrf token，进程内 30min 缓存） |
 | `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
 | `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |
@@ -1366,6 +1406,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_work_counts(kind, ids)` | 作品三项计数批量（搜索页本页排序用；逐项请求详情端点，ids ≤ 60；单项失败跳过，全局限速排队） |
 | `browse_ranking(kind, mode, page, date)` | 排行榜：illust/manga/ugoira 走 ranking.php?format=json，novel 走 /ajax/ranking/novel（每页 50，含 prev/next_date） |
 | `browse_work_detail(kind, id)` | 作品详情：illust+pages+ugoira_meta / novel 全文（含 series 导航 + 正文内嵌图索引 `embedded_images`） |
+| `browse_ugoira_frames(artworkId)` | ugoira 帧序列：`ugoira_meta` → 取 zip（`src` 600×600 优先，回退 `originalSrc`、`zip_urls.original`）→ 白名单解包到 `<data>/cache/img/ugoira/<id>/`（manifest 命中直接复用，目录最多保留 12 个作品）→ 返回 `{frames:[{src,delay}], width:null, height:null}`，`src` 为 `pixiv-ugoira` 协议 URL；登录守卫同浏览命令 |
 | `browse_related(kind, id, limit)` | 相关推荐一次性池（recommend/init，page 参数无效） |
 | `browse_user_follow(id, followed)` | 公开关注/取消关注，返回 `{ is_followed: boolean }`；正整数 ID 校验后走登录守卫、CSRF 和既有限速 |
 | `browse_user_profile(id)` | 作者资料（/ajax/user/{id}?full=1） |
@@ -1395,7 +1436,9 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 Alt+F4 / 标题栏关闭）与 Edit 项（撤销/剪切/复制/粘贴/全选，WebView2 原生
 支持），默认隐藏不影响文本编辑快捷键。
 
-以上数据命令实现于 `commands/browse_api_cmds.rs`，公共登录守卫 `build_browse_api`：
+以上数据命令实现于 `commands/browse_api_cmds.rs`，`browse_ugoira_frames` 实现于
+`commands/ugoira_cmds.rs`（薄壳 + 可离线调用的 `*_impl`，业务真相源在 `ugoira.rs`），
+公共登录守卫 `build_browse_api`：
 无 PHPSESSID 一律 `Err("未登录或登录态已失效，请先登录")`（前端据此弹登录窗）。
 端点 / 参数 / 响应解析契约见 `docs/PIXIV-API.md`（含端点 → 实现 → 测试的维护矩阵）。
 图片经 `pixiv-img` 自定义协议（`image_proxy.rs`，白名单 `*.pximg.net`，磁盘缓存
@@ -1407,7 +1450,8 @@ CDN 下载不占 ajax 限速与 400ms 请求间隔；CDN 侧的 429 不重试、
 无跨请求退避（与改造前一致的既有边界）。
 
 目录选择不走命令：前端直接用 `@tauri-apps/plugin-dialog` 的
-`open({directory: true})`。
+`open({directory: true})`；插件已在 `lib.rs` 注册
+（`.plugin(tauri_plugin_dialog::init())`），未注册时调用必然 reject。
 
 历史联合查询规则：`novels` + `illustrations` 两表 UNION ALL（统一行形状
 id / category / title / author_name / pages / series_id / illust_type /
@@ -1693,6 +1737,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0036 | 翻译运行层窗口防护与任务续跑 | [adr/0036-translation-runtime-guard-and-continuation.md](adr/0036-translation-runtime-guard-and-continuation.md) |
 | 0037 | 翻译预览的归属、尾窗与稳定展示 | [adr/0037-translation-preview-ownership-and-stability.md](adr/0037-translation-preview-ownership-and-stability.md) |
 | 0038 | 翻译审查收敛与按块返工（审查分级、`revise_draft`、每块额度、`chunk_gate`） | [adr/0038-translation-review-convergence.md](adr/0038-translation-review-convergence.md) |
+| 0039 | ugoira 应用内播放与多 P 按页下载 | [adr/0039-ugoira-playback-and-page-download.md](adr/0039-ugoira-playback-and-page-download.md) |
 
 ADR 按需追加，不强制一次性写完。
 

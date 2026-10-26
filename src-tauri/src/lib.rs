@@ -26,6 +26,7 @@ pub mod saucenao;
 pub mod settings;
 pub mod state;
 pub mod translation;
+pub mod ugoira;
 mod translation_legacy;
 mod translation_diagnostics;
 mod translation_summary;
@@ -47,6 +48,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(log_plugin)
+        // 系统对话框（设置页「输出目录 → 浏览…」）：前端 @tauri-apps/plugin-dialog 的
+        // open({directory:true}) 依赖此插件注册；此前只在 Cargo/capability 里声明、
+        // 从未 init，导致浏览按钮必然 reject（「无法打开目录选择器」）。
+        .plugin(tauri_plugin_dialog::init())
         // 浏览页「在浏览器中打开」：opener 插件以系统默认程序打开 http(s) 外链。
         .plugin(tauri_plugin_opener::init())
         // 头像回显协议：从 data/cache 读取后端代下的头像文件。
@@ -83,6 +88,70 @@ pub fn run() {
                         .status(404)
                         // 404 禁缓存：文件就位后（代下完成/瞬时锁释放）下一次请求必须真正
                         // 回源，否则 webview 缓存的 404 会让头像持续回退首字母直到重启。
+                        .header("Cache-Control", "no-store")
+                        .body(Cow::Borrowed(&[][..]))
+                        .expect("静态 404 响应构造不会失败")
+                }
+            }
+        })
+        // 动图帧协议（ugoira）：读取后端解包出来的帧文件
+        // `<data>/cache/img/ugoira/<id>/<file>`。写入侧（src/ugoira.rs）已按
+        // sanitize_frame_name 白名单校验文件名，这里用同一函数复核；URL 形态与
+        // 头像协议一致（Windows 走 `http://pixiv-ugoira.localhost/<id>/<file>`）。
+        .register_uri_scheme_protocol("pixiv-ugoira", |ctx, request| {
+            use std::borrow::Cow;
+            let uri_path = request.uri().path().to_string();
+            // 第 1 段必须是正整数作品 ID；文件名取最后一段并走与写入侧同一个净化
+            // 函数——`..` / 多段 / 控制字符 / Windows 非法字符一律 400。
+            let mut segments = uri_path.trim_start_matches('/').split('/');
+            let id = segments
+                .next()
+                .unwrap_or("")
+                .parse::<i64>()
+                .ok()
+                .filter(|id| *id > 0);
+            let name = std::path::Path::new(&uri_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .and_then(ugoira::sanitize_frame_name);
+            let (Some(id), Some(name)) = (id, name) else {
+                log::warn!("动图协议拒绝可疑请求: {uri_path:?}");
+                return tauri::http::Response::builder()
+                    .status(400)
+                    .header("Cache-Control", "no-store")
+                    .body(Cow::Borrowed(&[][..]))
+                    .expect("静态 400 响应构造不会失败");
+            };
+            let state = ctx.app_handle().state::<crate::state::AppState>();
+            let path = state
+                .paths
+                .data_dir
+                .join("cache")
+                .join("img")
+                .join("ugoira")
+                .join(id.to_string())
+                .join(&name);
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let mime = match name.rsplit('.').next() {
+                        Some("png") => "image/png",
+                        Some("webp") => "image/webp",
+                        Some("gif") => "image/gif",
+                        Some("bmp") => "image/bmp",
+                        Some("avif") => "image/avif",
+                        _ => "image/jpeg",
+                    };
+                    tauri::http::Response::builder()
+                        .header("Content-Type", mime)
+                        // 帧目录会因重新解包被清空重写，禁缓存避免旧帧残留。
+                        .header("Cache-Control", "no-store")
+                        .body(Cow::Owned(bytes))
+                        .expect("带 Content-Type 的响应构造不会失败")
+                }
+                Err(err) => {
+                    log::warn!("动图协议 404: {id}/{name} ({err})");
+                    tauri::http::Response::builder()
+                        .status(404)
                         .header("Cache-Control", "no-store")
                         .body(Cow::Borrowed(&[][..]))
                         .expect("静态 404 响应构造不会失败")
@@ -197,6 +266,7 @@ pub fn run() {
             commands::browse_api_cmds::browse_work_counts,
             commands::browse_api_cmds::browse_ranking,
             commands::browse_api_cmds::browse_work_detail,
+            commands::ugoira_cmds::browse_ugoira_frames,
             commands::browse_api_cmds::browse_related,
             commands::browse_api_cmds::browse_user_profile,
             commands::browse_api_cmds::browse_user_follow,
@@ -245,6 +315,7 @@ pub fn run() {
             commands::misc_cmds::illustrations_delete_all,
             commands::misc_cmds::open_novel_file,
             commands::misc_cmds::open_illustration_folder,
+            commands::misc_cmds::illust_saved_pages,
             // app
             commands::app_cmds::app_exit,
             // update

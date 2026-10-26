@@ -21,5 +21,6 @@ pub mod saucenao_cmds;
 pub mod settings_cmds;
 pub mod task_cmds;
 pub mod translation_cmds;
+pub mod ugoira_cmds;
 pub mod update_cmds;
 pub mod update_download_cmds;

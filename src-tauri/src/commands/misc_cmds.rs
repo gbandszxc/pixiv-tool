@@ -9,12 +9,14 @@
 //!   成功 → {"status":"success"}（reveal_in_file_manager）
 //! - illustration_*：同构（{"error":"插画记录不存在"}、{"error":"没有已保存的文件"}、
 //!   {"error":"illustration_ids 不能为空"}）
+//! - illust_saved_pages → {"pages":[0,2],"ugoira":false}（0 起升序；无记录 → 空数组）
 
 use std::path::Path;
 
 use serde_json::{Value, json};
 use tauri::State;
 
+use crate::core::illust_crawler::UGOIRA_TYPE;
 use crate::platform::reveal_in_file_manager;
 use crate::state::AppState;
 
@@ -93,6 +95,16 @@ pub async fn open_illustration_folder(
     open_illustration_folder_impl(&state, artwork_id)
 }
 
+/// 查询作品已保存的页码（0 起，升序）与是否 ugoira。
+/// 无记录 → {"pages": [], "ugoira": false}；ugoira 有记录 → {"pages":[0],"ugoira":true}。
+#[tauri::command]
+pub async fn illust_saved_pages(
+    state: State<'_, AppState>,
+    artwork_id: i64,
+) -> Result<Value, String> {
+    illust_saved_pages_impl(&state, artwork_id)
+}
+
 // 以下 _impl 函数不依赖 tauri::State，可离线单测/集成测试。
 
 pub fn novel_delete_impl(
@@ -163,6 +175,17 @@ pub fn open_novel_file_impl(state: &AppState, novel_id: i64) -> Result<Value, St
         Ok(()) => Ok(json!({ "status": "success" })),
         Err(msg) => Ok(json!({ "error": msg })),
     }
+}
+
+pub fn illust_saved_pages_impl(state: &AppState, artwork_id: i64) -> Result<Value, String> {
+    let Some(illustration) = state.db.get_illustration(artwork_id) else {
+        // 无记录 → 什么都没存过
+        return Ok(json!({ "pages": [], "ugoira": false }));
+    };
+    let ugoira = illustration.illust_type == UGOIRA_TYPE;
+    // saved_pages 已由 Db 读取出口归一；坏 JSON 兜底为空数组
+    let pages: Vec<i64> = serde_json::from_str(&illustration.saved_pages).unwrap_or_default();
+    Ok(json!({ "pages": pages, "ugoira": ugoira }))
 }
 
 pub fn open_illustration_folder_impl(state: &AppState, artwork_id: i64) -> Result<Value, String> {
@@ -298,6 +321,48 @@ mod tests {
             .unwrap();
         let body = open_novel_file_impl(&state, 10).unwrap();
         assert_eq!(body["error"], json!("文件不存在"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn illust_saved_pages_contract() {
+        let (state, dir) = temp_state("saved-pages");
+        // 无记录 → 空数组 + ugoira false
+        let body = illust_saved_pages_impl(&state, 100).unwrap();
+        assert_eq!(body["pages"], json!([]));
+        assert_eq!(body["ugoira"], json!(false));
+
+        // 普通多页作品：部分页已存
+        state
+            .db
+            .insert_illustration(&IllustrationInsert {
+                artwork_id: 101,
+                title: "T".into(),
+                saved_paths: r#"["/a/p0.png","/a/p2.png"]"#.into(),
+                saved_pages: "[0,2]".into(),
+                captured_at: now_iso(),
+                ..Default::default()
+            })
+            .unwrap();
+        let body = illust_saved_pages_impl(&state, 101).unwrap();
+        assert_eq!(body["pages"], json!([0, 2]));
+        assert_eq!(body["ugoira"], json!(false));
+
+        // ugoira 有记录 → [0] + ugoira true
+        state
+            .db
+            .insert_illustration(&IllustrationInsert {
+                artwork_id: 102,
+                title: "U".into(),
+                illust_type: 2,
+                saved_paths: r#"["/a/u.zip"]"#.into(),
+                captured_at: now_iso(),
+                ..Default::default()
+            })
+            .unwrap();
+        let body = illust_saved_pages_impl(&state, 102).unwrap();
+        assert_eq!(body["pages"], json!([0]));
+        assert_eq!(body["ugoira"], json!(true));
         cleanup(&dir);
     }
 

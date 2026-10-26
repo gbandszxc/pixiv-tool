@@ -31,7 +31,11 @@ const viewerPrefs = { spread: false, rtl: true, vertical: false, verticalScale: 
  * - 加载中纯色占位、失败显示重试；
  * - R-18 遮罩：blur(24px) + 中央文案 + 「显示」按钮（是否遮罩由父视图决定），
  *   遮罩期间只加载首页、不可进入全屏浮层；
- * - ugoira：仅显示封面帧 + 说明行（V1 不做帧动画）。
+ * - ugoira（动图）：父视图拉到帧后舞台主图改为帧轮播——单张 <img> 换 src，按每帧 delay
+ *   递归 setTimeout（下限 20ms）播放，预载未就绪的帧跳过不阻塞；默认自动播放，
+ *   prefers-reduced-motion 时初始暂停（舞台右下角胶囊控件可手动播放/暂停 + 帧计数）；
+ *   KeepAlive 停用与卸载清计时器、激活时恢复此前播放态；无帧 / 加载中 / 失败退回封面帧
+ *   + 说明行（加载中旋转图标、失败给「重试」、无帧保留「去 Pixiv 查看动画」旧文案）。
  */
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -52,16 +56,32 @@ const props = withDefaults(
     restricted?: boolean;
     /** 遮罩文案（R-18 / R-18G 区分） */
     restrictLabel?: string;
-    /** ugoira 说明行 */
+    /** ugoira 说明行（无帧 / 加载中 / 失败时展示降级文案） */
     ugoira?: boolean;
+    /** ugoira 逐帧地址与时长（毫秒）；父视图拉取成功后才给，非空即走帧轮播 */
+    ugoiraFrames?: { src: string; delay: number }[];
+    /** ugoira 帧拉取中（说明行显示加载态） */
+    ugoiraLoading?: boolean;
+    /** ugoira 帧拉取失败原因（说明行显示降级文案 + 重试，原文经 title 可读） */
+    ugoiraError?: string;
     /** 详情舞台页框宽度占比（0.5~1，1 = 撑满 = 既有观感；父视图读设置键 detail_image_scale） */
     stageScale?: number;
   }>(),
-  { alt: "", restricted: false, restrictLabel: "", ugoira: false, stageScale: 1 }
+  {
+    alt: "",
+    restricted: false,
+    restrictLabel: "",
+    ugoira: false,
+    ugoiraFrames: () => [],
+    ugoiraLoading: false,
+    ugoiraError: "",
+    stageScale: 1,
+  }
 );
 
 const emit = defineEmits<{
   (e: "reveal"): void;
+  (e: "retry-ugoira"): void;
 }>();
 
 const { t } = useI18n();
@@ -237,6 +257,184 @@ function retry(index: number): void {
   states.value = next;
   ticks.value = bumped;
 }
+
+// ===== ugoira 帧轮播 =====
+
+/** 首帧地址加载失败：退回静态封面帧 + 失败说明行（不让舞台永远停在骨架块） */
+const frameBroken = ref(false);
+/** 首帧已落定（帧轮播下页框纵横比与全屏入口的依据） */
+const frameReady = ref(false);
+
+/** 帧轮播生效：动图、父视图已给到帧、且帧图本身没坏（否则退回静态封面帧 + 说明行降级态）。 */
+const ugoiraPlayable = computed(
+  () => props.ugoira && props.ugoiraFrames.length > 0 && !frameBroken.value
+);
+
+/** 当前帧下标（轮播推进位；未就绪的帧跳过，见 nextReadyFrame）。 */
+const frameIndex = ref(0);
+/** 播放态：默认自动播放；系统偏好减少动效时初始暂停（控件仍可手动播放）。 */
+const playing = ref(!prefersReducedMotion());
+/** 已预载就绪的帧下标：非响应式（只有计时器与推进逻辑读它，模板不渲染）。 */
+let readyFrames = new Set<number>();
+/** 加载失败的帧下标：推进时跳过；全部损坏才整体退回静态封面 */
+let brokenFrames = new Set<number>();
+/** 预载代次：换作品后旧请求的 onload 不得写进新集合 */
+let frameGen = 0;
+/** 帧计时器：停用 / 卸载 / 换帧时统一清理 */
+let frameTimer: number | undefined;
+/** 组件是否在活动中：KeepAlive 停用期间不起表（帧可能在停用时才到达） */
+let viewerActive = true;
+/** 首帧已落定（就绪或失败）：此前不起表，首屏始终先停在首帧 */
+let firstSettled = false;
+
+/** 帧总数（模板与计时器共用） */
+const frameTotal = computed(() => props.ugoiraFrames.length);
+
+/** 安全下标：换作品的瞬间帧数可能先缩，取模钳住后各处索引都不会越界。 */
+const framePos = computed(() => (frameTotal.value ? frameIndex.value % frameTotal.value : 0));
+
+/** 帧数收缩时把下标落回区间内（否则计数会显示成「第 12 / 8 帧」）。 */
+watch(frameTotal, (total) => {
+  if (frameIndex.value >= total) frameIndex.value = 0;
+});
+
+/** 实际在动：单帧作品没有动画可言（控件按暂停态呈现且禁用，不谎报「正在播放」）。 */
+const animating = computed(() => playing.value && frameTotal.value > 1);
+
+/** 当前帧地址（未就绪时先挂它的地址，浏览器直接复用预载中的同一请求）。 */
+const frameSrc = computed(() => props.ugoiraFrames[framePos.value]?.src ?? "");
+
+function stopFrameTimer(): void {
+  if (frameTimer !== undefined) {
+    clearTimeout(frameTimer);
+    frameTimer = undefined;
+  }
+}
+
+/** 下一张就绪帧：从当前帧向后取模查找；一张都没就绪返回 -1（等预载完成再续）。 */
+function nextReadyFrame(): number {
+  const total = props.ugoiraFrames.length;
+  for (let step = 1; step <= total; step += 1) {
+    const i = (framePos.value + step) % total;
+    if (readyFrames.has(i)) return i;
+  }
+  return -1;
+}
+
+/** 按当前帧 delay 递归调度下一帧：下限 20ms（后端给 0 时不能变成死循环）。 */
+function scheduleFrame(): void {
+  stopFrameTimer();
+  // 遮罩期间不动画（沿用「遮罩期间不消费内容」的既定口径），解除后由 restricted 侦听恢复；
+  // 尚无就绪帧时不起表（预载落定后自行续上，避免空转）
+  if (!playing.value || !ugoiraPlayable.value || props.restricted) return;
+  if (!viewerActive) return; // KeepAlive 停用期间不跑（激活时恢复）
+  if (frameTotal.value < 2) return; // 单帧无动画可言，避免空转
+  if (!firstSettled) return; // 首帧未落定前不推进（首屏始终先停在首帧）
+  if (readyFrames.size === 0) return; // 一张都没就绪：落定后自行续上
+  const delay = Math.max(20, props.ugoiraFrames[framePos.value]?.delay ?? 0);
+  frameTimer = window.setTimeout(advanceFrame, delay);
+}
+
+function advanceFrame(): void {
+  frameTimer = undefined;
+  const next = nextReadyFrame();
+  if (next < 0) return; // 无就绪帧：预载落定后会重新起表
+  frameIndex.value = next;
+  scheduleFrame();
+}
+
+/**
+ * 逐帧预载：每帧各自 new Image()，就绪即记入集合；首帧（下标 0）落定后开始计时，
+ * 其余帧不阻塞播放（未就绪的帧在推进时跳过）。
+ * 换作品（ugoiraFrames 变化）与挂载各走一次，重复调用先清计时器、重置到首帧。
+ */
+function preloadUgoiraFrames(): void {
+  // 先无条件停表并作废旧代次：帧被清空（换作品 / 重试）时旧计时器必须立即失效
+  stopFrameTimer();
+  frameIndex.value = 0;
+  frameBroken.value = false;
+  frameReady.value = false;
+  frameGen += 1;
+  const gen = frameGen;
+  readyFrames = new Set<number>();
+  brokenFrames = new Set<number>();
+  firstSettled = false;
+  if (!ugoiraPlayable.value) return;
+  props.ugoiraFrames.forEach((frame, index) => {
+    const img = new Image();
+    img.decoding = "async";
+    // 就绪与失败都算「落定」：坏帧不入集合（推进时跳过），但不会拖住整段播放
+    const settle = (ok: boolean): void => {
+      if (gen !== frameGen) return; // 过期预载（已换作品）
+      if (ok) {
+        readyFrames.add(index);
+        // 当前帧尚未就绪（首帧即坏 / 跳帧后落空）：直接切到这张已就绪的帧
+        if (!readyFrames.has(framePos.value)) frameIndex.value = index;
+      } else {
+        brokenFrames.add(index);
+      }
+      if (index === 0) firstSettled = true;
+      // 播放中且表已空（等首帧 / 中途缺帧）：落定后重新起表
+      if (frameTimer === undefined) scheduleFrame();
+    };
+    img.onload = () => settle(true);
+    img.onerror = () => settle(false);
+    img.src = frame.src;
+  });
+  // 首帧可能已在该浏览器缓存中同步命中（onload 在 src 赋值时即触发），此处兜底再试一次
+  if (frameTimer === undefined) scheduleFrame();
+}
+
+/** 帧图 load：首帧落定后写纵横比（复用 correctAspect）并放开全屏入口。
+ *  后续帧尺寸可能不同，不再改写页框（否则播放中抖动）。 */
+function onUgoiraFrameLoad(e: Event): void {
+  if (frameReady.value) return;
+  correctAspect(0, e);
+  frameReady.value = true;
+}
+
+/** 首页是否可进全屏：帧轮播时以帧图落定为准（页框不再渲染封面图，states[0] 只由帧写），
+ *  其余页沿用逐页加载态。 */
+function stageReady(index: number): boolean {
+  if (index === 0 && ugoiraPlayable.value) return frameReady.value;
+  return states.value[index] === "ok";
+}
+
+/**
+ * 帧图加载失败（协议 / 文件缺失）：该帧记入损坏集合后跳过、继续放其余帧；
+ * 全部帧都损坏才整体退回静态封面帧，说明行给出失败态与重试。
+ */
+function onUgoiraFrameError(e: Event): void {
+  // 按地址反查下标：快速换帧时 error 可能晚于切帧到达，不能只信「当前帧」
+  const src = (e.target as HTMLImageElement).getAttribute("src") ?? "";
+  const pos = props.ugoiraFrames.findIndex((f) => f.src === src);
+  if (pos < 0) return; // 已不在当前帧集合里（换作品了）
+  brokenFrames.add(pos);
+  readyFrames.delete(pos);
+  if (brokenFrames.size >= frameTotal.value) {
+    // 一张都放不出来：退回静态封面帧，说明行给失败态
+    stopFrameTimer();
+    frameBroken.value = true;
+    frameReady.value = false;
+    return;
+  }
+  // 只有当前显示的帧坏了才需要跳；其余帧的损坏由预载集合记录即可
+  if (pos === framePos.value) {
+    stopFrameTimer();
+    advanceFrame();
+  }
+}
+
+function toggleUgoiraPlayback(): void {
+  playing.value = !playing.value;
+  if (playing.value) scheduleFrame();
+  else stopFrameTimer();
+}
+
+// 帧数组与动图标记任一变化都重来：父视图可能在 ugoira 判定之前就已给出帧
+watch([() => props.ugoira, () => props.ugoiraFrames], preloadUgoiraFrames);
+
+onMounted(preloadUgoiraFrames);
 
 // ===== 纵向舞台的翻页滚动 =====
 
@@ -520,7 +718,7 @@ function onFsError(index: number, e: Event): void {
 
 /** 进入全屏：该页主图就绪且未处于 R-18 遮罩时才可用（遮罩不可被绕过）。 */
 function openFullscreen(index: number): void {
-  if (props.restricted || states.value[index] !== "ok") return;
+  if (props.restricted || !stageReady(index)) return;
   fsPage.value = index;
   fsFallbackPages.value = [];
   fsStates.value = {};
@@ -697,27 +895,39 @@ onMounted(() => {
 });
 
 onActivated(() => {
+  viewerActive = true;
   attachWindowListeners();
   const el = scrollEl.value;
   if (el) el.scrollTop = savedScrollTop;
   syncFromScroll();
+  // 停用期间计时器已清：此前处于播放态就接着播（playing 未被停用改写）
+  if (playing.value) scheduleFrame();
 });
 
-onDeactivated(detachWindowListeners);
+onDeactivated(() => {
+  viewerActive = false;
+  detachWindowListeners();
+  stopFrameTimer();
+});
 
 onBeforeUnmount(() => {
+  viewerActive = false;
   window.dispatchEvent(new CustomEvent("pixiv-tool:image-fullscreen", { detail: false }));
   detachWindowListeners();
+  stopFrameTimer();
   if (rafId) cancelAnimationFrame(rafId);
   if (pendingTimer) clearTimeout(pendingTimer);
   if (fsRafId) cancelAnimationFrame(fsRafId);
   if (fsPendingTimer) clearTimeout(fsPendingTimer);
 });
 
-/** 遮罩解除（设置里打开 show_r18）后补一次窗口同步：滚动容器回到多页布局时无需等滚动。 */
+/** 遮罩解除（设置里打开 show_r18）后补一次窗口同步：滚动容器回到多页布局时无需等滚动。
+ *  ugoira 同时停/续帧计时器（遮罩期间不播放）。 */
 watch(
   () => props.restricted,
   async () => {
+    if (props.restricted) stopFrameTimer();
+    else if (playing.value) scheduleFrame();
     await nextTick();
     syncFromScroll();
   }
@@ -772,43 +982,83 @@ watch(
                （点击 / Enter / Space，openFullscreen 内有就绪与遮罩守卫），遮罩态不可聚焦 -->
           <div
             class="shot"
-            :class="{ ready: states[i] === 'ok' && !restricted }"
+            :class="{ ready: stageReady(i) && !restricted }"
             :style="shotStyle(i)"
             :tabindex="restricted ? -1 : 0"
             role="button"
             :aria-label="`${altOf(i)} · ${t('browse.work.fullscreen')}`"
-            :title="states[i] === 'ok' && !restricted ? t('browse.work.fullscreen') : undefined"
+            :title="stageReady(i) && !restricted ? t('browse.work.fullscreen') : undefined"
             @click="openFullscreen(i)"
             @keydown.enter.prevent="openFullscreen(i)"
             @keydown.space.prevent="openFullscreen(i)"
           >
-            <!-- 先低清后高清：540 占位层在主图之下，主图就绪后即被覆盖 -->
+            <!-- ugoira 帧轮播：单张 <img> 换 src（不重挂载，避免闪烁）；帧地址与封面同源，
+                 已预载的帧直接复用缓存。点击/键盘仍按既有行为进全屏（首帧就绪后开放）；
+                 限定首页（ugoira 只有 1 页，多页数据异常时其余页仍走普通封面分支） -->
             <img
-              v-if="live[i] && states[i] !== 'ok' && lowSrc(i)"
-              class="shot-img low"
-              :src="lowSrc(i)"
-              alt=""
-              aria-hidden="true"
-              decoding="async"
-            />
-            <img
-              v-if="live[i]"
-              v-show="states[i] === 'ok'"
-              :key="`${stageSrc(i)}#${ticks[i]}`"
-              class="shot-img"
+              v-if="i === 0 && ugoiraPlayable"
+              class="shot-img ugoira-img"
               :class="{ blurred: restricted }"
-              :src="stageSrc(i)"
-              :alt="altOf(i)"
+              :src="frameSrc"
+              :alt="altOf(0)"
               decoding="async"
-              @load="onLoad(i, $event)"
-              @error="onError(i)"
+              @load="onUgoiraFrameLoad"
+              @error="onUgoiraFrameError($event)"
             />
-            <div v-if="live[i] && states[i] === 'error' && !restricted" class="shot-state">
-              <p class="stage-text">{{ t("common.browseLoadFailed") }}</p>
-              <md-outlined-button @click.stop="retry(i)">{{ t("common.retry") }}</md-outlined-button>
-            </div>
+            <template v-else>
+              <!-- 先低清后高清：540 占位层在主图之下，主图就绪后即被覆盖 -->
+              <img
+                v-if="live[i] && states[i] !== 'ok' && lowSrc(i)"
+                class="shot-img low"
+                :src="lowSrc(i)"
+                alt=""
+                aria-hidden="true"
+                decoding="async"
+              />
+              <img
+                v-if="live[i]"
+                v-show="states[i] === 'ok'"
+                :key="`${stageSrc(i)}#${ticks[i]}`"
+                class="shot-img"
+                :class="{ blurred: restricted }"
+                :src="stageSrc(i)"
+                :alt="altOf(i)"
+                decoding="async"
+                @load="onLoad(i, $event)"
+                @error="onError(i)"
+              />
+              <div v-if="live[i] && states[i] === 'error' && !restricted" class="shot-state">
+                <p class="stage-text">{{ t("common.browseLoadFailed") }}</p>
+                <md-outlined-button @click.stop="retry(i)">{{ t("common.retry") }}</md-outlined-button>
+              </div>
+            </template>
           </div>
         </div>
+      </div>
+
+      <!-- ugoira 播放控件：舞台右下角胶囊（播放/暂停 + 帧计数）。放在舞台层而非页框内：
+           页框本身是 role="button" 的全屏入口，交互控件不得嵌在其中；
+           遮罩期间不渲染（遮罩层已盖住内容，也不该操作） -->
+      <div v-if="ugoiraPlayable && !restricted" class="ugoira-controls">
+        <md-icon-button
+          class="ugoira-toggle"
+          :disabled="frameTotal < 2"
+          :aria-label="animating ? t('browse.work.ugoiraPause') : t('browse.work.ugoiraPlay')"
+          :title="animating ? t('browse.work.ugoiraPause') : t('browse.work.ugoiraPlay')"
+          @click="toggleUgoiraPlayback"
+        >
+          <!-- 播放中显示暂停（lucide pause），暂停中显示播放（lucide play） -->
+          <svg v-if="animating" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="14" y="3" width="5" height="18" rx="1" />
+            <rect x="5" y="3" width="5" height="18" rx="1" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" />
+          </svg>
+        </md-icon-button>
+        <span class="ugoira-count" aria-live="off">
+          {{ t("browse.work.ugoiraFrame", { current: frameIndex + 1, total: ugoiraFrames.length }) }}
+        </span>
       </div>
 
       <!-- 页码徽标：跟随滚动（多页且未遮罩） -->
@@ -823,14 +1073,34 @@ watch(
       </div>
     </div>
 
-    <!-- ugoira 说明行 -->
-    <p v-if="ugoira" class="ugoira-note">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <!-- lucide circle-play -->
-        <path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z" />
-        <circle cx="12" cy="12" r="10" />
-      </svg>
-      {{ t("browse.work.ugoiraNote") }}
+    <!-- ugoira 说明行：加载中 → 失败（可重试）→ 无帧退回「去 Pixiv 查看动画」旧文案；
+         可播放且无加载/失败时不占位。失败态不展示后端原文，原文经 title 悬停可读 -->
+    <p v-if="ugoira && (ugoiraLoading || ugoiraError || !ugoiraPlayable)" class="ugoira-note" :title="ugoiraError || undefined">
+      <template v-if="ugoiraLoading">
+        <svg class="ugoira-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <!-- lucide loader-circle -->
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
+        {{ t("browse.work.ugoiraLoading") }}
+      </template>
+      <template v-else-if="ugoiraError || frameBroken">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <!-- lucide circle-alert -->
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 8v4" />
+          <path d="M12 16h.01" />
+        </svg>
+        {{ t("browse.work.ugoiraFallback") }}
+        <md-text-button class="ugoira-retry" @click="emit('retry-ugoira')">{{ t("common.retry") }}</md-text-button>
+      </template>
+      <template v-else>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <!-- lucide circle-play -->
+          <path d="M9 9.003a1 1 0 0 1 1.517-.859l4.997 2.997a1 1 0 0 1 0 1.718l-4.997 2.997A1 1 0 0 1 9 14.996z" />
+          <circle cx="12" cy="12" r="10" />
+        </svg>
+        {{ t("browse.work.ugoiraNote") }}
+      </template>
     </p>
 
     <!-- 全屏浮层：左右切换 + 右侧胶卷缩略图（不复用舞台内控件，后者被浮层盖住） -->
@@ -1265,6 +1535,71 @@ watch(
   width: 14px;
   height: 14px;
   flex-shrink: 0;
+}
+
+/* 加载中图标：16px 旋转环（系统偏好减少动效时静止，只留图标表意） */
+.ugoira-note svg.ugoira-spinner {
+  width: 16px;
+  height: 16px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ugoira-note svg.ugoira-spinner {
+    animation: none;
+  }
+}
+
+/* 失败态的重试按钮：与说明行同字号层级，收紧 Material 默认水平内距以免整行过高 */
+.ugoira-note .ugoira-retry {
+  --md-text-button-container-height: calc(var(--space-xl) + var(--space-xxs));
+  --md-text-button-leading-space: var(--space-sm);
+  --md-text-button-trailing-space: var(--space-sm);
+  --md-text-button-label-text-size: 12px;
+  --md-text-button-label-text-weight: 600;
+}
+
+/* ugoira 播放控件：舞台右下角胶囊（32px 高）。浮于图片之上，与页码徽标同位置策略，
+ * 但需响应指针（不 pointer-events: none）；浅色容器底保证任意画面下可读 */
+.ugoira-controls {
+  position: absolute;
+  right: var(--space-sm);
+  bottom: var(--space-sm);
+  z-index: 1;
+  display: flex;
+  /* 32px = 2 × space-lg（与 CopyPathButton 等 32px 控件的写法一致） */
+  height: calc(var(--space-lg) * 2);
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0 var(--space-sm);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container) 88%, transparent);
+}
+
+/* 32px 胶囊内的图标按钮收敛到 28px 触控域（Material 默认 40px 会撑破胶囊高度） */
+.ugoira-toggle {
+  --md-icon-button-state-layer-height: calc(var(--space-xl) + var(--space-xxs));
+  --md-icon-button-state-layer-width: calc(var(--space-xl) + var(--space-xxs));
+  --md-icon-button-icon-size: 16px;
+}
+
+.ugoira-toggle svg {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+}
+
+.ugoira-count {
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* ===== 全屏浮层 ===== */

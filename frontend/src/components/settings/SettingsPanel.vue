@@ -26,7 +26,7 @@
       <div class="m3-field">
         <label for="output-dir">{{ t("settings.outputDir") }}</label>
         <div class="settings-path-row">
-          <md-outlined-text-field id="output-dir" class="settings-path-input" :value="form.output_dir" :placeholder="t('settings.outputDirPlaceholder')" @input="form.output_dir = ($event.target as HTMLInputElement).value" />
+          <md-outlined-text-field id="output-dir" class="settings-path-input" :value="form.output_dir" :placeholder="t('settings.outputDirPlaceholder')" :error="Boolean(outputDirError)" :error-text="outputDirError" @input="form.output_dir = ($event.target as HTMLInputElement).value; outputDirError = ''" />
           <md-outlined-button @click="handleBrowse">{{ t("settings.browse") }}</md-outlined-button>
         </div>
       </div>
@@ -462,6 +462,26 @@ function changeCacheMax(value: string) {
 }
 
 function toggleFormat(format: string, checked: boolean) { form.value.output_formats = checked ? [...form.value.output_formats, format] : form.value.output_formats.filter((item) => item !== format); }
+/** 输出目录的保存前校验错误（字段内 error-text 展示，输入 / 浏览回填即清）。 */
+const outputDirError = ref("");
+/** Windows 路径非法字符，与后端 validate_output_dir 的名单一致（本项目主目标平台，统一按 Windows 规则拦下）。 */
+const OUTPUT_DIR_ILLEGAL_CHARS = "*?\"<>|";
+/**
+ * 收集输出目录中的非法字符：按出现顺序去重，控制字符改写成 U+00XX
+ * （原字符不可见，直接插进提示里等于没有信息）。
+ */
+function outputDirIllegalChars(value: string): string {
+  const seen = new Set<string>();
+  const found: string[] = [];
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    const shown = code < 32
+      ? `U+${code.toString(16).toUpperCase().padStart(4, "0")}`
+      : OUTPUT_DIR_ILLEGAL_CHARS.includes(char) ? char : "";
+    if (shown && !seen.has(shown)) { seen.add(shown); found.push(shown); }
+  }
+  return found.join(" ");
+}
 /** 下载文件名模板的保存前校验错误（字段内 error-text 展示，输入即清；键对应三个模板输入框）。 */
 const templateErrors = ref({ illust: "", novel: "", series: "" });
 /** supporting text 列出可用占位符：清单与校验白名单同源（utils/filenameTemplate.ts），不会漂移。 */
@@ -484,6 +504,7 @@ watch(() => [form.value.theme, form.value.theme_color], applyPreview);
 onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180;
   // 老配置 / mock 缺运行参数键时补后端默认值，避免草稿里出现 undefined 被当成越界
   form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
+  outputDirError.value = "";
   // 老配置缺模板键时回落默认值（与 stores/settings.ts 初值一致），避免空值卡住保存校验
   if (!form.value.illust_filename_template) form.value.illust_filename_template = "{title}_{pid}_p{page}";
   if (!form.value.novel_filename_template) form.value.novel_filename_template = "{title}_{nid}";
@@ -499,6 +520,7 @@ function hasUnsaved() { return Boolean(translationKey.value) || clearTranslation
 function reset() {
   form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
   templateErrors.value = { illust: "", novel: "", series: "" };
+  outputDirError.value = "";
   translationJsonError.value = "";
   resetTranslationDraft(); savedSnapshot.value = snapshot();
   if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
@@ -516,6 +538,20 @@ async function save(): Promise<boolean> {
     notify(t("translation.agent.errors.saveBlocked", { count: agentIssues.length }));
     return false;
   }
+  // 输出目录保存前预校验：空值 / 非法字符在字段下方直接标红并阻止整表写入；
+  // 目录是否可创建只能由后端判定，交给 saveSettings reject 后的回填。
+  if (!form.value.output_dir.trim()) {
+    outputDirError.value = t("settings.outputDirEmpty");
+    notify(outputDirError.value);
+    return false;
+  }
+  const illegalChars = outputDirIllegalChars(form.value.output_dir);
+  if (illegalChars) {
+    outputDirError.value = t("settings.outputDirInvalidChars", { chars: illegalChars });
+    notify(outputDirError.value);
+    return false;
+  }
+  outputDirError.value = "";
   // 文件名模板保存前预校验：非法字段标红（error-text 替换 supporting text）并阻止整表写入
   const templateChecks: Array<["illust" | "novel" | "series", FilenameTemplateKind, string]> = [
     ["illust", "illust", form.value.illust_filename_template],
@@ -543,9 +579,20 @@ async function save(): Promise<boolean> {
       ...(clearTranslationKey.value ? { translation_api_key: "" } : translationKey.value.trim() ? { translation_api_key: translationKey.value } : {}) });
     form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
     resetTranslationDraft(); savedSnapshot.value = snapshot(); notify(t("settings.saved")); return true;
-  } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); return false; }
+  } catch (err) {
+    const message = errorMessage(err) || t("settings.saveFailed");
+    // 后端 validate_output_dir 的中文文案都含「输出目录」：落到字段下方，同时保留通知
+    if (message.includes("输出目录")) outputDirError.value = message;
+    notify(message);
+    return false;
+  }
 }
-async function handleBrowse() { try { const path = await settingsStore.selectDirectory(); if (path) form.value.output_dir = path; } catch { notify(t("settings.pickFailed")); } }
+async function handleBrowse() {
+  try {
+    const path = await settingsStore.selectDirectory();
+    if (path) { form.value.output_dir = path; outputDirError.value = ""; }
+  } catch { notify(t("settings.pickFailed")); }
+}
 async function openConfirm() { await nextTick(); confirmDialog.value?.showModal(); }
 function closeConfirm() { confirmDialog.value?.close(); }
 async function handleConfirm() { closeConfirm(); try { await authStore.logout(); notify(t("settings.authCleared")); } catch (err) { notify(errorMessage(err) || t("settings.saveFailed")); } }

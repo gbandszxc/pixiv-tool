@@ -70,6 +70,13 @@ thiserror = "2.0"
 anyhow = "1.0"
 log = "0.4"
 rand = "0.9"
+# ugoira 帧解包（src/ugoira.rs）：只解 pixiv 动图 zip（deflate / stored）。
+# 不启用默认 features：默认会带上 aes/bzip2/zstd/xz 等本仓库用不到的解码器与
+# 加密依赖，白增编译面与供应链风险；flate2 已在依赖树中（wreq-util 的
+# emulation 默认 feature 以默认 features 引入，rust_backend 因此已就绪）。
+# `deflate-flate2` 只开 `_deflate-any` 标记，必须同时显式打开 `flate2`
+# 这个可选依赖 feature，否则 zip 内部 `use flate2::…` 无法解析（实测编译失败）。
+zip = { version = "2.4.2", default-features = false, features = ["deflate-flate2", "flate2"] }
 
 [target.'cfg(windows)'.dependencies]
 # Alt 唤出菜单栏走 WebView2 的 AcceleratorKeyPressed 事件；

@@ -790,6 +790,30 @@ export async function browseHistoryClear(): Promise<{ status: string; deleted: n
   return invokeBrowse<{ status: string; deleted: number }>("browse_history_clear");
 }
 
+// ===== 动图帧 / 已下载页（page-download-ui-v1；!isTauri() → mock）=====
+
+/** browse_ugoira_frames 返回体：frames 为逐帧图片（可播放顺序），delay 为该帧时长（毫秒）。 */
+export interface BrowseUgoiraFrames {
+  frames: { src: string; delay: number }[];
+  width: number | null;
+  height: number | null;
+}
+
+/** browse_ugoira_frames：拉取动图（ugoira）逐帧图片与每帧时长。 */
+export async function browseUgoiraFrames(id: number): Promise<BrowseUgoiraFrames> {
+  if (!isTauri()) return mockUgoiraFrames(id);
+  return invokeBrowse<BrowseUgoiraFrames>("browse_ugoira_frames", { artworkId: id });
+}
+
+/**
+ * illust_saved_pages：查询作品已下载的页码（0 起）。
+ * 裸 invoke：纯本地查询，失败不涉及登录态，无需登录守卫事件。
+ */
+export async function illustSavedPages(id: number): Promise<{ pages: number[]; ugoira: boolean }> {
+  if (!isTauri()) return { pages: [], ugoira: false };
+  return invoke<{ pages: number[]; ugoira: boolean }>("illust_saved_pages", { artworkId: id });
+}
+
 function channelKindToWork(kind: ChannelKind): WorkKind {
   return kind === "illustration" ? "illust" : kind;
 }
@@ -1610,4 +1634,17 @@ async function mockHistoryClear(): Promise<{ status: string; deleted: number }> 
   const deleted = mockHistoryEnsure().length;
   mockHistoryItems = [];
   return { status: "success", deleted };
+}
+
+// ===== 动图帧 mock =====
+
+/** 动图帧：4 帧内联 SVG（色相按 id 递增，肉眼可见逐帧变化），时长覆盖长短帧两档。 */
+async function mockUgoiraFrames(id: number): Promise<BrowseUgoiraFrames> {
+  await mockDelay();
+  const delays = [120, 80, 80, 160];
+  return {
+    frames: delays.map((delay, i) => ({ src: mockCover((id * 19 + i * 24) % 360, "landscape"), delay })),
+    width: 320,
+    height: 240,
+  };
 }

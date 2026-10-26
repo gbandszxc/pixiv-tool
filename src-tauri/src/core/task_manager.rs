@@ -112,6 +112,8 @@ impl TaskManager {
     /// - source_type 合法（novel: single/series/user；illustration: single/user），
     ///   否则 Err("未知来源类型: {t}")
     /// - cookies 含非空 PHPSESSID，否则 Err("未登录，请先登录")
+    /// - pages 仅在 illustration + single 时生效：空数组 / 含负数 →
+    ///   Err("页码必须是非负整数")；其余组合忽略（不报错）
     ///
     /// 流程：INSERT tasks(pending) → 记录 TaskControls → spawn 后台任务
     /// （构造 PixivClient/PixivApi，按 category 调 run_novel_crawler /
@@ -126,6 +128,7 @@ impl TaskManager {
         cookies: std::collections::HashMap<String, String>,
         settings: Settings,
         sink: EventSink,
+        pages: Option<Vec<i64>>,
     ) -> Result<String, String> {
         if !matches!(category, "novel" | "illustration") {
             return Err(format!("未知任务分类: {category}"));
@@ -151,6 +154,16 @@ impl TaskManager {
         if source_num <= 0 {
             return Err("来源 ID 必须是正整数".into());
         }
+        // 页码只在「插画 + 单作品」时生效；其它组合静默忽略
+        let pages = if category == "illustration" && source_type == "single" {
+            normalize_pages(pages)?
+        } else {
+            None
+        };
+        let pages_json = pages
+            .as_ref()
+            .map(|p| serde_json::to_string(p).unwrap_or_else(|_| "[]".into()))
+            .unwrap_or_else(|| "[]".into());
 
         let task_id = uuid::Uuid::new_v4().to_string();
         let now = now_iso();
@@ -160,6 +173,7 @@ impl TaskManager {
             source_id: source_id.to_string(),
             category: category.to_string(),
             status: "pending".into(),
+            pages: pages_json,
             created_at: now.clone(),
             updated_at: now,
         })?;
@@ -230,6 +244,7 @@ impl TaskManager {
                         data_dir,
                         user_id,
                         illust_filename_template: settings.illust_filename_template,
+                        pages,
                         max_wait_seconds: settings.max_wait_seconds,
                         controls,
                         sink,
@@ -295,6 +310,14 @@ impl TaskManager {
 
         let new_task_id = uuid::Uuid::new_v4().to_string();
         let now = now_iso();
+        // 页码随原任务复制（重试仍只补原任务选中的页）；坏 JSON 视为全部页
+        let retry_pages: Option<Vec<usize>> = serde_json::from_str::<Vec<i64>>(&task.pages)
+            .ok()
+            .and_then(|pages| normalize_pages(Some(pages)).ok().flatten());
+        let retry_pages_json = retry_pages
+            .as_ref()
+            .map(|p| serde_json::to_string(p).unwrap_or_else(|_| "[]".into()))
+            .unwrap_or_else(|| "[]".into());
         self.db.insert_task(&TaskInsert {
             task_id: new_task_id.clone(),
             // 与 Python 版一致：source_type 保留原任务标签，source_id 为逗号拼接
@@ -306,6 +329,7 @@ impl TaskManager {
                 .join(","),
             category: task.category.clone(),
             status: "pending".into(),
+            pages: retry_pages_json,
             created_at: now.clone(),
             updated_at: now,
         })?;
@@ -374,6 +398,7 @@ impl TaskManager {
                         data_dir,
                         user_id: None,
                         illust_filename_template,
+                        pages: retry_pages,
                         max_wait_seconds,
                         controls,
                         sink,
@@ -396,6 +421,21 @@ impl TaskManager {
     pub fn get_task(&self, task_id: &str) -> Result<Option<TaskRow>, String> {
         self.db.get_task(task_id)
     }
+}
+
+/// 页码校验与归一（纯函数）：None → None（全部页）；空数组 / 含负数 →
+/// Err("页码必须是非负整数")；否则去重升序为 usize 列表。
+pub(crate) fn normalize_pages(pages: Option<Vec<i64>>) -> Result<Option<Vec<usize>>, String> {
+    let Some(pages) = pages else {
+        return Ok(None);
+    };
+    if pages.is_empty() || pages.iter().any(|p| *p < 0) {
+        return Err("页码必须是非负整数".into());
+    }
+    let mut pages: Vec<usize> = pages.into_iter().map(|p| p as usize).collect();
+    pages.sort_unstable();
+    pages.dedup();
+    Ok(Some(pages))
 }
 
 /// 构造共享的 PixivApi（wreq Chrome147 指纹）。
@@ -475,6 +515,7 @@ mod tests {
                 logged_in_cookies(),
                 Settings::default(),
                 noop_sink(),
+                None,
             )
             .unwrap_err();
         assert_eq!(err, "未知任务分类: manga");
@@ -494,7 +535,8 @@ mod tests {
                 "novel",
                 logged_in_cookies(),
                 Settings::default(),
-                noop_sink()
+                noop_sink(),
+                None,
             )
             .unwrap_err(),
             "未知来源类型: box"
@@ -508,7 +550,8 @@ mod tests {
                 "illustration",
                 logged_in_cookies(),
                 Settings::default(),
-                noop_sink()
+                noop_sink(),
+                None,
             )
             .unwrap_err(),
             "未知来源类型: series"
@@ -528,7 +571,8 @@ mod tests {
                 "novel",
                 HashMap::new(),
                 Settings::default(),
-                noop_sink()
+                noop_sink(),
+                None,
             )
             .unwrap_err(),
             "未登录，请先登录"
@@ -543,7 +587,8 @@ mod tests {
                 "novel",
                 blank,
                 Settings::default(),
-                noop_sink()
+                noop_sink(),
+                None,
             )
             .unwrap_err(),
             "未登录，请先登录"
@@ -563,7 +608,8 @@ mod tests {
                 "novel",
                 logged_in_cookies(),
                 Settings::default(),
-                noop_sink()
+                noop_sink(),
+                None,
             )
             .unwrap_err(),
             "来源 ID 必须是数字: abc"
@@ -583,7 +629,8 @@ mod tests {
                 "illustration",
                 logged_in_cookies(),
                 Settings::default(),
-                noop_sink()
+                noop_sink(),
+                None,
             )
             .unwrap_err(),
             "未知来源类型: "
@@ -597,13 +644,58 @@ mod tests {
                     "novel",
                     logged_in_cookies(),
                     Settings::default(),
-                    noop_sink()
+                    noop_sink(),
+                    None,
                 )
                 .unwrap_err(),
                 "来源 ID 必须是正整数"
             );
         }
         assert!(tm.list_tasks(None).unwrap().is_empty());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn normalize_pages_rejects_invalid_and_sorts() {
+        // None → 全部页
+        assert_eq!(normalize_pages(None).unwrap(), None);
+        // 空数组 → 错误（区别于 None）
+        assert_eq!(
+            normalize_pages(Some(Vec::new())).unwrap_err(),
+            "页码必须是非负整数"
+        );
+        // 负数 → 错误
+        assert_eq!(
+            normalize_pages(Some(vec![0, -1])).unwrap_err(),
+            "页码必须是非负整数"
+        );
+        // 重复 → 去重升序
+        assert_eq!(
+            normalize_pages(Some(vec![2, 0, 2, 1])).unwrap(),
+            Some(vec![0, 1, 2])
+        );
+    }
+
+    #[test]
+    fn create_task_rejects_invalid_pages_before_insert() {
+        let (tm, dir) = temp_manager("pages");
+        for pages in [Some(Vec::new()), Some(vec![-1]), Some(vec![0, -3])] {
+            assert_eq!(
+                tm.create_task(
+                    "single",
+                    "1",
+                    vec![],
+                    "illustration",
+                    logged_in_cookies(),
+                    Settings::default(),
+                    noop_sink(),
+                    pages,
+                )
+                .unwrap_err(),
+                "页码必须是非负整数"
+            );
+        }
+        assert!(tm.list_tasks(None).unwrap().is_empty(), "校验失败不落库");
         cleanup(&dir);
     }
 
@@ -628,7 +720,7 @@ mod tests {
                 "nope",
                 logged_in_cookies(),
                 Settings::default(),
-                noop_sink()
+                noop_sink(),
             )
             .unwrap_err(),
             "任务不存在"

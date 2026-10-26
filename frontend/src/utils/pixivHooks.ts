@@ -12,6 +12,8 @@ export interface DownloadTarget {
   form: "novel" | "illustration";
   sourceType: "single" | "series" | "user";
   sourceId: number | string;
+  /** 部分页下载的页码（0 起）；省略 = 全部页面。 */
+  pages?: number[];
 }
 
 /** 用系统默认浏览器打开 pixiv 页面；非 Tauri（浏览器 mock 走查）退回 window.open。失败向上抛，由调用方提示。 */

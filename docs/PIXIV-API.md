@@ -196,8 +196,9 @@
 - 消费字段：数组每项 `urls.small / urls.regular（→ medium）/ urls.original`（original 缺失回退 regular / small，三档皆空跳过该页）、`width, height`。
 - 分页：无。
 
-**GET `/ajax/illust/{id}/ugoira_meta`** · 实现 `browse_api.rs:1912`（仅 illustType=2 调用，失败降级 None）；抓取 `api.rs:301` · 在线同上用例 · 离线 `parse_ugoira_frames_and_missing_src`、`parse_ugoira_meta_priority_and_error`
-- 浏览消费字段：`src`、`frames[].{file,delay}`；抓取消费字段：`originalSrc`（优先）、`zip_urls.original`（兜底），两者皆空 → Client 错误。
+**GET `/ajax/illust/{id}/ugoira_meta`** · 实现 `browse_api.rs:1912`（仅 illustType=2 调用，失败降级 None）；抓取 `api.rs:301`；浏览播放 `src-tauri/src/ugoira.rs` · 在线同上用例 · 离线 `parse_ugoira_frames_and_missing_src`、`parse_ugoira_meta_priority_and_error`
+- 浏览消费字段：`src`（600×600 zip，播放侧优先）+ `frames[].{file,delay}`（delay 毫秒）；抓取消费字段：`originalSrc`（优先）、`zip_urls.original`（兜底），两者皆空 → Client 错误。
+- 播放侧帧管线：`src` 缺失回退 `originalSrc`、再回退 `zip_urls.original` → 按 frames 白名单解包到 `<data>/cache/img/ugoira/<id>/`（manifest 记 zip URL 与帧表）→ 返回 `pixiv-ugoira` 协议 URL（SPEC §6.4、ADR 0039）。
 - 分页：无。注意路径是 `ugoira_meta`，不是 `/ugoira`（见 §6）。
 
 **GET `/ajax/novel/{id}`** · 实现 `browse_api.rs:1936`（`get_work_detail_novel`）；抓取 `api.rs:248` · 在线 `live_read.rs::live_novel_detail`、`live_read.rs::live_novel_embedded_images` · 离线 `parse_detail_metadata_nested_tags_and_counts`、`parse_novel_detail_fields`、`parse_novel_full_shape`、`parse_novel_missing_series_and_defaults`、`parse_novel_embedded_images_prefers_display_tier`
@@ -423,7 +424,7 @@
 | `/ajax/ranking/novel` | `get_ranking` browse_api.rs:1870；`parse_ranking_novel` :1088 | `live_read.rs::live_ranking_illust_and_novel` | `parse_ranking_novel_shape_and_last_page` / `parse_ranking_dates_normalized_to_yyyymmdd` | browse.ts:401 |
 | `/ajax/illust/{id}` | `get_work_detail_illust` browse_api.rs:1904；`get_illust` api.rs:282 | `live_read.rs::live_illust_detail_pages_ugoira` / `live_detail_metadata_illust_manga_novel` | `parse_detail_metadata_nested_tags_and_counts` / `parse_illust_detail_fields` / `parse_illust_full_shape` | browse.ts:412；core/sources.rs:106、core/crawler.rs:475,615 |
 | `/ajax/illust/{id}/pages` | browse_api.rs:1908；`parse_illust_pages` :1186 | `live_read.rs::live_illust_detail_pages_ugoira` | `parse_illust_pages_urls_and_fallback` | browse.ts:412 |
-| `/ajax/illust/{id}/ugoira_meta` | browse_api.rs:1912；`parse_ugoira` :1215；`get_ugoira_meta` api.rs:301 | `live_read.rs::live_illust_detail_pages_ugoira` | `parse_ugoira_frames_and_missing_src` / `parse_ugoira_meta_priority_and_error` | core/crawler.rs:633 |
+| `/ajax/illust/{id}/ugoira_meta` | browse_api.rs:1912；`parse_ugoira` :1215；`get_ugoira_meta` api.rs:301；播放侧 `ugoira.rs::ensure_frames`（命令 `browse_ugoira_frames`） | `live_read.rs::live_illust_detail_pages_ugoira` | `parse_ugoira_frames_and_missing_src` / `parse_ugoira_meta_priority_and_error` / `parse_playback_url_priority` / `parse_playback_frame_delay_fallback` / `sanitize_frame_name_rejects_traversal_and_junk` / `extract_frames_writes_only_whitelisted_single_segment_entries` | browse.ts（`browseUgoiraFrames`）/ `ImageViewer.vue`；core/crawler.rs:633（抓取仍用 `originalSrc`） |
 | `/ajax/novel/{id}` | `get_work_detail_novel` browse_api.rs:1936；`get_novel` api.rs:248 | `live_read.rs::live_novel_detail` / `live_detail_metadata_illust_manga_novel` | `parse_detail_metadata_nested_tags_and_counts` / `parse_novel_detail_fields` / `parse_novel_full_shape` | browse.ts:412；core/crawler.rs:370 |
 | `/ajax/illust / novel/{id}/recommend/init` | `get_related` browse_api.rs:1955；`parse_related` :1275 | `live_read.rs::live_related_illust_novel` | `parse_related_accepts_illusts_and_novels_keys` | browse.ts:421 |
 | `/ajax/user/{id}?full=1` | `get_user_profile` browse_api.rs:1977；`parse_user_profile` :1291 | `live_read.rs::live_user_profile` | `parse_user_profile_fields` | browse.ts:431 |

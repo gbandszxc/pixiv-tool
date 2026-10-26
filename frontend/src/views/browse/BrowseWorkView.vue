@@ -23,6 +23,7 @@ import { useSettingsStore } from "../../stores/settings";
 import {
   browseHistoryRecord,
   browseRelated,
+  browseUgoiraFrames,
   browseWorkDetail,
   errorMessage,
   pxSrc,
@@ -34,6 +35,8 @@ import ImageViewer from "../../components/browse/ImageViewer.vue";
 import CommentsSection from "../../components/browse/CommentsSection.vue";
 import RelatedGrid from "../../components/browse/RelatedGrid.vue";
 import BookmarkButton from "../../components/browse/BookmarkButton.vue";
+import CopyWorkId from "../../components/browse/CopyWorkId.vue";
+import PageDownloadPicker from "../../components/browse/PageDownloadPicker.vue";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
@@ -65,6 +68,11 @@ const relatedItems = ref<BrowseWorkItem[]>([]);
 const relatedLoading = ref(false);
 const relatedError = ref("");
 
+/** ugoira 逐帧图片与时长（非动图为空数组）；由 loadUgoira 拉取 */
+const ugoiraFrames = ref<{ src: string; delay: number }[]>([]);
+const ugoiraLoading = ref(false);
+const ugoiraError = ref("");
+
 const infoCol = ref<HTMLElement | null>(null);
 /** 右列下段面板：相关推荐（默认）/ 评论，由顶栏评论按钮切换 */
 const panel = ref<"related" | "comments">("related");
@@ -73,6 +81,8 @@ const panelEl = ref<HTMLElement | null>(null);
 /** 请求序号：快速连续跳转作品时丢弃过期响应 */
 let reqSeq = 0;
 let relSeq = 0;
+/** ugoira 帧请求序号：切作品后丢弃过期响应，避免旧帧覆盖新作品 */
+let ugoiraSeq = 0;
 
 // ===== 派生 =====
 
@@ -154,12 +164,22 @@ async function resetZoom(): Promise<void> {
 
 // ===== 加载 =====
 
+/** 清空 ugoira 三态并作废在途请求（切作品 / 加载失败 / 非动图都走这里）。 */
+function resetUgoira(): void {
+  ugoiraSeq += 1;
+  ugoiraFrames.value = [];
+  ugoiraLoading.value = false;
+  ugoiraError.value = "";
+}
+
 async function loadDetail(): Promise<void> {
   const seq = ++reqSeq;
   loading.value = true;
   error.value = "";
   detail.value = null;
   bookmarkState.value = null;
+  // 切作品先清动图帧：旧作品的帧绝不残留到新作品
+  resetUgoira();
   revealed.value = revealedWorkIds.has(props.id);
   void loadRelated();
   try {
@@ -172,6 +192,8 @@ async function loadDetail(): Promise<void> {
     }
     detail.value = data;
     bookmarkState.value = data.bookmarkState ?? null;
+    // 仅动图作品拉帧；非动图零额外 IPC
+    if (isUgoira.value) void loadUgoira();
     // 加载成功后上报浏览历史（失败静默）
     void browseHistoryRecord({
       workId: data.item.id,
@@ -186,8 +208,26 @@ async function loadDetail(): Promise<void> {
   } catch (err) {
     if (seq !== reqSeq) return;
     error.value = errorMessage(err) || t("common.browseLoadFailed");
+    resetUgoira();
   } finally {
     if (seq === reqSeq) loading.value = false;
+  }
+}
+
+/** 拉取 ugoira 逐帧图片；序号守卫丢弃过期响应（快速切作品时旧响应不改状态）。 */
+async function loadUgoira(): Promise<void> {
+  const seq = ++ugoiraSeq;
+  ugoiraLoading.value = true;
+  ugoiraError.value = "";
+  try {
+    const data = await browseUgoiraFrames(props.id);
+    if (seq !== ugoiraSeq) return;
+    ugoiraFrames.value = data.frames;
+  } catch (err) {
+    if (seq !== ugoiraSeq) return;
+    ugoiraError.value = errorMessage(err);
+  } finally {
+    if (seq === ugoiraSeq) ugoiraLoading.value = false;
   }
 }
 
@@ -434,8 +474,12 @@ onBeforeUnmount(detachKeydown);
           :restricted="restricted"
           :restrict-label="restrictLabel"
           :ugoira="isUgoira"
+          :ugoira-frames="ugoiraFrames"
+          :ugoira-loading="ugoiraLoading"
+          :ugoira-error="ugoiraError"
           :stage-scale="imageScale"
           @reveal="reveal"
+          @retry-ugoira="loadUgoira"
         />
         <div v-else class="stage-skeleton" aria-hidden="true"></div>
       </section>
@@ -496,6 +540,18 @@ onBeforeUnmount(detachKeydown);
           <p class="meta-line">
             <template v-if="item.width && item.height">{{ item.width }} × {{ item.height }} · </template>{{ dateText }}
           </p>
+
+          <!-- 作品 pid：点击复制（放信息区，不占顶栏动作位） -->
+          <CopyWorkId :id="item.id" />
+
+          <!-- 按页选择下载：多 P 作品才渲染（单页与动图由外层先挡掉，避免无谓的已下载查询） -->
+          <PageDownloadPicker
+            v-if="detail && !isUgoira && pages.length > 1"
+            :id="props.id"
+            :pages="pages"
+            :ugoira="isUgoira"
+            :disabled="loading"
+          />
 
           <!-- 描述（剥标签纯文本） -->
           <p v-if="plainDescription" class="description">{{ plainDescription }}</p>

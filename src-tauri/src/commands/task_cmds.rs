@@ -4,7 +4,9 @@
 //! - tasks_list → {"items":[TaskRow...]}；未知分类 → Err("未知任务分类: {c}")
 //! - task_create → {"task_id":"...","status":"pending"}（爬取后台执行，
 //!   进度经 "task://progress" / "task://done" 事件推送）；
-//!   未登录 → {"error":"未登录，请先登录"}；来源/分类非法 → {"error":"未知..."}
+//!   未登录 → {"error":"未登录，请先登录"}；来源/分类非法 → {"error":"未知..."}；
+//!   可选 pages（0 起页码数组，仅 illustration+single 生效）非法 →
+//!   {"error":"页码必须是非负整数"}
 //! - task_pause / task_resume / task_cancel → {"status":"paused"|"running"|"canceled"}；
 //!   任务不存在 → {"error":"任务不存在"}
 //! - task_retry_failed → {"task_id":新id,"status":"pending"}；
@@ -64,6 +66,8 @@ fn login_cookies(state: &AppState) -> Option<HashMap<String, String>> {
 }
 
 /// 创建抓取任务。category 缺省 "novel"；formats 缺省 ["txt","markdown"]。
+/// `pages`（0 起页码数组）仅在 illustration + single 时生效：空数组 / 含负数 →
+/// 200 + error("页码必须是非负整数")；其它组合忽略。
 #[tauri::command]
 pub async fn task_create(
     state: State<'_, AppState>,
@@ -72,6 +76,7 @@ pub async fn task_create(
     source_id: String,
     formats: Vec<String>,
     category: Option<String>,
+    pages: Option<Vec<i64>>,
 ) -> Result<Value, String> {
     let category = category.unwrap_or_else(|| "novel".to_string());
     // formats 空数组由 crawler 层兜底为 ["txt","markdown"]，命令层透传
@@ -89,6 +94,7 @@ pub async fn task_create(
         cookies,
         settings,
         sink,
+        pages,
     ) {
         Ok(task_id) => Ok(json!({ "task_id": task_id, "status": "pending" })),
         // 分类/来源/登录校验失败：业务错误走 200 + error（对齐旧端点）

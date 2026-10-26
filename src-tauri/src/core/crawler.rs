@@ -70,6 +70,8 @@ pub struct IllustCrawlArgs {
     /// 插画文件名模板（settings.illust_filename_template 透传）；
     /// 渲染为空回落现行命名。
     pub illust_filename_template: String,
+    /// 选中的 0 起页码（已归一：去重升序）；None = 全部页。
+    pub pages: Option<Vec<usize>>,
     pub max_wait_seconds: i64,
     pub controls: TaskControls,
     pub sink: EventSink,
@@ -480,7 +482,8 @@ async fn crawl_one_novel(
 ///   （内部追加 `_ugoira`）+ `.zip`；渲染为空回落现行
 ///   `{safe_title}_{artwork_id}_p{N}.{ext}` / `{safe_title}_{artwork_id}_ugoira.zip`；
 ///   多页 meta 缺失时从 p0 直链 `_p0.{ext} → _p{N}.{ext}` 推导
-/// - 已下载（is_illust_downloaded）→ skipped+1；saved_paths JSON 数组回写库
+/// - 已下载判定按页（`pages` 为 None 且已有记录 → skip；Some → 只下差集并与
+///   既有 saved_paths/saved_pages 合并，按页码升序保持一一对应）
 /// - 超时/取消/终态语义与 run_novel_crawler 相同（取消写 canceled，含修正）
 /// - 输出目录：单作品 `<output_dir>/pic/`
 pub async fn run_illust_crawler(args: IllustCrawlArgs) {
@@ -500,6 +503,7 @@ pub(crate) async fn run_illust_items(args: IllustCrawlArgs, preset_ids: Option<V
         data_dir,
         user_id,
         illust_filename_template,
+        pages,
         max_wait_seconds,
         controls,
         sink,
@@ -528,9 +532,17 @@ pub(crate) async fn run_illust_items(args: IllustCrawlArgs, preset_ids: Option<V
         None => match &source {
             IllustSource::Single(id) => match api.get_illust(*id).await {
                 Ok(data) => {
-                    let total = Some(data.page_count.max(1));
+                    // 分母：选了页码 → 选中且存在的页数；否则作品页数
+                    let total = match &pages {
+                        Some(wanted) => wanted
+                            .iter()
+                            .filter(|idx| (**idx as i64) < data.page_count.max(1))
+                            .count()
+                            .max(1) as i64,
+                        None => data.page_count.max(1),
+                    };
                     illust_cache.insert(*id, data);
-                    Ok((vec![*id], total))
+                    Ok((vec![*id], Some(total)))
                 }
                 Err(err) => {
                     log::warn!("任务 {task_id} 预取插画 {id} 分母失败，退回增量计数: {err}");
@@ -576,13 +588,47 @@ pub(crate) async fn run_illust_items(args: IllustCrawlArgs, preset_ids: Option<V
             if controls.is_cancelled() {
                 break;
             }
-            if db.is_illust_downloaded(artwork_id) {
-                counters.skipped += 1;
-                if pre_total.is_none() {
-                    counters.total += 1;
+            // 已下载判定按页：
+            // - pages 为 None 且已有记录 → 保持旧语义 skip（向后兼容）；
+            // - pages 为 Some → 与既有 saved_pages 求差集，空则 skip，否则只下差集。
+            let existing = db.get_illustration(artwork_id);
+            let (selected, existing_saved) = match (&pages, &existing) {
+                (None, Some(_)) => {
+                    counters.skipped += 1;
+                    if pre_total.is_none() {
+                        counters.total += 1;
+                    }
+                    continue;
                 }
-                continue;
-            }
+                (None, None) => (None, Vec::new()),
+                (Some(wanted), None) => (Some(wanted.clone()), Vec::new()),
+                (Some(wanted), Some(row)) => {
+                    // ugoira 的既有页集合归一后恒为 [0]，走同一差集逻辑
+                    let have = saved_pairs(&row.saved_paths, &row.saved_pages);
+                    let diff: Vec<usize> = wanted
+                        .iter()
+                        .copied()
+                        .filter(|p| !have.iter().any(|(saved, _)| saved == p))
+                        .collect();
+                    let already: i64 = (wanted.len() - diff.len()) as i64;
+                    // 单作品源按页推进（done+skipped=total）→ 按页计；重试/全集
+                    // 按作品推进 → 全命中才 +1
+                    counters.skipped += if pre_total.is_some() {
+                        already
+                    } else if diff.is_empty() {
+                        1
+                    } else {
+                        0
+                    };
+                    if diff.is_empty() {
+                        if pre_total.is_none() {
+                            counters.total += 1;
+                        }
+                        continue;
+                    }
+                    (Some(diff), have)
+                }
+            };
             if pre_total.is_none() {
                 counters.total += 1;
             }
@@ -608,6 +654,8 @@ pub(crate) async fn run_illust_items(args: IllustCrawlArgs, preset_ids: Option<V
                     &base_dir,
                     &mut illust_cache,
                     &illust_filename_template,
+                    selected.as_deref(),
+                    &existing_saved,
                     progress_cb,
                 )
                 .await
@@ -657,9 +705,42 @@ fn notify_progress(callback: &mut Option<&mut (dyn FnMut() + Send)>) {
     }
 }
 
+/// 既有记录 → `(页码, 路径)` 对（按 saved_paths 与 saved_pages 同序 zip）。
+/// saved_pages 已由 Db 读取出口归一，长度与 saved_paths 一致；不一致时取较短者。
+fn saved_pairs(saved_paths: &str, saved_pages: &str) -> Vec<(usize, String)> {
+    let paths: Vec<String> = serde_json::from_str(saved_paths).unwrap_or_default();
+    let pages: Vec<i64> = serde_json::from_str(saved_pages).unwrap_or_default();
+    pages
+        .into_iter()
+        .filter(|p| *p >= 0)
+        .zip(paths)
+        .map(|(page, path)| (page as usize, path))
+        .collect()
+}
+
+/// 合并既有与新增的「页 → 路径」（同页新增覆盖既有），按页码升序返回
+/// `(pages, paths)` 且两者一一对应。
+fn merge_saved(
+    existing: &[(usize, String)],
+    added: &[(usize, String)],
+) -> (Vec<usize>, Vec<String>) {
+    let mut merged: Vec<(usize, String)> = existing.to_vec();
+    for (page, path) in added {
+        match merged.iter_mut().find(|(p, _)| p == page) {
+            Some(slot) => slot.1 = path.clone(),
+            None => merged.push((*page, path.clone())),
+        }
+    }
+    merged.sort_by_key(|(page, _)| *page);
+    merged.into_iter().unzip()
+}
+
 /// 抓取单幅插画：get_illust（缓存优先）→ 逐页下载 / ugoira zip（文件名按
 /// `template` 模板渲染，渲染为空回落现行命名）→ 写库。
+/// `pages` 为 Some 时只下载其中页码（0 起）；None = 全部页。
+/// `existing` 为既有记录的 `(页码, 路径)`，结果与之合并后整体回写。
 /// `on_page_saved` 每保存一页（或 ugoira zip）回调一次（None 时不回调）。
+#[allow(clippy::too_many_arguments)]
 async fn crawl_one_illust(
     api: &PixivApi,
     db: &Db,
@@ -667,6 +748,8 @@ async fn crawl_one_illust(
     base_dir: &Path,
     cache: &mut HashMap<i64, IllustData>,
     template: &str,
+    pages: Option<&[usize]>,
+    existing: &[(usize, String)],
     mut on_page_saved: Option<&mut (dyn FnMut() + Send)>,
 ) -> Result<String, ItemError> {
     let data = match cache.remove(&artwork_id) {
@@ -690,7 +773,8 @@ async fn crawl_one_illust(
     let fail = |err: &dyn std::fmt::Display| ItemError::new(Some(&title), err);
 
     std::fs::create_dir_all(base_dir).map_err(|err| fail(&err))?;
-    let mut saved: Vec<String> = Vec::new();
+    // (页码, 路径)：saved_pages 与 saved_paths 同序一一对应
+    let mut added: Vec<(usize, String)> = Vec::new();
 
     if data.illust_type == UGOIRA_TYPE {
         // ugoira 原图 = zip 帧序列（originalSrc 优先，zip_urls.original 兜底）
@@ -705,7 +789,8 @@ async fn crawl_one_illust(
             .map_err(|err| fail(&err))?;
         let path = base_dir.join(ugoira_filename_with_template(&name_info, template));
         std::fs::write(&path, &bytes).map_err(|err| fail(&err))?;
-        saved.push(path.to_string_lossy().into_owned());
+        // ugoira 恒为单页 [0]
+        added.push((0, path.to_string_lossy().into_owned()));
         notify_progress(&mut on_page_saved);
     } else {
         let urls = collect_page_urls(&data);
@@ -719,6 +804,10 @@ async fn crawl_one_illust(
             if url.is_empty() {
                 continue;
             }
+            // 按页过滤：pages 为 None → 全部；Some → 只下选中页
+            if pages.is_some_and(|wanted| !wanted.contains(&idx)) {
+                continue;
+            }
             let bytes = api
                 .client()
                 .download_bytes(url)
@@ -726,10 +815,27 @@ async fn crawl_one_illust(
                 .map_err(|err| fail(&err))?;
             let path = base_dir.join(page_filename_with_template(&name_info, template, idx, url));
             std::fs::write(&path, &bytes).map_err(|err| fail(&err))?;
-            saved.push(path.to_string_lossy().into_owned());
+            added.push((idx, path.to_string_lossy().into_owned()));
             notify_progress(&mut on_page_saved);
         }
+        // 选中页码全部不可用（越界/空 URL）→ 报错而非写空记录（保持旧语义：
+        // pages 为 None 时仍按原样写库）
+        if pages.is_some() && added.is_empty() {
+            return Err(ItemError::new(
+                Some(&title),
+                &format!("作品 {artwork_id} 选中的页码没有可下载的原图"),
+            ));
+        }
     }
+
+    // ugoira 不合并（单文件，重下即覆盖）；普通作品与既有记录合并后整体回写
+    let (saved_pages, saved_paths) = if data.illust_type == UGOIRA_TYPE {
+        let page_list: Vec<usize> = added.iter().map(|(page, _)| *page).collect();
+        let path_list: Vec<String> = added.into_iter().map(|(_, path)| path).collect();
+        (page_list, path_list)
+    } else {
+        merge_saved(existing, &added)
+    };
 
     db.insert_illustration(&IllustrationInsert {
         artwork_id,
@@ -738,12 +844,13 @@ async fn crawl_one_illust(
         author_name: Some(data.user_name),
         illust_type: data.illust_type,
         page_count: data.page_count,
-        saved_paths: serde_json::to_string(&saved).unwrap_or_else(|_| "[]".into()),
+        saved_paths: serde_json::to_string(&saved_paths).unwrap_or_else(|_| "[]".into()),
+        saved_pages: serde_json::to_string(&saved_pages).unwrap_or_else(|_| "[]".into()),
         captured_at: now_iso(),
         status: "ok".into(),
     })
     .map_err(|err| fail(&err))?;
-    log::info!("插画 {artwork_id} 已保存 {} 个文件", saved.len());
+    log::info!("插画 {artwork_id} 已保存 {} 个文件", saved_paths.len());
     Ok(title)
 }
 
@@ -792,6 +899,37 @@ mod tests {
                 .push((name.to_string(), payload.clone()));
         });
         (sink, events)
+    }
+
+    #[test]
+    fn merge_saved_orders_and_dedups() {
+        let pair = |p: usize, s: &str| (p, s.to_string());
+        // 空既有 → 新增原样升序
+        let (pages, paths) = merge_saved(&[], &[pair(2, "/c"), pair(0, "/a")]);
+        assert_eq!(pages, vec![0, 2]);
+        assert_eq!(paths, vec!["/a".to_string(), "/c".to_string()]);
+        // 部分重叠 → 同页以新增为准，其余保留，整体升序
+        let (pages, paths) = merge_saved(
+            &[pair(0, "/old0"), pair(1, "/old1")],
+            &[pair(1, "/new1"), pair(3, "/new3")],
+        );
+        assert_eq!(pages, vec![0, 1, 3]);
+        assert_eq!(
+            paths,
+            vec!["/old0".to_string(), "/new1".to_string(), "/new3".to_string()]
+        );
+        // 全重叠 → 只更新路径，不新增页码
+        let (pages, paths) = merge_saved(&[pair(0, "/old")], &[pair(0, "/new")]);
+        assert_eq!(pages, vec![0]);
+        assert_eq!(paths, vec!["/new".to_string()]);
+    }
+
+    #[test]
+    fn saved_pairs_zips_pages_and_paths() {
+        let pairs = saved_pairs(r#"["/a","/b"]"#, "[0,2]");
+        assert_eq!(pairs, vec![(0, "/a".to_string()), (2, "/b".to_string())]);
+        // 坏 JSON → 空
+        assert!(saved_pairs("bad", "bad").is_empty());
     }
 
     #[test]

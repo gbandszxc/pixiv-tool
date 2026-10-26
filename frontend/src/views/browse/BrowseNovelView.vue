@@ -18,6 +18,7 @@ import NovelBgPicker from "../../components/browse/NovelBgPicker.vue";
 import NovelTranslationMenu from "../../components/browse/NovelTranslationMenu.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import BookmarkButton from "../../components/browse/BookmarkButton.vue";
+import CopyWorkId from "../../components/browse/CopyWorkId.vue";
 import {
   browseHistoryRecord,
   browseRelated,
@@ -596,6 +597,10 @@ function openInPixiv(): void {
             </router-link>
           </div>
           <p v-if="metaText" class="work-meta">{{ metaText }}</p>
+          <!-- 作品 pid：点击复制（信息头内，不占顶栏动作位）；包一层块级容器以承载上间距 -->
+          <div class="info-pid">
+            <CopyWorkId :id="item.id" />
+          </div>
           <p v-if="plainDescription" class="description">{{ plainDescription }}</p>
         </div>
 
@@ -1130,6 +1135,11 @@ html.dark .novel-view[class*="read-bg-"] {
   color: var(--ink-muted);
   font-size: 12px;
   line-height: 1.4;
+}
+
+/* 信息头内的 pid 复制行：紧跟尺寸/日期行，居中块内的行内元素 */
+.info-pid {
+  margin-top: var(--space-xs);
 }
 
 /* 系列导航 / 相关推荐 */
