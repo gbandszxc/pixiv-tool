@@ -96,9 +96,14 @@
    - 只有 `minor` 建议：块判 `pass`，不返工；如需记录，只在最终报告里列为可选润色项。
    - 存在 `major` / `critical` 且问题定位清晰（审查已经给出 `segment_id` 与修改方向）：优先调用 `revise_draft(chunk_id, patches:[{segment_id, text}])` 定点替换点名的片段；未点名片段原样保留，不新增、删除或重排。修订后旧审查结论失效，必须调用 `dispatch_review([chunk_id])` 复检。`revise_draft` 不消耗返工轮次。
    - 问题定位不清、涉及整块结构 / 语气 / 顺序，或同一块多次定点修订仍无法收敛：调用 `dispatch_translation(affected_chunk_ids)` 整块返工；运行层向翻译子 Agent 注入当前草稿、冻结约束与该块未解决问题；只重译受影响块，已通过块不得重译；返工后调用 `dispatch_review(affected_chunk_ids)` 复检。
-5. 整块返工轮次达到运行层上限（默认 2 轮）仍有阻塞问题时，停止循环，保留未解决项并上报 `needs_attention`。不得把未解决问题藏入备注后发布。
-6. 同一类问题跨多个块重复出现，或问题源于术语/风格本身时，按“返工与阶段重置”处理，不对每个块重复同样的失败翻译。
-7. 协调者不得直接编辑译文。小范围修复只通过 `revise_draft`，整块重写只通过 `dispatch_translation`；不得借 `revise_draft` 新增、删除、重排片段或夹带整块改写。
+5. 返工轮次纪律（同一块不在同一轮重复劳动）：
+   - 同一块在同一轮不得同时调用 `dispatch_translation` 与 `revise_draft`，先定点修订；
+   - `revise_draft` 成功后只调用 `dispatch_review([chunk_id])` 复检，不顺带重译或重审其它块；
+   - 只有整块结构损坏、大面积漏翻，或定点修订多次仍无法收敛时，才调用 `dispatch_translation` 整块重译；
+   - 审查已 `pass` 的块不得再次派发翻译或审查，`minor` 建议只在最终报告里记录。
+6. 整块返工轮次达到运行层上限（默认 2 轮）仍有阻塞问题时，停止循环，保留未解决项并上报 `needs_attention`。不得把未解决问题藏入备注后发布。
+7. 同一类问题跨多个块重复出现，或问题源于术语/风格本身时，按“返工与阶段重置”处理，不对每个块重复同样的失败翻译。
+8. 协调者不得直接编辑译文。小范围修复只通过 `revise_draft`，整块重写只通过 `dispatch_translation`；不得借 `revise_draft` 新增、删除、重排片段或夹带整块改写。
 
 ## 整体复核
 

@@ -403,6 +403,22 @@ pub struct JobContext {
     io: StoreIo,
 }
 
+/// 主 Agent 单轮轮次下限。
+///
+/// `translation_agent_max_turns` 约束的是单个子 Agent 一轮能走多少步；协调者要
+/// 串联扫描、冻结、翻译、审查、返工、整体复核与发布，默认 24 轮不够用。
+const COORDINATOR_MIN_TURNS: u32 = 48;
+
+/// 主 Agent 命中单轮轮次上限后的自动续跑次数（与无进展续跑分开计数）。
+/// 子 Agent 的 MaxTurns 不续跑——单块在设置轮次内交不出产物就按块失败，
+/// 避免单块无限循环。
+const MAX_TURN_CONTINUATIONS: u32 = 2;
+
+/// MaxTurns 续跑门禁：`continuations` 为已续跑次数，未达上限时允许再拉起一轮。
+fn can_continue_after_max_turns(continuations: u32) -> bool {
+    continuations < MAX_TURN_CONTINUATIONS
+}
+
 impl JobContext {
     /// 在同步作用域内访问产物访问器。
     ///
@@ -427,6 +443,20 @@ impl JobContext {
             max_no_progress: self.settings.translation_agent_stall_limit.clamp(3, 32) as u32,
             max_tool_corrections: self.settings.translation_agent_tool_corrections.clamp(0, 3)
                 as u32,
+        }
+    }
+
+    /// 主 Agent（协调者）的单轮轮次预算。
+    ///
+    /// 设置值描述单块子 Agent 的一轮步数；协调者要串联扫描、冻结、翻译、审查、
+    /// 返工、整体复核与发布，轮次需求远高于单块子 Agent，因此下限抬到
+    /// [`COORDINATOR_MIN_TURNS`]，上限仍与设置一致（128）。无进展与工具纠正
+    /// 上限不变，避免主 Agent 空转时也被放大。
+    pub fn coordinator_run_limits(&self) -> RunLimits {
+        let base = self.run_limits();
+        RunLimits {
+            max_turns: base.max_turns.max(COORDINATOR_MIN_TURNS),
+            ..base
         }
     }
 
@@ -2031,7 +2061,7 @@ impl TranslationService {
             .read_manifest()
             .map(|manifest| manifest.phase)
             .unwrap_or(Phase::PrepareSource);
-        let limits = ctx.run_limits();
+        let limits = ctx.coordinator_run_limits();
         let (max_tokens, params) = ctx
             .model
             .request_params(ctx.settings.translation_agent_chunk_max_chars.max(1) as usize)?;
@@ -2055,6 +2085,9 @@ impl TranslationService {
         let mut last_progress = self.progress_snapshot(ctx);
         let mut idle_runs: u32 = 0;
         let mut empty_runs: u32 = 0;
+        let mut turn_continuations: u32 = 0;
+        // 轮次上限续跑用尽时的实际单轮上限（用于覆盖用户可见原因）。
+        let mut turn_limit_gave_up: Option<u32> = None;
         // 最后一轮正常结束时的模型回答：零工具调用收敛时作为用户可见原因。
         let mut last_stop_text = String::new();
         let mut run_index: u32 = 0;
@@ -2209,6 +2242,47 @@ impl TranslationService {
                     )));
                 }
                 Err(error) => {
+                    // 主 Agent 是编排者：命中单轮轮次上限时，已完成阶段（扫描 /
+                    // 译文 / 审查）都已落盘，整个任务不该在这里失败。带一条
+                    // 「定位下一步、不要重复已完成阶段」的指令再拉起，最多
+                    // MAX_TURN_CONTINUATIONS 次。子 Agent 不续跑。
+                    if let RunError::MaxTurns(max_turns) = &error {
+                        // 命中上限前产物可能已经全部就绪（例如最后一步刚发布
+                        // 成功），先按磁盘校验，避免为已完成的 Job 再烧一轮。
+                        if self.verify_complete(ctx) {
+                            break Ok(());
+                        }
+                        if can_continue_after_max_turns(turn_continuations) {
+                            turn_continuations += 1;
+                            log_job(
+                                &ctx.scope,
+                                "main",
+                                phase,
+                                None,
+                                "run_turn_limit",
+                                &[
+                                    ("runs", &run_index.to_string()),
+                                    ("continuation", &turn_continuations.to_string()),
+                                    ("max_turns", &max_turns.to_string()),
+                                    ("phase", phase.as_str()),
+                                ],
+                            );
+                            // MaxTurns 不携带本轮历史；沿用上一轮的 carried 投影，
+                            // 补一条明确下一步的指令，避免模型从头重新扫描或重译。
+                            carried.push(Arc::new(rig_core::message::Message::user(
+                                continuation_nudge(
+                                    ctx,
+                                    "上一轮达到单轮轮次上限，已完成产物均已落盘；\
+                                     先调用 job_status / read_review_summary 定位下一步，\
+                                     不要重新扫描或重译已完成块",
+                                    false,
+                                ),
+                            )));
+                            continue;
+                        }
+                        turn_limit_gave_up = Some(*max_turns);
+                        break Err(error);
+                    }
                     let retryable =
                         matches!(&error, RunError::Provider { class, .. } if class.is_retryable());
                     if !retryable || !retry_policy.allows(provider_retries) {
@@ -2297,7 +2371,15 @@ impl TranslationService {
             }
             Err(error) => {
                 let code = error.code().to_string();
-                let message = crate::agent::events::safe_text(&error.to_string(), 200);
+                // 续跑用尽后错误码仍是 max_turns，但用户可见原因说明续跑次数；
+                // 未触发续跑（如子 Agent 场景不会走到这里）时沿用运行层原文。
+                let message = match turn_limit_gave_up {
+                    Some(max_turns) => crate::agent::events::safe_text(
+                        &turn_limit_exhausted_message(max_turns, MAX_TURN_CONTINUATIONS),
+                        200,
+                    ),
+                    None => crate::agent::events::safe_text(&error.to_string(), 200),
+                };
                 let step = ctx
                     .read_manifest()
                     .map(|manifest| manifest.phase.as_str())
@@ -2867,6 +2949,15 @@ fn language_code(language: legacy::SourceLanguage) -> &'static str {
     }
 }
 
+/// 主 Agent 达到单轮轮次上限、自动续跑用尽后的用户可见原因。
+/// 错误码仍是 `max_turns`，这里只补足「已续跑几次、产物仍可继续」。
+fn turn_limit_exhausted_message(max_turns: u32, continuations: u32) -> String {
+    format!(
+        "已自动续跑 {continuations} 次仍达到单轮轮次上限（{max_turns} 轮）；\
+         已完成块的译文与审查均已落盘，可手动继续任务"
+    )
+}
+
 /// 续跑提示：一轮正常结束但完成校验未通过、或可重试的模型请求失败后注入。
 /// 运行层直接给出磁盘产物推导出的下一步动作，避免模型重复「只读状态、不写产物」。
 /// `empty_turn` 表示上一轮完全没有发起工具调用，需要更强的格式要求与参数示例。
@@ -2879,7 +2970,7 @@ fn continuation_nudge(ctx: &JobContext, reason: &str, empty_turn: bool) -> Strin
     let mut lines = vec![
         format!("续跑指令（运行层生成，优先于此前所有说明）：任务停在「{phase}」阶段，{reason}。"),
         "只输出计划、总结或扫描/译文正文都不算完成，本轮回复必须包含工具调用；\
-         下面的待办清单直接取自磁盘产物，不要再调用 job_status。"
+         下面的待办清单直接取自磁盘产物，与 job_status 的待办字段一致。"
             .to_string(),
     ];
     if empty_turn {
@@ -3842,6 +3933,68 @@ mod tests {
         assert!(nudge.contains("额度已用尽"), "得到 {nudge}");
         assert!(nudge.contains("不要重复调用"), "避免模型空转");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn coordinator_run_limits_raise_max_turns_floor_only_for_main_agent() {
+        // 默认设置：子 Agent 仍是 24 轮，主 Agent 至少 48 轮。
+        let (_service, handle, _scope, dir) = job_fixture("limits-default", settings());
+        let sub = handle.ctx.run_limits();
+        assert_eq!(sub.max_turns, 24, "子 Agent 沿用设置值");
+        let coordinator = handle.ctx.coordinator_run_limits();
+        assert_eq!(coordinator.max_turns, 48, "主 Agent 下限抬到 48");
+        assert_eq!(
+            coordinator.max_no_progress, sub.max_no_progress,
+            "无进展上限不变"
+        );
+        assert_eq!(
+            coordinator.max_tool_corrections, sub.max_tool_corrections,
+            "工具纠正上限不变"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+
+        // 设置值低于下限：子 Agent 仍用设置值（4），主 Agent 抬到 48。
+        let mut low = settings();
+        low.translation_agent_max_turns = 4;
+        let (_service, handle, _scope, dir) = job_fixture("limits-low", low);
+        assert_eq!(handle.ctx.run_limits().max_turns, 4);
+        assert_eq!(handle.ctx.coordinator_run_limits().max_turns, 48);
+        let _ = std::fs::remove_dir_all(dir);
+
+        // 设置值高于下限：两者都遵循设置值，且上限仍 clamp 到 128。
+        let mut high = settings();
+        high.translation_agent_max_turns = 64;
+        let (_service, handle, _scope, dir) = job_fixture("limits-high", high);
+        assert_eq!(handle.ctx.run_limits().max_turns, 64);
+        assert_eq!(handle.ctx.coordinator_run_limits().max_turns, 64);
+        let _ = std::fs::remove_dir_all(dir);
+
+        let mut over = settings();
+        over.translation_agent_max_turns = 200;
+        let (_service, handle, _scope, dir) = job_fixture("limits-over", over);
+        assert_eq!(handle.ctx.run_limits().max_turns, 128, "上限统一 clamp");
+        assert_eq!(handle.ctx.coordinator_run_limits().max_turns, 128);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn max_turns_continuation_gate_and_error_mapping() {
+        // 门禁：最多续跑 MAX_TURN_CONTINUATIONS 次。
+        assert_eq!(MAX_TURN_CONTINUATIONS, 2);
+        assert!(can_continue_after_max_turns(0));
+        assert!(can_continue_after_max_turns(1));
+        assert!(!can_continue_after_max_turns(2), "第 3 次不再续跑");
+
+        // 错误映射：错误码保持 max_turns，消息说明续跑次数与可继续状态。
+        let error = RunError::MaxTurns(48);
+        assert_eq!(error.code(), "max_turns");
+        let message = turn_limit_exhausted_message(48, MAX_TURN_CONTINUATIONS);
+        assert!(message.contains("已自动续跑 2 次"), "得到 {message}");
+        assert!(message.contains("48 轮"), "带出实际单轮上限：{message}");
+        assert!(message.contains("落盘"), "说明产物未丢失：{message}");
+        // 用户可见原因经过 safe_text 后关键信息不被截断。
+        let safe = crate::agent::events::safe_text(&message, 200);
+        assert!(safe.contains("已自动续跑 2 次"), "得到 {safe}");
     }
 
     #[test]

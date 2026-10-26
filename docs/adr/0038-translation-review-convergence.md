@@ -131,6 +131,38 @@
 - 新字段使用 serde 默认值；旧 manifest / 旧快照缺少这些字段时按空列表 / 0 读取，
   不影响恢复。旧前端只读 `rework_rounds` 时仍能显示一个单调不减的最大值。
 
+### 8. 运行时保护：主 Agent 独立轮次预算与 MaxTurns 任务级续跑
+
+**根因**：真实任务 `20261026000822-bbab61`（9,430 字、4 块）以 `max_turns` 失败。
+主 Agent 在 24 轮内反复「`dispatch_review` → `read_review_summary` → `revise_draft`
+→ `dispatch_review`」，最后一块审查已经 `pass`，但尚未进入整体复核、合并与发布就用尽
+`translation_agent_max_turns`（默认 24）。运行层把主 Agent 与单块 translator / reviewer
+放在同一份 `run_limits()` 下，而 `drive()` 的 `RunError::MaxTurns` 分支直接终止任务，
+与「单轮上限只约束一轮、任务级推进由续跑循环收敛」的既有语义矛盾。
+
+**决策**：
+
+- `translation_agent_max_turns` 明确定义为**单个子 Agent** 的单轮模型轮次上限，
+  继续 clamp 4~128、默认 24；translator / reviewer 的 `RunRequest` 不变。
+- 新增主 Agent（协调者）独立的 `coordinator_run_limits()`：`max_turns` 取设置值与 48
+  的较大者（上限仍 128）；`max_no_progress` / `max_tool_corrections` 与子 Agent 相同。
+  `run_start` 日志因此记录主 Agent 实际使用的 `max_turns`。
+- 主 Agent 命中 `RunError::MaxTurns` 时不再直接终止任务：
+  - 命中上限前产物可能已全部就绪，先按磁盘做完成校验，已完成的 Job 直接转 `completed`；
+  - 未完成且续跑次数 < 2 时，记录 `run_turn_limit`（`runs` / `continuation` /
+    `max_turns` / `phase`），追加续跑指令（复用 `continuation_nudge`，明确先
+    `job_status` / `read_review_summary` 定位下一步、不要重新扫描或重译已完成块）
+    后继续下一轮；`MaxTurns` 不携带本轮历史，沿用上一次续跑的 `carried` 投影；
+  - 续跑上限独立计数（与 `MAX_IDLE_CONTINUATIONS` 分开），用尽后仍以 `max_turns`
+    收敛到 `needs_attention`，消息说明「已自动续跑 2 次仍达到单轮上限」；
+  - 每次续跑仍经过取消 / 暂停 / 预算 / 停止令牌的既有检查。
+- 子 Agent 的 `MaxTurns` **不续跑**：单块在设置轮次内交不出产物即按块失败并计入块级
+  状态，避免单块无限循环或无限计费。
+- 提示词同步降低无效轮次：同一块同一轮不得同时 `dispatch_translation` 与
+  `revise_draft`；`revise_draft` 成功后只 `dispatch_review([chunk_id])` 复检；
+  只有整块结构损坏或大面积漏翻才整块重译；已 `pass` 的块不得再次派发。提示词只是
+  效率约束，真正的终止仍由运行层计数与预算保证。
+
 ## 取代关系
 
 - 本 ADR 取代 ADR 0036 §3.3 中沿用的「`verdict=pass` 不得携带问题、任何已记录问题都使

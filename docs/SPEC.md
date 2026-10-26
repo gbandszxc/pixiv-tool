@@ -394,10 +394,19 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   错误码为 `model_declined`，消息直接引用模型说明（常见于内容审核拒绝）。
   任务级推进不受单轮轮次上限约束，总量仍受调用预算与模型尝试上限约束。续跑指令按磁盘
   产物直接给出下一步动作与待办块 ID，并声明「只输出文本不算完成、本轮必须包含工具调用」，
-  扫描阶段附 `submit_scan` 的最小参数示例，不再让模型自行调用 `job_status` 猜测进度；
-  `job_status` 的 `pending_scan` / `pending_translate` / `pending_review` /
-  `pending_rework` 与续跑指令
-  共用同一套磁盘判定。`run_done` 记录最终回答字符数与前 300 字符，供空转诊断（ADR 0036）。
+  扫描阶段附 `submit_scan` 的最小参数示例；待办清单与 `job_status` 的
+  `pending_scan` / `pending_translate` / `pending_review` / `pending_rework`
+  共用同一套磁盘判定，模型无需靠 `job_status` 猜测进度。
+  `run_done` 记录最终回答字符数与前 300 字符，供空转诊断（ADR 0036）。
+- **主 Agent 轮次预算与 MaxTurns 续跑**：`translation_agent_max_turns` 是**单个子 Agent**
+  的单轮模型轮次上限；主 Agent（协调者）要串联扫描、冻结、翻译、审查、返工、整体复核与
+  发布，轮次需求远高于单块子 Agent，因此主 Agent 的单轮预算至少 48 轮（上限仍 clamp 到
+  128），`max_no_progress` / `max_tool_corrections` 与子 Agent 相同。主 Agent 某一轮达到
+  单轮上限时，已完成阶段的产物均已落盘，任务级不直接失败：自动追加「定位下一步、不要重复
+  已完成阶段」的续跑指令重新拉起，最多 2 次（与无进展续跑分开计数），每次记录
+  `run_turn_limit` 日志；续跑仍受取消 / 暂停 / 预算与停止令牌约束。续跑用尽后错误码仍为
+  `max_turns`，消息说明「已自动续跑 2 次仍达到单轮上限」。子 Agent 的 MaxTurns **不续跑**：
+  单块在设置轮次内交不出产物按块失败，避免单块无限循环（ADR 0038）。
 - **恢复分类**：明确未发送的连接失败有限重试；限流与暂时性服务错误（如 `429` / 上游容量
   不足）在任务级按设置的 `retry_limit` 与退避策略重跑整轮并尊重 `Retry-After`，重试次数
   用尽才转 `needs_attention`；鉴权 / 余额 / 模型不存在 / 配置不兼容直接暂停并提示修正；
@@ -831,7 +840,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   | `translation_agent_rework_rounds` | 2 | 0~5 | 每块质检返工轮数（修复 + 复检，按块独立计数；手动继续时清零） |
   | `translation_agent_split_depth` | 3 | 0~5 | 超限细分深度 |
   | `translation_agent_tool_corrections` | 2 | 0~3 | 工具参数 / 结构纠正次数 |
-  | `translation_agent_max_turns` | 24 | 4~128 | 单子任务模型轮次 |
+  | `translation_agent_max_turns` | 24 | 4~128 | 单个子 Agent 的单轮模型轮次；主 Agent 至少 48 轮，命中上限自动续跑 2 次 |
   | `translation_agent_stall_limit` | 8 | 3~32 | 主 Agent 无进展上限（轮） |
   | `translation_agent_context_window` | 131072 | 16384~2097152 | 未知模型上下文窗口（token）；旧默认 32768 加载期迁移 |
   | `translation_agent_output_cap` | 16384 | 1024~262144 | 预算器使用的单请求输出上限（且不超过上下文窗口）；实际请求上限仍按分块输入分档，高级 JSON 显式值优先 |
