@@ -348,6 +348,34 @@ impl ArtifactIo for MemoryIo {
 }
 
 // ----------------------------------------------------------------------
+// JSON 信封
+// ----------------------------------------------------------------------
+
+/// 写入信封：借用序列化，避免复制 data。
+#[derive(Serialize)]
+struct EnvelopeRef<'a, T> {
+    schema: u32,
+    kind: &'a str,
+    data: &'a T,
+}
+
+/// 读取信封：一步反序列化，`kind` 零拷贝借用、`data` 直接落到目标类型，
+/// 免去整树 `Value` 解析与子树深拷贝。schema 用 `u64` 以便快路径能容纳
+/// 任意合法版本号，超范围值走 [`JobArtifacts::classify_read_error`] 分类。
+#[derive(Deserialize)]
+struct Envelope<'a, T> {
+    schema: u64,
+    kind: &'a str,
+    data: T,
+}
+
+/// 版本回退检查的轻量读取头：只取 `data.version`，不反序列化整份草稿。
+#[derive(Deserialize)]
+struct DraftVersionHead {
+    version: u64,
+}
+
+// ----------------------------------------------------------------------
 // Job 产物读写
 // ----------------------------------------------------------------------
 
@@ -430,9 +458,15 @@ impl<'a> JobArtifacts<'a> {
     // ---- drafts ----
 
     /// 写入草稿：同版本幂等覆盖，拒绝版本回退。
+    ///
+    /// 回退检查只读 `data.version`（[`DraftVersionHead`]），不反序列化整份旧
+    /// 草稿；文件级损坏（JSON / schema / kind）仍会阻塞写入，仅旧草稿 data 中
+    /// version 以外的字段损坏时放行覆盖，由新写入自愈。
     pub fn write_draft(&self, draft: &Draft) -> Result<(), String> {
         validate_chunk_id(&draft.chunk_id)?;
-        if let Some(existing) = self.read_draft(&draft.chunk_id)? {
+        let existing =
+            self.read_json::<DraftVersionHead>(&draft_path(&draft.chunk_id), KIND_DRAFT)?;
+        if let Some(existing) = existing {
             if draft.version < existing.version {
                 return Err(format!(
                     "{ERR_VERSION}: {}: {} < {}",
@@ -489,14 +523,7 @@ impl<'a> JobArtifacts<'a> {
     // ---- JSON 信封 ----
 
     fn write_json<T: Serialize>(&self, path: &str, kind: &str, data: &T) -> Result<(), String> {
-        #[derive(Serialize)]
-        struct Envelope<'a, T> {
-            schema: u32,
-            kind: &'a str,
-            data: &'a T,
-        }
-
-        let raw = serde_json::to_vec(&Envelope {
+        let raw = serde_json::to_vec(&EnvelopeRef {
             schema: SCHEMA_VERSION,
             kind,
             data,
@@ -513,30 +540,45 @@ impl<'a> JobArtifacts<'a> {
         let Some(raw) = self.io.read(path)? else {
             return Ok(None);
         };
-        let value: Value =
-            serde_json::from_slice(&raw).map_err(|_| format!("{ERR_INVALID}: {path}"))?;
-        let schema = value
-            .get("schema")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| format!("{ERR_INVALID}: {path}"))?;
-        if schema != u64::from(SCHEMA_VERSION) {
+        // 快路径：信封连同 data 一步反序列化到目标类型。
+        let envelope: Envelope<T> = match serde_json::from_slice(&raw) {
+            Ok(envelope) => envelope,
+            // 罕见路径（JSON 损坏 / 校验不过）：回退 Value 解析精确分类，
+            // 保证 schema / kind / invalid 的错误语义与逐字段校验等价。
+            Err(_) => return Err(Self::classify_read_error(&raw, path, expected_kind)),
+        };
+        if envelope.schema != u64::from(SCHEMA_VERSION) {
             return Err(format!(
-                "{ERR_SCHEMA}: {path}: found {schema}, expected {SCHEMA_VERSION}"
+                "{ERR_SCHEMA}: {path}: found {}, expected {SCHEMA_VERSION}",
+                envelope.schema
             ));
         }
-        let kind = value
-            .get("kind")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("{ERR_INVALID}: {path}"))?;
-        if kind != expected_kind {
+        if envelope.kind != expected_kind {
             return Err(format!("{ERR_KIND}: {path}"));
         }
-        let data = value
-            .get("data")
-            .ok_or_else(|| format!("{ERR_INVALID}: {path}"))?;
-        serde_json::from_value(data.clone())
-            .map(Some)
-            .map_err(|_| format!("{ERR_INVALID}: {path}"))
+        Ok(Some(envelope.data))
+    }
+
+    /// 与逐字段校验等价的错误分类：JSON 损坏、schema / kind 缺失或类型不符、
+    /// data 缺失或字段类型不符都归入 `artifact_invalid`；仅 schema 版本不匹配
+    /// 与 kind 不匹配有专属错误，且 schema 优先于 kind 判定。
+    fn classify_read_error(raw: &[u8], path: &str, expected_kind: &str) -> String {
+        let Ok(value) = serde_json::from_slice::<Value>(raw) else {
+            return format!("{ERR_INVALID}: {path}");
+        };
+        let Some(schema) = value.get("schema").and_then(Value::as_u64) else {
+            return format!("{ERR_INVALID}: {path}");
+        };
+        if schema != u64::from(SCHEMA_VERSION) {
+            return format!("{ERR_SCHEMA}: {path}: found {schema}, expected {SCHEMA_VERSION}");
+        }
+        let Some(kind) = value.get("kind").and_then(Value::as_str) else {
+            return format!("{ERR_INVALID}: {path}");
+        };
+        if kind != expected_kind {
+            return format!("{ERR_KIND}: {path}");
+        }
+        format!("{ERR_INVALID}: {path}")
     }
 }
 
@@ -825,6 +867,50 @@ mod tests {
         .unwrap();
         let error = artifacts.read_source().unwrap_err();
         assert!(error.contains(ERR_INVALID), "字段缺失应可识别：{error}");
+    }
+
+    #[test]
+    fn corrupt_data_type_is_invalid() {
+        let io = MemoryIo::new();
+        // schema 与 kind 均正确，data 是错误类型：一步反序列化失败后
+        // 回退分类，仍归入 artifact_invalid 而非 schema/kind 专属错误。
+        io.write_atomic(SOURCE_PATH, br#"{"schema":2,"kind":"source","data":[]}"#)
+            .unwrap();
+        let artifacts = JobArtifacts::new(&io);
+        let error = artifacts.read_source().unwrap_err();
+        assert!(
+            error.contains(ERR_INVALID),
+            "data 类型损坏应可识别：{error}"
+        );
+    }
+
+    #[test]
+    fn draft_version_check_reads_only_version_head() {
+        let io = MemoryIo::new();
+        // 旧草稿 data 缺少除 version 外的必填字段：完整读取仍报 invalid，
+        // 但写前回退检查只依赖 version，允许更高版本覆盖自愈。
+        io.write_atomic(
+            &draft_path("c0001"),
+            br#"{"schema":2,"kind":"draft","data":{"chunk_id":"c0001","version":1}}"#,
+        )
+        .unwrap();
+        let artifacts = JobArtifacts::new(&io);
+        let error = artifacts.read_draft("c0001").unwrap_err();
+        assert!(error.contains(ERR_INVALID), "完整读取应校验全字段：{error}");
+
+        let mut draft = sample_draft();
+        draft.version = 2;
+        artifacts.write_draft(&draft).unwrap();
+        assert_eq!(
+            artifacts.read_draft("c0001").unwrap().unwrap().version,
+            2,
+            "version 以外字段损坏的旧草稿可被更高版本覆盖"
+        );
+
+        let mut older = sample_draft();
+        older.version = 1;
+        let error = artifacts.write_draft(&older).unwrap_err();
+        assert!(error.contains(ERR_VERSION), "版本回退仍应被拒绝：{error}");
     }
 
     #[test]
