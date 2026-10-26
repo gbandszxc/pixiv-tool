@@ -54,7 +54,7 @@ use crate::{
         publish::{publish_status_with_language, render_markdown},
         source::{parse_segment_id, parse_source},
         tools,
-        validation::{merge_pages, validate_draft_with_language, validate_merge_with_language},
+        validation::{merge_pages, validate_merge_with_language},
     },
     translation_legacy as legacy,
 };
@@ -401,6 +401,12 @@ pub struct JobContext {
     /// 条目）或让两批派生块分到相同 ID（产物相互覆盖）。同步短临界区，
     /// 不得跨 `await` 持有。
     pub(crate) plan_lock: StdMutex<()>,
+    /// 分块计划元数据缓存（按计划顺序的块 ID）。`job_status` / 计数 / 待办
+    /// 分类等只读路径不再逐块读盘反序列化原文。写路径（`prepare_source` /
+    /// `split_chunk`，均持 `plan_lock`）落盘成功即在 `write_plan` 内同步更新；
+    /// 读路径未命中时读盘回填，回填持 `plan_lock` 双检，避免旧值覆盖新值。
+    /// 值为 `None` 表示尚未从磁盘加载（新建 Job 无计划时保持 `None`）。
+    pub(crate) plan_cache: StdMutex<Option<std::sync::Arc<Vec<String>>>>,
     /// 本 Job 累计用量（跨多次运行）。
     usage: StdMutex<TokenUsage>,
     /// 结果未知且按设置不自动重放的块：再次派发直接跳过，避免续跑时反复
@@ -1274,6 +1280,7 @@ impl TranslationService {
             journal: StdMutex::new(JournalBuffer::empty()),
             dispatch_gate,
             plan_lock: StdMutex::new(()),
+            plan_cache: StdMutex::new(None),
             usage: StdMutex::new(TokenUsage::default()),
             unknown_blocked: StdMutex::new(BTreeSet::new()),
             io: StoreIo::new(store),
@@ -1949,6 +1956,7 @@ impl TranslationService {
             journal: StdMutex::new(journal),
             dispatch_gate,
             plan_lock: StdMutex::new(()),
+            plan_cache: StdMutex::new(None),
             usage: StdMutex::new(usage),
             unknown_blocked: StdMutex::new(BTreeSet::new()),
             io: StoreIo::new(Arc::new(
@@ -2678,23 +2686,27 @@ impl TranslationService {
     /// incomplete）。块级判定与 `dispatch_translation` / 续跑提示共用
     /// [`tools::chunk_gate`]，避免「工具认为已完成、收尾却判未完成」。
     fn incomplete_stage(ctx: &JobContext) -> Option<(&'static str, Phase, String)> {
-        let chunks = tools::plan_chunks(ctx).ok()?;
-        if chunks.is_empty() {
+        // 块级定位只需要块 ID：走计划元数据缓存，不逐块读盘反序列化原文。
+        let chunk_ids = tools::plan_ids_cached(ctx).ok()?;
+        if chunk_ids.is_empty() {
             return Some((
                 "incomplete_prepare",
                 Phase::PrepareSource,
                 "原文尚未完成分块".into(),
             ));
         }
-        let scanned = chunks
+        let versions = tools::phase_versions(ctx);
+        let scanned = chunk_ids
             .iter()
-            .filter(|chunk| tools::read_scan_for_progress(ctx, &chunk.id).is_some())
+            .filter(|chunk_id| {
+                tools::read_scan_for_progress_with(ctx, chunk_id, &versions).is_some()
+            })
             .count();
-        if scanned < chunks.len() {
+        if scanned < chunk_ids.len() {
             return Some((
                 "incomplete_scan",
                 Phase::PrepareSource,
-                format!("还有 {} 个分块未完成扫描", chunks.len() - scanned),
+                format!("还有 {} 个分块未完成扫描", chunk_ids.len() - scanned),
             ));
         }
         let frozen = ctx.with_artifacts(|artifacts| {
@@ -2711,18 +2723,17 @@ impl TranslationService {
                 "术语与风格尚未冻结".into(),
             ));
         }
-        let versions = tools::phase_versions(ctx);
         let mut pending_translate = Vec::new();
         let mut pending_rework = Vec::new();
         let mut pending_review = Vec::new();
-        for chunk in &chunks {
-            let gate = tools::chunk_gate(ctx, &chunk.id, &versions);
+        for chunk_id in chunk_ids.iter() {
+            let gate = tools::chunk_gate(ctx, chunk_id, &versions);
             if !gate.draft_valid {
-                pending_translate.push(chunk.id.clone());
+                pending_translate.push(chunk_id.clone());
             } else if gate.needs_rework {
-                pending_rework.push(chunk.id.clone());
+                pending_rework.push(chunk_id.clone());
             } else if !gate.review_pass {
-                pending_review.push(chunk.id.clone());
+                pending_review.push(chunk_id.clone());
             }
         }
         if !pending_translate.is_empty() {
@@ -2782,24 +2793,26 @@ impl TranslationService {
     /// 任务推进度的粗粒度快照：直接数磁盘产物（草稿、审查、冻结、发布），
     /// 只用于判断「续跑是否带来进展」，不是精确度量。
     fn progress_snapshot(&self, ctx: &JobContext) -> u64 {
-        let chunks = match tools::plan_chunks(ctx) {
-            Ok(chunks) => chunks,
+        // 进展快照只需要块 ID：走计划元数据缓存，不逐块读盘反序列化原文。
+        let chunk_ids = match tools::plan_ids_cached(ctx) {
+            Ok(chunk_ids) => chunk_ids,
             Err(_) => return 0,
         };
+        let versions = tools::phase_versions(ctx);
         let mut progress = 0u64;
-        for chunk in &chunks {
+        for chunk_id in chunk_ids.iter() {
             // 扫描是 Pass 1 的主要工作量，计入进展避免扫描中途的续跑被误判无进展。
-            if tools::read_scan_for_progress(ctx, &chunk.id).is_some() {
+            if tools::read_scan_for_progress_with(ctx, chunk_id, &versions).is_some() {
                 progress += 1;
             }
-            if tools::read_draft_for_verify(ctx, &chunk.id)
+            if tools::read_draft_for_verify(ctx, chunk_id)
                 .ok()
                 .flatten()
                 .is_some()
             {
                 progress += 4;
             }
-            if tools::read_review_for_verify(ctx, &chunk.id)
+            if tools::read_review_for_verify(ctx, chunk_id)
                 .ok()
                 .flatten()
                 .is_some()
@@ -2841,9 +2854,6 @@ impl TranslationService {
             let Ok(Some(draft)) = tools::read_draft_for_verify(ctx, &chunk.id) else {
                 return false;
             };
-            if validate_draft_with_language(chunk, &draft, Some(&ctx.target_language)).is_err() {
-                return false;
-            }
             let Ok(Some(review)) = tools::read_review_for_verify(ctx, &chunk.id) else {
                 return false;
             };
@@ -2860,6 +2870,12 @@ impl TranslationService {
             if !global.passed {
                 return false;
             }
+            // 草稿结构与语言纯度不在这里单独跑一遍全文校验：紧随其后的
+            // validate_merge_with_language 与 publish_status_with_language 内部
+            // 都会逐块调用 validate_draft（同一批 chunk/draft、同一目标语言，
+            // 纯函数结果一致）。任一块校验失败时，前者以五项不全、后者以
+            // 非 Complete 使本判据返回 false——与「先逐块校验再合并」的旧
+            // 路径逐位等价，收尾时的全文扫描从三遍降到两遍。
             let pages = merge_pages(&chunks, &drafts);
             let report =
                 validate_merge_with_language(&chunks, &drafts, &pages, Some(&ctx.target_language));
@@ -3619,6 +3635,7 @@ pub(crate) fn test_job_context(
         journal: StdMutex::new(JournalBuffer::load(&store)),
         dispatch_gate: Arc::new(Semaphore::new(2)),
         plan_lock: StdMutex::new(()),
+        plan_cache: StdMutex::new(None),
         usage: StdMutex::new(TokenUsage::default()),
         unknown_blocked: StdMutex::new(BTreeSet::new()),
         io: StoreIo::new(store),

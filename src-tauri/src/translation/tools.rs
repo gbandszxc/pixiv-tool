@@ -243,7 +243,57 @@ pub fn read_plan(ctx: &JobContext) -> Option<ChunkPlan> {
 }
 
 fn write_plan(ctx: &JobContext, plan: &ChunkPlan) -> Result<(), String> {
-    write_json(ctx, PLAN_PATH, plan)
+    write_json(ctx, PLAN_PATH, plan)?;
+    // 计划落盘成功即同步缓存：调用点（prepare_source / split_chunk）都持有
+    // plan_lock，测试夹具单线程，缓存与磁盘在写路径上不存在不一致窗口。
+    let ids = std::sync::Arc::new(
+        plan.entries
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>(),
+    );
+    *ctx.plan_cache
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(ids);
+    Ok(())
+}
+
+/// 计划块 ID（缓存优先，未命中读盘回填）。
+///
+/// 只读路径（计数 / 待办分类 / job_status）用它替代 `plan_chunks`，避免为拿
+/// ID 与块数逐块读盘反序列化原文。回填持 `plan_lock` 并双检：并发读在回填前
+/// 若写路径已更新缓存，直接采用新值，防止旧计划回填覆盖（命中旧缓存直到下次
+/// 写路径才修正）。
+pub(crate) fn plan_ids_cached(ctx: &JobContext) -> Result<std::sync::Arc<Vec<String>>, String> {
+    {
+        let cache = ctx
+            .plan_cache
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(ids) = cache.as_ref() {
+            return Ok(ids.clone());
+        }
+    }
+    let plan = read_plan(ctx).ok_or_else(|| "尚未准备原文（缺少分块计划）".to_string())?;
+    let ids: std::sync::Arc<Vec<String>> =
+        std::sync::Arc::new(plan.entries.into_iter().map(|entry| entry.id).collect());
+    // 回填持 plan_lock 双检：与写路径（write_plan 在 plan_lock 临界区内更新
+    // 缓存）互斥，读到旧计划的并发读不会覆盖写路径刚更新的新缓存。
+    let plan_lock = ctx
+        .plan_lock
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let mut cache = ctx
+        .plan_cache
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(fresh) = cache.as_ref() {
+        return Ok(fresh.clone());
+    }
+    *cache = Some(ids.clone());
+    drop(cache);
+    drop(plan_lock);
+    Ok(ids)
 }
 
 // ----------------------------------------------------------------------
@@ -327,10 +377,7 @@ pub fn plan_chunks(ctx: &JobContext) -> Result<Vec<Chunk>, String> {
 
 /// 计划中的有效块 ID。
 pub fn plan_ids(ctx: &JobContext) -> Result<Vec<String>, String> {
-    Ok(plan_chunks(ctx)?
-        .into_iter()
-        .map(|chunk| chunk.id)
-        .collect())
+    Ok(plan_ids_cached(ctx)?.as_ref().clone())
 }
 
 // ----------------------------------------------------------------------
@@ -783,8 +830,13 @@ fn ensure_chunk_readable(chunk: &Chunk) -> Result<(), RunError> {
 }
 
 /// 读取有效扫描记录（存在且带当前约束阶段版本戳），供续跑进展快照使用。
-pub(crate) fn read_scan_for_progress(ctx: &JobContext, chunk_id: &str) -> Option<()> {
-    let versions = phase_versions(ctx);
+///
+/// 阶段版本由调用方传入：逐块循环扫描时避免每块重复读一遍阶段版本文件。
+pub(crate) fn read_scan_for_progress_with(
+    ctx: &JobContext,
+    chunk_id: &str,
+    versions: &PhaseVersions,
+) -> Option<()> {
     read_scan(ctx, chunk_id)
         .ok()
         .flatten()
@@ -2609,35 +2661,77 @@ pub(crate) struct PendingState {
 }
 
 pub(crate) fn pending_state(ctx: &JobContext) -> PendingState {
+    scan_pending_and_counts(ctx).0
+}
+
+/// 一轮逐块扫描同时产出待办分类与计数。
+///
+/// [`pending_state`] 与 [`compute_counts`] 的唯一实现：块集合取自计划元数据
+/// 缓存（[`plan_ids_cached`]，不再逐块读盘反序列化原文），循环内每块一次
+/// gate 判定 + 一次扫描检查，同步累加两侧所需结果。两个口径的判定与各自
+/// 单独调用时完全一致（同一份 [`chunk_gate`]）。
+fn scan_pending_and_counts(ctx: &JobContext) -> (PendingState, crate::agent::JobCounts) {
     let versions = phase_versions(ctx);
-    let chunks = plan_chunks(ctx).unwrap_or_default();
+    let chunk_ids = plan_ids_cached(ctx).unwrap_or_default();
     let mut state = PendingState {
-        chunk_ids: chunks.iter().map(|chunk| chunk.id.clone()).collect(),
+        chunk_ids: chunk_ids.as_ref().clone(),
         ..PendingState::default()
     };
-    for chunk in &chunks {
-        if read_scan_for_progress(ctx, &chunk.id).is_none() {
-            state.pending_scan.push(chunk.id.clone());
+    let mut translated = 0u32;
+    let mut reviewed = 0u32;
+    let mut needs_repair = 0u32;
+    for chunk_id in &state.chunk_ids {
+        if read_scan_for_progress_with(ctx, chunk_id, &versions).is_none() {
+            state.pending_scan.push(chunk_id.clone());
         }
-        let gate = chunk_gate(ctx, &chunk.id, &versions);
+        let gate = chunk_gate(ctx, chunk_id, &versions);
         if !gate.draft_valid {
-            state.pending_translate.push(chunk.id.clone());
+            state.pending_translate.push(chunk_id.clone());
         } else if gate.needs_rework {
-            state.pending_rework.push(chunk.id.clone());
+            state.pending_rework.push(chunk_id.clone());
         } else if !gate.review_pass {
-            state.pending_review.push(chunk.id.clone());
+            state.pending_review.push(chunk_id.clone());
+        }
+        if gate.draft_valid {
+            translated += 1;
+        }
+        if gate.review_pass {
+            reviewed += 1;
+        }
+        if gate.needs_rework {
+            needs_repair += 1;
         }
     }
-    state.constraints_frozen = ctx.with_artifacts(|artifacts| {
-        artifacts
-            .read_constraints()
-            .ok()
-            .flatten()
-            .is_some_and(|constraints| constraints.frozen)
-    });
-    state.published =
-        ctx.with_artifacts(|artifacts| artifacts.read_result().ok().flatten().is_some());
-    state
+    // 约束文件只解析一次，同时供「已冻结」判定与术语计数。
+    let constraints = ctx.with_artifacts(|artifacts| artifacts.read_constraints().ok().flatten());
+    state.constraints_frozen = constraints
+        .as_ref()
+        .is_some_and(|constraints| constraints.frozen);
+    // 发布产物只做存在性检查：result.json 含全部页译文，全量反序列化只为了
+    // is_some() 在计数热路径上过于昂贵；文件损坏的分辨留给完成判据的
+    // read_result 解析路径。
+    state.published = ctx.store.exists(crate::translation::artifacts::RESULT_PATH);
+    let terms = constraints
+        .map(|constraints| constraints.terms.len() as u32)
+        .unwrap_or(0);
+    let manifest = ctx.read_manifest().ok();
+    // 计划尚未落盘时保留启动时的估算块数，避免状态切换把计数清成 0。
+    let planned_chunks = Some(chunk_ids.len() as u32).filter(|count| *count > 0);
+    let counts = crate::agent::JobCounts {
+        pages: manifest
+            .as_ref()
+            .map_or(0, |manifest| manifest.counts.pages),
+        chunks: planned_chunks.unwrap_or_else(|| {
+            manifest
+                .as_ref()
+                .map_or(0, |manifest| manifest.counts.chunks)
+        }),
+        translated,
+        reviewed,
+        needs_repair,
+        terms,
+    };
+    (state, counts)
 }
 
 fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
@@ -2652,15 +2746,19 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                 let manifest = ctx
                     .read_manifest()
                     .map_err(|error| tool_error("storage", &error))?;
-                let chunks = plan_chunks(&ctx).unwrap_or_default();
-                let PendingState {
-                    pending_scan,
-                    pending_translate,
-                    pending_rework,
-                    pending_review,
-                    ..
-                } = pending_state(&ctx);
-                let counts = compute_counts(&ctx);
+                // 单遍扫描：待办分类与计数共享同一轮逐块判定，块集合走计划
+                // 元数据缓存，一次调用不再把全部分块反序列化三遍。
+                let (
+                    PendingState {
+                        chunk_ids,
+                        pending_scan,
+                        pending_translate,
+                        pending_rework,
+                        pending_review,
+                        ..
+                    },
+                    counts,
+                ) = scan_pending_and_counts(&ctx);
                 let budget = ctx.budget.snapshot();
                 tool_result(json!({
                     "job_id": ctx.scope.job_id,
@@ -2682,7 +2780,7 @@ fn job_status_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                         "remaining": budget.remaining,
                         "manual_extra": budget.manual_extra,
                     },
-                    "chunk_ids": chunks.iter().map(|chunk| chunk.id.clone()).collect::<Vec<_>>(),
+                    "chunk_ids": chunk_ids,
                     "pending_scan": pending_scan,
                     "pending_translate": pending_translate,
                     "pending_rework": pending_rework,
@@ -3198,51 +3296,7 @@ fn submit_review_tool(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> Dynam
 
 /// 依据产物重新计算计数（不含预算）。
 pub fn compute_counts(ctx: &JobContext) -> crate::agent::JobCounts {
-    let plan = plan_chunks(ctx);
-    let chunks = plan.clone().unwrap_or_default();
-    let versions = phase_versions(ctx);
-    let mut translated = 0u32;
-    let mut reviewed = 0u32;
-    let mut needs_repair = 0u32;
-    for chunk in &chunks {
-        let gate = chunk_gate(ctx, &chunk.id, &versions);
-        if gate.draft_valid {
-            translated += 1;
-        }
-        if gate.review_pass {
-            reviewed += 1;
-        }
-        if gate.needs_rework {
-            needs_repair += 1;
-        }
-    }
-    let terms = read_constraints(ctx)
-        .ok()
-        .flatten()
-        .map(|constraints| constraints.terms.len() as u32)
-        .unwrap_or(0);
-    let manifest = ctx.read_manifest().ok();
-    let (pages, chunk_count) = match &manifest {
-        Some(manifest) => (
-            manifest.counts.pages,
-            // 计划尚未落盘时保留启动时的估算块数，避免状态切换把计数清成 0。
-            plan.as_ref()
-                .map(|chunks| chunks.len() as u32)
-                .unwrap_or(manifest.counts.chunks),
-        ),
-        None => (
-            0,
-            plan.as_ref().map(|chunks| chunks.len() as u32).unwrap_or(0),
-        ),
-    };
-    crate::agent::JobCounts {
-        pages,
-        chunks: chunk_count,
-        translated,
-        reviewed,
-        needs_repair,
-        terms,
-    }
+    scan_pending_and_counts(ctx).1
 }
 
 /// 子运行使用的统一取消令牌（父任务取消即传播）。
@@ -3936,6 +3990,41 @@ mod tests {
                 .unwrap_or_else(|| panic!("派生块 {id} 缺失"));
             assert_eq!(chunk.segments.len(), 2, "派生块 {id} 是对半细分的结果");
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 计划写路径与元数据缓存同批更新：`split_chunk` 落盘新计划后，走缓存的
+    /// 读路径（计数 / 待办 / 块 ID）立即与磁盘一致，不残留缩块前的旧块集合。
+    #[test]
+    fn split_chunk_updates_plan_cache_in_step_with_disk() {
+        let (ctx, dir) = empty_fixture("split-cache", 5);
+        seed_for_tests(
+            &ctx,
+            &[
+                (splittable_chunk("c0001", 1), None, None),
+                (splittable_chunk("c0002", 2), None, None),
+            ],
+        );
+        // 预热缓存：seed 的计划与磁盘一致。
+        assert_eq!(
+            plan_ids(&ctx).unwrap(),
+            ["c0001".to_string(), "c0002".to_string()]
+        );
+
+        let derived = split_chunk(&ctx, "c0001").expect("缩块成功");
+        let on_disk: Vec<String> = read_plan(&ctx)
+            .expect("计划存在")
+            .entries
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+        // 缓存立即与磁盘一致：派生块按计划顺序顶替原块，c0002 保持在尾部。
+        let expected = vec![derived[0].clone(), derived[1].clone(), "c0002".to_string()];
+        assert_eq!(plan_ids(&ctx).unwrap(), expected);
+        assert_eq!(plan_ids(&ctx).unwrap(), on_disk, "缓存与磁盘计划一致");
+        assert_eq!(planned_chunk_count(&ctx), 3);
+        assert_eq!(pending_state(&ctx).chunk_ids, on_disk);
+        assert_eq!(compute_counts(&ctx).chunks, 3);
         let _ = std::fs::remove_dir_all(dir);
     }
 
