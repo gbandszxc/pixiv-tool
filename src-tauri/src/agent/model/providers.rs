@@ -4,10 +4,16 @@
 //! `translation.rs` 的既有语义（阶段 1 以本模块为迁移目标；旧实现暂不改动，
 //! 后续单元把旧函数切到这里的公开实现，避免长期维护两套规则）。
 //!
-//! 本模块只负责「配置 → Rig model」和「配置 → CompletionRequest 补丁」，
-//! 不持有全局状态，可直接在离线测试中装配。
+//! 本模块只负责「配置 → Rig model」和「配置 → CompletionRequest 补丁」。
+//! `ProviderConfig` 本身每次运行都会新建（上游 `ModelConfig::model()` 每个
+//! 子 Agent 运行调用一次），因此 wreq 客户端与请求闸门挂在本模块的
+//! `OnceLock` 上进程级共享：客户端 clone 共享连接池与 TLS 会话，闸门跨
+//! Job / 块 / 重试统一限流。两者之外的配置推导保持纯函数，可离线测试。
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use rig_core::{
     completion::CompletionRequest,
@@ -63,6 +69,42 @@ pub const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
 /// 默认思考档：三协议默认 medium；用户显式给出的思考字段优先。
 pub const DEFAULT_REASONING_EFFORT: &str = "medium";
+
+/// 全局模型请求闸门的最大在飞请求数。
+///
+/// 多本小说并行（设置 clamp 1-8）× 每本并发块（clamp 1-16）理论峰值 128 个
+/// 在飞请求，重试还会在其上叠加；对同一网关同时压 128 个长请求只会换来
+/// 大面积 429 / 断连。取 32 = 8 本小说平均各 4 个在飞请求：足以饱和常见
+/// 网关的并发配额，又让超出的请求在闸门排队（真实背压）而非打爆对端。
+const MODEL_GATE_PERMITS: usize = 32;
+
+/// 进程级共享的模型请求闸门（桌面应用单进程）。
+///
+/// `ProviderConfig` 每次运行都新建，字段级缓存无效；闸门必须挂在模块级
+/// `OnceLock` 上才能跨 Job / 子 Agent / 块与重试统一限流。
+fn shared_gate() -> Arc<Semaphore> {
+    static GATE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+    GATE.get_or_init(|| Arc::new(Semaphore::new(MODEL_GATE_PERMITS)))
+        .clone()
+}
+
+/// 进程级共享的 wreq 客户端：内部是 `Arc`，clone 即共享连接池与 TLS 会话，
+/// 避免每块翻译 / 审查 / 重试都做一次全新握手。
+///
+/// 指纹伪装沿用 wreq 默认模拟（与 pixiv 抓取侧的显式 `Chrome147` 无关，
+/// 这里保持既有 builder 参数不变）；不携带 per-config 超时——各配置的
+/// `timeout_seconds` 由传输层按请求下发，同一个 client 才能服务不同配置。
+fn shared_client() -> Result<&'static wreq::Client, String> {
+    static CLIENT: OnceLock<wreq::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let client = wreq::Client::builder()
+        .redirect(wreq::redirect::Policy::none())
+        .build()
+        .map_err(|_| "无法初始化翻译客户端".to_string())?;
+    Ok(CLIENT.get_or_init(|| client))
+}
 
 /// URL 可以是 API 基址或当前协议的完整端点；HTTP 仅允许本机模型。
 ///
@@ -396,7 +438,8 @@ pub struct ProviderConfig {
     pub endpoint: tauri::Url,
     /// 需要附加的静态会话头（name, value）；仅 opencode host 生效。
     pub session_header: Option<(String, String)>,
-    /// 全局模型请求闸门。
+    /// 全局模型请求闸门；`new` 默认接入进程级共享闸门（[`shared_gate`]），
+    /// `with_gate` 可覆盖（测试注入或显式禁用传 `None`）。
     pub gate: Option<Arc<Semaphore>>,
 }
 
@@ -432,7 +475,8 @@ impl ProviderConfig {
             timeout_seconds,
             endpoint,
             session_header: None,
-            gate: None,
+            // 闸门在构造时接线：上游从不显式注入，缺省即共享限流。
+            gate: Some(shared_gate()),
         })
     }
 
@@ -448,15 +492,16 @@ impl ProviderConfig {
         self
     }
 
-    /// 构造 wreq 传输：超时沿用配置，禁重定向，叠加会话头与闸门。
+    /// 构造 wreq 传输：复用进程级共享 client（连接池/TLS 会话），单请求超时
+    /// 与 API key 脱敏按配置下发，禁重定向，叠加会话头与闸门。
     pub fn transport(&self) -> Result<WreqTransport, String> {
-        let client = wreq::Client::builder()
-            .timeout(Duration::from_secs(self.timeout_seconds))
-            .redirect(wreq::redirect::Policy::none())
-            .build()
-            .map_err(|_| "无法初始化翻译客户端")?;
-        let mut transport =
-            WreqTransport::new(client, self.endpoint.clone()).with_gate(self.gate.clone());
+        let mut transport = WreqTransport::new(
+            shared_client()?.clone(),
+            self.endpoint.clone(),
+            Duration::from_secs(self.timeout_seconds),
+        )
+        .with_gate(self.gate.clone())
+        .with_redact_key(self.api_key.clone());
         if let Some((name, value)) = &self.session_header {
             let name = http::header::HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| "opencode 会话头名称无效")?;
@@ -684,5 +729,63 @@ mod tests {
         assert!(validate_extra(&json!({"instructions": "x"}), ApiFormat::Responses).is_err());
         assert!(validate_extra(&json!({"system": "x"}), ApiFormat::Anthropic).is_err());
         assert!(validate_extra(&json!({"max_tokens": 10}), ApiFormat::Anthropic).is_ok());
+    }
+
+    /// 共享 client 与闸门必须是同一进程级实例：`ProviderConfig` 每次运行新建，
+    /// 字段级缓存无效，共享只能落在模块级 `OnceLock` 上（M1 / M3 接线前提）。
+    #[test]
+    fn client_and_gate_are_shared_process_wide() {
+        let first = shared_client().expect("共享 client 初始化");
+        let second = shared_client().expect("共享 client 二次获取");
+        assert!(std::ptr::eq(first, second), "两次获取返回了不同的 client");
+        assert!(
+            Arc::ptr_eq(&shared_gate(), &shared_gate()),
+            "两次获取返回了不同的闸门"
+        );
+    }
+
+    /// 每次构造的 transport 是新实例，但底层 client 指向同一进程级共享实例，
+    /// 且配置的超时 / 闸门 / 脱敏 key 都正确下发（连接池跨块复用的可见面）。
+    #[test]
+    fn transport_reuses_shared_client_and_carries_config() {
+        let config = config(ApiFormat::Responses, "https://example.com/v1", json!({}));
+        let first = config.transport().unwrap();
+        let second = config.transport().unwrap();
+        assert_eq!(first.endpoint(), &config.endpoint);
+        assert_eq!(second.endpoint(), &config.endpoint);
+        assert_eq!(first.request_timeout(), Duration::from_secs(600));
+        assert_eq!(second.request_timeout(), Duration::from_secs(600));
+        let gate = first.gate().expect("闸门必须在构造时默认接线");
+        assert!(Arc::ptr_eq(gate, &shared_gate()));
+    }
+
+    /// 闸门并发语义：同类型的独立闸门（避免与并行测试争抢全局许可）下，
+    /// 2N 个任务抢 N 个许可，同时在飞数不得超过 N，结束后许可全额归还。
+    #[tokio::test]
+    async fn gate_caps_concurrent_in_flight_requests() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let limit = MODEL_GATE_PERMITS;
+        let gate = Arc::new(Semaphore::new(limit));
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..limit * 2 {
+            let gate = gate.clone();
+            let in_flight = in_flight.clone();
+            let peak = peak.clone();
+            handles.push(tokio::spawn(async move {
+                let _permit = gate.acquire_owned().await.expect("闸门未关闭");
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+            }));
+        }
+        for handle in handles {
+            handle.await.expect("任务未 panic");
+        }
+        assert!(peak.load(Ordering::SeqCst) <= limit, "在飞数超过闸门上限");
+        assert_eq!(gate.available_permits(), limit, "许可未全额归还");
     }
 }
