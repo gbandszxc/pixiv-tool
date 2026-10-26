@@ -20,7 +20,7 @@ use std::{
         Arc, Mutex as StdMutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use chrono::Utc;
@@ -390,8 +390,10 @@ pub struct JobContext {
     pub confirm_before_start: bool,
     /// manifest 读改写串行化。
     manifest_lock: StdMutex<()>,
-    /// `sessions/journal.jsonl` 追加串行化（主运行与子任务并发写入时防丢行）。
-    journal_lock: StdMutex<()>,
+    /// `sessions/journal.jsonl` 的内存缓冲：append 只进内存并标脏，由间隔或
+    /// 显式 flush 点（终态 transition）整文件落盘；单个互斥锁同时承担原
+    /// journal_lock 的追加串行化职责（flush 写盘期间 append 阻塞等待）。
+    journal: StdMutex<JournalBuffer>,
     /// 单 Job 子任务并发闸门。
     pub dispatch_gate: Arc<Semaphore>,
     /// 分块计划写路径串行化：`split_chunk` 的读计划 → 派生 ID → 写计划是
@@ -406,6 +408,51 @@ pub struct JobContext {
     unknown_blocked: StdMutex<BTreeSet<String>>,
     /// 产物访问器（持有 `Arc<JobStore>`，与上下文同寿命）。
     io: StoreIo,
+}
+
+/// journal 单 Job 保留上限（行）；超出后一次裁掉一半旧行而非逐行，降低
+/// 触顶后每次 flush 的重写体积。
+const JOURNAL_MAX_LINES: usize = 4_000;
+/// 触顶裁剪后保留的行数（最新的一半）。
+const JOURNAL_KEEP_LINES: usize = 2_000;
+/// journal 缓冲的落盘间隔：append 只进内存，距上次落盘超过该间隔才整文件
+/// 重写一次。期间崩溃最多丢这一窗口内的诊断记录（journal 是回放辅助，
+/// 允许丢最近少量记录）；终态 transition 强制 flush，不受间隔限制。
+const JOURNAL_FLUSH_INTERVAL: Duration = Duration::from_secs(5);
+/// `sessions/journal.jsonl` 在 Job 目录内的相对路径。
+const JOURNAL_PATH: &str = "sessions/journal.jsonl";
+
+/// `sessions/journal.jsonl` 的内存缓冲：append 追加行并标脏，flush 把全部
+/// 内存行一次性原子写盘（替代旧的「每条追加都整文件读改写 + fsync」）。
+struct JournalBuffer {
+    lines: Vec<String>,
+    dirty: bool,
+    last_flush: Instant,
+}
+
+impl JournalBuffer {
+    /// 空缓冲（新建 Job：journal 必然不存在）。
+    fn empty() -> Self {
+        Self {
+            lines: Vec::new(),
+            dirty: false,
+            last_flush: Instant::now(),
+        }
+    }
+
+    /// 从磁盘装载既有记录（rehydrate 恢复路径；文件不存在即空缓冲）。
+    fn load(store: &JobStore) -> Self {
+        let bytes = store.read(JOURNAL_PATH).ok().flatten().unwrap_or_default();
+        Self {
+            lines: String::from_utf8_lossy(&bytes)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_string)
+                .collect(),
+            dirty: false,
+            last_flush: Instant::now(),
+        }
+    }
 }
 
 /// 主 Agent 单轮轮次下限。
@@ -542,32 +589,61 @@ impl JobContext {
     /// 只写结构化事实（角色、块 ID、状态、耗时、长度、用量），不写原文、译文、
     /// 提示词或凭据。`sessions/` 属于 Job 缓存拥有者，随 Job 一起删除。
     ///
+    /// 记录先进内存缓冲并标脏；距上次落盘 ≥ [`JOURNAL_FLUSH_INTERVAL`] 时才
+    /// 整文件落盘一次，终态 transition 强制 flush（见
+    /// [`TranslationService::transition`]）。journal 是诊断回放辅助，崩溃时
+    /// 丢失最近一个间隔内的记录可接受，换来消除「每条追加都整文件读改写 +
+    /// fsync」的写放大。超限一次裁掉一半旧行（保留最近事实）。
+    ///
     /// 主运行的上下文压缩经 `CompactionConfig::with_journal` 注入本方法，记录
     /// `compact_start / compact_done / compact_failed`，只含估算 token、耗时、
     /// 保留范围与结果码。
     pub fn append_session(&self, record: &Value) {
-        const PATH: &str = "sessions/journal.jsonl";
         let line = match serde_json::to_string(record) {
             Ok(line) => line,
             Err(_) => return,
         };
-        // 主运行（含压缩记录）与子任务完成记录可能并发到达；串行化读改写。
-        let _guard = self
-            .journal_lock
+        let due = {
+            let mut buffer = self
+                .journal
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            buffer.lines.push(line);
+            if buffer.lines.len() > JOURNAL_MAX_LINES {
+                let keep_from = buffer.lines.len() - JOURNAL_KEEP_LINES;
+                buffer.lines.drain(..keep_from);
+            }
+            buffer.dirty = true;
+            buffer.last_flush.elapsed() >= JOURNAL_FLUSH_INTERVAL
+        };
+        if due {
+            self.flush_journal(false);
+        }
+    }
+
+    /// 把内存 journal 缓冲整体落盘。
+    ///
+    /// `force=false` 时仅在距上次落盘 ≥ [`JOURNAL_FLUSH_INTERVAL`] 且有新记录
+    /// 时写；`force=true`（终态 transition、显式收尾、测试断言前）无视间隔。
+    /// 写失败保留脏标记，由下一次 flush 重试。单个 journal 互斥锁同时串行化
+    /// 追加与写盘：flush 写盘期间并发 append 阻塞等待，不丢行。
+    pub fn flush_journal(&self, force: bool) {
+        let mut buffer = self
+            .journal
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        let mut bytes = self.store.read(PATH).ok().flatten().unwrap_or_default();
-        // 单 Job 最多保留 4000 行，超出后丢弃最旧的记录（保留最近事实）。
-        const MAX_LINES: usize = 4_000;
-        const NEWLINE: u8 = 0x0A;
-        if bytes.iter().filter(|byte| **byte == NEWLINE).count() >= MAX_LINES
-            && let Some(cut) = bytes.iter().position(|byte| *byte == NEWLINE)
-        {
-            bytes.drain(..=cut);
+        if !buffer.dirty || (!force && buffer.last_flush.elapsed() < JOURNAL_FLUSH_INTERVAL) {
+            return;
         }
-        bytes.extend_from_slice(line.as_bytes());
-        bytes.push(NEWLINE);
-        let _ = self.store.write_atomic(PATH, &bytes);
+        let mut bytes = Vec::new();
+        for line in &buffer.lines {
+            bytes.extend_from_slice(line.as_bytes());
+            bytes.push(b'\n');
+        }
+        if self.store.write_atomic(JOURNAL_PATH, &bytes).is_ok() {
+            buffer.dirty = false;
+            buffer.last_flush = Instant::now();
+        }
     }
 
     /// 重新计算计数并通过事件广播（不改变 Job 状态）。
@@ -1015,8 +1091,19 @@ impl TranslationService {
             return Err("小说翻译输入无效或过大".into());
         }
         let (target_code, target_name) = legacy::resolve_target_language(&settings)?;
-        let source = parse_source(&novel.content, target_code)?;
-        let source_language = legacy::detect_language(&novel.content);
+        // 原文解析与语言检测是对最大 8MB 输入的 CPU 密集操作，连同内容副本
+        // 挪到阻塞线程执行，避免长时间占住异步 worker。
+        let content = novel.content.clone();
+        let target_for_parse = target_code.to_string();
+        let (source, source_language) = tokio::task::spawn_blocking(
+            move || -> Result<(SourceDoc, legacy::SourceLanguage), String> {
+                let source = parse_source(&content, &target_for_parse)?;
+                let source_language = legacy::detect_language(&content);
+                Ok((source, source_language))
+            },
+        )
+        .await
+        .map_err(|error| format!("解析小说原文失败：{error}"))??;
         if !force && legacy::same_target_language(source_language, target_code) {
             // 原文已是目标语言：不创建 Job，返回 completed 的空快照。
             return Ok(TranslationJobSnapshot {
@@ -1067,23 +1154,12 @@ impl TranslationService {
             max_chars: settings.translation_agent_chunk_max_chars.max(1) as usize,
             context_chars: settings.translation_agent_context_chars.max(0) as usize,
         };
-        let chunks = crate::translation::chunking::chunk_source(&source, &chunk_config);
-        let call_limit = if settings.translation_call_budget > 0 {
-            settings.translation_call_budget as u32
-        } else {
-            crate::agent::auto_call_budget(chunks.len() as u32)
-        };
-        let budget = Arc::new(BudgetTracker::new(call_limit));
         let job_id = self.new_job_id(novel.novel_id);
         let scope = JobScope {
             novel_id: novel.novel_id,
             job_id: job_id.clone(),
             generation: self.inner.generation.get(),
         };
-        let store = Arc::new(
-            JobStore::create_guarded(&self.inner.paths, &scope, self.inner.generation.clone())
-                .map_err(|error| format!("无法创建翻译任务目录：{error}"))?,
-        );
         let model = ModelConfig {
             format: settings.translation_api_format.clone(),
             base_url: settings.translation_api_url.clone(),
@@ -1097,56 +1173,83 @@ impl TranslationService {
         };
         let settings_json = settings_snapshot_json(&settings, target_code, &model);
         let resources = ResourceVersions::current();
-        {
-            let io = StoreIo::new(store.clone());
-            let artifacts = JobArtifacts::new(&io);
-            artifacts.write_source(&source)?;
-        }
-        // 原文正文单独保存：重启或重置 Pass 0 后不再依赖前端重新提交。
-        let input_bytes = serde_json::to_vec(&json!({
-            "title": novel.title,
-            "tags": novel.tags,
-            "description": novel.description,
-            "content": novel.content,
-        }))
-        .map_err(|_| "无法序列化翻译原文".to_string())?;
-        store
-            .write_atomic("source/input.json", &input_bytes)
-            .map_err(|error| format!("无法写入翻译原文：{error}"))?;
-        store
-            .write_atomic(
-                "settings_snapshot.json",
-                &serde_json::to_vec_pretty(&settings_json).unwrap_or_default(),
-            )
-            .map_err(|error| format!("无法写入设置快照：{error}"))?;
-        store
-            .write_atomic(
-                "resources.json",
-                &serde_json::to_vec_pretty(&resources).unwrap_or_default(),
-            )
-            .map_err(|error| format!("无法写入资源版本：{error}"))?;
-        let counts = JobCounts {
-            pages: source.page_count(),
-            chunks: chunks.len() as u32,
-            ..JobCounts::default()
-        };
-        store
-            .update_manifest(|manifest| {
-                manifest.input_hash = source.input_hash.clone();
-                manifest.target_language = target_code.to_string();
-                manifest.source_language = language_code(source_language).to_string();
-                manifest.settings_snapshot = settings_json.clone();
-                manifest.counts = counts;
-                manifest.attempts = AttemptBudget {
-                    model_calls: 0,
-                    limit: call_limit,
-                    manual_extra: 0,
-                    exits: 0,
+        // 分块计算（对全量原文的 CPU 密集操作）与首批产物落盘（create_guarded
+        // 建目录 + 多次 write_atomic，均含 fsync）同为阻塞操作，连同 novel /
+        // source 的所有权一起在阻塞线程完成，异步侧拿回存储句柄与计数。
+        let generation = self.inner.generation.clone();
+        let paths = self.inner.paths.clone();
+        let scope_for_store = scope.clone();
+        let call_budget = settings.translation_call_budget;
+        let target_for_store = target_code.to_string();
+        let source_language_code = language_code(source_language).to_string();
+        let (store, counts, call_limit) =
+            tokio::task::spawn_blocking(move || -> Result<_, String> {
+                let chunks = crate::translation::chunking::chunk_source(&source, &chunk_config);
+                let call_limit = if call_budget > 0 {
+                    call_budget as u32
+                } else {
+                    crate::agent::auto_call_budget(chunks.len() as u32)
                 };
-                manifest.state = JobState::Queued;
-                manifest.phase = Phase::PrepareSource;
+                let counts = JobCounts {
+                    pages: source.page_count(),
+                    chunks: chunks.len() as u32,
+                    ..JobCounts::default()
+                };
+                let input_hash = source.input_hash.clone();
+                let store = Arc::new(
+                    JobStore::create_guarded(&paths, &scope_for_store, generation)
+                        .map_err(|error| format!("无法创建翻译任务目录：{error}"))?,
+                );
+                {
+                    let io = StoreIo::new(store.clone());
+                    let artifacts = JobArtifacts::new(&io);
+                    artifacts.write_source(&source)?;
+                }
+                // 原文正文单独保存：重启或重置 Pass 0 后不再依赖前端重新提交。
+                let input_bytes = serde_json::to_vec(&json!({
+                    "title": novel.title,
+                    "tags": novel.tags,
+                    "description": novel.description,
+                    "content": novel.content,
+                }))
+                .map_err(|_| "无法序列化翻译原文".to_string())?;
+                store
+                    .write_atomic("source/input.json", &input_bytes)
+                    .map_err(|error| format!("无法写入翻译原文：{error}"))?;
+                store
+                    .write_atomic(
+                        "settings_snapshot.json",
+                        &serde_json::to_vec_pretty(&settings_json).unwrap_or_default(),
+                    )
+                    .map_err(|error| format!("无法写入设置快照：{error}"))?;
+                store
+                    .write_atomic(
+                        "resources.json",
+                        &serde_json::to_vec_pretty(&resources).unwrap_or_default(),
+                    )
+                    .map_err(|error| format!("无法写入资源版本：{error}"))?;
+                store
+                    .update_manifest(|manifest| {
+                        manifest.input_hash = input_hash;
+                        manifest.target_language = target_for_store;
+                        manifest.source_language = source_language_code;
+                        manifest.settings_snapshot = settings_json;
+                        manifest.counts = counts;
+                        manifest.attempts = AttemptBudget {
+                            model_calls: 0,
+                            limit: call_limit,
+                            manual_extra: 0,
+                            exits: 0,
+                        };
+                        manifest.state = JobState::Queued;
+                        manifest.phase = Phase::PrepareSource;
+                    })
+                    .map_err(|error| format!("无法写入任务清单：{error}"))?;
+                Ok((store, counts, call_limit))
             })
-            .map_err(|error| format!("无法写入任务清单：{error}"))?;
+            .await
+            .map_err(|error| format!("创建翻译任务失败：{error}"))??;
+        let budget = Arc::new(BudgetTracker::new(call_limit));
 
         let emitter = Arc::new(JobEmitter::new(self.inner.sink.clone(), scope.clone()));
         let dispatch_gate = Arc::new(Semaphore::new(
@@ -1168,7 +1271,7 @@ impl TranslationService {
             control: Control::default(),
             confirm_before_start: settings.translation_confirm_before_start,
             manifest_lock: StdMutex::new(()),
-            journal_lock: StdMutex::new(()),
+            journal: StdMutex::new(JournalBuffer::empty()),
             dispatch_gate,
             plan_lock: StdMutex::new(()),
             usage: StdMutex::new(TokenUsage::default()),
@@ -1335,33 +1438,39 @@ impl TranslationService {
 
     /// 阅读器结果：优先最新已完成 v2 Job，其次 v1 只读缓存（标记 partial）。
     pub async fn result(&self, novel_id: i64) -> Result<Option<TranslationResult>, String> {
-        if let Ok(jobs) = list_jobs(&self.inner.paths, novel_id) {
-            for summary in jobs {
-                if summary.corrupt || summary.pending_delete {
-                    continue;
-                }
-                let Some(manifest) = read_manifest_at(&summary.path) else {
-                    continue;
-                };
-                if manifest.state != JobState::Completed {
-                    continue;
-                }
-                if let Some(result) = read_job_result(&self.inner.paths, &manifest)
-                    && result.status == PublishStatus::Complete
-                {
-                    return Ok(Some(result));
+        // 目录枚举、manifest 与 MB 级 result.json 读取、v1 缓存回落全是磁盘
+        // 阻塞操作，整体挪到阻塞线程，避免长时间占住异步 worker。
+        let paths = self.inner.paths.clone();
+        let settings = self.settings_snapshot();
+        tokio::task::spawn_blocking(move || {
+            if let Ok(jobs) = list_jobs(&paths, novel_id) {
+                for summary in jobs {
+                    if summary.corrupt || summary.pending_delete {
+                        continue;
+                    }
+                    let Some(manifest) = read_manifest_at(&summary.path) else {
+                        continue;
+                    };
+                    if manifest.state != JobState::Completed {
+                        continue;
+                    }
+                    if let Some(result) = read_job_result(&paths, &manifest)
+                        && result.status == PublishStatus::Complete
+                    {
+                        return Ok(Some(result));
+                    }
                 }
             }
-        }
-        let settings = self.settings_snapshot();
-        let Ok((target, _)) = legacy::resolve_target_language(&settings) else {
-            return Ok(None);
-        };
-        let book =
-            crate::translation::legacy::read_latest_book(&self.inner.paths.data_dir, novel_id)?;
-        Ok(book.and_then(|book| {
-            crate::translation::legacy::to_partial_result(novel_id, target, &book)
-        }))
+            let Ok((target, _)) = legacy::resolve_target_language(&settings) else {
+                return Ok(None);
+            };
+            let book = crate::translation::legacy::read_latest_book(&paths.data_dir, novel_id)?;
+            Ok(book.and_then(|book| {
+                crate::translation::legacy::to_partial_result(novel_id, target, &book)
+            }))
+        })
+        .await
+        .map_err(|error| format!("读取翻译结果失败：{error}"))?
     }
 
     /// 浮层预览：原文 / 译文对照。
@@ -1662,7 +1771,7 @@ impl TranslationService {
     pub async fn resume(&self, job_id: &str) -> Result<(), String> {
         let handle = match self.handle(job_id) {
             Some(handle) => handle,
-            None => self.rehydrate(job_id)?,
+            None => self.rehydrate(job_id).await?,
         };
         self.resume_prepare(&handle)?;
         self.spawn_supervisor(handle);
@@ -1719,7 +1828,7 @@ impl TranslationService {
     /// 预算：manifest 的 `attempts.model_calls / manual_extra` 与 `usage` 一并还原，
     /// 不因重启清零。阶段与块计划：`prepare_source` 不再重新切块（计划仍在磁盘上），
     /// 主 Agent 从 `job_status` 得到待办块，已完成的块直接复用。
-    fn rehydrate(&self, job_id: &str) -> Result<Arc<JobHandle>, String> {
+    async fn rehydrate(&self, job_id: &str) -> Result<Arc<JobHandle>, String> {
         // 1. 定位 manifest 与世代。
         let (manifest, corrupt) = self.find_manifest(job_id)?;
         if corrupt {
@@ -1747,8 +1856,17 @@ impl TranslationService {
             JobStore::open_guarded(&self.inner.paths, &scope, self.inner.generation.clone())
                 .map_err(|error| error.to_string())?,
         );
-        let input = read_input(&store, manifest.novel_id)
-            .ok_or_else(|| "任务缺少原文记录，无法恢复".to_string())?;
+        // 最多 8MB 的原文与既有 journal 一起在阻塞线程读回，不占异步 worker。
+        let store_for_load = store.clone();
+        let rehydrate_novel_id = manifest.novel_id;
+        let (input, journal) = tokio::task::spawn_blocking(move || {
+            let input = read_input(&store_for_load, rehydrate_novel_id);
+            let journal = JournalBuffer::load(&store_for_load);
+            (input, journal)
+        })
+        .await
+        .map_err(|error| format!("恢复任务上下文失败：{error}"))?;
+        let input = input.ok_or_else(|| "任务缺少原文记录，无法恢复".to_string())?;
         let settings = self.settings_snapshot();
         let snapshot = store
             .read("settings_snapshot.json")
@@ -1828,7 +1946,7 @@ impl TranslationService {
             confirm_before_start: settings.translation_confirm_before_start
                 && manifest.constraint_version == 0,
             manifest_lock: StdMutex::new(()),
-            journal_lock: StdMutex::new(()),
+            journal: StdMutex::new(journal),
             dispatch_gate,
             plan_lock: StdMutex::new(()),
             usage: StdMutex::new(usage),
@@ -2776,6 +2894,11 @@ impl TranslationService {
         if handle.ctx.scope.generation != self.inner.generation.get() {
             return;
         }
+        // 先强制 flush journal 缓冲，再让新状态可见（runtime / manifest / 事件
+        // 均以新状态为准）：并行观察者一旦看到终态就允许直接读磁盘 journal
+        // 回放，缓冲必须在此之前落盘；supervise 尾部的终态驱逐会释放上下文，
+        // 同理。flush 在此失败只保留脏标记，不阻断状态机。
+        handle.ctx.flush_journal(true);
         let phase = handle
             .ctx
             .read_manifest()
@@ -3493,7 +3616,7 @@ pub(crate) fn test_job_context(
         control: Control::default(),
         confirm_before_start: false,
         manifest_lock: StdMutex::new(()),
-        journal_lock: StdMutex::new(()),
+        journal: StdMutex::new(JournalBuffer::load(&store)),
         dispatch_gate: Arc::new(Semaphore::new(2)),
         plan_lock: StdMutex::new(()),
         usage: StdMutex::new(TokenUsage::default()),
@@ -3895,6 +4018,131 @@ mod tests {
         assert_eq!(manifest.state, JobState::Paused);
         // 块计数不清零：计划存在时按计划数；这里两块都已落盘。
         assert_ne!(manifest.counts.chunks, 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// journal 缓冲：append 只进内存（间隔内不落盘），强制 flush 后文件内容
+    /// 与内存缓冲逐行一致，且重复 flush 不产生重复行。
+    #[test]
+    fn journal_append_buffers_in_memory_and_flushes_on_demand() {
+        let (_service, handle, _scope, dir) = job_fixture("journal-buffer", settings());
+        let ctx = &handle.ctx;
+        ctx.append_session(&json!({ "kind": "a", "n": 1 }));
+        ctx.append_session(&json!({ "kind": "b", "n": 2 }));
+        assert!(
+            !ctx.store.exists(JOURNAL_PATH),
+            "落盘间隔内不应产生整文件重写"
+        );
+
+        ctx.flush_journal(true);
+        let read_lines = || {
+            let bytes = ctx
+                .store
+                .read(JOURNAL_PATH)
+                .expect("读取 journal")
+                .expect("flush 后 journal 应存在");
+            String::from_utf8(bytes)
+                .expect("journal 是 UTF-8")
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let flushed = read_lines();
+        assert_eq!(flushed.len(), 2, "flush 后文件与内存行数一致");
+        assert!(flushed[0].contains("\"kind\":\"a\""));
+        assert!(flushed[1].contains("\"kind\":\"b\""));
+        let buffered = ctx.journal.lock().unwrap();
+        assert_eq!(
+            flushed,
+            buffered
+                .lines
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            "文件内容与内存缓冲逐行一致"
+        );
+        drop(buffered);
+
+        // 重复强制 flush 幂等：脏标记已清，不重写也不重复。
+        ctx.flush_journal(true);
+        assert_eq!(read_lines().len(), 2, "重复 flush 不产生重复行");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// journal 超限裁剪：一次裁掉一半旧行，内存与 flush 后的文件都只保留
+    /// 最新的 JOURNAL_KEEP_LINES 条。
+    #[test]
+    fn journal_trims_oldest_half_when_exceeding_limit() {
+        let (_service, handle, _scope, dir) = job_fixture("journal-trim", settings());
+        let ctx = &handle.ctx;
+        let total = JOURNAL_MAX_LINES + 8;
+        for index in 0..total {
+            ctx.append_session(&json!({ "kind": "tick", "i": index }));
+        }
+
+        {
+            let buffer = ctx.journal.lock().unwrap();
+            assert!(
+                buffer.lines.len() >= JOURNAL_KEEP_LINES && buffer.lines.len() <= JOURNAL_MAX_LINES,
+                "内存行数应在保留窗口与上限之间（裁半按触发时机滞后收敛）"
+            );
+            let first = &buffer.lines[0];
+            let last = buffer.lines.last().expect("缓冲非空");
+            assert!(
+                first.contains(&format!("\"i\":{}", JOURNAL_KEEP_LINES + 1)),
+                "最旧保留行应是首次裁剪后的第 {} 条：{first}",
+                JOURNAL_KEEP_LINES + 1
+            );
+            assert!(
+                last.contains(&format!("\"i\":{}", total - 1)),
+                "最新行应保留：{last}"
+            );
+            let expected = buffer.lines.clone();
+            drop(buffer);
+
+            ctx.flush_journal(true);
+            let bytes = ctx
+                .store
+                .read(JOURNAL_PATH)
+                .expect("读取 journal")
+                .expect("flush 后 journal 应存在");
+            let flushed: Vec<String> = String::from_utf8(bytes)
+                .expect("UTF-8")
+                .lines()
+                .map(str::to_string)
+                .collect();
+            assert_eq!(
+                flushed,
+                expected.iter().map(String::as_str).collect::<Vec<_>>(),
+                "flush 后文件内容与内存缓冲一致"
+            );
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 终态 transition 强制 flush：间隔内的缓冲记录在转终态后必须已在磁盘上
+    /// （e2e 等终态后直接读文件的断言依赖该语义）。
+    #[test]
+    fn terminal_transition_flushes_buffered_journal() {
+        let (service, handle, _scope, dir) = job_fixture("journal-flush", settings());
+        handle
+            .ctx
+            .append_session(&json!({ "kind": "before_terminal", "n": 1 }));
+        assert!(!handle.ctx.store.exists(JOURNAL_PATH), "间隔内尚未落盘");
+
+        service.transition(&handle, JobState::Completed, "completed", None);
+
+        let bytes = handle
+            .ctx
+            .store
+            .read(JOURNAL_PATH)
+            .expect("读取 journal")
+            .expect("终态 transition 必须把缓冲落盘");
+        let text = String::from_utf8(bytes).expect("UTF-8");
+        assert!(
+            text.contains("\"kind\":\"before_terminal\""),
+            "缓冲中的记录应已写入文件：{text}"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
