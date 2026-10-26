@@ -1265,10 +1265,17 @@ impl TranslationService {
     /// 内存索引 + 磁盘扫描（重启后仍能看到 interrupted / corrupt 任务）。
     pub async fn jobs(&self) -> JobList {
         let mut by_id: BTreeMap<JobId, TranslationJobSnapshot> = BTreeMap::new();
-        if let Ok(handles) = self.inner.jobs.lock() {
-            for (job_id, handle) in handles.iter() {
-                by_id.insert(job_id.clone(), self.handle_snapshot(handle));
-            }
+        // 锁内只收集句柄：快照要读磁盘（计划文件、manifest），放在临界区外，
+        // 避免任务列表轮询阻塞 start / delete 等同锁路径。
+        let handles: Vec<(JobId, Arc<JobHandle>)> = match self.inner.jobs.lock() {
+            Ok(jobs) => jobs
+                .iter()
+                .map(|(job_id, handle)| (job_id.clone(), Arc::clone(handle)))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        for (job_id, handle) in &handles {
+            by_id.insert(job_id.clone(), self.handle_snapshot(handle));
         }
         let v2 = self.inner.paths.data_dir.join("translations").join("v2");
         if let Ok(novels) = std::fs::read_dir(&v2) {
@@ -1428,6 +1435,9 @@ impl TranslationService {
     }
 
     fn handle_snapshot(&self, handle: &Arc<JobHandle>) -> TranslationJobSnapshot {
+        // 块 ID 只需读一次计划文件（与磁盘态快照 plan_chunk_ids_at 同源）；
+        // 全量反序列化每个分块是任务列表轮询下的主要开销，快照不再付出。
+        let chunk_ids = plan_ids_from_store(&handle.ctx.store);
         // 事件侧的预览 / 归属 / seq 在锁外读取，避免与运行层发事件形成嵌套等待。
         let preview = handle.ctx.emitter.last_preview();
         let preview_current = handle.ctx.emitter.last_current();
@@ -1465,11 +1475,7 @@ impl TranslationService {
             },
             already_target_language: false,
             target_language: handle.ctx.target_language.clone(),
-            chunk_ids: tools::plan_chunks(&handle.ctx)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|chunk| chunk.id)
-                .collect(),
+            chunk_ids,
         }
     }
 
@@ -1930,6 +1936,9 @@ impl TranslationService {
             }
         }
         self.transition(&handle, JobState::Cancelled, "cancelled", Some("cancelled"));
+        // 轮询确认 supervisor 已退出才驱逐；超时残留的卡死 supervisor 仍占着
+        // 注册表条目，delete 据此继续拒绝（见 evict_terminal_job 的约束说明）。
+        self.evict_terminal_job(&handle);
         Ok(())
     }
 
@@ -1985,6 +1994,42 @@ impl TranslationService {
             return;
         }
         locks.remove(&novel_id);
+    }
+
+    /// 终态收尾后把任务移出进程内注册表（只驱逐句柄，不动任务树与小说锁）。
+    ///
+    /// Completed / Cancelled 且 supervisor 已结束（`running` 复位）时驱逐，
+    /// 释放设置快照、模型 Key 明文与存储句柄；任务目录与 manifest 留在磁盘上，
+    /// 查询经 `find_manifest` / 目录扫描自然回落磁盘路径。约束：
+    ///
+    /// - NeedsAttention / Paused / Interrupted 保留内存态：控制位与
+    ///   confirm / resume / pause 依赖运行时状态；
+    /// - `running` 仍为 true（取消轮询超时的卡死残留）时不驱逐：delete 靠
+    ///   注册表条目拒绝「supervisor 未退出先删目录」；
+    /// - `Arc::ptr_eq` 保证只驱逐当前注册条目：同 ID 重建（rehydrate）后，
+    ///   旧 supervisor 的迟到收尾不会误删新句柄。
+    /// - start 生成全新 job_id、rehydrate 拒绝终态，均无「同 ID 覆盖终态条目」
+    ///   的路径；`HashMap::insert` 本身按 key 覆盖旧条目，语义一致。
+    fn evict_terminal_job(&self, handle: &Arc<JobHandle>) {
+        if handle.running.load(Ordering::SeqCst) {
+            return;
+        }
+        let terminal = handle
+            .runtime
+            .lock()
+            .map(|runtime| matches!(runtime.state, JobState::Completed | JobState::Cancelled))
+            .unwrap_or(false);
+        if !terminal {
+            return;
+        }
+        let job_id = &handle.ctx.scope.job_id;
+        if let Ok(mut jobs) = self.inner.jobs.lock()
+            && jobs
+                .get(job_id)
+                .is_some_and(|entry| Arc::ptr_eq(entry, handle))
+        {
+            jobs.remove(job_id);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -2144,6 +2189,9 @@ impl TranslationService {
                 crate::agent::events::safe_text(&error, 160)
             );
         }
+        // supervisor 退出即终态驱逐点：Completed / Cancelled 的句柄在此离开
+        // 注册表（transition 已先落盘并 flush 事件，磁盘回落路径自此接管）。
+        self.evict_terminal_job(&handle);
     }
 
     /// 排队期间被取消：退出等待并按终态收尾。
@@ -2155,6 +2203,7 @@ impl TranslationService {
     fn abandon_queue(&self, handle: &Arc<JobHandle>) {
         handle.running.store(false, Ordering::SeqCst);
         self.transition(handle, JobState::Cancelled, "cancelled", Some("cancelled"));
+        self.evict_terminal_job(handle);
     }
 
     async fn drive(&self, handle: &Arc<JobHandle>) -> Result<(), String> {
@@ -3846,6 +3895,120 @@ mod tests {
         assert_eq!(manifest.state, JobState::Paused);
         // 块计数不清零：计划存在时按计划数；这里两块都已落盘。
         assert_ne!(manifest.counts.chunks, 0);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 终态驱逐：Completed 的 Job 在 supervisor 退出序列（transition + evict）后
+    /// 离开进程内注册表，但任务列表与快照仍经磁盘路径可见、内容一致。
+    #[tokio::test]
+    async fn completed_job_leaves_registry_but_stays_queryable() {
+        let (service, handle, scope, dir) = job_fixture("evict-completed", settings());
+        seed_rework_job(&handle);
+        assert!(service.handle(&scope.job_id).is_some(), "夹具默认已注册");
+
+        // 与 supervise 尾部相同的退出序列：transition 先落盘 + flush 事件，再驱逐。
+        service.transition(&handle, JobState::Completed, "completed", None);
+        service.evict_terminal_job(&handle);
+
+        assert!(
+            service.handle(&scope.job_id).is_none(),
+            "终态 Job 必须离开注册表"
+        );
+        // 磁盘回落：快照仍可读，状态与块 ID 来自 manifest / 计划文件。
+        let snapshot = service.snapshot(&scope.job_id).await.expect("快照可读");
+        assert_eq!(snapshot.state, JobState::Completed);
+        assert_eq!(
+            snapshot.chunk_ids,
+            vec!["c0001".to_string(), "c0002".to_string()]
+        );
+        let list = service.jobs().await;
+        let listed = list
+            .jobs
+            .iter()
+            .find(|job| job.job_id == scope.job_id)
+            .expect("任务列表仍应包含已完成 Job");
+        assert_eq!(listed.state, JobState::Completed);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 取消同理：驱逐后快照 / 列表 / 再取消都走磁盘路径且语义不变。
+    #[tokio::test]
+    async fn cancelled_job_leaves_registry_and_falls_back_to_disk() {
+        let (service, handle, scope, dir) = job_fixture("evict-cancelled", settings());
+        service.transition(&handle, JobState::Cancelled, "cancelled", Some("cancelled"));
+        service.evict_terminal_job(&handle);
+
+        assert!(service.handle(&scope.job_id).is_none(), "取消后离开注册表");
+        let snapshot = service.snapshot(&scope.job_id).await.expect("快照可读");
+        assert_eq!(snapshot.state, JobState::Cancelled);
+        assert_eq!(snapshot.error_code.as_deref(), Some("cancelled"));
+        // 再取消：磁盘路径对已取消任务幂等返回 Ok，不报「任务不存在」。
+        service.cancel(&scope.job_id).await.expect("重复取消幂等");
+        let list = service.jobs().await;
+        assert!(
+            list.jobs.iter().any(|job| job.job_id == scope.job_id),
+            "任务列表仍能看到已取消 Job"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 负例：NeedsAttention / Paused / Interrupted 保留内存态，驱逐调用不生效。
+    #[tokio::test]
+    async fn resumable_states_stay_in_registry() {
+        let (service, handle, scope, dir) = job_fixture("evict-negative", settings());
+        seed_rework_job(&handle);
+
+        service.transition(&handle, JobState::Paused, "paused", None);
+        service.evict_terminal_job(&handle);
+        assert!(service.handle(&scope.job_id).is_some(), "Paused 不驱逐");
+
+        service.transition(
+            &handle,
+            JobState::NeedsAttention,
+            "blocked",
+            Some("blocked"),
+        );
+        service.evict_terminal_job(&handle);
+        assert!(
+            service.handle(&scope.job_id).is_some(),
+            "NeedsAttention 不驱逐"
+        );
+
+        service.transition(
+            &handle,
+            JobState::Interrupted,
+            "interrupted",
+            Some("interrupted"),
+        );
+        service.evict_terminal_job(&handle);
+        assert!(
+            service.handle(&scope.job_id).is_some(),
+            "Interrupted 不驱逐"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 轻量 chunk_ids 路径：内存态快照与驱逐后的磁盘态快照同源（计划文件），
+    /// 顺序与分块计划一致。
+    #[tokio::test]
+    async fn snapshot_chunk_ids_match_plan_order_across_eviction() {
+        let (service, handle, scope, dir) = job_fixture("chunk-ids", settings());
+        seed_rework_job(&handle);
+
+        let memory = service.snapshot(&scope.job_id).await.expect("内存快照");
+        assert_eq!(
+            memory.chunk_ids,
+            vec!["c0001".to_string(), "c0002".to_string()],
+            "内存态快照按计划顺序给出块 ID"
+        );
+
+        service.transition(&handle, JobState::Completed, "completed", None);
+        service.evict_terminal_job(&handle);
+        let disk = service.snapshot(&scope.job_id).await.expect("磁盘快照");
+        assert_eq!(
+            disk.chunk_ids, memory.chunk_ids,
+            "驱逐前后 chunk_ids 同源一致"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
