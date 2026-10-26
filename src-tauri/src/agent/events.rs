@@ -3,6 +3,11 @@
 //! 事件是后端的唯一进度真相源：每 Job `seq` 单调，进度合并节流，阶段切换与
 //! 终态立即 flush。Tauri 侧发射 `translation://job`；测试用 [`RecordingSink`]。
 //!
+//! `seq` 分配与实际下发必须在同一 `state` 临界区内完成：并发线程若能在分配
+//! 与下发之间插入更大的 `seq` 先行到达，前端按「`seq` 不大于已见即丢弃」去重
+//! 会把迟到的事件永久丢弃（丢的是终态时界面卡在运行中）。[`EventSink`] 契约
+//! 要求实现非阻塞且不得回调本发射器，锁内下发不会延长临界区。
+//!
 //! 节流只作用于传输层，不影响业务状态；调用方在阶段结束、任务终态与界面
 //! 关闭前调用 [`JobEmitter::flush`]。
 
@@ -366,34 +371,32 @@ impl JobEmitter {
             .filter(|owner| owner.role != Role::Main)
     }
 
-    /// 立即发送一条事件（跳过节流），返回分配的 `seq`。
-    pub fn emit_now(&self, mut event: JobEvent) -> u64 {
-        let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
-        state.prepare(&mut event, tokio::time::Instant::now());
+    /// 在持有 `state` 锁的前提下分配 `seq`、补齐 Job 元数据并下发。
+    ///
+    /// 下发必须在锁内：[`EventSink`] 实现非阻塞且不回调本发射器（Tauri 投递、
+    /// 记录追加、空实现），不会与 `state` 形成锁环。
+    fn seal_and_emit(&self, state: &mut EmitState, mut event: JobEvent) -> u64 {
         let seq = state.seal(&mut event);
         event.job_id = self.scope.job_id.clone();
         event.novel_id = self.scope.novel_id;
         event.elapsed_ms = self.started.elapsed().as_millis() as u64;
-        drop(state);
         self.sink.emit(event);
         seq
     }
 
+    /// 立即发送一条事件（跳过节流），返回分配的 `seq`。
+    pub fn emit_now(&self, mut event: JobEvent) -> u64 {
+        let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
+        state.prepare(&mut event, tokio::time::Instant::now());
+        self.seal_and_emit(&mut state, event)
+    }
+
     /// 发送积压的合并事件（阶段结束、终态、关闭界面之前调用）。
     pub fn flush(&self) {
-        let pending = {
-            let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
-            state.pending.take()
-        };
-        let Some(mut event) = pending else { return };
         let mut state = self.state.lock().unwrap_or_else(|err| err.into_inner());
-        let seq = state.seal(&mut event);
-        event.job_id = self.scope.job_id.clone();
-        event.novel_id = self.scope.novel_id;
-        event.elapsed_ms = self.started.elapsed().as_millis() as u64;
-        drop(state);
-        self.sink.emit(event);
-        let _ = seq;
+        if let Some(event) = state.pending.take() {
+            self.seal_and_emit(&mut state, event);
+        }
     }
 
     /// 判定并处理一条事件：立即发送、合并等待或丢弃。
@@ -409,9 +412,7 @@ impl JobEmitter {
             || prepared.marker;
 
         if immediate {
-            state.pending = Some(event);
-            drop(state);
-            self.flush();
+            self.seal_and_emit(&mut state, event);
             return;
         }
 
@@ -424,9 +425,7 @@ impl JobEmitter {
             let bytes = event.preview.len_bytes();
             let grew = bytes.saturating_sub(state.last_preview_bytes) >= self.preview_bytes;
             if elapsed >= self.preview_interval || grew {
-                state.pending = Some(event);
-                drop(state);
-                self.flush();
+                self.seal_and_emit(&mut state, event);
             } else {
                 // 预览优先：积压的最新预览覆盖普通进度。
                 state.pending = Some(event);
@@ -437,9 +436,7 @@ impl JobEmitter {
         // 普通进度：≥5s 且计数有变化才发送；窗口内的变化留作下一轮的合并候选。
         if event.counts != state.last_counts {
             if elapsed >= self.progress_interval {
-                state.pending = Some(event);
-                drop(state);
-                self.flush();
+                self.seal_and_emit(&mut state, event);
             } else {
                 state.pending = Some(event);
             }
@@ -889,5 +886,80 @@ mod tests {
             Phase::Translate,
             "子任务的运行阶段不能改写 Job 阶段"
         );
+    }
+
+    const CONCURRENT_THREADS: usize = 8;
+    const CONCURRENT_PER_THREAD: usize = 50;
+
+    /// 断言 RecordingSink 观测到的序列与 `seq` 严格一致且无丢失。
+    ///
+    /// 这是前端去重契约（`seq <= 已见即丢弃`）的防线：观测顺序一旦与 `seq`
+    /// 倒挂，迟到的小 `seq` 会被永久丢弃。
+    fn assert_seq_matches_delivery_order(events: &[JobEvent]) {
+        assert_eq!(
+            events.len(),
+            CONCURRENT_THREADS * CONCURRENT_PER_THREAD,
+            "并发事件不得丢失"
+        );
+        for (index, event) in events.iter().enumerate() {
+            assert_eq!(
+                event.seq,
+                index as u64 + 1,
+                "seq 必须与实际下发顺序严格一致"
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_emit_now_keeps_seq_matching_delivery_order() {
+        let (emitter, sink) = emitter();
+        let emitter = Arc::new(emitter);
+        let handles: Vec<_> = (0..CONCURRENT_THREADS)
+            .map(|_| {
+                let emitter = emitter.clone();
+                std::thread::spawn(move || {
+                    for i in 0..CONCURRENT_PER_THREAD {
+                        emitter.emit_now(progress(JobCounts {
+                            translated: i as u32 + 1,
+                            ..JobCounts::default()
+                        }));
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("emit_now 线程不应 panic");
+        }
+        assert_seq_matches_delivery_order(&sink.events());
+    }
+
+    #[test]
+    fn concurrent_accept_keeps_seq_matching_delivery_order() {
+        // 终态事件每条都命中 accept 的立即发送分支；若 seq 分配与下发不在
+        // 同一临界区，多线程下先分配的小 seq 会后到并被前端丢弃。
+        let (emitter, sink) = emitter();
+        let emitter = Arc::new(emitter);
+        let handles: Vec<_> = (0..CONCURRENT_THREADS)
+            .map(|_| {
+                let emitter = emitter.clone();
+                std::thread::spawn(move || {
+                    for _ in 0..CONCURRENT_PER_THREAD {
+                        emitter.emit(runtime_event(
+                            &scope(),
+                            JobState::Completed,
+                            Phase::Review,
+                            TokenUsage::default(),
+                            Preview::default(),
+                            "completed",
+                            None,
+                        ));
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("accept 线程不应 panic");
+        }
+        assert_seq_matches_delivery_order(&sink.events());
     }
 }
