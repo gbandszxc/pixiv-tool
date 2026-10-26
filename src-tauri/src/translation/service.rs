@@ -394,6 +394,11 @@ pub struct JobContext {
     journal_lock: StdMutex<()>,
     /// 单 Job 子任务并发闸门。
     pub dispatch_gate: Arc<Semaphore>,
+    /// 分块计划写路径串行化：`split_chunk` 的读计划 → 派生 ID → 写计划是
+    /// 多步组合操作，并发派发同时缩块时无锁的后写会覆盖先写（丢 split
+    /// 条目）或让两批派生块分到相同 ID（产物相互覆盖）。同步短临界区，
+    /// 不得跨 `await` 持有。
+    pub(crate) plan_lock: StdMutex<()>,
     /// 本 Job 累计用量（跨多次运行）。
     usage: StdMutex<TokenUsage>,
     /// 结果未知且按设置不自动重放的块：再次派发直接跳过，避免续跑时反复
@@ -1165,6 +1170,7 @@ impl TranslationService {
             manifest_lock: StdMutex::new(()),
             journal_lock: StdMutex::new(()),
             dispatch_gate,
+            plan_lock: StdMutex::new(()),
             usage: StdMutex::new(TokenUsage::default()),
             unknown_blocked: StdMutex::new(BTreeSet::new()),
             io: StoreIo::new(store),
@@ -1818,6 +1824,7 @@ impl TranslationService {
             manifest_lock: StdMutex::new(()),
             journal_lock: StdMutex::new(()),
             dispatch_gate,
+            plan_lock: StdMutex::new(()),
             usage: StdMutex::new(usage),
             unknown_blocked: StdMutex::new(BTreeSet::new()),
             io: StoreIo::new(Arc::new(
@@ -3439,6 +3446,7 @@ pub(crate) fn test_job_context(
         manifest_lock: StdMutex::new(()),
         journal_lock: StdMutex::new(()),
         dispatch_gate: Arc::new(Semaphore::new(2)),
+        plan_lock: StdMutex::new(()),
         usage: StdMutex::new(TokenUsage::default()),
         unknown_blocked: StdMutex::new(BTreeSet::new()),
         io: StoreIo::new(store),

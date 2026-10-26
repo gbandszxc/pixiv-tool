@@ -33,6 +33,7 @@ use crate::{
         CancelToken, CurrentWork, FailureClass, Phase, Role, RunError, RunRequest, TokenUsage,
         budget::{TOOL_RESULT_TOKEN_LIMIT, estimate_tokens, truncate_to_tokens},
         events::{log_job, safe_text, warn_job},
+        model::providers::{ApiFormat, resolve_api_format},
         recovery::{RetryPolicy, backoff},
         resources::{load_resource, role_prompt, system_prompt},
         runtime,
@@ -398,7 +399,18 @@ fn arg_str_list(args: &Value, key: &str) -> Result<Vec<String>, ToolExecutionErr
     if values.is_empty() {
         return Err(tool_error("invalid_args", &format!("{key} 不能为空数组")));
     }
-    Ok(values)
+    // 重复 ID 只保留首现：模型偶发重复列出同一块时，避免同一块在同一批里
+    // 被并发派发两次（双倍 token 消耗、草稿版本的读改写竞争）。
+    Ok(dedup_strings(values))
+}
+
+/// 保留首现顺序去重（dispatch ids 与统计类工具的列表参数共用）。
+fn dedup_strings(values: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .filter(|value| seen.insert(value.clone()))
+        .collect()
 }
 
 fn arg_bool(args: &Value, key: &str, default: bool) -> bool {
@@ -553,6 +565,12 @@ async fn prepare_source_impl(
         write_chunk(ctx, chunk).map_err(|error| tool_error("storage", &error))?;
     }
     let versions = phase_versions(ctx);
+    // 计划决策段持锁（与 split_chunk 同一把）：「读旧计划 → 判断是否重建 →
+    // 写新计划」与并发缩块的写路径互斥，避免相互覆盖。同步临界区，不跨 await。
+    let plan_lock = ctx
+        .plan_lock
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let existing = read_plan(ctx);
     // 计划是否仍然有效：阶段版本一致，且**顶层块**与最新切块一一对应。
     // 顶层块一致时保留已细分的派生块（重复调用 prepare_source 不应丢弃有效的
@@ -581,6 +599,7 @@ async fn prepare_source_impl(
         };
         write_plan(ctx, &plan).map_err(|error| tool_error("storage", &error))?;
     }
+    drop(plan_lock);
     let budget = ctx.budget.snapshot();
     let segments: usize = chunks.iter().map(|chunk| chunk.segments.len()).sum();
     let _ = ctx.update_manifest(|manifest| {
@@ -686,39 +705,81 @@ fn read_chunk_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
             Box::pin(async move {
                 let id = arg_str(&args, "chunk_id")?;
                 let include_context = arg_bool(&args, "include_context", false);
-                let chunk = read_chunk(&ctx, &id)
-                    .map_err(|error| tool_error("invalid_chunk", &error))?
-                    .ok_or_else(|| {
-                        tool_error_with("unknown_chunk", "分块不存在", json!({"chunk_id": id}))
-                    })?;
-                let segments: Vec<Value> = chunk
-                    .segments
-                    .iter()
-                    .map(|segment| {
-                        let (page, line, _) = parse_segment_id(&segment.id).unwrap_or((0, 0, 0));
-                        json!({
-                            "id": segment.id,
-                            "page": page,
-                            "line": line,
-                            "text": segment.text,
-                            "kind": segment_kind_str(segment.kind),
-                        })
-                    })
-                    .collect();
-                let context = if include_context {
-                    json!({"prev": chunk.prev_context, "next": chunk.next_context})
-                } else {
-                    json!({"prev": "", "next": ""})
-                };
-                tool_result(json!({
-                    "chunk_id": chunk.id,
-                    "order": chunk.order,
-                    "segments": segments,
-                    "context": context,
-                }))
+                let payload = read_chunk_payload(&ctx, &id, include_context)?;
+                tool_result(payload)
             })
         },
     )
+}
+
+/// `read_chunk` 工具核心：构造载荷前先做全文超限预检。
+///
+/// 本工具只接受单个块、无法像多块工具那样缩小范围；超限时若静默截断，子
+/// Agent 会拿着缺片段的「全文」去提交，在校验失败之间烧轮次。因此返回结构
+/// 化错误 `chunk_too_large`：仅带上下文读不下时提示去掉上下文；连全文都读
+/// 不下时由派发层的 `split_chunk` 自动细分兜底（预检见 `ensure_chunk_readable`）。
+fn read_chunk_payload(
+    ctx: &JobContext,
+    id: &str,
+    include_context: bool,
+) -> Result<Value, ToolExecutionError> {
+    let chunk = read_chunk(ctx, id)
+        .map_err(|error| tool_error("invalid_chunk", &error))?
+        .ok_or_else(|| tool_error_with("unknown_chunk", "分块不存在", json!({"chunk_id": id})))?;
+    let token_estimate = estimate_chunk_read_tokens(&chunk, include_context);
+    if token_estimate > TOOL_RESULT_TOKEN_LIMIT {
+        let message = if estimate_chunk_read_tokens(&chunk, false) <= TOOL_RESULT_TOKEN_LIMIT {
+            "块全文加邻接上下文超过单次读取上限；用 include_context=false 去掉上下文即可完整读取"
+        } else {
+            "单块全文已超过单次工具结果上限，无法完整读取；请等待派发层细分本块后重试"
+        };
+        return Err(tool_error_with(
+            "chunk_too_large",
+            message,
+            json!({
+                "chunk_id": id,
+                "token_estimate": token_estimate,
+                "limit": TOOL_RESULT_TOKEN_LIMIT,
+            }),
+        ));
+    }
+    let segments: Vec<Value> = chunk
+        .segments
+        .iter()
+        .map(|segment| {
+            let (page, line, _) = parse_segment_id(&segment.id).unwrap_or((0, 0, 0));
+            json!({
+                "id": segment.id,
+                "page": page,
+                "line": line,
+                "text": segment.text,
+                "kind": segment_kind_str(segment.kind),
+            })
+        })
+        .collect();
+    let context = if include_context {
+        json!({"prev": chunk.prev_context, "next": chunk.next_context})
+    } else {
+        json!({"prev": "", "next": ""})
+    };
+    Ok(json!({
+        "chunk_id": chunk.id,
+        "order": chunk.order,
+        "segments": segments,
+        "context": context,
+    }))
+}
+
+/// 子任务派发前的可读性预检：块全文（不含可选上下文）预估就超过单次工具
+/// 结果上限时，子 Agent 无法通过 `read_chunk` 拿到全文，必然在缺片段的校验
+/// 失败之间烧轮次。直接按输入超限返回 `RunError::InputTooLarge`——
+/// `classify_run_error` 把它映射为 `FailureClass::InputTooLarge`，让派发层
+/// 的 `split_chunk` 自动细分接管，不浪费任何模型调用。
+fn ensure_chunk_readable(chunk: &Chunk) -> Result<(), RunError> {
+    if estimate_chunk_read_tokens(chunk, false) > TOOL_RESULT_TOKEN_LIMIT {
+        return Err(RunError::InputTooLarge);
+    }
+    Ok(())
 }
 
 /// 读取有效扫描记录（存在且带当前约束阶段版本戳），供续跑进展快照使用。
@@ -729,6 +790,17 @@ pub(crate) fn read_scan_for_progress(ctx: &JobContext, chunk_id: &str) -> Option
         .flatten()
         .filter(|_| stamped(ctx, "scan", chunk_id, versions.prepare_constraints))
         .map(|_| ())
+}
+
+/// `read_chunk` 结果 token 的保守估算：CJK 按 1 token/字符 + 10% 余量 + JSON
+/// 结构外壳；与协调者单轮预算预估器、`read_chunk` 工具的超限预检同口径。
+fn estimate_chunk_read_tokens(chunk: &Chunk, include_context: bool) -> u32 {
+    let context_chars = if include_context {
+        chunk.prev_context.chars().count() + chunk.next_context.chars().count()
+    } else {
+        0
+    };
+    ((chunk.chars as usize + context_chars) * 11 / 10) as u32 + 128
 }
 
 /// 协调者工具结果大小预估器：`read_chunk` 按块字符数（含邻接窗口）估算
@@ -762,13 +834,7 @@ impl crate::agent::ToolResultEstimator for ChunkResultEstimator {
             // 无效参数走工具本身的错误返回（小结果），不参与预算。
             return 0;
         };
-        let context_chars = if include_context {
-            chunk.prev_context.chars().count() + chunk.next_context.chars().count()
-        } else {
-            0
-        };
-        // CJK 保守按 1 token/字符 + 10% 余量 + JSON 结构外壳。
-        ((chunk.chars as usize + context_chars) * 11 / 10) as u32 + 128
+        estimate_chunk_read_tokens(&chunk, include_context)
     }
 }
 
@@ -1304,6 +1370,10 @@ fn plan_dispatch(
     ids: Vec<String>,
     versions: &PhaseVersions,
 ) -> Result<DispatchPlan, ToolExecutionError> {
+    // 防线纵深：工具入口已去重，这里再兜一次底——同一批里同一块只规划一次，
+    // 否则两个并发 dispatch_one 会对同一块重复请求模型（双倍 token、草稿版本
+    // 的读改写竞争）。
+    let ids = dedup_strings(ids);
     let rework_cap = rework_limit(ctx);
     let rework_set: BTreeSet<String> = if kind == DispatchKind::Translate {
         rework_targets(ctx, versions, &ids)?.into_iter().collect()
@@ -1402,11 +1472,7 @@ pub(crate) struct ChunkGate {
 }
 
 /// 读取磁盘产物并计算单块完成度判定。
-pub(crate) fn chunk_gate(
-    ctx: &JobContext,
-    chunk_id: &str,
-    versions: &PhaseVersions,
-) -> ChunkGate {
+pub(crate) fn chunk_gate(ctx: &JobContext, chunk_id: &str, versions: &PhaseVersions) -> ChunkGate {
     let chunk = read_chunk(ctx, chunk_id).ok().flatten();
     let draft = read_draft(ctx, chunk_id).ok().flatten();
     let review = read_review(ctx, chunk_id).ok().flatten();
@@ -1738,6 +1804,9 @@ async fn run_translator(
         .ok()
         .flatten()
         .ok_or_else(|| RunError::Internal("分块不存在".into()))?;
+    // 发请求前预检：全文都读不了的块直接按输入超限交给 split_chunk 细分，
+    // 不让子 Agent 烧一次调用后卡在缺片段的校验失败上。
+    ensure_chunk_readable(&chunk)?;
     let constraints = read_constraints(ctx).ok().flatten();
     let draft = read_draft(ctx, chunk_id).ok().flatten();
     let review = read_review(ctx, chunk_id).ok().flatten();
@@ -1895,6 +1964,8 @@ async fn run_reviewer(
         .ok()
         .flatten()
         .ok_or_else(|| RunError::Internal("分块不存在".into()))?;
+    // 同 run_translator：全文读不了的块直接交给 split_chunk 细分。
+    ensure_chunk_readable(&chunk)?;
     let draft = read_draft(ctx, chunk_id)
         .ok()
         .flatten()
@@ -1929,9 +2000,9 @@ async fn run_reviewer(
         .map_err(RunError::Internal)?;
     // 审查是结构化输出任务：长思考只会挤占网关常见的 8~10k 输出封顶，
     // 让 submit_review 因为 finish_reason=Length 失败。审查降低思考强度。
-    if let Some(object) = params.as_mut().and_then(Value::as_object_mut) {
-        object.insert("reasoning_effort".into(), json!("low"));
-    }
+    // params 已被 normalize_extra 按 ADR 0032 归一化——顶层 reasoning_effort
+    // 只对 Chat 协议生效，必须按协议写对应字段。
+    apply_review_thinking(&mut params, &ctx.model.format, max_tokens);
     let request = RunRequest::new(
         Role::Reviewer,
         system,
@@ -1975,12 +2046,54 @@ fn accumulate_usage(ctx: &std::sync::Arc<JobContext>, usage: TokenUsage) {
     });
 }
 
+/// 审查请求的思考降档：按协议写入对应字段。
+///
+/// `params` 来自 `ModelConfig::request_params`，已经过 providers.rs 的
+/// `normalize_extra` 完成三协议归一化（ADR 0032）：Chat 在顶层
+/// `reasoning_effort`，Responses 嵌套在 `reasoning.effort`，Anthropic 是
+/// `thinking.budget_tokens`（档位表同 providers.rs：low=2048，且不超过
+/// 输出上限 − 1024）。只在归一化已建好对应字段时降档——用户显式关闭思考
+/// （无 reasoning / thinking 字段）时不强行开启。
+fn apply_review_thinking(params: &mut Option<Value>, format: &str, output_cap: Option<u64>) {
+    let Some(object) = params.as_mut().and_then(Value::as_object_mut) else {
+        return;
+    };
+    match resolve_api_format(format) {
+        Ok(ApiFormat::Responses) => {
+            if let Some(Value::Object(reasoning)) = object.get_mut("reasoning") {
+                reasoning.insert("effort".into(), json!("low"));
+            }
+        }
+        Ok(ApiFormat::Anthropic) => {
+            if let Some(Value::Object(thinking)) = object.get_mut("thinking") {
+                let max = output_cap.unwrap_or(0);
+                if max > 1_024 {
+                    let budget = 2_048u64.min(max - 1_024).max(1_024);
+                    thinking.insert("budget_tokens".into(), json!(budget));
+                }
+            }
+        }
+        _ => {
+            // Chat Completions（默认）：顶层字段即可。
+            object.insert("reasoning_effort".into(), json!("low"));
+        }
+    }
+}
+
 /// 细分一个超限块：拆成两个派生块（不超过 `split_depth`）。
 fn split_chunk(
     ctx: &std::sync::Arc<JobContext>,
     chunk_id: &str,
 ) -> Result<Vec<String>, &'static str> {
     let max_depth = ctx.settings.translation_agent_split_depth.clamp(0, 5) as u32;
+    // 计划变更全程持锁：read_plan → 算派生 ID → write_chunk → write_plan 是
+    // 多步组合操作。并发派发同时命中缩块时（dispatch 闸门允许多块并行），
+    // 无锁的后写会覆盖先写（丢 split 条目），两批派生块也会从同一 max_number
+    // 起算而分到相同 ID（产物相互覆盖）。同步临界区，不跨 await。
+    let plan_lock = ctx
+        .plan_lock
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let mut plan = read_plan(ctx).ok_or("too_large")?;
     let Some(index) = plan.entries.iter().position(|entry| entry.id == chunk_id) else {
         return Err("too_large");
@@ -2061,6 +2174,8 @@ fn split_chunk(
         },
     );
     write_plan(ctx, &plan).map_err(|_| "too_large")?;
+    // 计划已落盘：派生块与条目作为整体发布，日志与会话记录不要求在锁内。
+    drop(plan_lock);
     warn_job(
         &ctx.scope,
         "coordinator",
@@ -2110,11 +2225,13 @@ fn read_review_summary_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
             let ctx = ctx.clone();
             Box::pin(async move {
                 let ids = match args.get("chunk_ids") {
-                    Some(Value::Array(items)) if !items.is_empty() => items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect::<Vec<_>>(),
+                    Some(Value::Array(items)) if !items.is_empty() => dedup_strings(
+                        items
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect(),
+                    ),
                     _ => plan_ids(&ctx).map_err(|error| tool_error("not_prepared", &error))?,
                 };
                 let (mut critical, mut major, mut minor) = (0u32, 0u32, 0u32);
@@ -2518,9 +2635,8 @@ pub(crate) fn pending_state(ctx: &JobContext) -> PendingState {
             .flatten()
             .is_some_and(|constraints| constraints.frozen)
     });
-    state.published = ctx.with_artifacts(|artifacts| {
-        artifacts.read_result().ok().flatten().is_some()
-    });
+    state.published =
+        ctx.with_artifacts(|artifacts| artifacts.read_result().ok().flatten().is_some());
     state
 }
 
@@ -2797,11 +2913,7 @@ fn apply_draft_patches(
                 json!({"segment_id": id}),
             ));
         }
-        if !existing
-            .segments
-            .iter()
-            .any(|segment| segment.id == id)
-        {
+        if !existing.segments.iter().any(|segment| segment.id == id) {
             return Err(tool_error_with(
                 "unknown_segment",
                 "patch 引用了本块草稿之外的片段",
@@ -2906,10 +3018,9 @@ fn revise_draft_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                     .get("patches")
                     .cloned()
                     .ok_or_else(|| tool_error("invalid_args", "缺少参数 patches"))?;
-                let patches: Vec<DraftPatchArg> =
-                    serde_json::from_value(raw).map_err(|error| {
-                        tool_error("invalid_args", &format!("patches 结构无效：{error}"))
-                    })?;
+                let patches: Vec<DraftPatchArg> = serde_json::from_value(raw).map_err(|error| {
+                    tool_error("invalid_args", &format!("patches 结构无效：{error}"))
+                })?;
                 let draft = apply_draft_patches(&existing, &patches)?;
                 // 先校验再写：补丁把结构弄坏时不产生任何副作用。
                 if let Err(issues) =
@@ -3395,17 +3506,19 @@ mod tests {
             .expect_err("阻塞级问题不得以 pass 提交");
             let payload = error_payload(&error);
             assert_eq!(payload["error"]["code"], "blocking_issues");
-            assert!(payload["error"]["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("needs_fix")));
+            assert!(
+                payload["error"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("needs_fix"))
+            );
         }
     }
 
     #[test]
     fn needs_fix_requires_at_least_one_blocking_issue() {
         let minor = [review_issue("p001-l000-s0", Severity::Minor)];
-        let empty = check_review_grading(ReviewVerdict::NeedsFix, &[])
-            .expect_err("needs_fix 不得为空");
+        let empty =
+            check_review_grading(ReviewVerdict::NeedsFix, &[]).expect_err("needs_fix 不得为空");
         assert_eq!(error_payload(&empty)["error"]["code"], "minor_only");
         let only_minor = check_review_grading(ReviewVerdict::NeedsFix, &minor)
             .expect_err("仅有 minor 时应提交 pass");
@@ -3518,7 +3631,10 @@ mod tests {
             }],
         )
         .expect_err("空白译文应拒绝");
-        assert_eq!(error_payload(&empty_text)["error"]["code"], "empty_translation");
+        assert_eq!(
+            error_payload(&empty_text)["error"]["code"],
+            "empty_translation"
+        );
     }
 
     fn gate_chunk() -> Chunk {
@@ -3751,6 +3867,224 @@ mod tests {
         assert_eq!(plan.planned(), ["c0001".to_string()]);
         assert!(plan.rework_used().is_empty());
         assert!(ctx.control.rework_map().is_empty(), "审查不消耗返工额度");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- 并发缩块 / ids 去重 / 思考降档 / 块超限预检 ----
+
+    /// 四段的块：可被 split_chunk 对半细分。
+    fn splittable_chunk(id: &str, page: u32) -> Chunk {
+        Chunk {
+            id: id.into(),
+            order: page,
+            segments: (0..4)
+                .map(|index| SourceSegment {
+                    id: format!("p{page:03}-l000-s{index}"),
+                    text: "てすと".repeat(index + 1),
+                    kind: SegmentKind::Text,
+                })
+                .collect(),
+            prev_context: String::new(),
+            next_context: String::new(),
+            chars: 40,
+        }
+    }
+
+    /// 两个块并发缩块（dispatch 闸门放行多块并行、同时命中 InputTooLarge 的
+    /// 竞争场景）：计划条目不丢、派生 ID 不冲突、四份派生产物都在。
+    #[test]
+    fn concurrent_split_keeps_all_derived_chunks() {
+        let (ctx, dir) = empty_fixture("split-race", 5);
+        seed_for_tests(
+            &ctx,
+            &[
+                (splittable_chunk("c0001", 1), None, None),
+                (splittable_chunk("c0002", 2), None, None),
+            ],
+        );
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let handles: Vec<_> = ["c0001", "c0002"]
+            .into_iter()
+            .map(|chunk_id| {
+                let ctx = ctx.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    split_chunk(&ctx, chunk_id)
+                })
+            })
+            .collect();
+        let mut derived_ids = Vec::new();
+        for handle in handles {
+            let derived = handle
+                .join()
+                .expect("线程未 panic")
+                .expect("两块都应缩块成功");
+            derived_ids.extend(derived);
+        }
+        let plan = read_plan(&ctx).expect("计划存在");
+        assert_eq!(plan.entries.len(), 4, "两块的 split 条目都在计划中");
+        let unique: BTreeSet<_> = derived_ids.iter().collect();
+        assert_eq!(
+            unique.len(),
+            4,
+            "派生 ID 不得冲突（同 ID 会相互覆盖产物）：{derived_ids:?}"
+        );
+        for id in &derived_ids {
+            let chunk = read_chunk(&ctx, id)
+                .expect("读取派生块")
+                .unwrap_or_else(|| panic!("派生块 {id} 缺失"));
+            assert_eq!(chunk.segments.len(), 2, "派生块 {id} 是对半细分的结果");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 列表参数去重：重复 id 只保留首现，dispatch 不再对同一块并发派发两次。
+    #[test]
+    fn list_args_deduplicate_ids_preserving_order() {
+        let ids = arg_str_list(
+            &json!({"chunk_ids": ["c0002", "c0001", "c0002", "c0001"]}),
+            "chunk_ids",
+        )
+        .expect("解析成功");
+        assert_eq!(ids, ["c0002", "c0001"]);
+
+        // 重复目标进入派发规划时也只规划一次（防线纵深：防止绕过工具入口的
+        // 调用方把同一块派发两次，触发草稿版本的读改写竞争）。
+        let (ctx, dir) = empty_fixture("dedup-plan", 5);
+        seed_for_tests(&ctx, &[(gate_chunk(), None, None)]);
+        let versions = phase_versions(&ctx);
+        let plan = plan_dispatch(
+            &ctx,
+            DispatchKind::Translate,
+            vec!["c0001".into(), "c0001".into()],
+            &versions,
+        )
+        .expect("规划成功");
+        assert_eq!(plan.planned(), ["c0001".to_string()], "重复 id 只派发一次");
+        assert_eq!(ctx.control.rework_rounds("c0001"), 0, "首次翻译不消耗额度");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 审查思考降档按协议落位：params 已被 normalize_extra 归一化（ADR 0032），
+    /// 顶层 reasoning_effort 只对 Chat 生效。
+    #[test]
+    fn review_thinking_downgrade_matches_protocol_shapes() {
+        // Chat：顶层字段。
+        let mut params = Some(json!({"reasoning_effort": "medium"}));
+        apply_review_thinking(&mut params, "chat_completions", None);
+        let params = params.expect("params 存在");
+        assert_eq!(params["reasoning_effort"], "low");
+        assert!(params.get("reasoning").is_none() && params.get("thinking").is_none());
+
+        // Responses：嵌套 reasoning.effort；顶层无效字段不得出现。
+        let mut params = Some(json!({"reasoning": {"effort": "medium", "summary": "auto"}}));
+        apply_review_thinking(&mut params, "responses", None);
+        let params = params.expect("params 存在");
+        assert_eq!(params["reasoning"]["effort"], "low");
+        assert_eq!(params["reasoning"]["summary"], "auto");
+        assert!(params.get("reasoning_effort").is_none());
+
+        // Anthropic：thinking.budget_tokens 重算为 low 档（providers.rs 档位表）。
+        let mut params = Some(json!({"thinking": {"type": "enabled", "budget_tokens": 4096}}));
+        apply_review_thinking(&mut params, "anthropic", Some(262_144));
+        let params = params.expect("params 存在");
+        assert_eq!(
+            params["thinking"],
+            json!({"type": "enabled", "budget_tokens": 2_048})
+        );
+        assert!(params.get("reasoning_effort").is_none());
+
+        // 输出上限过小时预算收到 max-1024，且不低于 1024。
+        let mut params = Some(json!({"thinking": {"type": "enabled", "budget_tokens": 4096}}));
+        apply_review_thinking(&mut params, "anthropic", Some(2_048));
+        assert_eq!(
+            params.expect("params 存在")["thinking"]["budget_tokens"],
+            1_024
+        );
+
+        // 用户显式关闭思考（无对应字段）时不强行开启。
+        let mut params = Some(json!({"temperature": 1}));
+        apply_review_thinking(&mut params, "anthropic", Some(262_144));
+        let params = params.expect("params 存在");
+        assert!(params.get("thinking").is_none() && params.get("reasoning").is_none());
+    }
+
+    /// 端到端形态：三种协议下 request_params（已归一化）+ 审查降档的最终请求形态。
+    #[test]
+    fn review_request_params_end_up_in_protocol_shape_for_all_formats() {
+        let (ctx, dir) = empty_fixture("review-params", 5);
+        let cases: [(&str, &dyn Fn(&Value)); 3] = [
+            ("chat_completions", &|params: &Value| {
+                assert_eq!(params["reasoning_effort"], "low");
+                assert!(params.get("reasoning").is_none());
+            }),
+            ("responses", &|params: &Value| {
+                assert_eq!(params["reasoning"]["effort"], "low");
+                assert!(params.get("reasoning_effort").is_none());
+            }),
+            ("anthropic", &|params: &Value| {
+                assert_eq!(params["thinking"]["type"], "enabled");
+                assert_eq!(params["thinking"]["budget_tokens"], 2_048);
+                assert!(params.get("reasoning_effort").is_none());
+            }),
+        ];
+        for (format, verify) in cases {
+            let mut model = ctx.model.clone();
+            model.format = format.into();
+            let (cap, mut params) = model.request_params(1_000).expect("参数推导成功");
+            apply_review_thinking(&mut params, format, cap);
+            verify(&params.expect("params 存在"));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 单块全文超限：read_chunk 返回结构化 chunk_too_large（不静默截断），
+    /// 派发预检按 InputTooLarge 分类，让 split_chunk 自动细分接管。
+    #[test]
+    fn oversized_chunk_reports_chunk_too_large_and_classifies_input_too_large() {
+        let (ctx, dir) = empty_fixture("chunk-too-large", 5);
+        // 估算 = chars * 11/10 + 128；9000 字符 ≈ 10028 token > 8192。
+        let oversized = Chunk {
+            id: "c0001".into(),
+            order: 1,
+            segments: vec![SourceSegment {
+                id: "p001-l000-s0".into(),
+                text: "あ".repeat(9_000),
+                kind: SegmentKind::Text,
+            }],
+            prev_context: "前".repeat(200),
+            next_context: String::new(),
+            chars: 9_000,
+        };
+        write_chunk(&ctx, &oversized).expect("写入超限块");
+        let normal = splittable_chunk("c0002", 2);
+        write_chunk(&ctx, &normal).expect("写入正常块");
+
+        // 不带上下文也超限：结构化错误，不产生截断载荷。
+        let error = read_chunk_payload(&ctx, "c0001", false).expect_err("超限块应报错");
+        let payload = error_payload(&error);
+        assert_eq!(payload["error"]["code"], "chunk_too_large");
+        assert_eq!(payload["limit"], TOOL_RESULT_TOKEN_LIMIT);
+        assert!(
+            payload["token_estimate"]
+                .as_u64()
+                .is_some_and(|n| n > 8_192)
+        );
+
+        // 只有带上下文超限时：提示去掉上下文即可完整读取。
+        let error = read_chunk_payload(&ctx, "c0001", true).expect_err("带上下文超限也应报错");
+        assert_eq!(error_payload(&error)["error"]["code"], "chunk_too_large");
+
+        // 正常块不受影响。
+        assert!(read_chunk_payload(&ctx, "c0002", true).is_ok());
+
+        // 派发预检：超限块返回 InputTooLarge，分类走 split_chunk 兜底分支。
+        let error = ensure_chunk_readable(&oversized).expect_err("超限块应被预检拦截");
+        assert!(matches!(error, RunError::InputTooLarge));
+        assert_eq!(classify_run_error(&error), FailureClass::InputTooLarge);
+        assert!(ensure_chunk_readable(&gate_chunk()).is_ok(), "正常块放行");
+
         let _ = std::fs::remove_dir_all(dir);
     }
 }
