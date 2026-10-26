@@ -149,6 +149,10 @@ impl HttpClientExt for WreqTransport {
         }
     }
 
+    // HttpClientExt 要求返回 future 为 `'static`，`async fn` 隐式捕获 `&self`
+    // 生命周期无法满足（E0477，上游 rig-http 各实现同样保持此写法），故保留
+    // 显式 `impl Future` 并放行该 lint。
+    #[allow(clippy::manual_async_fn)]
     fn send_multipart<U>(
         &self,
         _req: Request<MultipartForm>,
@@ -224,6 +228,10 @@ impl HttpClientExt for WreqTransport {
 }
 
 /// 获取闸门许可。`acquire_owned` 在 future 被取消时会移除等待者，不会泄漏许可。
+//
+// Err 沿用 rig_core 的 HttpError（体积超 clippy 128 字节阈值）；本函数私有、
+// 调用点紧邻，改 Box 会连锁波及 send / send_streaming 的错误合并路径，不值得。
+#[allow(clippy::result_large_err)]
 async fn acquire(gate: &Option<Arc<Semaphore>>) -> Result<Option<OwnedSemaphorePermit>, HttpError> {
     match gate {
         Some(gate) => gate
@@ -240,6 +248,10 @@ async fn acquire(gate: &Option<Arc<Semaphore>>) -> Result<Option<OwnedSemaphoreP
 ///
 /// 共享 client 不携带 per-config 超时，单请求总超时（ADR 0023）在这里经
 /// `RequestBuilder::timeout` 下发（wreq 的 per-request 配置只走 builder 路径）。
+//
+// Err 沿用 rig_core 的 HttpError（体积超 clippy 128 字节阈值）；改 Box 会改变
+// 传输层错误传递形态并波及调用点，侵入过大，故放行。
+#[allow(clippy::result_large_err)]
 async fn send_once(
     client: &wreq::Client,
     endpoint: &tauri::Url,

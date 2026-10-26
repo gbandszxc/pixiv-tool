@@ -396,10 +396,10 @@ pub fn apply_request_defaults(
     let runtime_cap = request.max_tokens.take();
     match config.format {
         ApiFormat::ChatCompletions => {
-            if let Some(cap) = runtime_cap {
-                if let Some(body) = defaults.additional_params.as_object_mut() {
-                    body.insert("max_completion_tokens".into(), json!(cap));
-                }
+            if let Some(cap) = runtime_cap
+                && let Some(body) = defaults.additional_params.as_object_mut()
+            {
+                body.insert("max_completion_tokens".into(), json!(cap));
             }
             request.max_tokens = None;
         }

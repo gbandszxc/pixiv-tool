@@ -212,10 +212,8 @@ impl EmitState {
         event.preview = display.clone();
         self.display = display;
 
-        if is_preview {
-            if let Some(phase) = self.job_phase {
-                event.phase = phase;
-            }
+        if is_preview && let Some(phase) = self.job_phase {
+            event.phase = phase;
         }
         if !event.state.is_terminal() {
             // 当前工作位置跟随实际展示的预览；主会话不标块。

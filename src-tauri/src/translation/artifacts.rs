@@ -466,13 +466,13 @@ impl<'a> JobArtifacts<'a> {
         validate_chunk_id(&draft.chunk_id)?;
         let existing =
             self.read_json::<DraftVersionHead>(&draft_path(&draft.chunk_id), KIND_DRAFT)?;
-        if let Some(existing) = existing {
-            if draft.version < existing.version {
-                return Err(format!(
-                    "{ERR_VERSION}: {}: {} < {}",
-                    draft.chunk_id, draft.version, existing.version
-                ));
-            }
+        if let Some(existing) = existing
+            && draft.version < existing.version
+        {
+            return Err(format!(
+                "{ERR_VERSION}: {}: {} < {}",
+                draft.chunk_id, draft.version, existing.version
+            ));
         }
         self.write_json(&draft_path(&draft.chunk_id), KIND_DRAFT, draft)
     }
