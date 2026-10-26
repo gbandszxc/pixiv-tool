@@ -437,8 +437,9 @@ watch(() => job.value?.constraint_version, (next, previous) => {
   if (tab.value === "terms") void loadConstraints();
 });
 
-// 进度计数变化说明有块完成翻译 / 审查：丢弃旧预览缓存并重新预取，
+// 进度计数变化说明有块完成翻译 / 审查：丢弃本地旧预览并重新预取，
 // 否则早期读到的「未译」会一直留在列表里，与顶部计数矛盾。
+// store 的 applySnapshot 会同步失效该 Job 的预览缓存，这里的重取才真正回到后端拿新内容。
 watch(
   () => {
     const counts = job.value?.counts;

@@ -293,7 +293,7 @@ export const useSettingsStore = defineStore("settings", () => {
     translation_agent_tool_corrections: 2,
     translation_agent_max_turns: 24,
     translation_agent_stall_limit: 8,
-    translation_agent_context_window: 32768,
+    translation_agent_context_window: 131072,
     translation_agent_output_cap: 16384,
     translation_agent_compact_percent: 75,
     translation_agent_recent_history_tokens: 4096,

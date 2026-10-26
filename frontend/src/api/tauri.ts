@@ -164,7 +164,7 @@ export interface Settings {
   translation_agent_max_turns?: number;
   /** 主 Agent 无进展上限（3~32，默认 8） */
   translation_agent_stall_limit?: number;
-  /** 未知模型上下文窗口（16384~2097152，默认 32768） */
+  /** 未知模型上下文窗口（16384~2097152，默认 131072） */
   translation_agent_context_window?: number;
   /** 单请求输出上限（1024~262144，默认 16384，且不超过上下文窗口） */
   translation_agent_output_cap?: number;

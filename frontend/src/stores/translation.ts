@@ -57,6 +57,8 @@ export interface TranslationStartOutcome {
 const MAX_ERRORS = 12;
 /** 预览缓存上限：翻块浏览不无限增长。 */
 const MAX_PREVIEWS = 120;
+/** 投影结果 LRU 上限：整篇译文单条可达数百 KB，只保留最近访问的小说。 */
+const MAX_RESULTS = 8;
 
 /** 构造事件缺失字段的兜底快照（首次收到未知 Job 的事件时使用）。 */
 function snapshotFromEvent(event: TranslationJobEvent, existing?: TranslationJobSnapshot): TranslationJobSnapshot {
@@ -108,7 +110,7 @@ export const useTranslationStore = defineStore("translation", () => {
   const seqByJob = new Map<string, number>();
   /** `${jobId}:${chunkId}` → 预览（非响应式，组件自持展示状态）。 */
   const previewCache = new Map<string, ChunkPreview>();
-  /** novelId → 已拉取的投影结果及其版本。 */
+  /** novelId → 已拉取的投影结果及其版本；LRU 上限 MAX_RESULTS，见 rememberResult。 */
   const results = ref(new Map<number, { version: number; result: TranslationResult | null }>());
   /** jobId:constraintVersion:state → 约束（版本或状态变化后自动重取）。 */
   const constraintsCache = new Map<string, TranslationConstraints>();
@@ -205,6 +207,18 @@ export const useTranslationStore = defineStore("translation", () => {
       constraintsCache.clear();
       previewCache.clear();
     }
+    // 进行中计数前进说明有块完成翻译 / 审查：该 Job 的旧预览已过期，在这里失效，
+    // 之后任何消费者（浮层重取、直接读 store）才能拿到新内容，块状态点与顶部计数一致。
+    // （版本变化走上面的全清；终态 / publish 走下面的定稿清理；三处口径互不覆盖。）
+    const previousCounts = previous?.counts;
+    if (
+      previousCounts &&
+      (previousCounts.translated !== snapshot.counts.translated ||
+        previousCounts.reviewed !== snapshot.counts.reviewed ||
+        previousCounts.needs_repair !== snapshot.counts.needs_repair)
+    ) {
+      for (const key of previewCache.keys()) if (key.startsWith(`${snapshot.job_id}:`)) previewCache.delete(key);
+    }
     if (snapshot.state === "completed" || snapshot.state === "needs_attention" || snapshot.phase === "publish") {
       // 终态后块内容已定稿：清掉旧草稿预览，下次按需重读。
       for (const key of previewCache.keys()) if (key.startsWith(`${snapshot.job_id}:`)) previewCache.delete(key);
@@ -233,10 +247,19 @@ export const useTranslationStore = defineStore("translation", () => {
     }
     for (const jobId of [...jobs.value.keys()]) {
       if (!seen.has(jobId) && (receivedAt.get(jobId) ?? 0) < startedAt) {
+        const novelId = jobs.value.get(jobId)?.novel_id;
         jobs.value.delete(jobId);
         seqByJob.delete(jobId);
         receivedAt.delete(jobId);
         frozenElapsed.delete(jobId);
+        // 该小说已无任何本地任务：级联清理标题与投影结果等派生缓存，
+        // 不给后端已删除的产物留幽灵条目（与 reset 的全清口径一致，但只针对该小说）。
+        if (novelId !== undefined && ![...jobs.value.values()].some((job) => job.novel_id === novelId)) {
+          novelTitles.value.delete(novelId);
+          results.value.delete(novelId);
+        }
+        // 约束缓存按 `${jobId}:版本:状态` 键，直接清掉被删 Job 的全部条目。
+        for (const key of [...constraintsCache.keys()]) if (key.startsWith(`${jobId}:`)) constraintsCache.delete(key);
       }
     }
     for (const [novelId, jobId] of [...activeByNovel.value.entries()]) {
@@ -435,13 +458,30 @@ export const useTranslationStore = defineStore("translation", () => {
     }
   }
 
+  /**
+   * 投影结果写入 results（LRU）：先删后写把该条移到末尾表示最近使用，
+   * 超过上限时淘汰队首（最久未访问）的小说，长期会话不单调增长。
+   */
+  function rememberResult(novelId: number, entry: { version: number; result: TranslationResult | null }): void {
+    results.value.delete(novelId);
+    results.value.set(novelId, entry);
+    while (results.value.size > MAX_RESULTS) {
+      const oldest = results.value.keys().next().value;
+      if (oldest === undefined) break;
+      results.value.delete(oldest);
+    }
+  }
+
   /** 阅读器投影结果；版本一致时走缓存，避免每次事件都读盘。 */
   async function result(novelId: number, force = false): Promise<TranslationResult | null> {
     const cached = results.value.get(novelId);
     const version = lastResultVersion.value;
-    if (!force && cached && cached.version === version) return cached.result;
+    if (!force && cached && cached.version === version) {
+      rememberResult(novelId, cached);
+      return cached.result;
+    }
     const data = await getNovelTranslationResult(novelId);
-    results.value.set(novelId, { version, result: data });
+    rememberResult(novelId, { version, result: data });
     return data;
   }
 

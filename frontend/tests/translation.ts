@@ -35,6 +35,9 @@ let pauseCalls = 0;
 let resumeCalls = 0;
 let cancelCalls = 0;
 let confirmCalls = 0;
+// 缓存行为计数:命中 store 缓存不产生后端调用,用于断言失效 / 淘汰真的回源。
+let previewCalls = 0;
+let resultCalls = 0;
 let lastConfirmed: { terms: any[]; style: string } | null = null;
 let constraintsAwaiting = true;
 let missingConstraints = false;
@@ -138,7 +141,7 @@ window.__TAURI_INTERNALS__ = {
       if (!job) throw new Error("任务不存在");
       return job;
     }
-    if (command === "novel_translation_result") return result;
+    if (command === "novel_translation_result") { resultCalls++; return result; }
     if (command === "novel_translation_start") {
       startCalls++;
       lastStartForce = args.force;
@@ -176,7 +179,7 @@ window.__TAURI_INTERNALS__ = {
       if (job) job = { ...job, state: "running", message: "confirmed" };
       return null;
     }
-    if (command === "novel_translation_preview") return previewFor(args.chunkId);
+    if (command === "novel_translation_preview") { previewCalls++; return previewFor(args.chunkId); }
     if (command === "novel_translation_constraints") {
       if (missingConstraints) throw new Error("Command novel_translation_constraints not found");
       return constraints();
@@ -349,6 +352,16 @@ async function run() {
   first!.click(); await settle();
   assert(popover()!.textContent?.includes("第 1 块译文") && popover()!.textContent?.includes("已审查"), "已译块展示译文与审查态");
 
+  // ===== 进度推进使预览缓存失效：counts 前进后同块重读必须回到后端 =====
+  // 稳态基线：counts 不变时同块重读命中 store 缓存，不产生后端调用。
+  const previewsBefore = previewCalls;
+  await store.preview(job!.job_id, "c0002");
+  assert(previewCalls === previewsBefore, "counts 不变时同块重读命中缓存不回源");
+  // counts 前进（有块译完）：store 失效该 Job 的旧预览，浮层 watch 清空重取，全部回源。
+  emitJob({ counts: { ...job!.counts, translated: job!.counts.translated + 1 } });
+  await settle(); await settle();
+  assert(previewCalls > previewsBefore, `counts 前进后预览缓存失效并重取（before=${previewsBefore}，after=${previewCalls}）`);
+
   // ===== 问题 =====
   await tab("问题");
   await settle();
@@ -356,7 +369,9 @@ async function run() {
   assert(popover()!.textContent?.includes("未解决分块：c0002"), "未解决块置顶提示");
   const issueRows = [...popover()!.querySelectorAll<HTMLElement>(".issue-row")];
   assert(issueRows.length === 2, "问题逐条列出");
-  assert(issueRows[0].textContent?.includes("c0002") && issueRows[0].textContent?.includes("主要"), "未解决问题排在前面且严重度可读");
+  // 严重度双口径：文本是处置状态（待修 / 建议），title 是严重度（主要 / 轻微）。
+  const firstSeverity = issueRows[0].querySelector(".issue-severity");
+  assert(issueRows[0].textContent?.includes("c0002") && firstSeverity?.textContent?.includes("待修") && firstSeverity.getAttribute("title") === "主要", "未解决问题排在前面且严重度可读");
   assert(issueRows[1].textContent?.includes("c0001"), "已解决/轻微问题在后");
 
   // ===== 暂停 / 继续 / 取消 =====
@@ -442,6 +457,23 @@ async function run() {
   assert(host.querySelector(".translation-trigger-wrap > .translation-indicator.is-error"), "失败入口显示 error 状态点");
   startMode = "ok";
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); await settle();
+
+  // ===== 投影结果 LRU：超过上限淘汰最早访问的小说，重读回源 =====
+  const resultCallsBefore = resultCalls;
+  await store.result(42);
+  assert(resultCalls === resultCallsBefore, "版本一致时投影结果命中缓存不回源");
+  // 再拉 8 本占满 LRU：小说 42 是最早访问的条目，被淘汰。
+  for (let id = 101; id <= 108; id++) await store.result(id, true);
+  const resultCallsMidway = resultCalls;
+  await store.result(42);
+  assert(resultCalls === resultCallsMidway + 1, `超过 LRU 上限后最早访问的小说投影被淘汰并重取（midway=${resultCallsMidway}，after=${resultCalls}）`);
+
+  // ===== 后端任务索引被删：级联清理该小说的标题等派生缓存 =====
+  const ghost = job;
+  job = null;
+  await store.refreshJobs(Date.now() + 1000);
+  assert(!store.jobs.has(ghost!.job_id) && store.titleFor(42) === "", "后端已删任务级联清理标题等派生缓存");
+  job = ghost;
 
   // ===== 缓存清理：译文与任务状态一起失效 =====
   await openPanel();
@@ -538,7 +570,7 @@ async function run() {
   assert(entryMeta() === "已修改 1 项", `已保存的高级 JSON 让一级入口显示已修改项数（实际 ${entryMeta()}）`);
   await openCategory("并发与任务预算");
   await inputIn("translation-agent-global-concurrency", "9");
-  assert(panelHost.querySelector(".field-hint")?.textContent?.includes("自动（32 + 16 × 分块数）"), "调用预算为 0 时显示自动公式");
+  assert(panelHost.querySelector(".field-hint")?.textContent?.includes("自动（64 + 32 × 分块数）"), "调用预算为 0 时显示自动公式");
   await toService();
   assert(entryMeta() === "已修改 2 项", `一级摘要随草稿更新（实际 ${entryMeta()}）`);
   await openCategory("并发与任务预算");
