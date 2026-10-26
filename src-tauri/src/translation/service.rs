@@ -1628,6 +1628,10 @@ impl TranslationService {
         }
         handle.ctx.control.pause();
         // 等 supervisor 收尾，保证调用方看到稳定状态。
+        // 超时后仍 transition(Paused) 是有意的保守取舍：在途块随后落盘属于
+        // 「停在最近检查点」语义内的可接受窗口（supervisor 收尾时 drive 也会
+        // 幂等转 Paused）；不引入 abort 或「收尾中」新状态，避免状态机复杂化。
+        // 残留窗口：supervisor 真正退出前 running 仍为 true，delete 仍会被拒。
         for _ in 0..600 {
             if !handle.running.load(Ordering::SeqCst) {
                 break;
@@ -1774,12 +1778,12 @@ impl TranslationService {
         //    避免升级前创建的任务因旧上限过紧而一恢复就耗尽；自定义值不动。
         let chunks = manifest.counts.chunks;
         let legacy_auto = 32u32.saturating_add(16u32.saturating_mul(chunks));
-        let limit = if settings.translation_call_budget == 0 && manifest.attempts.limit == legacy_auto
-        {
-            crate::agent::auto_call_budget(chunks)
-        } else {
-            manifest.attempts.limit
-        };
+        let limit =
+            if settings.translation_call_budget == 0 && manifest.attempts.limit == legacy_auto {
+                crate::agent::auto_call_budget(chunks)
+            } else {
+                manifest.attempts.limit
+            };
         if limit != manifest.attempts.limit {
             let _ = store.update_manifest(|manifest| manifest.attempts.limit = limit);
         }
@@ -1875,14 +1879,16 @@ impl TranslationService {
                 JobStore::open(&self.inner.paths, &scope).map_err(|error| error.to_string())?;
             // 只写 manifest 不广播：seq 由每任务的 emitter 维护，磁盘路径没有该状态；
             // 前端在取消成功后主动刷新任务快照。
-            store.update_manifest(|manifest| {
-                manifest.state = JobState::Cancelled;
-                manifest.last_error = Some(SafeError {
-                    code: "cancelled".into(),
-                    message: "cancelled".into(),
-                    step: manifest.phase.as_str().into(),
-                });
-            }).map_err(|error| error.to_string())?;
+            store
+                .update_manifest(|manifest| {
+                    manifest.state = JobState::Cancelled;
+                    manifest.last_error = Some(SafeError {
+                        code: "cancelled".into(),
+                        message: "cancelled".into(),
+                        step: manifest.phase.as_str().into(),
+                    });
+                })
+                .map_err(|error| error.to_string())?;
             return Ok(());
         };
         let state = handle
@@ -1903,6 +1909,12 @@ impl TranslationService {
                 runtime.state = JobState::Cancelling;
                 runtime.message = "cancelling".into();
             }
+            // 超时后仍按终态收尾是保守取舍：取消信号已传播到运行层与子任务
+            //（drive 的 select、supervise 的排队等待均响应），排队卡死路径已在
+            // supervise 中修掉，5 秒超时只剩进程级卡死场景——此时 JoinHandle
+            // 已交给 panic 观察者，无 abort 入口，且 abort 在同步段上同样无效。
+            // 残留窗口：卡死的 supervisor 可能在 Cancelled 状态下多写少量产物
+            //（写层有世代校验兜底），supervisor 退出前 delete 仍会被拒。
             for _ in 0..200 {
                 if !handle.running.load(Ordering::SeqCst) {
                     break;
@@ -1921,6 +1933,7 @@ impl TranslationService {
                 return Err("任务正在运行，请先取消或暂停".into());
             }
             handle.ctx.control.cancel();
+            let novel_id = handle.ctx.scope.novel_id;
             handle
                 .ctx
                 .store
@@ -1929,6 +1942,7 @@ impl TranslationService {
             if let Ok(mut jobs) = self.inner.jobs.lock() {
                 jobs.remove(job_id);
             }
+            self.remove_idle_novel_lock(novel_id);
             return Ok(());
         }
         let (manifest, corrupt) = self.find_manifest(job_id)?;
@@ -1941,7 +1955,29 @@ impl TranslationService {
             generation: manifest.generation,
         };
         let store = JobStore::open(&self.inner.paths, &scope).map_err(|error| error.to_string())?;
-        store.remove_tree().map_err(|error| error.to_string())
+        store.remove_tree().map_err(|error| error.to_string())?;
+        self.remove_idle_novel_lock(manifest.novel_id);
+        Ok(())
+    }
+
+    /// 删除任务后回收该小说的小说锁条目（novel_locks 只增不减会随小说数膨胀）。
+    ///
+    /// 判据是 `Arc::strong_count`：除注册表自身外还有持有者（该小说仍有排队 /
+    /// 运行中的 supervisor 拿着 clone）时保留。清理与 `novel_lock()` 的
+    /// `entry()` 在同一把 StdMutex 临界区内互斥，不存在「删掉后旧锁仍被
+    /// 并发取走、同小说两把锁失去互斥」的窗口。
+    fn remove_idle_novel_lock(&self, novel_id: i64) {
+        let mut locks = self
+            .inner
+            .novel_locks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(lock) = locks.get(&novel_id)
+            && Arc::strong_count(lock) > 1
+        {
+            return;
+        }
+        locks.remove(&novel_id);
     }
 
     // ------------------------------------------------------------------
@@ -2024,20 +2060,73 @@ impl TranslationService {
             return;
         }
         let inner = self.inner.clone();
-        tokio::spawn(async move {
-            TranslationService { inner }.supervise(handle).await;
+        let queued = handle.clone();
+        let supervisor = tokio::spawn(async move {
+            TranslationService { inner }.supervise(queued).await;
         });
+        // panic 观察者：supervise panic 时 `running.store(false)` 不会执行，
+        // 若无人观察 JoinError，running 位永久为 true——pause / cancel 的轮询
+        // 永远超时，resume / delete 永久被拒，只能重启应用。观察者收到
+        // JoinError 时复位 running；panic 额外落 interrupted 终态（可恢复）。
+        let inner = self.inner.clone();
+        tokio::spawn(async move {
+            TranslationService { inner }
+                .watch_supervisor(supervisor, handle)
+                .await;
+        });
+    }
+
+    /// supervisor 结束观察：正常结束不介入（running 由 supervise 尾部复位）；
+    /// JoinError 时复位 running 位，panic 额外落 interrupted 让用户可 resume。
+    async fn watch_supervisor(
+        &self,
+        supervisor: tokio::task::JoinHandle<()>,
+        handle: Arc<JobHandle>,
+    ) {
+        if let Err(error) = supervisor.await {
+            handle.running.store(false, Ordering::SeqCst);
+            if error.is_panic() {
+                log::warn!(
+                    "novel={} job={} event=supervisor_panicked state=interrupted",
+                    handle.ctx.scope.novel_id,
+                    handle.ctx.scope.job_id,
+                );
+                self.transition(
+                    &handle,
+                    JobState::Interrupted,
+                    "supervisor_panicked",
+                    Some("supervisor_panicked"),
+                );
+            }
+        }
     }
 
     async fn supervise(&self, handle: Arc<JobHandle>) {
         // 同一小说串行：先取小说锁，再占活跃小说槽位（排队中的小说不占活跃名额）。
+        // 两段排队等待都必须响应取消：否则排队中的 Job 不受 control.cancel 影响，
+        // cancel() 轮询超时强转 Cancelled 后 running 仍为 true，delete / resume
+        // 会被「任务正在运行」拒绝，直到前序 Job 释放资源（可能长达数小时）。
+        let cancel = handle.ctx.control.cancel.child();
         let novel_lock = self.novel_lock(handle.ctx.scope.novel_id);
-        let _novel_guard = novel_lock.lock().await;
-        let _novel_permit = self
-            .inner
-            .scheduler
-            .enter_novel(handle.ctx.scope.novel_id)
-            .await;
+        let _novel_guard = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                self.abandon_queue(&handle);
+                return;
+            }
+            guard = novel_lock.lock() => guard,
+        };
+        let _novel_permit = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                self.abandon_queue(&handle);
+                return;
+            }
+            permit = self
+                .inner
+                .scheduler
+                .enter_novel(handle.ctx.scope.novel_id) => permit,
+        };
         let result = self.drive(&handle).await;
         handle.running.store(false, Ordering::SeqCst);
         if let Err(error) = result {
@@ -2048,6 +2137,17 @@ impl TranslationService {
                 crate::agent::events::safe_text(&error, 160)
             );
         }
+    }
+
+    /// 排队期间被取消：退出等待并按终态收尾。
+    ///
+    /// running 先复位（cancel() 的轮询据此结束），再 transition(Cancelled)
+    /// 落盘并广播事件（transition 内部 emit_now + flush）。select 丢弃的是
+    /// 尚未取得的锁守卫 / enter_novel 的 future：Scheduler 的 ActiveClaim
+    /// 在 Drop 时自行补偿活跃计数，此处无资源泄漏。
+    fn abandon_queue(&self, handle: &Arc<JobHandle>) {
+        handle.running.store(false, Ordering::SeqCst);
+        self.transition(handle, JobState::Cancelled, "cancelled", Some("cancelled"));
     }
 
     async fn drive(&self, handle: &Arc<JobHandle>) -> Result<(), String> {
@@ -2990,8 +3090,7 @@ fn continuation_nudge(ctx: &JobContext, reason: &str, empty_turn: bool) -> Strin
     };
     if pending.chunk_ids.is_empty() {
         lines.push(
-            "下一步：调用 prepare_source() 建立分块计划；返回数量为 0 时上报需要人工处理。"
-                .into(),
+            "下一步：调用 prepare_source() 建立分块计划；返回数量为 0 时上报需要人工处理。".into(),
         );
     } else if !pending.pending_scan.is_empty() {
         lines.push(format!(
@@ -4087,6 +4186,175 @@ mod tests {
         );
         assert_eq!(view.issues.len(), 2, "minor 仍返回给前端展示");
         assert_eq!(view.affected_chunks, ["c0001", "c0002"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ------------------------------------------------------------------
+    // 生命周期防护：排队取消 / panic 复位 / 锁条目回收
+    // ------------------------------------------------------------------
+
+    /// 排队中的 Job（挂在同一小说的小说锁上）必须能被取消：
+    /// cancel 返回后 running 复位、状态落 Cancelled、立即可 delete。
+    /// 修复前 cancel() 轮询 5 秒强转 Cancelled，但 running 仍为 true，
+    /// delete / resume 被「任务正在运行」拒绝直到前序 Job 释放锁。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queued_job_cancel_exits_novel_lock_and_allows_delete() {
+        let (service, handle, scope, dir) = job_fixture("queued-cancel-lock", settings());
+        let novel_lock = service.novel_lock(scope.novel_id);
+        let _guard = novel_lock.lock().await; // 模拟前序 Job 占住小说锁
+        handle.running.store(true, Ordering::SeqCst);
+        {
+            let mut runtime = handle.runtime.lock().unwrap();
+            runtime.state = JobState::Queued;
+            runtime.message = "queued".into();
+        }
+        let svc = service.clone();
+        let queued = handle.clone();
+        tokio::spawn(async move {
+            svc.supervise(queued).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            handle.running.load(Ordering::SeqCst),
+            "排队中的任务 running 应为 true"
+        );
+
+        let started = std::time::Instant::now();
+        service.cancel(&scope.job_id).await.expect("取消应成功");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "排队取消应秒级返回，实际 {:?}",
+            started.elapsed()
+        );
+        assert!(
+            !handle.running.load(Ordering::SeqCst),
+            "取消后 running 必须复位"
+        );
+        assert_eq!(
+            handle.runtime.lock().unwrap().state,
+            JobState::Cancelled,
+            "状态应落 Cancelled 终态"
+        );
+        assert_eq!(
+            handle.ctx.store.read_manifest().unwrap().state,
+            JobState::Cancelled,
+            "manifest 应落 Cancelled"
+        );
+        service
+            .delete(&scope.job_id)
+            .await
+            .expect("取消后应立即可删除，不再被「任务正在运行」拒绝");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 排队在活跃小说槽位上的 Job 同样必须能被取消（supervise 的第二段等待）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn queued_job_cancel_exits_active_novel_wait() {
+        let mut base = settings();
+        base.translation_agent_active_novels = 1;
+        let (service, handle, scope, dir) = job_fixture("queued-cancel-slot", base);
+        // 占满唯一的活跃小说槽位（用别的小说 id，不碰小说锁）。
+        let _permit = service.inner.scheduler.enter_novel(999_999).await;
+        handle.running.store(true, Ordering::SeqCst);
+        {
+            let mut runtime = handle.runtime.lock().unwrap();
+            runtime.state = JobState::Queued;
+            runtime.message = "queued".into();
+        }
+        let svc = service.clone();
+        let queued = handle.clone();
+        tokio::spawn(async move {
+            svc.supervise(queued).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            handle.running.load(Ordering::SeqCst),
+            "任务应卡在活跃小说槽位等待上"
+        );
+
+        service.cancel(&scope.job_id).await.expect("取消应成功");
+        assert!(
+            !handle.running.load(Ordering::SeqCst),
+            "取消后 running 必须复位"
+        );
+        assert_eq!(handle.runtime.lock().unwrap().state, JobState::Cancelled);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// supervisor panic 后观察者必须复位 running 并落 interrupted：
+    /// 否则 pause / cancel 轮询永远超时，resume / delete 永久被拒。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn supervisor_panic_resets_running_and_lands_interrupted() {
+        let (service, handle, _scope, dir) = job_fixture("supervisor-panic", settings());
+        handle.running.store(true, Ordering::SeqCst);
+        // JoinError 观察走的是真实产品路径 watch_supervisor；panic 被
+        // JoinHandle 捕获，不会传播到测试进程。
+        let supervisor = tokio::spawn(async {
+            panic!("模拟 supervisor panic");
+        });
+        service.watch_supervisor(supervisor, handle.clone()).await;
+        assert!(
+            !handle.running.load(Ordering::SeqCst),
+            "panic 后 running 必须复位"
+        );
+        assert_eq!(
+            handle.runtime.lock().unwrap().state,
+            JobState::Interrupted,
+            "panic 应落 interrupted（resume 准入状态）"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 正常结束（Join Ok）时观察者不介入：running 由 supervise 尾部复位。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn supervisor_normal_exit_is_not_touched_by_watcher() {
+        let (service, handle, _scope, dir) = job_fixture("supervisor-ok", settings());
+        handle.running.store(true, Ordering::SeqCst);
+        let supervisor = tokio::spawn(async {});
+        service.watch_supervisor(supervisor, handle.clone()).await;
+        assert!(
+            handle.running.load(Ordering::SeqCst),
+            "正常结束路径观察者不得提前复位 running"
+        );
+        assert_eq!(handle.runtime.lock().unwrap().state, JobState::Paused);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 该小说仍有排队 / 运行中的 supervisor 持有锁时，delete 不得清理条目。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_keeps_novel_lock_while_holder_alive() {
+        let (service, handle, scope, dir) = job_fixture("lock-keep", settings());
+        let holder = service.novel_lock(scope.novel_id);
+        let _queued_holder = holder.clone(); // 模拟排队 supervisor 的持有
+        service.delete(&scope.job_id).await.expect("删除应成功");
+        assert!(
+            service
+                .inner
+                .novel_locks
+                .lock()
+                .unwrap()
+                .contains_key(&scope.novel_id),
+            "仍有持有者时不得清理小说锁条目"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 小说锁空闲（无其他持有者）时，delete 应回收条目，避免 map 只增不减。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn delete_removes_idle_novel_lock_entry() {
+        let (service, handle, scope, dir) = job_fixture("lock-clean", settings());
+        // 创建条目后立即释放返回值：注册表成为唯一持有者。
+        let _ = service.novel_lock(scope.novel_id);
+        service.delete(&scope.job_id).await.expect("删除应成功");
+        assert!(
+            !service
+                .inner
+                .novel_locks
+                .lock()
+                .unwrap()
+                .contains_key(&scope.novel_id),
+            "空闲条目应被清理"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }
