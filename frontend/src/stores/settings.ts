@@ -338,9 +338,10 @@ export const useSettingsStore = defineStore("settings", () => {
     await invoke("clear_logs");
   }
 
-  async function selectDirectory(): Promise<string | null> {
+  /** 打开系统目录选择框：给 defaultPath 时从该目录起步（不存在 / 非法时由插件回落默认位置），取消返回 null。 */
+  async function selectDirectory(defaultPath?: string): Promise<string | null> {
     // 目录选择走系统对话框插件，不经过后端命令；取消时返回 null。
-    const selected = await openDialog({ directory: true });
+    const selected = await openDialog({ directory: true, defaultPath });
     return typeof selected === "string" ? selected : null;
   }
 

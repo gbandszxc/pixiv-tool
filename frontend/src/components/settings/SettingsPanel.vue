@@ -589,7 +589,8 @@ async function save(): Promise<boolean> {
 }
 async function handleBrowse() {
   try {
-    const path = await settingsStore.selectDirectory();
+    // 文本框已有路径时以其为初始目录；空值 / 不存在 / 含非法字符时由对话框插件回落默认位置。
+    const path = await settingsStore.selectDirectory(form.value.output_dir.trim() || undefined);
     if (path) { form.value.output_dir = path; outputDirError.value = ""; }
   } catch { notify(t("settings.pickFailed")); }
 }

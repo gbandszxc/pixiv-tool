@@ -785,7 +785,9 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 - `output_dir` 默认 = **系统下载目录/pixiv-tool**（`~/Downloads/pixiv-tool`，
   跨平台统一实现，见 `src-tauri/src/paths.rs:default_output_dir`）；旧默认值
   字面量 `"downloads"` 在加载时自动迁移为新默认。仍支持用户自填绝对路径或
-  相对路径（相对路径锚定 data 目录）。JSON 损坏时备份为
+  相对路径（相对路径锚定 data 目录）。设置弹窗「浏览」以文本框当前值为
+  系统目录选择框的初始目录（空值 / 不存在 / 含非法字符时回落系统默认位置）。
+  JSON 损坏时备份为
   `settings.json.corrupt-{mtime_ns}` 后重建默认。
 
 - 数据/配置目录策略写死（见 §3.3），不暴露"系统配置目录"切换开关。
