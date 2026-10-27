@@ -54,7 +54,7 @@ resource_id: skill:smart-translator
 | `load_resource` | `load_resource(resource_id)` → 文本 | 全部 |
 | `prepare_source` | `prepare_source()` → `{pages, chunks, segments, budget}` | 协调者 |
 | `read_chunk_summary` | `read_chunk_summary(chunk_ids[])` → 每块摘要 | 协调者 |
-| `read_chunk` | `read_chunk(chunk_id, include_context)` → `{segments, context}` | 全部 |
+| `read_chunk` | `read_chunk(chunk_id, include_context)` → `{segments, context, terms, style}`；约束未冻结时 `terms` / `style` 为空 | 全部 |
 | `submit_scan` | `submit_scan(chunk_id, terms[], style, notes, confidence)` → 已提交或冲突提示 | 协调者 |
 | `freeze_constraints` | `freeze_constraints()` → `{version, terms, style, conflicts, unresolved}` | 协调者 |
 | `dispatch_translation` | `dispatch_translation(chunk_ids[])` → 每块 `{chunk_id, status, usage, issue_count}` | 协调者 |
@@ -269,12 +269,17 @@ submit_scan(
 
 ### 7.2 翻译子 Agent 的输入
 
-运行层装配：
+运行层装配（首条用户消息，角色说明与工具契约之后）：
+
+- `chunk_id` 与目标语言；
+- 返工时的当前草稿与未解决问题。
+
+经 `read_chunk` 工具结果进入会话：
 
 - 当前块 `segments` 与 `prev` / `next` 上下文；
-- 冻结约束版本、相关术语、风格与人物对白要求；
-- 目标语言与受保护标记说明；
-- 返工时的当前草稿与未解决问题。
+- 与本块相关的冻结术语与风格要求。
+
+系统提示词只含基础翻译提示；角色说明与工具契约随首条用户消息注入，约束数据经工具结果进入，派发消息不前置术语清单。
 
 翻译子 Agent 只能读取指定块。邻接上下文只用于理解，不进入输出。
 
@@ -341,7 +346,7 @@ submit_scan(
 1. 收集受影响块 ID 与问题明细（`segment_id`、严重度、修改方向）。
 2. 问题定位清晰、影响局部片段：调用 `revise_draft(chunk_id, patches:[{segment_id, text}])` 定点替换审查点名的片段。未点名片段原样保留，不得新增、删除或重排片段；工具会按新版本落盘并使旧审查结论失效。
 3. 修订完成后调用 `dispatch_review(affected_chunk_ids)` 复检；`revise_draft` 不消耗返工轮次。
-4. 问题定位不清、涉及整块结构 / 语气 / 顺序，或同一块多次定点修订仍无法收敛：调用 `dispatch_translation(affected_chunk_ids)` 整块返工；运行层注入当前草稿、冻结约束与该块未解决问题；只重译受影响块，已通过块不重译；返工后调用 `dispatch_review(affected_chunk_ids)` 复检。
+4. 问题定位不清、涉及整块结构 / 语气 / 顺序，或同一块多次定点修订仍无法收敛：调用 `dispatch_translation(affected_chunk_ids)` 整块返工；运行层注入当前草稿与该块未解决问题（冻结术语与风格仍经 `read_chunk` 返回）；只重译受影响块，已通过块不重译；返工后调用 `dispatch_review(affected_chunk_ids)` 复检。
 
 整块返工轮次达到运行层上限（默认 2 轮）仍有阻塞问题时，停止循环，保留未解决项并上报 `needs_attention`。不得把未解决问题藏入备注后发布。
 

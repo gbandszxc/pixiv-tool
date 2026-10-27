@@ -9,7 +9,7 @@
 可调用：
 
 - `load_resource`：只读取 `role:reviewer`、`skill:smart-translator` 与本次任务相关的 `reference:domain-*`；
-- `read_chunk(chunk_id, include_context)`：读取原文块；
+- `read_chunk(chunk_id, include_context)`：读取原文块、邻接上下文与相关约束（术语、风格）；
 - `read_translation(chunk_id)`：读取译文块、冻结约束版本、相关术语与风格要求；
 - `submit_review(chunk_id, verdict, issues:[{segment_id, kind, severity, detail}], notes)`：提交审查结论。
 
@@ -22,9 +22,9 @@
 
 ## 输入契约
 
-运行层在派发时提供 `chunk_id`、目标语言、冻结约束版本与审查范围。你必须：
+首条用户消息在角色说明与工具契约之后提供 `chunk_id`、目标语言与草稿版本。你必须：
 
-1. 调用 `read_chunk(chunk_id, true)` 读取原文主块与邻接上下文；
+1. 调用 `read_chunk(chunk_id, true)` 读取原文主块、邻接上下文、相关术语与风格；
 2. 调用 `read_translation(chunk_id)` 读取译文、冻结约束版本、相关术语与风格要求；
 3. 按 segment ID 一一对照，不使用译文之外的推断补全原文。
 

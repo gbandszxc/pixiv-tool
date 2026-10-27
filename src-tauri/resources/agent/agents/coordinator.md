@@ -95,7 +95,7 @@
 4. 先判断问题级别，再决定修复方式：
    - 只有 `minor` 建议：块判 `pass`，不返工；如需记录，只在最终报告里列为可选润色项。
    - 存在 `major` / `critical` 且问题定位清晰（审查已经给出 `segment_id` 与修改方向）：优先调用 `revise_draft(chunk_id, patches:[{segment_id, text}])` 定点替换点名的片段；未点名片段原样保留，不新增、删除或重排。修订后旧审查结论失效，必须调用 `dispatch_review([chunk_id])` 复检。`revise_draft` 不消耗返工轮次。
-   - 问题定位不清、涉及整块结构 / 语气 / 顺序，或同一块多次定点修订仍无法收敛：调用 `dispatch_translation(affected_chunk_ids)` 整块返工；运行层向翻译子 Agent 注入当前草稿、冻结约束与该块未解决问题；只重译受影响块，已通过块不得重译；返工后调用 `dispatch_review(affected_chunk_ids)` 复检。
+   - 问题定位不清、涉及整块结构 / 语气 / 顺序，或同一块多次定点修订仍无法收敛：调用 `dispatch_translation(affected_chunk_ids)` 整块返工；运行层向翻译子 Agent 注入当前草稿与该块未解决问题（冻结术语与风格仍经 `read_chunk` 返回）；只重译受影响块，已通过块不得重译；返工后调用 `dispatch_review(affected_chunk_ids)` 复检。
 5. 返工轮次纪律（同一块不在同一轮重复劳动）：
    - 同一块在同一轮不得同时调用 `dispatch_translation` 与 `revise_draft`，先定点修订；
    - `revise_draft` 成功后只调用 `dispatch_review([chunk_id])` 复检，不顺带重译或重审其它块；

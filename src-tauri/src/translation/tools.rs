@@ -53,7 +53,7 @@ use crate::{
 };
 
 // ----------------------------------------------------------------------
-// 工具契约摘要（拼进对应角色的系统提示）
+// 工具契约摘要（协调者拼进系统提示；子 Agent 随首条用户消息注入）
 // ----------------------------------------------------------------------
 
 /// 协调者工具契约（与 SKILL.md §3.2 一致）。
@@ -62,7 +62,7 @@ pub const COORDINATOR_TOOL_CONTRACT: &str = "\
 - load_resource(resource_id) → 文本；
 - prepare_source() → {pages, chunks, segments, budget}；
 - read_chunk_summary(chunk_ids[]) → 每块摘要（不含全文）；
-- read_chunk(chunk_id, include_context) → {segments, context}；
+- read_chunk(chunk_id, include_context) → {segments, context, terms, style}；
 - submit_scan(chunk_id, terms[], style, notes, confidence) → 已提交或冲突提示；
 - freeze_constraints() → {version, terms, style, conflicts, unresolved}；
 - dispatch_translation(chunk_ids[]) → 每块 {chunk_id, status, usage, issue_count}；
@@ -78,19 +78,19 @@ pub const COORDINATOR_TOOL_CONTRACT: &str = "\
   （pending_scan / pending_translate / pending_rework / pending_review）。
 派发工具返回 status=ok 才计为完成；paused / awaiting_confirmation / fatal 时立即停止派发。";
 
-/// 翻译子 Agent 工具契约。
+/// 翻译子 Agent 工具契约（随首条用户消息注入，不进系统提示词）。
 pub const TRANSLATOR_TOOL_CONTRACT: &str = "\
 工具契约：
 - load_resource(resource_id)：仅 role:translator、skill:smart-translator、reference:domain-*；
-- read_chunk(chunk_id, include_context) → {segments, context}；
+- read_chunk(chunk_id, include_context) → {segments, context, terms, style}；
 - submit_translation(chunk_id, segments:[{id, text}]) → 提交结果。
 必须先 read_chunk 再 submit_translation；每个输入 segment ID 恰好出现一次且顺序一致。";
 
-/// 审查子 Agent 工具契约。
+/// 审查子 Agent 工具契约（随首条用户消息注入，不进系统提示词）。
 pub const REVIEWER_TOOL_CONTRACT: &str = "\
 工具契约：
 - load_resource(resource_id)：仅 role:reviewer、skill:smart-translator、reference:domain-*；
-- read_chunk(chunk_id, include_context) → {segments, context}；
+- read_chunk(chunk_id, include_context) → {segments, context, terms, style}；
 - read_translation(chunk_id) → {draft_version, segments, constraints_version, terms, style}；
 - submit_review(chunk_id, verdict, issues:[{segment_id, kind, severity, detail}], notes)。
 分级：verdict=pass 允许 issues 为空或全部为 minor（minor 不阻塞，保留供展示与可选修订）；
@@ -738,7 +738,7 @@ fn read_chunk_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
     let ctx = ctx.clone();
     DynamicTool::new(
         tool_name("read_chunk"),
-        "读取一个块的原文片段与可选邻接上下文；ID 由工具生成，不得自造。",
+        "读取一个块的原文片段、可选邻接上下文与相关约束（术语、风格）；ID 由工具生成，不得自造。",
         json!({
             "type": "object",
             "properties": {
@@ -765,6 +765,10 @@ fn read_chunk_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
 /// Agent 会拿着缺片段的「全文」去提交，在校验失败之间烧轮次。因此返回结构
 /// 化错误 `chunk_too_large`：仅带上下文读不下时提示去掉上下文；连全文都读
 /// 不下时由派发层的 `split_chunk` 自动细分兜底（预检见 `ensure_chunk_readable`）。
+///
+/// 相关约束（术语、风格）随本工具返回而非前置在派发消息里：约束内容以工具
+/// 结果进入会话，避免派发请求开头出现集中罗列的术语清单，降低内容过滤的
+/// 触发概率；冻结前（Pass 1 扫描阶段）约束为空，两字段返回空值。
 fn read_chunk_payload(
     ctx: &JobContext,
     id: &str,
@@ -773,13 +777,16 @@ fn read_chunk_payload(
     let chunk = read_chunk(ctx, id)
         .map_err(|error| tool_error("invalid_chunk", &error))?
         .ok_or_else(|| tool_error_with("unknown_chunk", "分块不存在", json!({"chunk_id": id})))?;
-    let token_estimate = estimate_chunk_read_tokens(&chunk, include_context);
+    let constraints = read_constraints(ctx).ok().flatten();
+    let token_estimate = estimate_chunk_read_tokens(&chunk, include_context, constraints.as_ref());
     if token_estimate > TOOL_RESULT_TOKEN_LIMIT {
-        let message = if estimate_chunk_read_tokens(&chunk, false) <= TOOL_RESULT_TOKEN_LIMIT {
-            "块全文加邻接上下文超过单次读取上限；用 include_context=false 去掉上下文即可完整读取"
-        } else {
-            "单块全文已超过单次工具结果上限，无法完整读取；请等待派发层细分本块后重试"
-        };
+        let message =
+            if estimate_chunk_read_tokens(&chunk, false, constraints.as_ref()) <= TOOL_RESULT_TOKEN_LIMIT
+            {
+                "块全文加邻接上下文超过单次读取上限；用 include_context=false 去掉上下文即可完整读取"
+            } else {
+                "单块全文已超过单次工具结果上限，无法完整读取；请等待派发层细分本块后重试"
+            };
         return Err(tool_error_with(
             "chunk_too_large",
             message,
@@ -809,21 +816,32 @@ fn read_chunk_payload(
     } else {
         json!({"prev": "", "next": ""})
     };
+    let terms = constraints
+        .as_ref()
+        .map(|constraints| relevant_terms(&chunk, constraints))
+        .unwrap_or_default();
+    let style = constraints
+        .map(|constraints| safe_text(&constraints.style, 600))
+        .unwrap_or_default();
     Ok(json!({
         "chunk_id": chunk.id,
         "order": chunk.order,
         "segments": segments,
         "context": context,
+        "terms": terms,
+        "style": style,
     }))
 }
 
-/// 子任务派发前的可读性预检：块全文（不含可选上下文）预估就超过单次工具
-/// 结果上限时，子 Agent 无法通过 `read_chunk` 拿到全文，必然在缺片段的校验
-/// 失败之间烧轮次。直接按输入超限返回 `RunError::InputTooLarge`——
-/// `classify_run_error` 把它映射为 `FailureClass::InputTooLarge`，让派发层
-/// 的 `split_chunk` 自动细分接管，不浪费任何模型调用。
-fn ensure_chunk_readable(chunk: &Chunk) -> Result<(), RunError> {
-    if estimate_chunk_read_tokens(chunk, false) > TOOL_RESULT_TOKEN_LIMIT {
+/// 子任务派发前的可读性预检：块全文（不含可选上下文，含随 `read_chunk` 返回
+/// 的约束载荷）预估就超过单次工具结果上限时，子 Agent 无法通过 `read_chunk`
+/// 拿到全文，必然在缺片段的校验失败之间烧轮次。直接按输入超限返回
+/// `RunError::InputTooLarge`——`classify_run_error` 把它映射为
+/// `FailureClass::InputTooLarge`，让派发层的 `split_chunk` 自动细分接管，不浪
+/// 费任何模型调用。
+fn ensure_chunk_readable(ctx: &JobContext, chunk: &Chunk) -> Result<(), RunError> {
+    let constraints = read_constraints(ctx).ok().flatten();
+    if estimate_chunk_read_tokens(chunk, false, constraints.as_ref()) > TOOL_RESULT_TOKEN_LIMIT {
         return Err(RunError::InputTooLarge);
     }
     Ok(())
@@ -845,14 +863,28 @@ pub(crate) fn read_scan_for_progress_with(
 }
 
 /// `read_chunk` 结果 token 的保守估算：CJK 按 1 token/字符 + 10% 余量 + JSON
-/// 结构外壳；与协调者单轮预算预估器、`read_chunk` 工具的超限预检同口径。
-fn estimate_chunk_read_tokens(chunk: &Chunk, include_context: bool) -> u32 {
+/// 结构外壳；与协调者单轮预算预估器、`read_chunk` 工具的超限预检同口径。约束
+/// 载荷（术语表序列化字符数 + 风格截断文本）按实际返回形态计入；无约束时
+/// 增量为 0。
+fn estimate_chunk_read_tokens(
+    chunk: &Chunk,
+    include_context: bool,
+    constraints: Option<&Constraints>,
+) -> u32 {
     let context_chars = if include_context {
         chunk.prev_context.chars().count() + chunk.next_context.chars().count()
     } else {
         0
     };
-    ((chunk.chars as usize + context_chars) * 11 / 10) as u32 + 128
+    let constraint_chars = constraints
+        .map(|constraints| {
+            let terms = serde_json::to_string(&relevant_terms(chunk, constraints))
+                .unwrap_or_else(|_| "[]".into());
+            let style = safe_text(&constraints.style, 600);
+            terms.chars().count() + style.chars().count()
+        })
+        .unwrap_or(0);
+    ((chunk.chars as usize + context_chars + constraint_chars) * 11 / 10) as u32 + 128
 }
 
 /// 协调者工具结果大小预估器：`read_chunk` 按块字符数（含邻接窗口）估算
@@ -886,7 +918,8 @@ impl crate::agent::ToolResultEstimator for ChunkResultEstimator {
             // 无效参数走工具本身的错误返回（小结果），不参与预算。
             return 0;
         };
-        estimate_chunk_read_tokens(&chunk, include_context)
+        let constraints = read_constraints(&self.ctx).ok().flatten();
+        estimate_chunk_read_tokens(&chunk, include_context, constraints.as_ref())
     }
 }
 
@@ -1881,22 +1914,18 @@ async fn run_translator(
         .ok_or_else(|| RunError::Internal("分块不存在".into()))?;
     // 发请求前预检：全文都读不了的块直接按输入超限交给 split_chunk 细分，
     // 不让子 Agent 烧一次调用后卡在缺片段的校验失败上。
-    ensure_chunk_readable(&chunk)?;
-    let constraints = read_constraints(ctx).ok().flatten();
+    ensure_chunk_readable(ctx, &chunk)?;
     let draft = read_draft(ctx, chunk_id).ok().flatten();
     let review = read_review(ctx, chunk_id).ok().flatten();
-    let system = format!(
+    // 系统提示词只保留基础翻译提示（system.md）：角色规则与工具契约随首条
+    // 用户消息注入，可变约束（术语、风格）经 read_chunk 工具结果进入会话。
+    // 高权重的 system 位置不承载这些内容，降低派发请求触发内容过滤的概率。
+    let system = system_prompt().to_string();
+    let prompt = format!(
         "{}\n\n{}\n\n{}",
-        system_prompt(),
         role_prompt(Role::Translator),
-        TRANSLATOR_TOOL_CONTRACT
-    );
-    let prompt = translator_prompt(
-        ctx,
-        &chunk,
-        constraints.as_ref(),
-        draft.as_ref(),
-        review.as_ref(),
+        TRANSLATOR_TOOL_CONTRACT,
+        translator_prompt(ctx, &chunk, draft.as_ref(), review.as_ref())
     );
     let (max_tokens, params) = ctx
         .model
@@ -1937,30 +1966,22 @@ async fn run_translator(
     Ok(outcome.usage)
 }
 
+/// 翻译子 Agent 的首条用户消息（角色规则与工具契约已在其前拼接）。
+///
+/// 只派发任务元数据：chunk_id、目标语言、返工基线与未解决问题。术语与风格
+/// 不前置在这里——它们随 `read_chunk` 的工具结果进入会话，避免派发消息开头
+/// 出现集中的术语清单。
 fn translator_prompt(
     ctx: &JobContext,
     chunk: &Chunk,
-    constraints: Option<&Constraints>,
     draft: Option<&Draft>,
     review: Option<&Review>,
 ) -> String {
     let mut prompt = format!(
-        "chunk_id: {}\n目标语言: {}（{}）\n约束版本: {}\n风格: {}\n相关术语: {}\n",
+        "chunk_id: {}\n目标语言: {}（{}）\n",
         chunk.id,
         ctx.target_language,
         ctx.target_language_name,
-        constraints
-            .map(|constraints| constraints.version)
-            .unwrap_or(0),
-        constraints
-            .map(|constraints| safe_text(&constraints.style, 600))
-            .unwrap_or_else(|| "（无）".into()),
-        constraints
-            .map(|constraints| {
-                serde_json::to_string(&relevant_terms(chunk, constraints))
-                    .unwrap_or_else(|_| "[]".into())
-            })
-            .unwrap_or_else(|| "[]".into()),
     );
     if let Some(draft) = draft {
         prompt.push_str(&format!(
@@ -1988,7 +2009,7 @@ fn translator_prompt(
         prompt.push_str(&format!("本块未解决问题：{}\n", Value::Array(issues)));
     }
     prompt.push_str(
-        "请先调用 read_chunk(chunk_id, true) 读取原文，然后调用 submit_translation 提交本块全部片段。\
+        "请先调用 read_chunk(chunk_id, true) 读取原文、相关术语与风格，然后调用 submit_translation 提交本块全部片段。\
          只翻主块，上下文不进入输出；不得新增、删除或重排片段。",
     );
     prompt
@@ -2040,34 +2061,23 @@ async fn run_reviewer(
         .flatten()
         .ok_or_else(|| RunError::Internal("分块不存在".into()))?;
     // 同 run_translator：全文读不了的块直接交给 split_chunk 细分。
-    ensure_chunk_readable(&chunk)?;
+    ensure_chunk_readable(ctx, &chunk)?;
     let draft = read_draft(ctx, chunk_id)
         .ok()
         .flatten()
         .ok_or_else(|| RunError::Internal("本块还没有可审查的译文".into()))?;
-    let constraints = read_constraints(ctx).ok().flatten();
-    let system = format!(
-        "{}\n\n{}\n\n{}",
-        system_prompt(),
-        role_prompt(Role::Reviewer),
-        REVIEWER_TOOL_CONTRACT
-    );
+    // 同 run_translator：system 只保留基础翻译提示，角色规则与工具契约随首条
+    // 用户消息注入，术语与风格经工具结果进入会话。
+    let system = system_prompt().to_string();
     let prompt = format!(
-        "chunk_id: {}\n目标语言: {}（{}）\n草稿版本: {}\n约束版本: {}\n风格: {}\n相关术语: {}\n\
+        "{}\n\n{}\n\nchunk_id: {}\n目标语言: {}（{}）\n草稿版本: {}\n\
          请先 read_chunk(chunk_id, true) 与 read_translation(chunk_id)，逐片段对照后 submit_review。",
+        role_prompt(Role::Reviewer),
+        REVIEWER_TOOL_CONTRACT,
         chunk.id,
         ctx.target_language,
         ctx.target_language_name,
         draft.version,
-        constraints.as_ref().map(|item| item.version).unwrap_or(0),
-        constraints
-            .as_ref()
-            .map(|item| safe_text(&item.style, 600))
-            .unwrap_or_else(|| "（无）".into()),
-        constraints
-            .as_ref()
-            .map(|item| serde_json::to_string(&relevant_terms(&chunk, item)).unwrap_or_default())
-            .unwrap_or_else(|| "[]".into()),
     );
     let (max_tokens, mut params) = ctx
         .model
@@ -4192,10 +4202,83 @@ mod tests {
         assert!(read_chunk_payload(&ctx, "c0002", true).is_ok());
 
         // 派发预检：超限块返回 InputTooLarge，分类走 split_chunk 兜底分支。
-        let error = ensure_chunk_readable(&oversized).expect_err("超限块应被预检拦截");
+        let error =
+            ensure_chunk_readable(&ctx, &oversized).expect_err("超限块应被预检拦截");
         assert!(matches!(error, RunError::InputTooLarge));
         assert_eq!(classify_run_error(&error), FailureClass::InputTooLarge);
-        assert!(ensure_chunk_readable(&gate_chunk()).is_ok(), "正常块放行");
+        assert!(
+            ensure_chunk_readable(&ctx, &gate_chunk()).is_ok(),
+            "正常块放行"
+        );
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `read_chunk` 载荷携带约束（术语、风格），且只含与本块相关的术语；
+    /// 冻结前两字段为空。派发消息（`translator_prompt`）不再前置术语与风格。
+    #[test]
+    fn read_chunk_carries_constraints_and_prompt_stays_clean() {
+        let (ctx, dir) = empty_fixture("read-chunk-constraints", 2);
+        let chunk = Chunk {
+            id: "c0001".into(),
+            order: 1,
+            segments: vec![SourceSegment {
+                id: "p001-l000-s0".into(),
+                text: "アリスは森へ向かった。".into(),
+                kind: SegmentKind::Text,
+            }],
+            prev_context: String::new(),
+            next_context: String::new(),
+            chars: 12,
+        };
+        write_chunk(&ctx, &chunk).expect("写入测试块");
+
+        // 冻结前（Pass 1 扫描阶段）：无约束，terms 为空数组、style 为空串。
+        let payload = read_chunk_payload(&ctx, "c0001", true).expect("读取成功");
+        assert_eq!(payload["terms"], json!([]));
+        assert_eq!(payload["style"], "");
+
+        // 冻结后：只返回源词出现在本块的术语，风格随载荷返回。
+        write_constraints(
+            &ctx,
+            &Constraints {
+                version: 1,
+                terms: vec![
+                    AgentTerm {
+                        source_term: "アリス".into(),
+                        locked_translation: "爱丽丝".into(),
+                        term_type: "character".into(),
+                        aliases: Vec::new(),
+                        notes: String::new(),
+                    },
+                    AgentTerm {
+                        source_term: "ボブ".into(),
+                        locked_translation: "鲍勃".into(),
+                        term_type: "character".into(),
+                        aliases: Vec::new(),
+                        notes: String::new(),
+                    },
+                ],
+                style: "第三人称、口语化".into(),
+                conflicts: Vec::new(),
+                unresolved: Vec::new(),
+                frozen: true,
+            },
+        )
+        .expect("写入约束");
+        let payload = read_chunk_payload(&ctx, "c0001", true).expect("读取成功");
+        let terms = payload["terms"].as_array().expect("terms 为数组");
+        assert_eq!(terms.len(), 1, "无关术语不进入载荷");
+        assert_eq!(terms[0]["source_term"], "アリス");
+        assert_eq!(terms[0]["locked_translation"], "爱丽丝");
+        assert_eq!(payload["style"], "第三人称、口语化");
+
+        // 派发消息保持干净：术语与风格只经工具结果进入会话（键值行形态
+        // 「相关术语: ...」/「风格: ...」不再出现，指令性提及除外）。
+        let prompt = translator_prompt(&ctx, &chunk, None, None);
+        assert!(!prompt.contains("アリス"));
+        assert!(!prompt.contains("相关术语:"));
+        assert!(!prompt.contains("风格:"));
 
         let _ = std::fs::remove_dir_all(dir);
     }

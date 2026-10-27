@@ -144,7 +144,7 @@ impl MockServer {
         self.requests()
             .iter()
             .filter(|body| {
-                role_of(&system_of(body)) == "translator"
+                role_of_request(body) == "translator"
                     && user_of(body).contains(&format!("chunk_id: {chunk_id}"))
             })
             .count()
@@ -153,7 +153,7 @@ impl MockServer {
     fn translator_requests(&self) -> usize {
         self.requests()
             .iter()
-            .filter(|body| role_of(&system_of(body)) == "translator")
+            .filter(|body| role_of_request(body) == "translator")
             .count()
     }
 
@@ -165,7 +165,7 @@ impl MockServer {
         self.requests()
             .iter()
             .filter(|body| {
-                role_of(&system_of(body)) == "translator"
+                role_of_request(body) == "translator"
                     && user_of(body).contains(&format!("chunk_id: {chunk_id}"))
                     && !body["messages"].as_array().is_some_and(|messages| {
                         messages.iter().any(|message| {
@@ -369,10 +369,15 @@ fn text_stream(text: &str) -> Reply {
 }
 
 /// 角色判定：用角色文档标题，避免被协调者正文里的同名提法误命中。
-fn role_of(system: &str) -> &'static str {
-    if system.contains("# 角色：翻译子 Agent（translator）") {
+/// 子 Agent 的系统提示词只含基础翻译提示，角色契约随首条用户消息注入；
+/// 协调者的角色契约仍在系统提示词里——两处合并判定。
+fn role_of_request(body: &Value) -> &'static str {
+    let mut text = system_of(body);
+    text.push('\n');
+    text.push_str(&user_of(body));
+    if text.contains("# 角色：翻译子 Agent（translator）") {
         "translator"
-    } else if system.contains("# 角色：审查子 Agent（reviewer）") {
+    } else if text.contains("# 角色：审查子 Agent（reviewer）") {
         "reviewer"
     } else {
         "main"
@@ -755,20 +760,19 @@ fn scripted_roles(
             "1. 目标：完成整篇翻译；2. 约束：已冻结；3. 产物：见块产物；             4. 进度：按检查点；5. 未决：无；6. 下一步：继续派发待办块。",
         );
     }
-    let system = system_of(body);
     let (calls, mut results) = tool_history(body);
     let hint = user_of(body)
         .split("chunk_id: ")
         .nth(1)
         .and_then(|rest| rest.split_whitespace().next())
         .map(|id| id.trim().to_string());
-    if role_of(&system) == "translator" {
+    if role_of_request(body) == "translator" {
         if let Some(id) = hint {
             results.insert("chunk_id_hint".into(), json!(id));
         }
         return translator_next(&calls, &results);
     }
-    if role_of(&system) == "reviewer" {
+    if role_of_request(body) == "reviewer" {
         if let Some(id) = hint {
             results.insert("chunk_id_hint".into(), json!(id));
         }
@@ -1154,7 +1158,7 @@ async fn pause_then_resume_continues_without_redoing_chunks() {
     let handler = {
         let blocked = blocked.clone();
         Arc::new(move |body: &Value| {
-            if role_of(&system_of(body)) == "translator"
+            if role_of_request(body) == "translator"
                 && blocked.load(Ordering::SeqCst)
                 && user_of(body).contains("chunk_id: c0002")
             {
@@ -1329,7 +1333,7 @@ async fn confirmation_mode_waits_for_confirm_then_continues() {
 async fn cancel_stops_immediately_and_keeps_checkpoint() {
     let fixture = fixture("cancel");
     let handler = Arc::new(|body: &Value| {
-        if role_of(&system_of(body)) == "translator" {
+        if role_of_request(body) == "translator" {
             return Reply::Hang;
         }
         scripted(body)
@@ -1511,7 +1515,7 @@ async fn dropped_connection_fails_the_chunk_without_completing_the_job() {
     let fixture = fixture("drop");
     let handler = Arc::new(|body: &Value| {
         // 翻译 c0002 时只发响应头就断开。
-        if role_of(&system_of(body)) == "translator" && user_of(body).contains("chunk_id: c0002") {
+        if role_of_request(body) == "translator" && user_of(body).contains("chunk_id: c0002") {
             return Reply::Abort;
         }
         scripted(body)
@@ -1569,7 +1573,7 @@ async fn truncated_output_splits_the_chunk_and_still_completes() {
         let fired = fired.clone();
         Arc::new(move |body: &Value| {
             // 第一次翻译 c0001（含开场与超长行）时返回「输出超限」，触发缩块重做。
-            if role_of(&system_of(body)) == "translator"
+            if role_of_request(body) == "translator"
                 && user_of(body).contains("chunk_id: c0001")
                 && fired.fetch_add(1, Ordering::SeqCst) == 0
             {
@@ -1641,7 +1645,7 @@ async fn truncated_output_splits_the_chunk_and_still_completes() {
 async fn invalid_tool_arguments_stop_after_corrections() {
     let fixture = fixture("args");
     let handler = Arc::new(|body: &Value| {
-        if role_of(&system_of(body)) == "translator" {
+        if role_of_request(body) == "translator" {
             // 参数不是合法 JSON 对象：运行层有限纠正后停止。
             return Reply::Sse(vec![
                 chat_chunk(
@@ -1708,7 +1712,7 @@ async fn resume_after_restart_rebuilds_job_from_disk() {
         let blocked = blocked.clone();
         Arc::new(move |body: &Value| {
             // 卡住 c0002 的翻译，模拟「进程在 c0001 已完成后退出」。
-            if role_of(&system_of(body)) == "translator"
+            if role_of_request(body) == "translator"
                 && blocked.load(Ordering::SeqCst)
                 && user_of(body).contains("chunk_id: c0002")
             {
@@ -2132,7 +2136,7 @@ async fn two_novels_run_concurrently_without_crossing_jobs() {
     let handler = {
         let gate = gate.clone();
         Arc::new(move |body: &Value| {
-            if role_of(&system_of(body)) == "translator" && !gate.is_open() {
+            if role_of_request(body) == "translator" && !gate.is_open() {
                 return Reply::Gated {
                     gate: gate.clone(),
                     body: body.clone(),
@@ -2302,7 +2306,7 @@ async fn active_novels_limit_queues_second_novel_until_first_releases() {
     let handler = {
         let gate = gate.clone();
         Arc::new(move |body: &Value| {
-            if role_of(&system_of(body)) == "translator" && !gate.is_open() {
+            if role_of_request(body) == "translator" && !gate.is_open() {
                 return Reply::Gated {
                     gate: gate.clone(),
                     body: body.clone(),
@@ -2379,7 +2383,7 @@ async fn cancelling_one_novel_does_not_affect_the_other() {
     let handler = {
         let gate = gate.clone();
         Arc::new(move |body: &Value| {
-            if role_of(&system_of(body)) == "translator" && !gate.is_open() {
+            if role_of_request(body) == "translator" && !gate.is_open() {
                 return Reply::Gated {
                     gate: gate.clone(),
                     body: body.clone(),
@@ -2532,7 +2536,7 @@ async fn main_run_continuation_completes_after_idle_end() {
             .as_array()
             .is_some_and(|tools| !tools.is_empty())
         {
-            let role = role_of(&system_of(body));
+            let role = role_of_request(body);
             if role != "translator" && role != "reviewer" {
                 let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
                 if n == 2 {
@@ -2600,7 +2604,7 @@ async fn retryable_provider_error_is_retried_before_giving_up() {
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = calls.clone();
     let handler: Handler = Arc::new(move |body: &Value| {
-        if role_of(&system_of(body)) == "main" && counter.fetch_add(1, Ordering::SeqCst) == 0 {
+        if role_of_request(body) == "main" && counter.fetch_add(1, Ordering::SeqCst) == 0 {
             // 首次主 Agent 请求返回 429：任务级应退避重试而不是直接转 needs_attention。
             return Reply::Error(429, json!({"error": {"message": "cell is at capacity"}}));
         }
@@ -2634,7 +2638,7 @@ async fn retryable_provider_error_is_retried_before_giving_up() {
     let main_calls = server
         .requests()
         .iter()
-        .filter(|body| role_of(&system_of(body)) == "main")
+        .filter(|body| role_of_request(body) == "main")
         .count();
     assert!(
         main_calls >= 2,
@@ -2696,7 +2700,7 @@ async fn bulk_read_chunk_throttled_by_turn_budget_still_completes() {
                     "1. 目标：完成整篇翻译；2. 约束：已冻结；3. 产物：见块产物；             4. 进度：按检查点；5. 未决：无；6. 下一步：继续派发待办块。",
                 );
             }
-            let role = role_of(&system_of(body));
+            let role = role_of_request(body);
             if role == "translator" || role == "reviewer" {
                 return scripted(body);
             }
@@ -3208,7 +3212,7 @@ fn exhausted_after_rework_limit(body: &Value) -> Option<Reply> {
     let has_tools = body["tools"]
         .as_array()
         .is_some_and(|tools| !tools.is_empty());
-    if !has_tools || role_of(&system_of(body)) != "main" {
+    if !has_tools || role_of_request(body) != "main" {
         return None;
     }
     let (_, results) = tool_history(body);

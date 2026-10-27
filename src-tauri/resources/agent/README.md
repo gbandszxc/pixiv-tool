@@ -75,6 +75,14 @@ pub const PROMPT_SYSTEM: &str =
 3. 确认 `load_resource` 白名单未意外扩大；
 4. 运行资源完整性与无禁用内容检查。
 
+## 会话装配
+
+各角色会话的系统提示词与首条用户消息按以下方式装配：
+
+- 协调者（主 Agent）：系统提示词为 `prompts/system.md` + `role:coordinator` + 协调者工具契约的拼接。协调者是长会话，角色规则占据 system 位置（preamble，不参与历史压缩）可避免被压缩摘要掉。
+- 翻译 / 审查子 Agent：系统提示词只有 `prompts/system.md`；角色契约（`role:translator` / `role:reviewer`）与工具契约随首条用户消息注入。子 Agent 会话短（典型数轮），压缩风险可忽略；system 是内容过滤权重最高的位置，不承载可变的角色与约束内容，可降低派发请求触发内容过滤的概率。
+- 冻结约束（相关术语与风格）不前置在派发消息里，随 `read_chunk` 工具结果进入会话；约束未冻结时返回空值。
+
 ## 系统提示词替换
 
 `prompts/system.md` 是基础系统提示词占位，完整翻译规则由 `skill:smart-translator` 提供。宿主可以按构建配置或应用设置替换该文件内容，但替换文本必须保留以下不可删除的约束：
