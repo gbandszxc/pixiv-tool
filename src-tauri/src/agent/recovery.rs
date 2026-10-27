@@ -14,6 +14,9 @@ pub enum FailureClass {
     NotSent,
     /// 限流、暂时性服务错误：退避后重试。
     Retryable,
+    /// 提供商内容过滤拒绝：过滤判断含采样随机性，按可重试退避重发；
+    /// 重试耗尽后转人工（更换模型 / 网关）。
+    ContentFiltered,
     /// 鉴权、余额、模型不存在、配置不兼容：暂停并提示修正设置。
     Permanent,
     /// 已发送但结果未知：保留现场，默认等待用户恢复。
@@ -39,6 +42,7 @@ impl FailureClass {
         match self {
             Self::NotSent => "not_sent",
             Self::Retryable => "retryable",
+            Self::ContentFiltered => "content_filtered",
             Self::Permanent => "permanent",
             Self::UnknownOutcome => "unknown_outcome",
             Self::InputTooLarge => "input_too_large",
@@ -50,7 +54,7 @@ impl FailureClass {
 
     /// 是否允许自动重试同一请求。
     pub fn is_retryable(self) -> bool {
-        matches!(self, Self::NotSent | Self::Retryable)
+        matches!(self, Self::NotSent | Self::Retryable | Self::ContentFiltered)
     }
 
     /// 是否可以自动恢复（不重放同一请求，而是压缩/缩块/纠正）。
@@ -102,6 +106,19 @@ pub fn classify_http(status: Option<u16>, code: Option<&str>, message: &str) -> 
         ])
     {
         return FailureClass::OutputTruncated;
+    }
+
+    if code_matches(&["content_filter", "content_filtering"])
+        || mentions(&[
+            "finish_reason: content_filter",
+            "finish_reason=content_filter",
+            "content_filter",
+            "content filter",
+            "content policy",
+            "content filtering",
+        ])
+    {
+        return FailureClass::ContentFiltered;
     }
 
     if code_matches(&[
@@ -308,6 +325,19 @@ mod tests {
             classify_http(Some(200), Some("max_output_tokens"), "truncated"),
             FailureClass::OutputTruncated
         );
+        assert_eq!(
+            classify_http(
+                None,
+                None,
+                "the provider failed the turn: Provider finish_reason: content_filter"
+            ),
+            FailureClass::ContentFiltered
+        );
+        assert_eq!(
+            classify_http(Some(400), Some("content_filter"), "blocked by policy"),
+            FailureClass::ContentFiltered
+        );
+        assert!(FailureClass::ContentFiltered.is_retryable());
         assert_eq!(
             classify_http(Some(400), Some("invalid_tool_arguments"), "bad tool"),
             FailureClass::InvalidToolArgs

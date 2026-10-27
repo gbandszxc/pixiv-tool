@@ -482,6 +482,7 @@ export default {
         incomplete_global_review: "Global review is not finished or not passed",
         incomplete_publish: "Merge or publish is not finished",
         model_declined: "The model declined or stopped without calling tools",
+        content_filtered: "Content was blocked by the model provider's filter and automatic retries did not pass; switch the model or gateway",
         rework_exhausted: "Serious issues remain unresolved and rework attempts are exhausted. Review the issue list before continuing",
         blocking_issues: "Blocking issues were found; the task cannot continue",
         minor_only: "Only minor issues were found (treated as passed)",

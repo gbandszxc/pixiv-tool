@@ -1768,6 +1768,29 @@ async fn dispatch_one_inner(
                             "输入或输出超限且无法继续细分",
                         )]);
                     }
+                    FailureClass::ContentFiltered => {
+                        // 内容过滤存在采样随机性：原样退避重发有机会通过；
+                        // 重试耗尽后以明确错误码转人工（更换模型 / 网关）。
+                        if !policy.allows(attempt) {
+                            return Ok(vec![ChunkOutcome::failed(
+                                chunk_id,
+                                "content_filtered",
+                                "内容被模型服务过滤，重试次数已用尽；请更换模型或网关",
+                            )]);
+                        }
+                        attempt = attempt.saturating_add(1);
+                        if backoff(&policy, attempt - 1, &ctx.control.cancel)
+                            .await
+                            .is_none()
+                        {
+                            return Ok(vec![ChunkOutcome::failed(
+                                chunk_id,
+                                terminal_status(ctx),
+                                "重试等待已中止",
+                            )]);
+                        }
+                        continue;
+                    }
                     FailureClass::Retryable | FailureClass::NotSent => {
                         if !policy.allows(attempt) {
                             return Ok(vec![ChunkOutcome::failed(

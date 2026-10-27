@@ -467,6 +467,7 @@ export default {
         incomplete_global_review: "全体レビューが未完了または未合格です",
         incomplete_publish: "マージまたは公開が未完了です",
         model_declined: "モデルが拒否、またはツールを呼ばずに終了しました",
+        content_filtered: "コンテンツがモデル提供側のフィルターにブロックされ、自動リトライでも通過しませんでした。モデルまたはゲートウェイを変更してください",
         rework_exhausted: "未解決の重大な問題があり、やり直し回数の上限に達しました。問題一覧を確認してから続行してください",
         blocking_issues: "ブロックする問題があるため、タスクを続行できません",
         minor_only: "軽微な問題のみが見つかりました（合格として扱います）",

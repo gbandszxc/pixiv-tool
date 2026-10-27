@@ -483,6 +483,7 @@ export default {
         incomplete_global_review: "整体复核未完成或未通过",
         incomplete_publish: "合并或发布未完成",
         model_declined: "模型拒绝或未调用工具即结束",
+        content_filtered: "内容被模型服务的过滤拦截，自动重试仍未通过；请更换模型或网关",
         rework_exhausted: "存在未解决的严重问题，返工次数已用尽，请检查问题清单后继续",
         blocking_issues: "存在阻塞性问题，任务无法继续",
         minor_only: "仅存在轻微问题（已按通过处理）",
