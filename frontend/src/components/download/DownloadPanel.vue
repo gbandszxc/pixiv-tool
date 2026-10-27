@@ -31,13 +31,18 @@ const pickerPages = computed(() => cache.value?.pages ?? []);
 const pickerSaved = computed(() => cache.value?.saved ?? []);
 /** 缓存命中同一作品才渲染（ugoira 与单页作品没有按页选择语义） */
 const pageSelectionCount = computed(() => panel.pageSelection.illustration.length);
-/** 部分页选择时主按钮直接说明将下载几页；全选/未显示选择器时保持「开始抓取」（= 整件） */
+/**
+ * 主按钮文案跟随下载范围：插画页签统一「下载」措辞——选择器内部分选择时说明将下载几项，
+ * 其余形态（全选、清空、单页 / ugoira、用户全集、详情未加载）均为「下载全部」（= 整件）；
+ * 小说页签无按页选择语义，保持「开始抓取」。
+ */
 const submitLabel = computed(() => {
+  if (panel.kind !== "illustration") return t("crawl.start");
   const count = pageSelectionCount.value;
   const total = pickerPages.value.length;
   return showPicker.value && count > 0 && count < total
     ? t("browse.work.pageDownloadSelected", { count })
-    : t(`${prefix.value}.start`);
+    : t("browse.work.pageDownloadAll");
 });
 const showPicker = computed(() => {
   const current = cache.value;
