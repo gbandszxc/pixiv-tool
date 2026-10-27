@@ -32,17 +32,22 @@ const pickerSaved = computed(() => cache.value?.saved ?? []);
 /** 缓存命中同一作品才渲染（ugoira 与单页作品没有按页选择语义） */
 const pageSelectionCount = computed(() => panel.pageSelection.illustration.length);
 /**
- * 主按钮文案跟随下载范围：插画页签统一「下载」措辞——选择器内部分选择时说明将下载几项，
- * 其余形态（全选、清空、单页 / ugoira、用户全集、详情未加载）均为「下载全部」（= 整件）；
- * 小说页签无按页选择语义，保持「开始抓取」。
+ * 主按钮文案跟随下载范围：单件来源为「下载」（小说单篇；插画单页与 ugoira，多页作品
+ * 详情未加载时也先中立显示「下载」）；多件集合为「下载全部」（小说系列 / 用户、插画
+ * 用户全集、多页作品全选或清空态），页选择器内部分选择时为「下载所选 N 项」。
  */
 const submitLabel = computed(() => {
-  if (panel.kind !== "illustration") return t("crawl.start");
-  const count = pageSelectionCount.value;
-  const total = pickerPages.value.length;
-  return showPicker.value && count > 0 && count < total
-    ? t("browse.work.pageDownloadSelected", { count })
-    : t("browse.work.pageDownloadAll");
+  if (panel.kind === "illustration" && showPicker.value) {
+    const count = pageSelectionCount.value;
+    const total = pickerPages.value.length;
+    return count > 0 && count < total
+      ? t("workspace.downloadSelected", { count })
+      : t("workspace.downloadAll");
+  }
+  // 选择器未渲染：单件来源（小说单篇 / 插画单张）为「下载」，系列 / 用户等集合来源为「下载全部」
+  return draft.value.sourceType === "single"
+    ? t("workspace.download")
+    : t("workspace.downloadAll");
 });
 const showPicker = computed(() => {
   const current = cache.value;
