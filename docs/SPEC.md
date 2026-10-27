@@ -952,7 +952,7 @@ token 的写路径自愈覆盖全部 POST 写方法（Auth/Client 失败或 200+
 | 浏览-首页 | `/browse/home`（推荐流，换一批去重追加） | ✅ |
 | 浏览-频道 | `/browse/illustration` `/browse/manga` `/browse/novel`（关注新作/推荐/排行/热门标签板块 + 顶部 R-18 快捷筛选（全部/一般向/R18）） | ✅ |
 | 浏览-发现 | `/browse/discover`（按历史推荐，前端去重无限滚动） | ✅ |
-| 浏览-动态 | `/browse/feed`（关注的新作品：插画/小说 × 全部/R-18） | ✅ |
+| 浏览-动态 | `/browse/feed`（关注的新作品：插画/小说 × 全部/全年龄/R-18） | ✅ |
 | 浏览-搜索 | `/browse/search`（类型 tab + 排序/对象/匹配 + ID/链接直达；纯数字 ID 按类型 tab 跳插画/漫画/小说详情，链接形态自带类型不受 tab 影响；链接支持作品、用户主页、小说系列与插画/漫画系列，自绘页面增加时通过 `parseInput.ts` 的识别类型/规则及搜索页 `pushTarget` 扩展，跳转分支由 TypeScript 穷尽检查约束；页码分页 20/页（接口每页 60 条切 3 页）+ 本页排序（点赞/收藏/浏览维度下拉 + 独立升/降切换，优先复用列表已有计数与详情缓存，仅所选维度缺失时经 `browse_work_counts` 整页一次性补取，计数齐备后只重排一次；零值有效、未知项垫底）） | ✅ |
 | 浏览-排行榜 | `/browse/ranking`（插画/漫画/动图/小说 × 周期 + 日期导航） | ✅ |
 | 浏览-收藏 | `/browse/bookmark`（插画·漫画/小说 × 公开/私密 + 标签筛选） | ✅ |
@@ -1284,6 +1284,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   服务端 R-18 候选可能混入一般向/未知条目，仍按 `x_restrict` 过滤。
   插画频道展示响应中的 `recommendByTag` 标签推荐分区（每区最多 12 条，空区
   隐藏），完整榜单入口随 R-18 档预选 `daily_r18`，标签搜索继承内容档位。
+  关注动态页的范围 tab 同为企业三档（全部 / 全年龄 / R-18，`mode=all|safe|r18`
+  直传 `browse_follow_latest`），与频道条的差异是每次切换都重新请求服务端快照。
   排行榜的插画/漫画/动图条目在接口里
   **没有顶层 `x_restrict`**，由 `illust_content_type.sexual`（0 一般 / 1 R-18 /
   2 R-18G）补入 `x_restrict`（实测见 `docs/research/pixiv-browse-api.md` §9，
@@ -1416,7 +1418,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_home_feed` | 首页推荐流（street POST + csrf token，进程内 30min 缓存） |
 | `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
 | `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |
-| `browse_follow_latest(kind, mode, page)` | 关注的新作品（p + isLastPage） |
+| `browse_follow_latest(kind, mode, page)` | 关注的新作品（p + isLastPage）；mode = all|safe|r18，动态页范围 tab 三档直传 |
 | `browse_search(kind, word, order, mode, s_mode, type, page)` | 插画/漫画/小说搜索（total + lastPage；透传已有可选 like_count/bookmark_count/view_count，小说自带收藏数） |
 | `browse_work_counts(kind, ids)` | 作品三项计数批量（搜索页本页排序用；逐项请求详情端点，ids ≤ 60；单项失败跳过，全局限速排队） |
 | `browse_ranking(kind, mode, page, date)` | 排行榜：illust/manga/ugoira 走 ranking.php?format=json，novel 走 /ajax/ranking/novel（每页 50，含 prev/next_date） |

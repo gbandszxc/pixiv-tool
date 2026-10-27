@@ -841,6 +841,7 @@ export default {
       kindNovel: "小说",
       scopeLabel: "范围",
       scopeAll: "全部",
+      scopeSafe: "全年龄",
       scopeR18: "R-18",
     },
     watchlist: {

@@ -7,7 +7,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  * 浏览·关注动态页（F2）。
  *
  * - 两个 SectionTabs：作品类型（插画|小说 → kind illust|novel）与
- *   范围（全部|R-18 → mode all|r18）；
+ *   范围（全部|全年龄|R-18 → mode all|safe|r18）；
  * - `browseFollowLatest(kind, mode, page)` 分页加载（后端 next_page = isLastPage ? null : p+1，
  *   useInfiniteList 按 next_page 判定收尾）；
  * - 切换任一 tab 重置列表并回到页面顶部。
@@ -34,6 +34,7 @@ const kindTabs = computed(() => [
 ]);
 const modeTabs = computed(() => [
   { value: "all", label: t("browse.feed.scopeAll") },
+  { value: "safe", label: t("browse.feed.scopeSafe") },
   { value: "r18", label: t("browse.feed.scopeR18") },
 ]);
 

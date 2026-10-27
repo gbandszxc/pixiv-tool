@@ -841,6 +841,7 @@ export default {
       kindNovel: "Novels",
       scopeLabel: "Scope",
       scopeAll: "All",
+      scopeSafe: "Safe",
       scopeR18: "R-18",
     },
     watchlist: {

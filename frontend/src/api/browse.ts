@@ -28,7 +28,7 @@ export type WorkKind = "illust" | "manga" | "ugoira" | "novel";
 export type ChannelKind = "illustration" | "manga" | "novel";
 /** browse_follow_latest 的 kind / mode 取值。 */
 export type FeedKind = "illust" | "novel";
-export type FeedMode = "all" | "r18";
+export type FeedMode = "all" | "safe" | "r18";
 /** browse_search / browse_related / browse_user_works 的 kind 取值。 */
 export type ListWorkKind = "illust" | "manga" | "novel";
 /** 作者作品排序：desc = 时间倒序（默认，最新在前）/ asc = 时间正序。 */
@@ -521,7 +521,7 @@ export async function browseFollowLatest(
   mode: FeedMode,
   page: number
 ): Promise<BrowseList> {
-  if (!isTauri()) return mockPaginated(`feed:${kind}:${mode}`, page, [kind]);
+  if (!isTauri()) return mockPaginated(`feed:${kind}:${mode}`, page, [kind], { xRestrict: mode === "r18" ? 1 : mode === "safe" ? 0 : undefined });
   return invokeBrowse<BrowseList>("browse_follow_latest", { kind, mode, page });
 }
 
@@ -964,6 +964,8 @@ interface MockItemsOptions {
   rankFrom?: number;
   /** id 编号基底（缺省 (page-1)*60；discover 的「换一批」用调用计数偏移避免 id 撞车） */
   idBase?: number;
+  /** 固定全部条目的 x_restrict（mock 的服务端档位语义；缺省保持随机分布） */
+  xRestrict?: number;
 }
 
 function mockItems(seedKey: string, page: number, opts: MockItemsOptions): BrowseWorkItem[] {
@@ -975,6 +977,7 @@ function mockItems(seedKey: string, page: number, opts: MockItemsOptions): Brows
   return Array.from({ length: count }, (_, i) => {
     const item = makeMockItem(rand, idBase + i + 1, opts.kinds[Math.floor(rand() * opts.kinds.length)] ?? "illust");
     if (opts.rankFrom != null) item.rank = opts.rankFrom + i;
+    if (opts.xRestrict != null) item.x_restrict = opts.xRestrict;
     return item;
   });
 }
@@ -994,9 +997,9 @@ function mockPaginated(
   seedKey: string,
   page: number,
   kinds: WorkKind[],
-  opts?: { withTotal?: boolean }
+  opts?: { withTotal?: boolean; /** 固定全部条目的 x_restrict（mock 的服务端档位语义） */ xRestrict?: number }
 ): BrowseList {
-  const items = mockItems(seedKey, page, { kinds });
+  const items = mockItems(seedKey, page, { kinds, xRestrict: opts?.xRestrict });
   const next = page < MOCK_MAX_PAGES ? page + 1 : null;
   return {
     items,
@@ -1026,13 +1029,13 @@ async function mockChannel(kind: ChannelKind, mode: "all" | "r18"): Promise<Brow
   await mockDelay();
   const workKind = channelKindToWork(kind);
   const rand = mulberry32(seedFrom(`channel:${kind}:${mode}`));
-  const restrictItems = (items: BrowseWorkItem[]) => items.map((item) => ({ ...item, x_restrict: mode === "r18" ? 1 : item.x_restrict }));
   const section = (name: string, withRank = false): BrowseList => ({
-    items: restrictItems(mockItems(`channel:${kind}:${mode}:${name}`, 1, {
+    items: mockItems(`channel:${kind}:${mode}:${name}`, 1, {
       kinds: [workKind],
       count: 10 + Math.floor(rand() * 9), // 10-18 条
       rankFrom: withRank ? 1 : undefined,
-    })),
+      xRestrict: mode === "r18" ? 1 : undefined,
+    }),
     total: null,
     next_page: null,
   });
@@ -1046,10 +1049,11 @@ async function mockChannel(kind: ChannelKind, mode: "all" | "r18"): Promise<Brow
     kind === "illustration"
       ? pick(rand, MOCK_TRENDING_TAGS, 3).map((tag, i) => ({
           tag: tag.name,
-          items: restrictItems(mockItems(`channel:${kind}:${mode}:tag:${i}`, 1, {
+          items: mockItems(`channel:${kind}:${mode}:tag:${i}`, 1, {
             kinds: [workKind],
             count: 14,
-          })),
+            xRestrict: mode === "r18" ? 1 : undefined,
+          }),
         }))
       : [];
   return {

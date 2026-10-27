@@ -798,6 +798,7 @@ export default {
       kindNovel: "小説",
       scopeLabel: "表示範囲",
       scopeAll: "すべて",
+      scopeSafe: "全年齢",
       scopeR18: "R-18",
     },
     watchlist: {
