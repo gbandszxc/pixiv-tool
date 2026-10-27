@@ -806,6 +806,8 @@ export default {
       pageDownloadStarted: "已创建下载任务：{count} 页",
       pageDownloadFailed: "创建下载任务失败",
       pageAllSaved: "全部页面已下载",
+      pagePickerEmpty: "没有可选择的页面",
+      pageSelectRequired: "请至少选择一页",
     },
     author: {
       follow: "关注",

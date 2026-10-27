@@ -36,7 +36,6 @@ import CommentsSection from "../../components/browse/CommentsSection.vue";
 import RelatedGrid from "../../components/browse/RelatedGrid.vue";
 import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import CopyWorkId from "../../components/browse/CopyWorkId.vue";
-import PageDownloadPicker from "../../components/browse/PageDownloadPicker.vue";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
@@ -298,6 +297,17 @@ function openInPixiv(): void {
   );
 }
 
+/** 返填插画下载表单：详情已加载时把 pages 一并交给面板（省掉面板的一次详情请求）。 */
+function fillIllustForm(): void {
+  fillDownloadForm({
+    form: "illustration",
+    sourceType: "single",
+    sourceId: props.id,
+    // 详情未就绪时不带 pages（面板自己拉取）；ugoira 传空数组，明确不出现按页选择
+    pages: detail.value ? (isUgoira.value ? [] : pages.value) : undefined,
+  });
+}
+
 // ===== 遮罩 / 键盘 =====
 
 function reveal(): void {
@@ -402,11 +412,11 @@ onBeforeUnmount(detachKeydown);
           <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" />
         </svg>
       </md-icon-button>
-      <!-- 返填到插画抓取页：来源=单篇，ID=当前作品 -->
+      <!-- 返填到插画抓取页：来源=单篇，ID=当前作品；已加载的 pages 一并传过去，面板不再重复请求详情 -->
       <md-icon-button
         :aria-label="t('browse.hooks.fillIllustForm')"
         :title="t('browse.hooks.fillIllustForm')"
-        @click="fillDownloadForm({ form: 'illustration', sourceType: 'single', sourceId: props.id })"
+        @click="fillIllustForm"
       >
         <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <!-- lucide download -->
@@ -543,15 +553,6 @@ onBeforeUnmount(detachKeydown);
 
           <!-- 作品 pid：点击复制（放信息区，不占顶栏动作位） -->
           <CopyWorkId :id="item.id" />
-
-          <!-- 按页选择下载：多 P 作品才渲染（单页与动图由外层先挡掉，避免无谓的已下载查询） -->
-          <PageDownloadPicker
-            v-if="detail && !isUgoira && pages.length > 1"
-            :id="props.id"
-            :pages="pages"
-            :ugoira="isUgoira"
-            :disabled="loading"
-          />
 
           <!-- 描述（剥标签纯文本） -->
           <p v-if="plainDescription" class="description">{{ plainDescription }}</p>

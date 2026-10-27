@@ -78,9 +78,17 @@
   ugoira 恒 `[0]`，不参与按页语义。
 - **查询**：`illust_saved_pages(artworkId)` → `{pages:[0,2], ugoira:false}`；无记录 →
   `{"pages":[],"ugoira":false}`；ugoira 有记录 → `{"pages":[0],"ugoira":true}`。
-- **前端**：`PageDownloadPicker` 只在多页插画/漫画详情渲染，方形缩略图网格 + 已下载
-  标记 + 选中态（2px primary 描边 + 实心圆勾，不只靠颜色），主行动调 `task_create` 带
-  `pages`；ugoira 整块不渲染。
+- **前端**：`PageDownloadPicker`（`components/download/`）在**下载侧栏**渲染，作品详情页
+  不再出现——出现条件为面板「插画」页签 + 来源「单张」+ 解析出的多页且非 ugoira 作品。
+  组件只做受控选择（方形缩略图网格 + 已下载标记 + 选中态 2px primary 描边 + 实心圆勾，
+  不只靠颜色），选中集合经 `v-model` 交给面板，由面板的「开始抓取」统一下发
+  `task_create` 带 `pages`；自身不建任务、不查已下载。页面数据两条来源：详情页「返填
+  表单」预置已加载的 `pages`（零额外请求），或面板按 350ms 防抖自取 `browse_work_detail`
+  （失败静默、不渲染选择器）。新作品默认全选，任务侧按页差集只下缺的页、已下载页跳过，
+  手动清空后不再自动选上；按钮全选时为「开始抓取」（整件），部分选择时改「下载所选 N 页」，
+  清空后禁用。布局随侧栏落位：面板 `container-type: inline-size`，右侧 480px 落位单列
+  （选择器在表单下方），底部整宽落位在 `@container (min-width: 640px)` 且含选择器时改两栏。
+  ugoira 整块不渲染。选择器位置：下载侧栏（2026-10-27 调整，初版计划曾放详情页右栏）。
 - **详情页 pid 复制**：`CopyWorkId` 在右栏信息区显示 `pid` + 数字，点击复制并 snackbar
   确认——补上「拿到作品 id 去别处搜索 / 分享」这条最常见的动作。
 
@@ -95,7 +103,8 @@
   下载 zip。这是刻意的取舍——帧文件数量多且体积不参与 `image_cache_max_mib` 的三档
   分区淘汰，若不单独设上限会无限增长。
 - **ugoira 没有按页语义**：动图是单文件（zip），`saved_pages` 恒 `[0]`，
-  `PageDownloadPicker` 对 ugoira 整块不渲染，`task_create` 的 `pages` 对 ugoira 无效。
+  `PageDownloadPicker` 对 ugoira 整块不渲染（下载侧栏也只在非 ugoira 的多页作品上出现
+  选择器），`task_create` 的 `pages` 对 ugoira 无效。
 - **旧行靠推断**：`saved_pages` 列新增前写入的行按 `saved_paths` 长度推断连续页码
   （ugoira 推断为 `[0]`），只在读取出口归一、**不写回**；推断结果对历史上「部分页下载」
   不存在的场景是准确的，但无法还原真实页序（当时也没记录）。

@@ -6,14 +6,17 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useDownloadPanelStore } from "../stores/downloadPanel";
 import { isTauri } from "../api/tauri";
-import type { BrowseWorkItem } from "../api/browse";
+import type { BrowseWorkItem, IllustPage } from "../api/browse";
 
 export interface DownloadTarget {
   form: "novel" | "illustration";
   sourceType: "single" | "series" | "user";
   sourceId: number | string;
-  /** 部分页下载的页码（0 起）；省略 = 全部页面。 */
-  pages?: number[];
+  /**
+   * 详情页已加载的页面（插画单篇）；面板据此直接渲染按页选择，省掉一次详情请求。
+   * 省略 = 面板自己拉取详情。
+   */
+  pages?: IllustPage[];
 }
 
 /** 用系统默认浏览器打开 pixiv 页面；非 Tauri（浏览器 mock 走查）退回 window.open。失败向上抛，由调用方提示。 */
@@ -29,7 +32,7 @@ export async function openInBrowser(url: string): Promise<void> {
   await openUrl(url);
 }
 
-/** 在当前页面旁打开下载面板，不改变路由历史。 */
+/** 在当前页面旁打开下载面板，不改变路由历史。target.pages 一并透传：面板据此免去一次详情请求。 */
 export function fillDownloadForm(target: DownloadTarget): void {
   useDownloadPanelStore().open(target);
 }

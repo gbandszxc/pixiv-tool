@@ -763,6 +763,8 @@ export default {
       pageDownloadStarted: "ダウンロードタスクを作成しました：{count} ページ",
       pageDownloadFailed: "ダウンロードタスクを作成できませんでした",
       pageAllSaved: "すべてのページをダウンロード済みです",
+      pagePickerEmpty: "選択できるページがありません",
+      pageSelectRequired: "少なくとも 1 ページ選択してください",
     },
     author: {
       follow: "フォローする",

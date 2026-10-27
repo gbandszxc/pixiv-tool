@@ -169,7 +169,7 @@ pixiv-tool/
 │  ├─ src/
 │  │  ├─ views/                 # ToolsView（下载页签壳）/ TasksView / HistoryView / SaucenaoView（以图识图）
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark/History/Me + Work/Series/Author/Novel
-│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/（核心导航 / PageBackButton）download/（共用下载表单 / 状态栏）settings/（SettingsPanel / SettingsDialog / TranslationAdvancedPanel / TranslationAgentFields / sections.ts）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / CopyWorkId / PageDownloadPicker / NovelContent / NovelTranslationMenu / TranslationProgressBanner / SectionTabs / RelatedGrid）
+│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/（核心导航 / PageBackButton）download/（共用下载表单 / 状态栏 / PageDownloadPicker）settings/（SettingsPanel / SettingsDialog / TranslationAdvancedPanel / TranslationAgentFields / sections.ts）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / CopyWorkId / NovelContent / NovelTranslationMenu / TranslationProgressBanner / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history/translation，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
@@ -1235,15 +1235,26 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
   「已复制 pid …」并把图标瞬时切为 `check`（约 1.6s 复原），失败给统一通知；用原生
   `<button>`（`md-icon-button` 的 40px 高度会撑高紧凑信息行），`aria-label` 与 `title`
   同文案，`focus-visible` 为 primary 2px 外环。放在右栏信息区、不占顶栏动作位。
-- **多 P 按页下载选择器（`PageDownloadPicker`）**：仅多页插画/漫画详情渲染（单页与
-  ugoira 整块不渲染，避免无谓的已下载查询）。方形缩略图网格
-  `repeat(auto-fill, minmax(56px,1fr))`、`--radius-control` 圆角；序号为左上角 11px 胶囊角标，
-  已下载页叠 11px「已下载」胶囊；选中态 = 2px primary 描边 + 右上角 16px 实心圆勾
-  （不只靠颜色区分）。工具行为「全选」（优先未下载页）/「清空」文本按钮 +
-  「已选 N / M 页」回显，底部 `md-filled-button`「下载所选 N 页」调 `task_create` 带
-  `pages`（0 起页码），任务完成后刷新「已下载」标记；组件无卡片外框（标题 + 网格 +
-  动作行，纵向 `--space-md` 分隔）。窄窗（≤959px）信息列变为流式块，选择器自然落到
-  图片下方、整宽铺开。
+- **多 P 按页下载选择器（`PageDownloadPicker`）**：位于**下载侧栏**
+  （`components/download/PageDownloadPicker.vue`），作品详情页不再渲染。出现条件 =
+  下载面板「插画」页签 + 来源「单张」+ 解析出的作品为多页且非 ugoira（单页与 ugoira
+  整块不渲染，避免无谓的已下载查询）。组件职责收窄为**受控选择**：只渲染方形缩略图
+  网格 + 「全选」（优先未下载页）/「清空」文本按钮 + 「已选 N / M 页」回显，选中集合经
+  `v-model` 交给父级；自身不建任务、不查已下载，提交统一走面板的「开始抓取」。
+  **数据来源两条**：① 详情页顶栏「返填表单」把已加载的 `pages` 预置进面板，零额外请求；
+  ② 列表卡片 / 作者页返填或手动输入 id 时，面板自身按 **350ms 防抖**调
+  `browse_work_detail` 拉详情（失败静默、不渲染选择器）。新作品载入后**默认全选**，
+  任务侧按页差集只下缺的页、已下载页自动跳过；用户手动清空后不会被重新选上。
+  **按钮文案**：全选时为面板的「开始抓取」（= 整件，等价旧行为），部分选择时切换为
+  「下载所选 N 页」（调 `task_create` 带 `pages`，0 起页码），清空后禁用，提交中禁用并
+  `aria-busy`。方形缩略图网格 `repeat(auto-fill, minmax(56px,1fr))`、`--radius-control`
+  圆角；序号为左上角 11px 胶囊角标，已下载页叠 11px「已下载」胶囊（来自
+  `illust_saved_pages`，由面板侧查询）；选中态 = 2px primary 描边 + 右上角 16px 实心圆勾
+  （不只靠颜色区分）。组件无卡片外框（标题 + 网格 + 动作行，纵向 `--space-md` 分隔），
+  `.panel-body` 内排在表单之后。**布局随侧栏落位**：面板自身 `container-type: inline-size`
+  ——右侧 480px 落位天然 <640px，保持单列、选择器在表单下方；底部整宽落位在
+  `@container (min-width: 640px)` 且面板内含选择器时改两栏（页签横跨顶部、左表单右
+  选择器，缩略图区最多两行后内部滚动）。
 - **详情页顶栏与面板（查看器 / 阅读器共用）**：顶栏带文案的动作保持 40px 胶囊（收藏），
   图标动作统一 `md-icon-button`（40×40、无描边、20px lucide 官方路径线性图标，stroke 2），
   顺序为「收藏 / 评论 / 返填表单 / 在浏览器中打开」；**不再用只有图标的
@@ -1401,7 +1412,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
 | `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位 |
-| `illust_saved_pages(artworkId)` | 已保存页查询：返回 `{pages:[0,2], ugoira:false}`（0 起页码升序）；无记录 → `{"pages":[],"ugoira":false}`，ugoira 有记录 → `{"pages":[0],"ugoira":true}`；详情页按页下载选择器据此标记「已下载」 |
+| `illust_saved_pages(artworkId)` | 已保存页查询：返回 `{pages:[0,2], ugoira:false}`（0 起页码升序）；无记录 → `{"pages":[],"ugoira":false}`，ugoira 有记录 → `{"pages":[0],"ugoira":true}`；下载侧栏按页选择器据此标记「已下载」 |
 | `browse_home_feed` | 首页推荐流（street POST + csrf token，进程内 30min 缓存） |
 | `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
 | `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |

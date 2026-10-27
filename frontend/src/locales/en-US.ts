@@ -806,6 +806,8 @@ export default {
       pageDownloadStarted: "Download task created: {count} pages",
       pageDownloadFailed: "Failed to create download task",
       pageAllSaved: "All pages already downloaded",
+      pagePickerEmpty: "No selectable pages",
+      pageSelectRequired: "Select at least one page",
     },
     author: {
       follow: "Follow",

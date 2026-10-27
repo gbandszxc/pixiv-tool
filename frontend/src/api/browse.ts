@@ -159,6 +159,15 @@ export interface BrowseUserProfile {
   is_followed?: boolean;
 }
 
+/** 插画/漫画的单个页面（small/medium 可能缺失，original 必有）。 */
+export type IllustPage = {
+  small?: string;
+  medium?: string;
+  original: string;
+  width?: number;
+  height?: number;
+};
+
 /** browse_work_detail（illust/manga）返回体；detail_kind 用于运行时区分联合类型。 */
 export interface BrowseIllustDetail {
   detail_kind: "illust";
@@ -172,7 +181,7 @@ export interface BrowseIllustDetail {
     bookmarked?: boolean;
   };
   /** 单页作品也返回 1 项 */
-  pages: { small?: string; medium?: string; original: string; width?: number; height?: number }[];
+  pages: IllustPage[];
   /** ugoira 动图帧信息；V1 只显示封面帧 */
   ugoira?: { src: string; frames: { file: string; delay: number }[] } | null;
   /** 所属系列（页面顶部入口） */
