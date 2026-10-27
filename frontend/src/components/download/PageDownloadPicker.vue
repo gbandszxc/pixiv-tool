@@ -58,6 +58,18 @@ watch(() => props.modelValue, (value) => {
 });
 const selected = computed(() => new Set(selection.value));
 const selectedCount = computed(() => selected.value.size);
+/**
+ * 全选按钮的禁用判定：selectAll 的目标集（未下载页；全部已下载则退化为全部页）
+ * 已与当前选中集一致时，点击不会有任何变化。
+ */
+const selectDisabled = computed(() => {
+  if (total.value === 0) return true;
+  const unsaved = props.pages.map((_, i) => i).filter((i) => !savedPages.value.has(i));
+  const goal = unsaved.length ? unsaved : props.pages.map((_, i) => i);
+  return goal.length === selection.value.length && goal.every((i) => selected.value.has(i));
+});
+/** 清空按钮的禁用判定：已经一页未选时无可清空。 */
+const clearDisabled = computed(() => selectedCount.value === 0);
 
 function isSelected(index: number): boolean {
   return selected.value.has(index);
@@ -101,6 +113,7 @@ function clearAll(): void {
             type="button"
             class="picker-link"
             :title="t('browse.work.pageSelectAll')"
+            :disabled="props.disabled || selectDisabled"
             @click="selectAll"
           >
             {{ t("browse.work.pageSelectAll") }}
@@ -109,6 +122,7 @@ function clearAll(): void {
             type="button"
             class="picker-link"
             :title="t('browse.work.pageSelectNone')"
+            :disabled="props.disabled || clearDisabled"
             @click="clearAll"
           >
             {{ t("browse.work.pageSelectNone") }}
@@ -202,6 +216,16 @@ function clearAll(): void {
 
 .picker-link:hover {
   color: var(--ink);
+}
+
+/* 无动作可做（已全选 / 已清空）或外部禁用时：降透明度、不变色、不可点 */
+.picker-link:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.picker-link:disabled:hover {
+  color: var(--ink-muted);
 }
 
 .picker-link:focus-visible {
