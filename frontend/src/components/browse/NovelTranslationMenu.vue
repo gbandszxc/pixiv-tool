@@ -984,7 +984,8 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
   width: min(420px, calc(100vw - var(--space-lg) * 2));
   max-width: calc(100vw - var(--space-lg) * 2);
-  max-height: min(76vh, 620px);
+  height: min(72vh, 520px);
+  max-height: calc(100vh - 100px);
   border-radius: 16px;
   background: var(--md-sys-color-surface-container);
   border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 20%, transparent);
@@ -1159,7 +1160,23 @@ onBeforeUnmount(() => {
 }
 
 /* 内容区是唯一滚动容器：长文、问题列表、预览都在这里内滚。 */
-.panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-sm) var(--space-md); }
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-sm) var(--space-md);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent) transparent;
+}
+.panel-body::-webkit-scrollbar { width: 6px; }
+.panel-body::-webkit-scrollbar-track { background: transparent; }
+.panel-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent);
+  border-radius: 999px;
+}
+.panel-body::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
+}
 .panel-section { display: flex; flex-direction: column; gap: var(--space-sm); min-width: 0; }
 .panel-state-line { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .panel-meta { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }

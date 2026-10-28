@@ -277,6 +277,41 @@ textarea {
 .m3-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-md); }
 .m3-choice { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }
 .m3-alert { margin-top: var(--space-lg); padding: var(--space-md) var(--space-lg); border-radius: 12px; background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
+
+/* 全局滚动条美化：透明轨道、细滑块、圆角无上下箭头 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent);
+  border-radius: 999px;
+  transition: background 150ms ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
 .m3-alert.error { background: #ffdad6; color: #410002; }
 .m3-alert.warning { background: #ffddb2; color: #2a1700; }
 .m3-table { width: 100%; border-collapse: collapse; background: var(--md-sys-color-surface-container); border-radius: 16px; overflow: hidden; }
