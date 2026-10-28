@@ -28,6 +28,7 @@ import {
 } from "../../api/translation";
 import { useTranslationStore } from "../../stores/translation";
 import { useSettingsStore } from "../../stores/settings";
+import { notify } from "../../ui/notify";
 import TranslationProgressBanner from "./TranslationProgressBanner.vue";
 
 const props = defineProps<{
@@ -69,17 +70,114 @@ const availableModels = computed(() => {
   return models;
 });
 
-async function onModelChange(model: string) {
-  if (!model || model === currentModel.value) return;
+const modelSelectRef = ref<HTMLElement | null>(null);
+
+async function copyModelId(): Promise<void> {
+  if (!currentModel.value) return;
   try {
-    await settingsStore.saveSettings({ translation_model: model });
+    await navigator.clipboard.writeText(currentModel.value);
+    notify(t("common.copied"));
   } catch (err) {
     actionError.value = errorMessage(err);
   }
 }
 
+/**
+ * 针对 Material Web select 的 shadow DOM 穿透补丁：
+ * 1. 约束未展开 label 单行、溢出省略截断（修复 flex item 默认 min-width: auto 撑破容器换行）；
+ * 2. 展开菜单内部允许模型 ID 正常折行并完整展示。
+ */
+function patchSelectEllipsis(): void {
+  const select = modelSelectRef.value;
+  if (!select || !select.shadowRoot) return;
+  if (!select.shadowRoot.querySelector("style[data-ellipsis]")) {
+    const style = document.createElement("style");
+    style.setAttribute("data-ellipsis", "true");
+    style.textContent = `
+      :host {
+        min-width: 0 !important;
+        white-space: nowrap !important;
+      }
+      .field, .select {
+        min-width: 0 !important;
+        max-width: 100% !important;
+      }
+      #label {
+        min-width: 0 !important;
+        width: 100% !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+        display: block !important;
+      }
+    `;
+    select.shadowRoot.appendChild(style);
+  }
+  const field = select.shadowRoot.querySelector("md-outlined-field");
+  if (field && field.shadowRoot && !field.shadowRoot.querySelector("style[data-ellipsis]")) {
+    const fieldStyle = document.createElement("style");
+    fieldStyle.setAttribute("data-ellipsis", "true");
+    fieldStyle.textContent = `
+      .container {
+        min-width: 0 !important;
+        max-width: 100% !important;
+      }
+      .middle, .content {
+        min-width: 0 !important;
+        overflow: hidden !important;
+      }
+    `;
+    field.shadowRoot.appendChild(fieldStyle);
+  }
+  const options = select.querySelectorAll("md-select-option");
+  options.forEach((opt) => {
+    if (opt.shadowRoot && !opt.shadowRoot.querySelector("style[data-wrap]")) {
+      const optStyle = document.createElement("style");
+      optStyle.setAttribute("data-wrap", "true");
+      optStyle.textContent = `
+        #item, md-item {
+          height: auto !important;
+          min-height: 40px !important;
+          white-space: normal !important;
+        }
+      `;
+      opt.shadowRoot.appendChild(optStyle);
+      const item = opt.shadowRoot.querySelector("md-item");
+      if (item && item.shadowRoot && !item.shadowRoot.querySelector("style[data-wrap]")) {
+        const itemStyle = document.createElement("style");
+        itemStyle.setAttribute("data-wrap", "true");
+        itemStyle.textContent = `
+          .text {
+            height: auto !important;
+            white-space: normal !important;
+            word-break: break-all !important;
+            overflow-wrap: anywhere !important;
+            line-height: 1.4 !important;
+          }
+        `;
+        item.shadowRoot.appendChild(itemStyle);
+      }
+    }
+  });
+}
+
 const open = ref(false);
 const panel = ref<HTMLElement | null>(null);
+
+watch([open, availableModels, currentModel], () => {
+  if (open.value) void nextTick(patchSelectEllipsis);
+});
+
+async function onModelChange(model: string) {
+  if (!model || model === currentModel.value) return;
+  try {
+    await settingsStore.saveSettings({ translation_model: model });
+    void nextTick(patchSelectEllipsis);
+  } catch (err) {
+    actionError.value = errorMessage(err);
+  }
+}
+
 interface Focusable { focus(): void }
 const trigger = ref<Focusable | null>(null);
 
@@ -586,17 +684,34 @@ onBeforeUnmount(() => {
         <div class="panel-model-control">
           <md-outlined-select
             v-if="availableModels.length"
+            ref="modelSelectRef"
             class="panel-model-select"
             :value="currentModel"
+            :title="currentModel"
             :disabled="busy"
             :aria-label="t('translation.model')"
             @change="onModelChange(($event.target as HTMLSelectElement).value)"
           >
-            <md-select-option v-for="m in availableModels" :key="m" :value="m">{{ m }}</md-select-option>
+            <md-select-option v-for="m in availableModels" :key="m" :value="m">
+              <div class="model-option-text">{{ m }}</div>
+            </md-select-option>
           </md-outlined-select>
           <span v-else class="panel-model-text" :title="currentModel || t('translation.noModelConfigured')">
             {{ currentModel || t('translation.noModelConfigured') }}
           </span>
+          <button
+            type="button"
+            class="panel-model-copy-btn"
+            :disabled="!currentModel"
+            :title="t('common.copy')"
+            :aria-label="t('common.copy')"
+            @click="copyModelId"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+              <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+            </svg>
+          </button>
         </div>
       </div>
 
@@ -919,13 +1034,36 @@ onBeforeUnmount(() => {
   flex: none;
 }
 .panel-model-icon { width: 15px; height: 15px; color: var(--md-sys-color-primary); }
-.panel-model-control { flex: 1; min-width: 0; display: flex; justify-content: flex-end; }
+.panel-model-control {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
 .panel-model-select {
   width: 100%;
-  max-width: 250px;
+  max-width: 196px;
+  min-width: 0;
   --md-outlined-field-top-space: 4px;
   --md-outlined-field-bottom-space: 4px;
   --md-outlined-select-text-field-input-text-size: 12px;
+}
+.panel-model-select md-select-option {
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  height: auto;
+  min-height: 40px;
+}
+.model-option-text {
+  white-space: normal;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  font-size: 12px;
+  padding: 4px 0;
 }
 .panel-model-text {
   color: var(--ink);
@@ -935,6 +1073,38 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: right;
+  max-width: 196px;
+}
+.panel-model-copy-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: color 140ms ease, background 140ms ease;
+}
+.panel-model-copy-btn:hover:not(:disabled) {
+  color: var(--md-sys-color-primary);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+.panel-model-copy-btn:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 1px;
+}
+.panel-model-copy-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.panel-model-copy-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* tab 条：M3 Primary Tab 质感与平滑下划线指示条 */
