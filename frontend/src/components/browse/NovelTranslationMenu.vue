@@ -102,6 +102,13 @@ function patchSelectEllipsis(): void {
         min-width: 0 !important;
         max-width: 100% !important;
       }
+      md-menu {
+        max-width: 220px !important;
+        --__menu-max-width: 220px !important;
+      }
+      .menu-wrapper {
+        max-width: 220px !important;
+      }
       #label {
         min-width: 0 !important;
         width: 100% !important;
@@ -139,6 +146,7 @@ function patchSelectEllipsis(): void {
           height: auto !important;
           min-height: 40px !important;
           white-space: normal !important;
+          max-width: 220px !important;
         }
       `;
       opt.shadowRoot.appendChild(optStyle);
@@ -153,6 +161,7 @@ function patchSelectEllipsis(): void {
             word-break: break-all !important;
             overflow-wrap: anywhere !important;
             line-height: 1.4 !important;
+            max-width: 190px !important;
           }
         `;
         item.shadowRoot.appendChild(itemStyle);
@@ -1056,6 +1065,7 @@ onBeforeUnmount(() => {
   overflow-wrap: anywhere;
   height: auto;
   min-height: 40px;
+  max-width: 220px;
 }
 .model-option-text {
   white-space: normal;
@@ -1064,6 +1074,7 @@ onBeforeUnmount(() => {
   line-height: 1.4;
   font-size: 12px;
   padding: 4px 0;
+  max-width: 190px;
 }
 .panel-model-text {
   color: var(--ink);
