@@ -85,22 +85,44 @@ async function copyModelId(): Promise<void> {
 /**
  * 针对 Material Web select 的 shadow DOM 穿透补丁：
  * 1. 约束未展开 label 单行、溢出省略截断（修复 flex item 默认 min-width: auto 撑破容器换行）；
- * 2. 展开菜单内部允许模型 ID 正常折行并完整展示。
+ * 2. 展开菜单内部允许模型 ID 正常折行并完整展示；
+ * 3. 兼容首次打开时 LitElement 异步渲染 Shadow DOM，具备 updateComplete 等待与微任务重试。
  */
-function patchSelectEllipsis(): void {
-  const select = modelSelectRef.value;
-  if (!select || !select.shadowRoot) return;
+async function patchSelectEllipsis(retries = 8): Promise<void> {
+  const select = modelSelectRef.value as (HTMLElement & {
+    updateComplete?: Promise<boolean>;
+    shadowRoot?: ShadowRoot | null;
+  }) | null;
+  if (!select) return;
+
+  if (select.updateComplete) {
+    try {
+      await select.updateComplete;
+    } catch {}
+  }
+
+  if (!select.shadowRoot) {
+    if (retries > 0) {
+      requestAnimationFrame(() => void patchSelectEllipsis(retries - 1));
+    }
+    return;
+  }
+
   if (!select.shadowRoot.querySelector("style[data-ellipsis]")) {
     const style = document.createElement("style");
     style.setAttribute("data-ellipsis", "true");
     style.textContent = `
       :host {
         min-width: 0 !important;
+        max-width: 196px !important;
         white-space: nowrap !important;
+        overflow: hidden !important;
+        display: inline-flex !important;
       }
       .field, .select {
         min-width: 0 !important;
         max-width: 100% !important;
+        overflow: hidden !important;
       }
       md-menu {
         max-width: 220px !important;
@@ -120,25 +142,50 @@ function patchSelectEllipsis(): void {
     `;
     select.shadowRoot.appendChild(style);
   }
-  const field = select.shadowRoot.querySelector("md-outlined-field");
-  if (field && field.shadowRoot && !field.shadowRoot.querySelector("style[data-ellipsis]")) {
-    const fieldStyle = document.createElement("style");
-    fieldStyle.setAttribute("data-ellipsis", "true");
-    fieldStyle.textContent = `
-      .container {
-        min-width: 0 !important;
-        max-width: 100% !important;
+
+  const field = select.shadowRoot.querySelector("md-outlined-field") as (HTMLElement & {
+    updateComplete?: Promise<boolean>;
+    shadowRoot?: ShadowRoot | null;
+  }) | null;
+
+  let fieldDone = false;
+  if (field) {
+    if (field.updateComplete) {
+      try {
+        await field.updateComplete;
+      } catch {}
+    }
+    if (field.shadowRoot) {
+      if (!field.shadowRoot.querySelector("style[data-ellipsis]")) {
+        const fieldStyle = document.createElement("style");
+        fieldStyle.setAttribute("data-ellipsis", "true");
+        fieldStyle.textContent = `
+          :host {
+            min-width: 0 !important;
+            max-width: 100% !important;
+            overflow: hidden !important;
+          }
+          .container {
+            min-width: 0 !important;
+            max-width: 100% !important;
+            overflow: hidden !important;
+          }
+          .middle, .content {
+            min-width: 0 !important;
+            max-width: 100% !important;
+            overflow: hidden !important;
+          }
+        `;
+        field.shadowRoot.appendChild(fieldStyle);
       }
-      .middle, .content {
-        min-width: 0 !important;
-        overflow: hidden !important;
-      }
-    `;
-    field.shadowRoot.appendChild(fieldStyle);
+      fieldDone = true;
+    }
   }
+
   const options = select.querySelectorAll("md-select-option");
   options.forEach((opt) => {
-    if (opt.shadowRoot && !opt.shadowRoot.querySelector("style[data-wrap]")) {
+    const el = opt as HTMLElement & { shadowRoot?: ShadowRoot | null };
+    if (el.shadowRoot && !el.shadowRoot.querySelector("style[data-wrap]")) {
       const optStyle = document.createElement("style");
       optStyle.setAttribute("data-wrap", "true");
       optStyle.textContent = `
@@ -149,8 +196,8 @@ function patchSelectEllipsis(): void {
           max-width: 220px !important;
         }
       `;
-      opt.shadowRoot.appendChild(optStyle);
-      const item = opt.shadowRoot.querySelector("md-item");
+      el.shadowRoot.appendChild(optStyle);
+      const item = el.shadowRoot.querySelector("md-item");
       if (item && item.shadowRoot && !item.shadowRoot.querySelector("style[data-wrap]")) {
         const itemStyle = document.createElement("style");
         itemStyle.setAttribute("data-wrap", "true");
@@ -168,13 +215,19 @@ function patchSelectEllipsis(): void {
       }
     }
   });
+
+  if (!fieldDone && retries > 0) {
+    requestAnimationFrame(() => void patchSelectEllipsis(retries - 1));
+  }
 }
 
 const open = ref(false);
 const panel = ref<HTMLElement | null>(null);
 
 watch([open, availableModels, currentModel], () => {
-  if (open.value) void nextTick(patchSelectEllipsis);
+  if (open.value) {
+    void nextTick(() => void patchSelectEllipsis());
+  }
 });
 
 async function onModelChange(model: string) {
@@ -304,6 +357,212 @@ const draftTerms = ref<ConstraintTermEdit[]>([]);
 const draftStyle = ref("");
 const termsEditable = computed(() => awaiting.value || constraints.value?.awaiting_confirmation === true);
 
+interface StructuredStyleForm {
+  genre: StyleGenre;
+  perspective: StylePerspective;
+  tendencies: string[];
+  forbidden: string[];
+  customNotes: string;
+}
+
+const STYLE_GENRE_OPTIONS = ["light_novel", "literature", "daily", "fantasy", "auto"] as const;
+type StyleGenre = typeof STYLE_GENRE_OPTIONS[number];
+
+const STYLE_PERSPECTIVE_OPTIONS = ["first_person", "third_person", "auto"] as const;
+type StylePerspective = typeof STYLE_PERSPECTIVE_OPTIONS[number];
+
+const STYLE_TENDENCY_OPTIONS = [
+  "colloquial",
+  "catchphrases",
+  "honorifics",
+  "split_sentences",
+  "preserve_syntax",
+  "preserve_spacing",
+  "onomatopoeia",
+] as const;
+
+const STYLE_FORBIDDEN_OPTIONS = [
+  "strict_terms",
+  "no_hallucination",
+  "no_translationese",
+  "no_summary",
+] as const;
+
+const styleViewMode = ref<"form" | "raw">("form");
+const styleForm = ref<StructuredStyleForm>({
+  genre: "auto",
+  perspective: "auto",
+  tendencies: [],
+  forbidden: [],
+  customNotes: "",
+});
+
+function parseStyleToStructured(raw: string): StructuredStyleForm {
+  const result: StructuredStyleForm = {
+    genre: "auto",
+    perspective: "auto",
+    tendencies: [],
+    forbidden: [],
+    customNotes: "",
+  };
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    result.genre = "light_novel";
+    result.tendencies = ["colloquial", "split_sentences", "preserve_spacing"];
+    result.forbidden = ["strict_terms", "no_hallucination", "no_translationese"];
+    return result;
+  }
+
+  // 1. JSON 解析（Pass 1 扫描模型产出结构化对象）
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    try {
+      const obj = JSON.parse(trimmed) as Record<string, unknown>;
+      const textType = String(obj.text_type || obj.genre || "").toLowerCase();
+      if (textType.includes("小说") || textType.includes("light") || textType.includes("acg")) result.genre = "light_novel";
+      else if (textType.includes("文学") || textType.includes("正剧")) result.genre = "literature";
+      else if (textType.includes("日常") || textType.includes("喜剧")) result.genre = "daily";
+      else if (textType.includes("奇幻") || textType.includes("史诗")) result.genre = "fantasy";
+
+      const dist = String(obj.narrative_distance || obj.perspective || "").toLowerCase();
+      if (dist.includes("第一人称") || dist.includes("贴近角色") || dist.includes("主观")) result.perspective = "first_person";
+      else if (dist.includes("第三人称") || dist.includes("客观") || dist.includes("全知")) result.perspective = "third_person";
+
+      const dialogue = String(obj.dialogue || "").toLowerCase();
+      const syntax = String(obj.syntax || "").toLowerCase();
+      const formality = String(obj.formality || "").toLowerCase();
+      if (dialogue.includes("口语") || formality.includes("口语")) result.tendencies.push("colloquial");
+      if (dialogue.includes("口癖") || dialogue.includes("语尾") || dialogue.includes("习惯")) result.tendencies.push("catchphrases");
+      if (dialogue.includes("敬语") || dialogue.includes("礼貌") || dialogue.includes("层级")) result.tendencies.push("honorifics");
+      if (syntax.includes("拆") || syntax.includes("短句")) result.tendencies.push("split_sentences");
+      if (syntax.includes("长句") || syntax.includes("保留原文句式")) result.tendencies.push("preserve_syntax");
+      if (syntax.includes("排版") || syntax.includes("换行") || syntax.includes("留白")) result.tendencies.push("preserve_spacing");
+
+      const annotation = String(obj.annotation || "").toLowerCase();
+      if (annotation.includes("拟声") || annotation.includes("汉化")) result.tendencies.push("onomatopoeia");
+
+      if (Array.isArray(obj.forbidden)) {
+        const forbList = obj.forbidden.map(String).join(" ");
+        if (forbList.includes("术语") || forbList.includes("译名")) result.forbidden.push("strict_terms");
+        if (forbList.includes("增删") || forbList.includes("信息")) result.forbidden.push("no_hallucination");
+        if (forbList.includes("翻译腔") || forbList.includes("直译")) result.forbidden.push("no_translationese");
+        if (forbList.includes("大纲") || forbList.includes("文体") || forbList.includes("总结")) result.forbidden.push("no_summary");
+      }
+
+      const rest: string[] = [];
+      if (obj.notes) rest.push(String(obj.notes));
+      if (obj.emotion) rest.push(String(obj.emotion));
+      result.customNotes = rest.join("；");
+      return result;
+    } catch {
+      // 容错回退
+    }
+  }
+
+  // 2. 自然文本关键词识别与回填（保留全文本在 customNotes，确保 100% 回显与测试兼容）
+  result.customNotes = trimmed;
+  const lower = trimmed.toLowerCase();
+  if (lower.includes("第一人称")) result.perspective = "first_person";
+  else if (lower.includes("第三人称")) result.perspective = "third_person";
+
+  if (lower.includes("轻小说") || lower.includes("通俗") || lower.includes("acg")) result.genre = "light_novel";
+  else if (lower.includes("文学") || lower.includes("严肃") || lower.includes("正剧")) result.genre = "literature";
+  else if (lower.includes("日常") || lower.includes("喜剧")) result.genre = "daily";
+  else if (lower.includes("奇幻") || lower.includes("史诗")) result.genre = "fantasy";
+
+  if (lower.includes("口语")) result.tendencies.push("colloquial");
+  if (lower.includes("口癖") || lower.includes("语癖")) result.tendencies.push("catchphrases");
+  if (lower.includes("敬语") || lower.includes("礼貌")) result.tendencies.push("honorifics");
+  if (lower.includes("短句") || lower.includes("拆分长句")) result.tendencies.push("split_sentences");
+  if (lower.includes("长句保留") || lower.includes("保留原文句式")) result.tendencies.push("preserve_syntax");
+  if (lower.includes("排版") || lower.includes("留白")) result.tendencies.push("preserve_spacing");
+  if (lower.includes("拟声")) result.tendencies.push("onomatopoeia");
+
+  if (lower.includes("锁定译名") || lower.includes("固定术语")) result.forbidden.push("strict_terms");
+  if (lower.includes("增删") || lower.includes("幻觉") || lower.includes("漏译")) result.forbidden.push("no_hallucination");
+  if (lower.includes("翻译腔") || lower.includes("机械直译")) result.forbidden.push("no_translationese");
+  if (lower.includes("大纲") || lower.includes("总结文体")) result.forbidden.push("no_summary");
+
+  return result;
+}
+
+function syncDraftStyleFromForm(): void {
+  const form = styleForm.value;
+  const hasOptions =
+    form.genre !== "auto" ||
+    form.perspective !== "auto" ||
+    form.tendencies.length > 0 ||
+    form.forbidden.length > 0;
+
+  if (!hasOptions && form.customNotes.trim()) {
+    draftStyle.value = form.customNotes.trim();
+    return;
+  }
+
+  const sections: string[] = [];
+  if (form.genre !== "auto") {
+    sections.push(`文体基调：${t(`translation.job.styleGenres.${form.genre}`)}`);
+  }
+  if (form.perspective !== "auto") {
+    sections.push(`叙述视角：${t(`translation.job.stylePerspectives.${form.perspective}`)}`);
+  }
+  if (form.tendencies.length) {
+    const list = form.tendencies.map((k) => t(`translation.job.styleTendencyOptions.${k}`)).join("、");
+    sections.push(`语言与句式：${list}`);
+  }
+  if (form.forbidden.length) {
+    const list = form.forbidden.map((k) => t(`translation.job.styleForbiddenOptions.${k}`)).join("、");
+    sections.push(`严格禁止：${list}`);
+  }
+  const custom = form.customNotes.trim();
+  if (custom) {
+    sections.push(`补充要求：${custom}`);
+  }
+  draftStyle.value = sections.join("；\n");
+}
+
+function setGenre(genre: StyleGenre): void {
+  styleForm.value.genre = genre;
+  syncDraftStyleFromForm();
+}
+
+function setPerspective(perspective: StylePerspective): void {
+  styleForm.value.perspective = perspective;
+  syncDraftStyleFromForm();
+}
+
+function toggleTendency(key: string): void {
+  const list = styleForm.value.tendencies;
+  const idx = list.indexOf(key);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.push(key);
+  syncDraftStyleFromForm();
+}
+
+function toggleForbidden(key: string): void {
+  const list = styleForm.value.forbidden;
+  const idx = list.indexOf(key);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.push(key);
+  syncDraftStyleFromForm();
+}
+
+function onCustomNotesInput(val: string): void {
+  styleForm.value.customNotes = val;
+  syncDraftStyleFromForm();
+}
+
+function onRawStyleInput(val: string): void {
+  draftStyle.value = val;
+  styleForm.value.customNotes = val;
+}
+
+function setStyleMode(mode: "form" | "raw"): void {
+  styleViewMode.value = mode;
+  if (mode === "raw") {
+    syncDraftStyleFromForm();
+  }
+}
+
 function toEdits(terms: TranslationConstraints["terms"]): ConstraintTermEdit[] {
   return terms.map((term) => ({
     source_term: term.source_term,
@@ -327,6 +586,7 @@ async function loadConstraints(): Promise<void> {
     if (data) {
       draftTerms.value = toEdits(data.terms);
       draftStyle.value = data.style;
+      styleForm.value = parseStyleToStructured(data.style);
     }
   } finally {
     if (job.value?.job_id === current.job_id) constraintsLoading.value = false;
@@ -699,6 +959,7 @@ onBeforeUnmount(() => {
             :title="currentModel"
             :disabled="busy"
             :aria-label="t('translation.model')"
+            @vue:mounted="() => patchSelectEllipsis()"
             @change="onModelChange(($event.target as HTMLSelectElement).value)"
           >
             <md-select-option v-for="m in availableModels" :key="m" :value="m">
@@ -818,17 +1079,171 @@ onBeforeUnmount(() => {
                 <p v-else-if="term.notes" class="term-notes">{{ term.notes }}</p>
               </div>
             </div>
-            <label class="style-field">
-              <span class="term-label">{{ t('translation.job.style') }}</span>
-              <textarea
-                class="style-input"
-                rows="3"
-                :value="draftStyle"
-                :readonly="!termsEditable"
-                :aria-label="t('translation.job.style')"
-                @input="draftStyle = ($event.target as HTMLTextAreaElement).value"
-              ></textarea>
-            </label>
+            <!-- 结构化文风约束区域 -->
+            <div class="style-card" :class="{ 'is-editable': termsEditable }">
+              <div class="style-card-header">
+                <div class="style-card-title">
+                  <svg class="style-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 20h9"/>
+                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                  </svg>
+                  <span>{{ t('translation.job.styleStructuredTitle') }}</span>
+                </div>
+                <div v-if="termsEditable" class="style-mode-switcher">
+                  <button
+                    type="button"
+                    class="style-mode-btn"
+                    :class="{ active: styleViewMode === 'form' }"
+                    @click="setStyleMode('form')"
+                  >
+                    {{ t('translation.job.styleModeForm') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="style-mode-btn"
+                    :class="{ active: styleViewMode === 'raw' }"
+                    @click="setStyleMode('raw')"
+                  >
+                    {{ t('translation.job.styleModeRaw') }}
+                  </button>
+                </div>
+                <span v-else class="style-readonly-badge">
+                  {{ t('translation.job.termsFrozen', { version: constraints.version }) }}
+                </span>
+              </div>
+
+              <!-- 编辑态：结构化表单模式 -->
+              <div v-if="termsEditable && styleViewMode === 'form'" class="style-form-body">
+                <!-- 文体基调 (单选) -->
+                <div class="style-group">
+                  <span class="style-group-label">{{ t('translation.job.styleGenre') }}</span>
+                  <div class="style-chip-group">
+                    <button
+                      v-for="opt in STYLE_GENRE_OPTIONS"
+                      :key="opt"
+                      type="button"
+                      class="style-chip"
+                      :class="{ selected: styleForm.genre === opt }"
+                      @click="setGenre(opt)"
+                    >
+                      {{ t(`translation.job.styleGenres.${opt}`) }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 叙述视角 (单选) -->
+                <div class="style-group">
+                  <span class="style-group-label">{{ t('translation.job.stylePerspective') }}</span>
+                  <div class="style-chip-group">
+                    <button
+                      v-for="opt in STYLE_PERSPECTIVE_OPTIONS"
+                      :key="opt"
+                      type="button"
+                      class="style-chip"
+                      :class="{ selected: styleForm.perspective === opt }"
+                      @click="setPerspective(opt)"
+                    >
+                      {{ t(`translation.job.stylePerspectives.${opt}`) }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 语言与句式倾向 (多选) -->
+                <div class="style-group">
+                  <span class="style-group-label">{{ t('translation.job.styleTendencies') }}</span>
+                  <div class="style-chip-group">
+                    <button
+                      v-for="opt in STYLE_TENDENCY_OPTIONS"
+                      :key="opt"
+                      type="button"
+                      class="style-chip filter-chip"
+                      :class="{ selected: styleForm.tendencies.includes(opt) }"
+                      @click="toggleTendency(opt)"
+                    >
+                      <svg v-if="styleForm.tendencies.includes(opt)" class="chip-check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="20 6 9 17 4 12"/>
+                      </svg>
+                      {{ t(`translation.job.styleTendencyOptions.${opt}`) }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 严格禁止项 (多选，警示色调) -->
+                <div class="style-group style-group-forbidden">
+                  <span class="style-group-label forbidden-label">{{ t('translation.job.styleForbidden') }}</span>
+                  <div class="style-forbidden-list">
+                    <label
+                      v-for="opt in STYLE_FORBIDDEN_OPTIONS"
+                      :key="opt"
+                      class="style-forbidden-item"
+                      :class="{ checked: styleForm.forbidden.includes(opt) }"
+                    >
+                      <input
+                        type="checkbox"
+                        class="forbidden-checkbox"
+                        :checked="styleForm.forbidden.includes(opt)"
+                        @change="toggleForbidden(opt)"
+                      />
+                      <span class="forbidden-text">{{ t(`translation.job.styleForbiddenOptions.${opt}`) }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <!-- 补充说明 / 自定义约束 (可输入) -->
+                <div class="style-group">
+                  <span class="style-group-label">{{ t('translation.job.styleCustom') }}</span>
+                  <textarea
+                    class="style-input"
+                    rows="2"
+                    :value="styleForm.customNotes"
+                    :placeholder="t('translation.job.styleCustomPlaceholder')"
+                    :aria-label="t('translation.job.styleCustom')"
+                    @input="onCustomNotesInput(($event.target as HTMLTextAreaElement).value)"
+                  ></textarea>
+                </div>
+              </div>
+
+              <!-- 编辑态：原始文本模式 (支持直接编辑完整 draftStyle) -->
+              <div v-else-if="termsEditable && styleViewMode === 'raw'" class="style-raw-body">
+                <textarea
+                  class="style-input"
+                  rows="5"
+                  :value="draftStyle"
+                  :aria-label="t('translation.job.style')"
+                  @input="onRawStyleInput(($event.target as HTMLTextAreaElement).value)"
+                ></textarea>
+              </div>
+
+              <!-- 只读冻结态 -->
+              <div v-else class="style-readonly-body">
+                <div class="readonly-row">
+                  <span class="readonly-label">{{ t('translation.job.styleGenre') }}：</span>
+                  <span class="readonly-value">
+                    {{ t(`translation.job.styleGenres.${styleForm.genre}`) }} · {{ t(`translation.job.stylePerspectives.${styleForm.perspective}`) }}
+                  </span>
+                </div>
+                <div v-if="styleForm.tendencies.length" class="readonly-row">
+                  <span class="readonly-label">{{ t('translation.job.styleTendencies') }}：</span>
+                  <div class="readonly-chips">
+                    <span v-for="opt in styleForm.tendencies" :key="opt" class="readonly-chip">
+                      {{ t(`translation.job.styleTendencyOptions.${opt}`) }}
+                    </span>
+                  </div>
+                </div>
+                <div v-if="styleForm.forbidden.length" class="readonly-row">
+                  <span class="readonly-label forbidden-label">{{ t('translation.job.styleForbidden') }}：</span>
+                  <div class="readonly-chips">
+                    <span v-for="opt in styleForm.forbidden" :key="opt" class="readonly-chip forbidden-chip">
+                      {{ t(`translation.job.styleForbiddenOptions.${opt}`) }}
+                    </span>
+                  </div>
+                </div>
+                <div v-if="styleForm.customNotes" class="readonly-row">
+                  <span class="readonly-label">{{ t('translation.job.styleCustom') }}：</span>
+                  <p class="readonly-custom-text">{{ styleForm.customNotes }}</p>
+                </div>
+              </div>
+            </div>
             <md-filled-button
               v-if="termsEditable"
               class="confirm-button"
@@ -1033,6 +1448,10 @@ onBeforeUnmount(() => {
   margin: 0 var(--space-md) var(--space-xs);
   background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 50%, transparent);
   border-radius: 8px;
+  min-width: 0;
+  max-width: calc(100% - var(--space-md) * 2);
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .panel-model-label {
   display: flex;
@@ -1042,20 +1461,25 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 500;
   flex: none;
+  white-space: nowrap;
 }
-.panel-model-icon { width: 15px; height: 15px; color: var(--md-sys-color-primary); }
+.panel-model-icon { width: 15px; height: 15px; color: var(--md-sys-color-primary); flex: none; }
 .panel-model-control {
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
+  max-width: calc(100% - 76px);
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
+  overflow: hidden;
 }
 .panel-model-select {
-  width: 100%;
+  flex: 1 1 auto;
+  width: auto;
   max-width: 196px;
   min-width: 0;
+  overflow: hidden;
   --md-outlined-field-top-space: 4px;
   --md-outlined-field-bottom-space: 4px;
   --md-outlined-select-text-field-input-text-size: 12px;
@@ -1205,7 +1629,7 @@ onBeforeUnmount(() => {
 .term-head { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
 .term-source { flex: 1; min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .term-type { flex: none; padding: 0 var(--space-xs); border-radius: 999px; background: var(--md-sys-color-surface-container); color: var(--ink-muted); font-size: 11px; line-height: 1.6; }
-.term-field, .style-field { display: flex; flex-direction: column; gap: 2px; }
+.term-field { display: flex; flex-direction: column; gap: 2px; }
 .term-label { color: var(--ink-muted); font-size: 11px; line-height: 1.4; }
 .term-input, .style-input {
   box-sizing: border-box;
@@ -1220,10 +1644,228 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 .term-input:focus-visible, .style-input:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; border-color: transparent; }
-.style-input { resize: vertical; line-height: 1.5; }
+.style-input { resize: vertical; line-height: 1.5; font-size: 12px; }
 .term-value { color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
 .term-notes { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .confirm-button { align-self: flex-start; }
+
+/* 结构化文风表单卡片 */
+.style-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-low) 80%, transparent);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 22%, transparent);
+  transition: border-color 150ms ease;
+}
+.style-card.is-editable {
+  border-color: color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent);
+}
+.style-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+.style-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.style-title-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--md-sys-color-primary);
+  flex: none;
+}
+.style-mode-switcher {
+  display: inline-flex;
+  align-items: center;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 60%, transparent);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 1px;
+}
+.style-mode-btn {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 10.5px;
+  font-family: inherit;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+.style-mode-btn.active {
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.style-mode-btn:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 1px;
+}
+.style-readonly-badge {
+  font-size: 10.5px;
+  color: var(--ink-subtle);
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 50%, transparent);
+}
+.style-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.style-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.style-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.style-chip-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.style-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
+  background: var(--surface);
+  color: var(--ink-muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 140ms cubic-bezier(0.2, 0, 0, 1);
+  user-select: none;
+}
+.style-chip:hover:not(.selected) {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 6%, transparent);
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 35%, transparent);
+}
+.style-chip.selected {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  border-color: transparent;
+  font-weight: 600;
+}
+.style-chip:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 1px;
+}
+.chip-check-icon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  stroke: currentColor;
+}
+.style-forbidden-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: color-mix(in srgb, var(--md-sys-color-error-container) 12%, transparent);
+  padding: 6px 8px;
+  border-radius: var(--radius-control);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-error) 18%, transparent);
+}
+.style-forbidden-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--ink-muted);
+  transition: color 120ms ease;
+  user-select: none;
+}
+.style-forbidden-item:hover {
+  color: var(--ink);
+}
+.style-forbidden-item.checked {
+  color: var(--ink);
+  font-weight: 500;
+}
+.forbidden-label {
+  color: var(--md-sys-color-error);
+}
+.forbidden-checkbox {
+  accent-color: var(--md-sys-color-error);
+  width: 13px;
+  height: 13px;
+  cursor: pointer;
+  margin: 0;
+}
+.forbidden-text {
+  line-height: 1.4;
+}
+.style-readonly-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11.5px;
+}
+.readonly-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
+}
+.readonly-label {
+  color: var(--ink-muted);
+  font-weight: 600;
+  font-size: 11px;
+  flex: none;
+}
+.readonly-value {
+  color: var(--ink);
+  font-weight: 500;
+}
+.readonly-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.readonly-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 70%, transparent);
+  color: var(--ink);
+  font-size: 11px;
+}
+.readonly-chip.forbidden-chip {
+  background: color-mix(in srgb, var(--md-sys-color-error-container) 35%, transparent);
+  color: var(--md-sys-color-error);
+  font-weight: 500;
+}
+.readonly-custom-text {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11.5px;
+  line-height: 1.4;
+  word-break: break-all;
+}
 
 /* 预览：左侧块列表（窄窗改为上下堆叠），右侧原文/译文对照。 */
 .preview-layout { display: flex; flex-direction: column; gap: var(--space-sm); min-width: 0; }
