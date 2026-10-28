@@ -1,14 +1,14 @@
 export default {
   update: {
-    titles: { available: "发现新版本", downloading: "正在下载更新", opening: "下载完成，正在启动安装程序", error: "更新下载失败", cancelled: "下载已取消", guide: "安装更新" },
+    titles: { available: "发现新版本", downloading: "正在下载更新", opening: "正在打开安装程序并退出", error: "更新下载失败", cancelled: "下载已取消", ready: "更新已下载", confirm: "退出并安装更新？" },
     version: "更新至 v{version}", preparing: "正在匹配安装包…", progress: "更新下载进度",
-    download: "下载并安装", retry: "重新下载", cancelDownload: "取消下载", cancelling: "正在取消…",
-    cancelled: "下载已取消，临时文件已清理。", openRelease: "打开发布页", openDirectory: "打开下载目录", done: "完成",
-    installerOpened: "更新包已下载完成，已请求系统打开安装程序。",
-    directoryOpened: "无法自动启动安装程序，已打开下载目录，请手动运行安装包。",
-    manualOpen: "更新包已下载完成，但安装程序和文件管理器均无法打开，请按下方路径手动访问。",
-    install: { windows: "按安装程序提示完成覆盖安装。", macos: "打开 DMG，将 Pixiv Tool 拖入应用程序文件夹并替换旧版本；未签名包可尝试右键打开。", linux: "AppImage：替换旧文件并授予执行权限；deb/rpm：使用系统软件安装器安装。" },
-    closeApp: "如安装程序要求关闭当前应用，请完成下载任务后退出。", restart: "安装完成后重新启动应用。",
+    download: "下载更新", retry: "重新下载", cancelDownload: "取消下载", cancelling: "正在取消…",
+    cancelled: "下载已取消，临时文件已清理。", openRelease: "打开发布页", openDirectory: "打开下载目录",
+    ready: "更新包已下载并校验完成。点击“退出并安装更新”后，应用将在系统成功接手打开安装包后自动退出。",
+    later: "稍后安装", installNow: "退出并安装更新", confirmInstall: "仍然退出并安装", continueUsing: "后台下载", downloadReady: "更新已下载，可从账号菜单检查更新并安装。",
+    activeTasks: "存在未完成的下载或翻译任务，或任务状态尚未同步。退出将中断当前执行；请等待任务完成，或确认仍然退出并安装。",
+    install: { windows: "退出后，请按安装程序提示完成覆盖安装。", macos: "打开 DMG 后，将 Pixiv Tool 拖入应用程序文件夹并替换旧版本。应用会自动退出，仍需手动拖拽安装。", linux: "AppImage：替换旧文件并授予执行权限；deb/rpm：使用系统软件安装器安装。" },
+    restart: "安装完成后重新启动应用。",
   },
   workspace: {
   "discover": "发现",

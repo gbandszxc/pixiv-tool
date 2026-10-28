@@ -130,6 +130,8 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 
 ## Components
 
+- **应用更新 UpdateDialog**：沿用原生 m3-dialog（宽 min(480px,90vw)、最大高 88vh）与 Material 进度条/按钮。下载中“后台下载”或 Esc 只收起弹窗，显式“取消下载”才取消；后台完成/失败通知，重新检查更新可回到原进度或完成态。下载完成展示平台安装说明、完整路径；主操作 filled“退出并安装更新”，text“稍后安装”与“重新下载”，outlined“打开下载目录”；同一会话保留已下载包。存在未完成任务或状态同步失败时，在原弹窗就地显示 error 角色的中断影响与“仍然退出并安装”，不叠第二个退出确认。opening 显示不定进度并锁定操作；启动失败回完成态，保留错误与重试操作。macOS 明确仍需 DMG 拖拽覆盖。路径 anywhere 换行，操作行沿用 flex-wrap；不新增颜色、圆角、阴影或动效。
+
 - **帮助说明 HelpTooltip**：字段标签、分组名或相关操作旁使用 32px 原生帮助按钮 + 16px Lucide circle-question-mark SVG，颜色 ink-muted，hover 为 8% on-surface，focus-visible 为 primary 2px 外环；`.field-label` 用既有 4px 间距与居中对齐，保持标签字号/字重。冗长的静态帮助默认收起，悬停、键盘聚焦或点击后显示 `role=tooltip`，按钮通过 `aria-describedby` 关联完整说明，焦点留在按钮。原生 popover top layer 防止被 dialog/滚动容器裁切，优先向下、空间不足向上，视口内保留 16px 余量；浮层为 surface-container / ink、13px/1.6、12px 内边距、control 圆角与唯一合法轻阴影，宽度至多 360px（15 × space-xl），长文本按段落换行，不新增颜色或动效。指针可移入说明继续阅读（跨间隙 150ms 关闭宽限），点击可固定/再次关闭，Esc 先关说明、外部点击/失焦/页面滚动/resize 关闭。设置六组、登录指引、搜索链接/ID 帮助、以图识图介绍统一使用此入口；错误、校验、进度、空态、未配置引导、确认操作后果与维护操作立即生效的短提示仍直接显示。
 - **小说翻译（整篇 Job）**：入口为原分页底栏、阅读背景按钮右侧的 20px Lucide languages SVG + md-icon-button；点击在按钮上方弹出 384px（24 × space-lg）面板，右缘对齐触发器，底缘与触发器留 space-sm 间距。面板左缘不越过侧栏右缘（打开与窗口变化时按侧栏右缘 + space-sm 右移钳制，完整落在主工作区），层级 900 恒高于侧栏。surface-container 底、control 圆角、唯一合法轻阴影。
   - **头部**：标题 + 12px ink-muted 范围行「整篇作品 · N 页 · M 块」+ 状态行（8px 状态点 + 12px 状态文字）。状态行 `role="status" aria-live="polite"` 是唯一播报区。状态点语义：进行中 / 待确认 primary，完成 `--state-success-ink`，失败 / 需要处理 error，其余中性；入口点叠在原图标右上角并带 2px surface 描边。失败原因经状态点 / 入口 title 悬停可读，状态文字本身始终可读。

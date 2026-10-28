@@ -155,7 +155,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 与 translation/ 共 81 个 #[tauri::command]（translation 18 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 9 / app 1 / update 4）
+│     ├─ commands/              # 与 translation/ 共 82 个 #[tauri::command]（translation 18 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 9 / app 1 / update 5）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
 │     ├─ cookies.rs             # keyring CookieStore
@@ -1055,6 +1055,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ### 6.3 主题
 
+更新弹窗沿用 m3-dialog 与 Material 按钮/进度条；下载可收起后台执行，ready 展示平台引导、路径和安装/稍后操作，confirm 在原弹窗直显任务中断影响，opening 禁止重复操作，安装失败回 ready 保留包和错误。长路径与操作行允许换行，沿用既有 token，无新增动效（ADR 0040；DESIGN.md / .impeccable/design.json 同步）。
+
 全局静态帮助采用公共 `components/common/HelpTooltip.vue`：设置六组的字段/分组说明、登录方式与 Session 获取步骤、搜索链接/ID 规则、以图识图介绍/使用说明默认收进相邻帮助图标。悬停、聚焦或点击展开，role=tooltip 与 aria-describedby 保留可访问关联，原生 popover top layer 不受对话框滚动区裁切，按视口空间定位/换行；焦点留在触发器，指针可移入阅读，Esc 优先关闭说明，外部点击/失焦/滚动/resize 收起。校验错误、凭据库错误、进度、空态引导、未配置状态和确认后果保留直显，维护组保留立即生效的短提示。视觉与交互细节同步 DESIGN.md / .impeccable/design.json。
 
 维护组按缓存与日志直排分区，显示分类/总大小、确认后清理动作和最近日志；分类冗长说明收进分类旁帮助图标（HelpTooltip），路径不直接回显——由 `components/settings/CopyPathButton.vue` 复制图标承载，悬停/聚焦 tooltip 显示完整路径，点击写入剪贴板并以 Snackbar 提示、图标短暂切换为对勾。14px 标题与 12px 辅助文字沿用既有 token；日志为可聚焦的等宽纯文本滚动区，最多 240px 高，不对轮询使用 aria-live。位于末尾时跟随新日志，手动向上阅读时保留位置；空缓存/日志禁用清理，读取失败保留快照与重试；维护页关闭即停止轮询，语义及安全边界见 §9 / ADR 0027。视觉细节见 DESIGN.md / .impeccable/design.json。
@@ -1450,7 +1452,8 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_bookmark_remove(kind, id, bookmarkId)` | 取消收藏：插画走 ajax form，小说走旧式 `/novel/bookmark_setting.php` 表单 |
 | `app_exit` | 退出应用（前端确认框确认后调用，与 Cmd+Q 路径一致） |
 | `check_app_update` | 检查更新：解析 GitHub releases 页面取最新稳定版，返回 has_update/current_version/latest_version/release_url/platform/package_type；系统代理失败回退直连；启动检查无更新/失败静默，手动检查给提示 |
-| `download_app_update(version, progress)` | 下载并校验对应版本、当前平台/架构/包类型的 Release 包；progress 为 IPC Channel，返回 path/installer_opened/directory_opened/package_type；仅一个更新下载可在途 |
+| `download_app_update(version, progress)` | 下载并校验对应版本、当前平台/架构/包类型的 Release 包；progress 为 IPC Channel，返回 path/package_type，不打开安装包；仅一个更新下载可在途 |
+| `install_app_update` | 打开后端记录的已完成更新包；文件不存在或系统打开失败时返回错误并保持应用运行；安装前重新核对普通文件、下载时实际大小与 SHA256；系统接受打开请求后以 exit(0) 退出，跳过普通退出确认，不接受前端文件路径 |
 | `cancel_app_update` | 取消当前更新下载（含元数据请求），清理临时目录；无在途下载时幂等 |
 | `open_update_directory` | 打开最近一次已完成更新包目录，仅后端保留的路径，不接受前端任意文件路径 |
 
@@ -1531,7 +1534,7 @@ App 级单例，离开小说页或关闭浮层不断开；缓存清理成功后�
 ### 7.2 应用内更新
 
 启动 3s 后静默检查一次，仅新版弹确认；手动检查沿用账号菜单。用户确认后进入
-`UpdateDialog`：available → downloading → opening → guide；失败进入 error（重新下载 / 打开发布页），取消进入 cancelled（可重新下载）。
+`UpdateDialog`：available → downloading → ready；下载失败进入 error（重新下载 / 打开发布页），取消进入 cancelled（可重新下载）。下载中可关闭弹窗继续后台下载（Esc 同效），取消只由显式按钮触发；后台完成/失败通过通知提示，重新检查更新回到原状态。同一会话同一版本的已下载包保留，稍后安装无需重下。ready 提供“退出并安装更新 / 稍后安装 / 打开下载目录 / 重新下载”；存在活跃下载、未终结翻译 Job 或下载状态同步失败时，先在原弹窗进入 confirm，说明中断影响并确认一次，再进入 opening（ADR 0040）。
 更新不复用携带 Pixiv Cookie 的客户端，不引入本地 HTTP 服务。资产清单双源获取：首选 GitHub REST
 `/repos/gbandszxc/pixiv-tool/releases/tags/{tag}`（结构化、带精确大小与摘要），优先 v 前缀再裸 tag，
 仅接受精确版本稳定 Release；API 被匿名限额或网络失败时回退发布页 `expanded_assets/<tag>` 片段
@@ -1551,12 +1554,12 @@ debug/便携未知包类型提示发布页兜底。macOS 原生包优先同架�
 更新检查优先从重定向后的 URL 提取版本，成功即不读取 HTML；HTML 回退与
 Release JSON 均按实际响应字节累计限制在 4MB，不能仅依赖 Content-Length。
 
-`progress: Channel<UpdateProgress>` 载荷为 `{phase:downloading|opening,file_name,downloaded,total,bytes_per_second}`，
+`progress: Channel<UpdateProgress>` 载荷为 `{phase:downloading,file_name,downloaded,total,bytes_per_second}`，
 下载中最多约每 200ms 发一次、速度取近 2s 窗口，开始和完成各发一次；前端展示百分比、已下载/总大小、
-KB/MB/GB 与速度。Esc 在下载中取消，在 opening 状态等待；下载中关闭背景交互。
+KB/MB/GB 与速度。下载不自动打开安装包；opening 期间阻止关闭和重复点击。
 Windows 由系统文件关联启动 MSI/NSIS；macOS `open`、Linux `xdg-open` 检查退出状态（15s 上限），
-自动打开失败尝试文件管理器定位，失败再打开目录。两种系统打开均失败仍是下载成功，界面提供目录操作与完整路径。
-安装引导按 Windows/macOS/Linux 显示覆盖安装、关闭当前应用和重启步骤，不自动退出、不宣称安装已完成。
+仅在用户明确安装后执行打开；成功表示系统接受打开请求，不保证安装窗口已出现。后端打开成功后自动 exit(0)，避免再次弹普通退出确认；失败保留应用和已下载包，显示错误并允许重试、打开目录或重新下载。目录操作独立，不能作为安装启动成功的依据。
+安装引导按 Windows/macOS/Linux 显示覆盖安装和重启步骤；macOS 明确 DMG 打开后仍需拖入 Applications 替换。安装由系统和用户完成，不宣称安装完成，也不自动重启（ADR 0040）。
 离线回归：Rust 包匹配/来源验证/流式大小摘要测试 + `/tests/update.html` 真实组件 IPC mock（不会启动安装包）。
 
 ---
@@ -1765,6 +1768,8 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0037 | 翻译预览的归属、尾窗与稳定展示 | [adr/0037-translation-preview-ownership-and-stability.md](adr/0037-translation-preview-ownership-and-stability.md) |
 | 0038 | 翻译审查收敛与按块返工（审查分级、`revise_draft`、每块额度、`chunk_gate`） | [adr/0038-translation-review-convergence.md](adr/0038-translation-review-convergence.md) |
 | 0039 | ugoira 应用内播放与多 P 按页下载 | [adr/0039-ugoira-playback-and-page-download.md](adr/0039-ugoira-playback-and-page-download.md) |
+
+| 0040 | 更新下载与安装分离，系统交接成功后退出 | [adr/0040-update-install-and-exit.md](adr/0040-update-install-and-exit.md) |
 
 ADR 按需追加，不强制一次性写完。
 

@@ -269,7 +269,7 @@ Developer ID 公证能力（对外分发另议）。
 
 ## 8. 应用内更新包契约
 
-应用内更新见 ADR 0016 / SPEC §7.2。检查仍用 Release 页面，下载元数据取 GitHub REST
+应用内更新见 ADR 0016 / ADR 0040 / SPEC §7.2。检查仍用 Release 页面，下载元数据取 GitHub REST
 Release assets 的实际 name / browser_download_url / size / digest。Windows MSI、Linux
 deb/rpm/AppImage 从 Tauri bundler 写入可执行文件的 bundle_type 识别，不以宿主系统架构替代编译架构。
 debug/未打包便携可执行文件没有类型标记，须通过发布页手动选择。
@@ -282,7 +282,7 @@ NSIS（若发布）为 `x64-setup.exe` / `arm64-setup.exe`；DMG 为 `x64.dmg` /
 macOS 通用可执行文件保持 universal DMG，原生包优先同架构、无原生时接受 universal。
 CI 命名或产物扩展发生变化必须同时更新 `update_download_cmds.rs` 与其离线匹配测试。
 
-下载在系统临时目录写 .part，大小与可用 GitHub SHA256 digest 校验后才正式保存和打开；
+下载在系统临时目录写 .part，大小与可用 GitHub SHA256 digest 校验后才正式保存；用户确认“退出并安装更新”后才打开，系统接受打开请求后自动退出应用；
 不属于 Tauri updater 签名包，不要求 createUpdaterArtifacts，不提供静默替换或签名验证。
-macOS 未签名限制仍见 §7；Linux 无安装器/文件关联时回退文件管理器。Windows/macOS/Linux
+macOS 未签名限制仍见 §7，DMG 打开后仍需手动拖入 Applications 替换；Linux AppImage 仍需手动替换。安装包缺失或系统打开失败时保持应用运行，可重试、打开下载目录或重新下载。Windows/macOS/Linux
 安装器交接应在对应平台实机验收；离线测试仅验证下载与引导状态，不执行真实安装。
