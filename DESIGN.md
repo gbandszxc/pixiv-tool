@@ -156,6 +156,8 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 
 **控件密度.** Material Web 的 `md-outlined-text-field` 与 `md-outlined-select` 统一为 40px 高、14px 输入文字（组件默认 56px / 16px），与全局 14px 正文和 40px 的 choice 行对齐。实现只做尺寸 token 覆盖（`frontend/src/styles/main.css` 的「控件密度层」）：上下内距 8px（文本框 `--md-outlined-text-field-top/bottom-space`；选择器无容器高度 token，经内嵌 field 继承 `--md-outlined-field-top/bottom-space`）、输入字号 14px（选择器走 `--md-outlined-select-text-field-input-text-size`）、输入行高钉 24px（8 + 24 + 8 = 40px）。按钮维持 Material 默认的 40px 高 / 14px 标签字，不做覆盖。密度层不改颜色、圆角、描边、浮标等组件外观（Native-First Rule）。
 
+**滚动条.** 全局默认细滚动条配方（`frontend/src/styles/main.css` 的「全局滚动条」层，统一此前查看器舞台 / 信息列 / 小说阅读器 / 胶卷列等各自记载的「6px 同配方」）：根通配 `scrollbar-width: thin` + `scrollbar-color`（thumb `color-mix(in srgb, outline 35%, transparent)`、track 透明）；WebKit 侧 `::-webkit-scrollbar` 宽高 6px、track 与 corner 透明、thumb 同色 999px 胶囊并带 150ms 背景过渡（`prefers-reduced-motion` 下由全局兜底取消）、hover 提到 60%、`::-webkit-scrollbar-button` 隐藏（无上下箭头）。颜色只从 `outline` 角色派生（含混色），不引入新颜色；组件不得再自写滚动条样式，确需覆盖时沿用本配方（全屏浮层近黑底的白色半透明滚动条是既定深色例外，不扩散）。
+
 ### 浏览模式组件（ADR 0012）
 
 浏览（browse）页面在既有 M3 体系上新增以下本地组件，全部复用现有颜色角色与间距刻度，不引入新 token：
