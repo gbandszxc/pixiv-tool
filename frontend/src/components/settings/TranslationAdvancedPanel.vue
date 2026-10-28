@@ -145,11 +145,17 @@ const categoryHintKey = (category: TranslationAgentCategory) => `translation.age
 <template>
   <div id="translation-advanced-page" class="translation-advanced">
     <div v-if="!openCategory" class="advanced-head">
-      <md-text-button class="advanced-back advanced-back-service" @click="backToService">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
-        {{ t("translation.agent.backToService") }}
-      </md-text-button>
-      <span class="advanced-summary advanced-overview">{{ totalModified === 0 ? t("translation.agent.recommendedParams") : t("translation.agent.modifiedCount", { count: totalModified }) }}</span>
+      <div class="advanced-head-leading">
+        <md-icon-button class="advanced-back-button advanced-back-service" :aria-label="t('translation.agent.backToService')" :title="t('translation.agent.backToService')" @click="backToService">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+        </md-icon-button>
+        <div class="advanced-title-group">
+          <h3 class="advanced-title">{{ t("translation.agent.advancedSettingsTitle") }}</h3>
+        </div>
+      </div>
+      <span class="advanced-chip advanced-overview" :class="{ 'is-modified': totalModified > 0 }">
+        {{ totalModified === 0 ? t("translation.agent.recommendedParams") : t("translation.agent.modifiedCount", { count: totalModified }) }}
+      </span>
     </div>
 
     <!-- 分类首页：先给入口，避免一次铺开 21 个参数 -->
@@ -181,11 +187,17 @@ const categoryHintKey = (category: TranslationAgentCategory) => `translation.age
     <!-- 分类详情 -->
     <template v-else>
       <div class="advanced-detail-head">
-        <md-text-button class="advanced-back advanced-back-index" @click="backToIndex">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
-          {{ t("translation.agent.backToIndex") }}
-        </md-text-button>
-        <span class="advanced-summary advanced-category">{{ t(categoryTitleKey(openCategory)) }}</span>
+        <div class="advanced-head-leading">
+          <md-icon-button class="advanced-back-button advanced-back-index" :aria-label="t('translation.agent.backToIndex')" :title="t('translation.agent.backToIndex')" @click="backToIndex">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+          </md-icon-button>
+          <div class="advanced-title-group">
+            <h3 class="advanced-title">{{ t(categoryTitleKey(openCategory)) }}</h3>
+          </div>
+        </div>
+        <span class="advanced-chip advanced-category" :class="{ 'is-modified': categoryModified() > 0 }">
+          {{ openCategory === 'diagnostics' ? t("translation.agent.diagnosticsMeta") : (categoryModified() === 0 ? t("translation.agent.recommendedShort") : t("translation.agent.modifiedCount", { count: categoryModified() })) }}
+        </span>
       </div>
       <p class="advanced-intro">{{ t(categoryHintKey(openCategory)) }}</p>
 
@@ -231,10 +243,39 @@ const categoryHintKey = (category: TranslationAgentCategory) => `translation.age
 <style scoped>
 /* 二级页：与一级共用设置内容区的直排字段，不加卡片容器，只用既有 token */
 .translation-advanced { display: grid; gap: var(--space-lg); }
-.advanced-head, .advanced-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm) var(--space-md); }
-/* 两个返回按钮共用外观，`-service` / `-index` 后缀只用于区分语义（验收脚本按层级定位） */
-.advanced-back svg { width: 18px; height: 18px; margin-right: var(--space-xxs); }
-.advanced-summary { color: var(--ink-muted); font-size: 12px; font-weight: 600; }
+.advanced-head, .advanced-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding-bottom: var(--space-md);
+  border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
+}
+.advanced-head-leading { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+.advanced-back-button { margin-left: -8px; }
+.advanced-back-button svg { width: 20px; height: 20px; }
+.advanced-title-group { display: flex; align-items: center; min-width: 0; }
+.advanced-title { margin: 0; font-size: 17px; font-weight: 600; color: var(--ink); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.advanced-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 var(--space-sm);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.advanced-chip.is-modified {
+  background: var(--md-sys-color-primary-container);
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 30%, transparent);
+  color: var(--md-sys-color-on-primary-container);
+  font-weight: 600;
+}
 .advanced-intro { margin: 0; color: var(--ink-muted); font-size: 13px; line-height: 1.6; }
 .advanced-note { margin: var(--space-sm) 0 0; color: var(--ink-muted); font-size: 12px; line-height: 1.6; }
 /* 分类入口：整行可点，hover 用既有 8% primary 状态层 */

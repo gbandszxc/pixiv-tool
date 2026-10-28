@@ -135,6 +135,8 @@ export interface Settings {
   /** 接口协议（取值见 api/translation.ts 的 API_FORMATS），默认 chat_completions */
   translation_api_format: string;
   translation_model: string;
+  /** 缓存的可用模型列表（获取模型成功后写入） */
+  translation_models?: string[];
   /** 翻译目标语言（取值见 api/translation.ts 的 TARGET_LANGUAGE_CODES），空串 = 跟随界面语言 */
   translation_target_language: string;
   /** 小说翻译单请求超时（秒），默认 600（10 分钟），合法区间 30~3600 */

@@ -30,10 +30,11 @@ use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 48] = [
+const WRITABLE_KEYS: [&str; 49] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
+    "translation_models",
     "translation_target_language",
     "translation_timeout_seconds",
     "translation_extra",
@@ -160,6 +161,11 @@ pub fn apply_settings_patch(
     if let Some(value) = patch_obj.get("translation_timeout_seconds") {
         validate_translation_timeout_value(value)?;
     }
+    if let Some(value) = patch_obj.get("translation_models") {
+        if !value.is_array() {
+            return Err("模型列表必须是数组".to_string());
+        }
+    }
     // 运行参数与加载期回落共用 settings.rs 的同一张区间表。
     for rule in TRANSLATION_AGENT_INT_RULES {
         if let Some(value) = patch_obj.get(rule.key) {
@@ -282,6 +288,7 @@ mod tests {
             "theme_color": "jade",
             "max_wait_seconds": 3600,
             "translation_timeout_seconds": 900,
+            "translation_models": ["model-a", "model-b"],
             "backend_port": null,
             "output_formats": ["txt"],
             // 非白名单键忽略
@@ -293,6 +300,10 @@ mod tests {
         assert_eq!(updated.theme_color, "jade");
         assert_eq!(updated.max_wait_seconds, 3600);
         assert_eq!(updated.translation_timeout_seconds, 900);
+        assert_eq!(
+            updated.translation_models,
+            vec!["model-a".to_string(), "model-b".to_string()]
+        );
         assert_eq!(updated.backend_port, None);
         assert_eq!(updated.output_formats, vec!["txt".to_string()]);
         // 未出现的键保持原值

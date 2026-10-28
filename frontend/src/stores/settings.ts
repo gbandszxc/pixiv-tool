@@ -222,6 +222,7 @@ export function normalizeTranslationAgentSettings(settings: Settings): Settings 
   }
   if (typeof next.translation_agent_replay_unknown !== "boolean") next.translation_agent_replay_unknown = false;
   if (typeof next.translation_confirm_before_start !== "boolean") next.translation_confirm_before_start = false;
+  if (!Array.isArray(next.translation_models)) next.translation_models = [];
   return next;
 }
 
@@ -276,6 +277,7 @@ export const useSettingsStore = defineStore("settings", () => {
     // 接口协议（默认 Chat Completions），取值见 api/translation.ts 的 API_FORMATS
     translation_api_format: "chat_completions",
     translation_model: "",
+    translation_models: [],
     // 翻译目标语言（空串=跟随界面语言），取值见 api/translation.ts 的 TARGET_LANGUAGE_CODES
     translation_target_language: "",
     // 单请求超时（秒）：默认 600（10 分钟），合法区间 30~3600

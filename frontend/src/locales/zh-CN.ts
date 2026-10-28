@@ -298,7 +298,10 @@ export default {
     targetLanguageHint: "译文语言，默认跟随界面语言。原文语言与目标语言一致时不再请求模型，直接提示无需翻译；仍可点「仍然翻译」强制执行。",
     fetchModels: "获取模型",
     fetchingModels: "获取模型中…",
+    refreshModels: "刷新模型",
+    selectModelFromList: "从列表选择",
     manualModel: "手动输入模型 ID",
+    noModelConfigured: "未配置模型",
     testService: "检测可用",
     testing: "检测中…",
     serviceAvailable: "模型可用",
@@ -319,6 +322,7 @@ export default {
     // 二级高级设置（运行参数）。键名与区间见 src-tauri/src/settings.rs 的 TRANSLATION_AGENT_INT_RULES。
     agent: {
       advancedEntry: "高级设置",
+      advancedSettingsTitle: "小说翻译高级设置",
       recommendedParams: "推荐参数",
       recommendedShort: "推荐值",
       modifiedCount: "已修改 {count} 项",

@@ -27,6 +27,7 @@ import {
   type TranslationMode,
 } from "../../api/translation";
 import { useTranslationStore } from "../../stores/translation";
+import { useSettingsStore } from "../../stores/settings";
 import TranslationProgressBanner from "./TranslationProgressBanner.vue";
 
 const props = defineProps<{
@@ -57,6 +58,25 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const store = useTranslationStore();
+const settingsStore = useSettingsStore();
+
+const currentModel = computed(() => settingsStore.settings.translation_model);
+const availableModels = computed(() => {
+  const models = settingsStore.settings.translation_models || [];
+  if (currentModel.value && !models.includes(currentModel.value)) {
+    return [currentModel.value, ...models];
+  }
+  return models;
+});
+
+async function onModelChange(model: string) {
+  if (!model || model === currentModel.value) return;
+  try {
+    await settingsStore.saveSettings({ translation_model: model });
+  } catch (err) {
+    actionError.value = errorMessage(err);
+  }
+}
 
 const open = ref(false);
 const panel = ref<HTMLElement | null>(null);
@@ -536,14 +556,48 @@ onBeforeUnmount(() => {
     </span>
     <div v-if="open" class="translation-backdrop" @click="close"></div>
     <div v-if="open" ref="panel" class="translation-popover" role="dialog" :aria-label="t('translation.menu')" tabindex="-1">
-      <!-- 头部：范围 + 状态摘要（唯一 aria-live 区） -->
+      <!-- 头部：标题 + 范围 + 状态摘要 + 关闭按钮 -->
       <div class="panel-head">
-        <span class="translation-title">{{ t('translation.menu') }}</span>
-        <span class="panel-scope">{{ scopeText }}</span>
-        <span class="translation-status-row">
+        <div class="panel-head-top">
+          <div class="panel-head-title-group">
+            <span class="translation-title">{{ t('translation.menu') }}</span>
+            <span class="panel-scope">{{ scopeText }}</span>
+          </div>
+          <md-icon-button class="panel-close-btn" :aria-label="t('common.close')" @click="close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          </md-icon-button>
+        </div>
+        <div class="translation-status-row">
           <span class="translation-indicator" :class="`is-${tone}`" aria-hidden="true"></span>
           <span class="translation-status" :class="{ 'is-error': error }" role="status" aria-live="polite">{{ status }}</span>
-        </span>
+        </div>
+      </div>
+
+      <!-- 模型快速切换栏 -->
+      <div class="panel-model-bar">
+        <div class="panel-model-label">
+          <svg class="panel-model-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect width="16" height="16" x="4" y="4" rx="2" />
+            <rect width="6" height="6" x="9" y="9" rx="1" />
+            <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+          </svg>
+          <span>{{ t('translation.model') }}</span>
+        </div>
+        <div class="panel-model-control">
+          <md-outlined-select
+            v-if="availableModels.length"
+            class="panel-model-select"
+            :value="currentModel"
+            :disabled="busy"
+            :aria-label="t('translation.model')"
+            @change="onModelChange(($event.target as HTMLSelectElement).value)"
+          >
+            <md-select-option v-for="m in availableModels" :key="m" :value="m">{{ m }}</md-select-option>
+          </md-outlined-select>
+          <span v-else class="panel-model-text" :title="currentModel || t('translation.noModelConfigured')">
+            {{ currentModel || t('translation.noModelConfigured') }}
+          </span>
+        </div>
       </div>
 
       <!-- 四个 tab -->
@@ -804,13 +858,14 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  width: calc(var(--space-lg) * 24);
+  width: min(420px, calc(100vw - var(--space-lg) * 2));
   max-width: calc(100vw - var(--space-lg) * 2);
-  max-height: min(70vh, 560px);
-  border-radius: var(--radius-control);
+  max-height: min(76vh, 620px);
+  border-radius: 16px;
   background: var(--md-sys-color-surface-container);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 20%, transparent);
   color: var(--ink);
-  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+  box-shadow: 0 8px 28px -4px rgba(0, 0, 0, 0.16), 0 3px 8px -2px rgba(0, 0, 0, 0.08);
   outline: none;
 }
 .translation-popover:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
@@ -819,53 +874,128 @@ onBeforeUnmount(() => {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: var(--space-xxs);
-  padding: var(--space-lg) var(--space-lg) var(--space-sm);
+  gap: 4px;
+  padding: var(--space-md) var(--space-md) var(--space-xs);
 }
-.translation-title { font-size: 14px; font-weight: 600; }
-.panel-scope { color: var(--ink-muted); font-size: 12px; line-height: 1.4; }
+.panel-head-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-xs);
+}
+.panel-head-title-group {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+.translation-title { font-size: 15px; font-weight: 600; color: var(--ink); }
+.panel-scope { color: var(--ink-muted); font-size: 12px; }
+.panel-close-btn { width: 32px; height: 32px; --md-icon-button-icon-size: 18px; margin: -4px -4px -4px 0; }
 .translation-status-row { display: flex; align-items: flex-start; gap: var(--space-xs); }
 .translation-status-row .translation-indicator { margin-top: 5px; }
 .translation-status { color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .translation-status.is-error { color: var(--md-sys-color-error); }
 
-/* tab 条：原生按钮 + aria-selected，当前项 secondary-container（与模式按钮同配方）。 */
+/* 模型快速切换栏 */
+.panel-model-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: 6px var(--space-sm);
+  margin: 0 var(--space-md) var(--space-xs);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 50%, transparent);
+  border-radius: 8px;
+}
+.panel-model-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 500;
+  flex: none;
+}
+.panel-model-icon { width: 15px; height: 15px; color: var(--md-sys-color-primary); }
+.panel-model-control { flex: 1; min-width: 0; display: flex; justify-content: flex-end; }
+.panel-model-select {
+  width: 100%;
+  max-width: 250px;
+  --md-outlined-field-top-space: 4px;
+  --md-outlined-field-bottom-space: 4px;
+  --md-outlined-select-text-field-input-text-size: 12px;
+}
+.panel-model-text {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+/* tab 条：M3 Primary Tab 质感与平滑下划线指示条 */
 .panel-tabs {
   flex: none;
   display: flex;
-  gap: var(--space-xxs);
-  padding: 0 var(--space-md);
-  border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent);
+  gap: 0;
+  padding: 0 var(--space-sm);
+  border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
 }
 .panel-tab {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 36px;
   padding: var(--space-xs) var(--space-xxs);
   border: 0;
-  border-radius: var(--radius-control) var(--radius-control) 0 0;
   background: transparent;
   color: var(--ink-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 150ms ease;
 }
-.panel-tab:hover:not(.selected) { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+.panel-tab:hover:not(.selected) { color: var(--ink); background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent); }
 .panel-tab:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
-.panel-tab.selected { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
+.panel-tab.selected { color: var(--md-sys-color-primary); font-weight: 600; }
+.panel-tab.selected::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 14%;
+  right: 14%;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--md-sys-color-primary);
+}
 
 /* 内容区是唯一滚动容器：长文、问题列表、预览都在这里内滚。 */
-.panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-md) var(--space-lg) var(--space-sm); }
+.panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-sm) var(--space-md); }
 .panel-section { display: flex; flex-direction: column; gap: var(--space-sm); min-width: 0; }
 .panel-state-line { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .panel-meta { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .panel-empty { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.panel-notice { margin: 0; padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-control); background: color-mix(in srgb, var(--md-sys-color-error) 12%, transparent); color: var(--md-sys-color-error); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.panel-notice {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--md-sys-color-error) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-error) 20%, transparent);
+  color: var(--md-sys-color-error);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .panel-error { margin: 0; color: var(--md-sys-color-error); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.panel-error-code { margin: 0; color: var(--ink-subtle); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.panel-error-code { margin: 0; color: var(--ink-subtle); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .panel-subblock { display: flex; flex-direction: column; gap: var(--space-xxs); }
 .panel-subtitle { margin: 0; color: var(--ink); font-size: 12px; font-weight: 600; }
 .panel-list { margin: 0; padding-inline-start: var(--space-lg); color: var(--ink-muted); font-size: 12px; line-height: 1.5; }
@@ -942,33 +1072,67 @@ onBeforeUnmount(() => {
 .issue-chunk, .issue-segment { color: var(--ink-muted); font-size: 11px; }
 .issue-detail { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 
-/* 底部动作常驻 */
+/* 底部动作常驻：紧凑分段控制器 + 规范 34px 按钮 */
 .panel-actions {
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-lg) var(--space-lg);
-  border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent);
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-md) var(--space-md);
+  border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
 }
-.translation-modes { display: flex; gap: var(--space-xxs); }
+.translation-modes {
+  display: flex;
+  align-items: center;
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 60%, transparent);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
 .translation-mode {
   flex: 1;
   min-width: 0;
-  min-height: 40px;
-  padding: var(--space-sm);
+  height: 28px;
+  padding: 0 var(--space-xs);
   border: 0;
-  border-radius: var(--radius-control);
+  border-radius: 999px;
   background: transparent;
-  color: var(--ink);
+  color: var(--ink-muted);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
+  transition: all 160ms cubic-bezier(0.2, 0, 0, 1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.translation-mode:hover:not(.selected) { background: color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
-.translation-mode:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
-.translation-mode.selected { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
-.action-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+.translation-mode:hover:not(.selected) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
+}
+.translation-mode:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
+.translation-mode.selected {
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: 2px;
+  --md-filled-button-container-height: 34px;
+  --md-outlined-button-container-height: 34px;
+  --md-text-button-container-height: 34px;
+}
+.action-row md-filled-button,
+.action-row md-outlined-button,
+.action-row md-text-button {
+  height: 34px;
+}
 .cancel-button { --md-text-button-label-text-color: var(--md-sys-color-error); margin-inline-start: auto; }
 
 @media (prefers-reduced-motion: reduce) {

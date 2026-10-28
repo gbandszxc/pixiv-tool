@@ -126,13 +126,22 @@
           <div class="m3-field">
             <div class="field-label"><label for="translation-model">{{ t('translation.model') }}</label><HelpTooltip :label="t('translation.model')" :text="t('translation.probeHint')" /></div>
             <div class="m3-row translation-model-row">
-              <md-outlined-select v-if="availableModels.length" id="translation-model" class="translation-model-control" :aria-label="t('translation.model')" :value="form.translation_model" @change="form.translation_model = ($event.target as HTMLSelectElement).value">
+              <md-outlined-select v-if="availableModels.length && !manualModelMode" id="translation-model" class="translation-model-control" :aria-label="t('translation.model')" :value="form.translation_model" @change="form.translation_model = ($event.target as HTMLSelectElement).value">
                 <md-select-option v-for="model in modelOptions" :key="model" :value="model">{{ model }}</md-select-option>
               </md-outlined-select>
               <md-outlined-text-field v-else id="translation-model" class="translation-model-control" :value="form.translation_model" @input="form.translation_model = ($event.target as HTMLInputElement).value" />
-              <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe" @click="runProbe('models')">{{ t(probeBusy === 'models' ? 'translation.fetchingModels' : 'translation.fetchModels') }}</md-outlined-button>
+              <md-outlined-button :disabled="Boolean(probeBusy) || !canProbe" @click="runProbe('models')">
+                {{ t(probeBusy === 'models' ? 'translation.fetchingModels' : (availableModels.length ? 'translation.refreshModels' : 'translation.fetchModels')) }}
+              </md-outlined-button>
             </div>
-            <md-text-button v-if="availableModels.length" class="translation-manual-model" @click="useManualModel">{{ t('translation.manualModel') }}</md-text-button>
+            <div v-if="availableModels.length" class="translation-model-actions">
+              <md-text-button v-if="!manualModelMode" class="translation-manual-model" @click="manualModelMode = true">
+                {{ t('translation.manualModel') }}
+              </md-text-button>
+              <md-text-button v-else class="translation-manual-model" @click="manualModelMode = false">
+                {{ t('translation.selectModelFromList') }}
+              </md-text-button>
+            </div>
             <span v-if="modelsError" class="field-hint state-error" role="alert">{{ modelsError }}</span>
           </div>
           <div class="m3-field">
@@ -254,6 +263,7 @@ const clearTranslationKey = ref(false);
 const translationJson = ref("{}");
 const translationJsonError = ref("");
 const availableModels = ref<string[]>([]);
+const manualModelMode = ref(false);
 const modelsError = ref("");
 const probeBusy = ref<"test" | "models" | null>(null);
 const testResult = ref("");
@@ -290,14 +300,25 @@ const API_FORMAT_ENDPOINTS: Record<string, { endpoint: string; placeholder: stri
 };
 const apiFormatEndpoint = computed(() => API_FORMAT_ENDPOINTS[apiFormat.value].endpoint);
 const apiFormatPlaceholder = computed(() => API_FORMAT_ENDPOINTS[apiFormat.value].placeholder);
-/** 切换协议只换端点推导与探测上下文，URL 文本原样保留（由用户决定是否同步修改）。 */
+/** 切换协议只换端点推导与探测上下文，清空模型列表避免跨协议混淆。 */
 function changeApiFormat(value: string) {
   form.value.translation_api_format = canonicalApiFormat(value);
   availableModels.value = [];
+  form.value.translation_models = [];
+  manualModelMode.value = false;
   modelsError.value = "";
 }
-watch(() => [form.value.translation_api_url, form.value.translation_api_format, translationKey.value, clearTranslationKey.value], () => {
-  availableModels.value = []; modelsError.value = "";
+let lastApiUrl = form.value.translation_api_url;
+let lastApiFormat = form.value.translation_api_format;
+watch(() => [form.value.translation_api_url, form.value.translation_api_format], ([newUrl, newFormat]) => {
+  if (newUrl !== lastApiUrl || newFormat !== lastApiFormat) {
+    lastApiUrl = newUrl;
+    lastApiFormat = newFormat;
+    availableModels.value = [];
+    form.value.translation_models = [];
+    manualModelMode.value = false;
+    modelsError.value = "";
+  }
 }, { flush: "sync" });
 watch(() => [form.value.translation_api_url, form.value.translation_api_format, translationKey.value, clearTranslationKey.value, form.value.translation_model, translationJson.value], () => {
   probeVersion++; testResult.value = ""; modelsError.value = "";
@@ -330,7 +351,14 @@ async function runProbe(action: "test" | "models") {
     probeBusy.value = action;
     if (action === "models") {
       const models = await fetchTranslationModels(probe);
-      if (request === probeRequest && version === probeVersion) availableModels.value = models;
+      if (request === probeRequest && version === probeVersion) {
+        availableModels.value = models;
+        form.value.translation_models = models;
+        manualModelMode.value = false;
+        if (!form.value.translation_model.trim() && models.length > 0) {
+          form.value.translation_model = models[0];
+        }
+      }
     } else {
       await testTranslationService(probe);
       if (request === probeRequest && version === probeVersion) testResult.value = t("translation.serviceAvailable");
@@ -342,7 +370,7 @@ async function runProbe(action: "test" | "models") {
   } finally { if (request === probeRequest) probeBusy.value = null; }
 }
 /** 收起下拉回到自由文本输入：列表可能不含目标模型，或用户想直接粘贴模型 ID。 */
-function useManualModel() { availableModels.value = []; modelsError.value = ""; }
+function useManualModel() { manualModelMode.value = true; }
 
 // ===== 小说翻译高级设置（一级摘要 + 二级页面）=====
 
@@ -399,7 +427,9 @@ function locateInvalidAgentField(key: TranslationAgentIntKey) {
 }
 function resetTranslationDraft() {
   probeRequest++; probeVersion++; probeBusy.value = null;
-  availableModels.value = []; modelsError.value = ""; testResult.value = "";
+  availableModels.value = Array.isArray(form.value.translation_models) ? [...form.value.translation_models] : [];
+  manualModelMode.value = false;
+  modelsError.value = ""; testResult.value = "";
   translationKey.value = "";
   clearTranslationKey.value = false;
   translationJson.value = JSON.stringify(form.value.translation_extra, null, 2);
@@ -628,6 +658,7 @@ fieldset.translation-group > .m3-field:last-child { margin-bottom: 0; }
 .translation-key-chip { display: inline-flex; align-items: center; min-height: 20px; margin-left: var(--space-xxs); padding: 0 var(--space-sm); border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent); border-radius: 999px; color: var(--ink-muted); font-size: 12px; font-weight: 600; }
 .translation-key-chip.is-clearing { color: var(--md-sys-color-error); border-color: color-mix(in srgb, var(--md-sys-color-error) 45%, transparent); }
 /* 低强调动作靠左对齐，不随 grid 拉伸成整行宽的胶囊 */
+.translation-model-actions { display: flex; align-items: center; gap: var(--space-xs); margin-top: 2px; }
 .translation-manual-model { justify-self: start; }
 .translation-probe-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-md); }
 /* 「翻译前确认术语与风格」：勾选行与帮助图标同排，窄窗自然换行 */

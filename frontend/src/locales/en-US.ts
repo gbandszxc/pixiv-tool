@@ -297,7 +297,10 @@ export default {
     targetLanguageHint: "Language for the translation, following the interface language by default. When the novel already matches the target language the model is skipped and a notice appears; Translate anyway still forces the full run.",
     fetchModels: "Fetch models",
     fetchingModels: "Fetching models…",
+    refreshModels: "Refresh models",
+    selectModelFromList: "Select from list",
     manualModel: "Enter model ID manually",
+    noModelConfigured: "No model configured",
     testService: "Test availability",
     testing: "Testing…",
     serviceAvailable: "Model available",
@@ -318,6 +321,7 @@ export default {
     // Second-level advanced settings (runtime parameters). Keys and ranges mirror TRANSLATION_AGENT_INT_RULES in src-tauri/src/settings.rs.
     agent: {
       advancedEntry: "Advanced settings",
+      advancedSettingsTitle: "Novel Translation Advanced Settings",
       recommendedParams: "Recommended values",
       recommendedShort: "Recommended",
       modifiedCount: "{count} changed",

@@ -282,7 +282,10 @@ export default {
     targetLanguageHint: "翻訳に使用する言語です。初期設定では表示言語に合わせます。原文と翻訳先の言語が同じ場合は、モデルにリクエストせず、翻訳不要と表示します。「それでも翻訳する」で強制的に実行することもできます。",
     fetchModels: "モデル一覧を取得",
     fetchingModels: "モデル一覧を取得中…",
+    refreshModels: "モデルを更新",
+    selectModelFromList: "リストから選択",
     manualModel: "モデル ID を手動入力",
+    noModelConfigured: "モデル未設定",
     testService: "動作確認",
     testing: "確認中…",
     serviceAvailable: "モデルを利用できます",
@@ -303,6 +306,7 @@ export default {
     // 詳細設定（実行パラメーター）。キーと範囲は src-tauri/src/settings.rs の TRANSLATION_AGENT_INT_RULES と一致します。
     agent: {
       advancedEntry: "詳細設定",
+      advancedSettingsTitle: "小説翻訳の詳細設定",
       recommendedParams: "推奨値",
       recommendedShort: "推奨",
       modifiedCount: "{count} 件変更",

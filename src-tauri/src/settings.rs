@@ -74,6 +74,9 @@ pub struct Settings {
     /// 默认 `chat_completions`（OpenAI 兼容）。
     pub translation_api_format: String,
     pub translation_model: String,
+    /// 缓存的可用模型列表（获取模型成功后写入，便于下次直接在下拉框中选择）。
+    #[serde(default)]
+    pub translation_models: Vec<String>,
     /// 翻译目标语言（见 [`crate::translation::TARGET_LANGUAGES`]），空串 = 跟随界面语言 `language`。
     pub translation_target_language: String,
     /// 小说翻译单请求超时（秒），默认 [`DEFAULT_TRANSLATION_TIMEOUT_SECONDS`]（10 分钟）；
@@ -154,6 +157,7 @@ impl Default for Settings {
             translation_api_url: String::new(),
             translation_api_format: "chat_completions".into(),
             translation_model: String::new(),
+            translation_models: Vec::new(),
             translation_target_language: String::new(),
             translation_timeout_seconds: DEFAULT_TRANSLATION_TIMEOUT_SECONDS,
             translation_extra: serde_json::json!({}),
