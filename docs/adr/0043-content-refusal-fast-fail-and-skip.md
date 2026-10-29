@@ -1,4 +1,4 @@
-# ADR 0042：子任务内容拒绝快速失败与被拒块跳过
+# ADR 0043：子任务内容拒绝快速失败与被拒块跳过
 
 - 状态：已接受（细化 [ADR 0036](0036-translation-runtime-guard-and-continuation.md)
   的恢复分类与派发隔离；不推翻其 fatal 判据）

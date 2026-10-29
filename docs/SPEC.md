@@ -155,7 +155,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 与 translation/ 共 83 个 #[tauri::command]（translation 20 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 9 / app 1 / update 4）
+│     ├─ commands/              # 与 translation/ 共 84 个 #[tauri::command]（translation 20 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 9 / app 1 / update 5）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
 │     ├─ cookies.rs             # keyring CookieStore
@@ -385,7 +385,7 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   `translation_call_budget = 0` 且清单里的上限等于旧自动公式（`32 + 16 × 分块数`），
   自动升级为新公式；自定义上限不动。预算耗尽后用户可经
   `novel_translation_grant_budget` 手动追加（1~10000，只增不减，随 manifest 持久化）；
-  「继续」不自动补预算——追加是对成本的显式授权（ADR 0041）。
+  「继续」不自动补预算——追加是对成本的显式授权（ADR 0042）。
 - **单轮工具结果预算**：运行层按「工具名 + 参数」预估每个工具调用的结果 token
   （`read_chunk` 按块字符、邻接窗口与随行约束载荷（术语表序列化 + 风格截断文本）
   估算，其余工具不参与）；单轮累计超过
@@ -421,13 +421,13 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   已发送但结果未知默认不自动重放；输入超限先压缩或细分；输出截断缩块重做；工具参数 /
   结构错误有限纠正；质检问题优先 `revise_draft` 定点修订，必要时只返工受影响块；
   子 Agent 按内容政策显式拒绝（`content_refused`，从失败摘要解析）原样重试 1 次后
-  快速失败，不整批 fatal、不再自动重试（ADR 0042）。
+  快速失败，不整批 fatal、不再自动重试（ADR 0043）。
 - **注释策略与标记不变量**：ruby 标记（`[rb:原文>读音]`）的数量与结构由提交校验强制
   保持；「注释策略」维度只允许约束读音内容的处理方式。扫描提交与冻结约束时机器归一化
   （`normalize_annotation_policy`）：识别「只取本体 / 不注音 / 删除标记」类冲突表述并
   改写为规范值（保留结构、读音本地化为拼音），记 `annotation_policy_normalized` WARN。
   审查不得因「存在标记」判违规，也不得提出删标记类修法；`revise_draft` 每块限 4 轮，
-  超限以 `revise_limit` 拒绝并引导整块返工或阶段重置（ADR 0040）。
+  超限以 `revise_limit` 拒绝并引导整块返工或阶段重置（ADR 0041）。
 - **派发结果与未知块**：`dispatch_translation` / `dispatch_review` 按块返回
   `status=ok|permanent|budget_exhausted|unknown_outcome|content_refused|skipped|...`；
   只有 `permanent` / `budget_exhausted` 这类全局错误把整批标为 `fatal`，单块
@@ -436,7 +436,7 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   手动恢复任务时清空该记忆。内容拒绝重试 1 次后记入 `refused_chunks`（manifest +
   内存镜像），后续派发短路且 **resume 不清空**；用户经
   `novel_translation_skip_chunks` 显式跳过（移入 `skipped_chunks` 并自动继续）或
-  重新发起任务才解除（ADR 0042）。skipped 块不参与待办 / 完成判据 / 收尾计数；
+  重新发起任务才解除（ADR 0043）。skipped 块不参与待办 / 完成判据 / 收尾计数；
   合并校验用活跃块子集，产物中跳过块回退原文，结果状态为 `partial`。仅剩被拒块
   未处理时任务停在 `needs_attention`（`content_refused`，消息列块 ID 与跳过指引）。
 - **审查分级**：`submit_review` 的 `verdict=pass` 允许携带 `minor` 问题；只有
@@ -1071,6 +1071,8 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 ### 6.3 主题
 
+更新弹窗沿用 m3-dialog 与 Material 按钮/进度条；下载可收起后台执行，ready 展示平台引导、路径和安装/稍后操作，confirm 在原弹窗直显任务中断影响，opening 禁止重复操作，安装失败回 ready 保留包和错误。长路径与操作行允许换行，沿用既有 token，无新增动效（ADR 0040；DESIGN.md / .impeccable/design.json 同步）。
+
 全局静态帮助采用公共 `components/common/HelpTooltip.vue`：设置六组的字段/分组说明、登录方式与 Session 获取步骤、搜索链接/ID 规则、以图识图介绍/使用说明默认收进相邻帮助图标。悬停、聚焦或点击展开，role=tooltip 与 aria-describedby 保留可访问关联，原生 popover top layer 不受对话框滚动区裁切，按视口空间定位/换行；焦点留在触发器，指针可移入阅读，Esc 优先关闭说明，外部点击/失焦/滚动/resize 收起。校验错误、凭据库错误、进度、空态引导、未配置状态和确认后果保留直显，维护组保留立即生效的短提示。视觉与交互细节同步 DESIGN.md / .impeccable/design.json。
 
 维护组按缓存与日志直排分区，显示分类/总大小、确认后清理动作和最近日志；分类冗长说明收进分类旁帮助图标（HelpTooltip），路径不直接回显——由 `components/settings/CopyPathButton.vue` 复制图标承载，悬停/聚焦 tooltip 显示完整路径，点击写入剪贴板并以 Snackbar 提示、图标短暂切换为对勾。14px 标题与 12px 辅助文字沿用既有 token；日志为可聚焦的等宽纯文本滚动区，最多 240px 高，不对轮询使用 aria-live。位于末尾时跟随新日志，手动向上阅读时保留位置；空缓存/日志禁用清理，读取失败保留快照与重试；维护页关闭即停止轮询，语义及安全边界见 §9 / ADR 0027。视觉细节见 DESIGN.md / .impeccable/design.json。
@@ -1412,13 +1414,13 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `settings_get` / `settings_save(settings)` | 配置读写（白名单 48 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
 | `novel_translation_start(novel, force)` | 启动或加入整篇翻译 Job；novel=`{novel_id,title,tags,description,content}`（content ≤ 8MB，非法 id / 空内容拒绝）。启动前校验设置、URL、模型与 Key，任何失败不创建 Job；原文已是目标语言且 `force=false` 时返回 `already_target_language:true` 与未落库的空快照。同一作品、原文版本、目标语言重复启动加入既有 Job，`force=true` 新建。返回 `{job: TranslationJobSnapshot, already_target_language}`，命令立即返回、后台 tokio 继续执行。目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言（ADR 0018） |
 | `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
-| `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds,refused_chunks,skipped_chunks}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms,skipped}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；`refused_chunks` 是被模型按内容政策拒绝的块 ID、`skipped_chunks` 是用户显式跳过的块 ID（均升序，serde 默认兼容旧载荷，ADR 0042）；任务不存在或清单损坏返回可读错误 |
+| `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds,refused_chunks,skipped_chunks}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms,skipped}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；`refused_chunks` 是被模型按内容政策拒绝的块 ID、`skipped_chunks` 是用户显式跳过的块 ID（均升序，serde 默认兼容旧载荷，ADR 0043）；任务不存在或清单损坏返回可读错误 |
 | `novel_translation_result(novelId)` | 阅读器投影：优先已完成且状态为 `complete` 的 v2 Job，否则回退 v1 旧缓存并标记 `partial`；无结果返回 null。返回 `{novel_id,job_id,target_language,pages:{页码:[{line,text}]},status:"complete"|"partial"|"needs_attention",unresolved}` |
 | `novel_translation_confirm(jobId, terms, style)` | 确认术语与风格（等待确认时由浮层提交）。terms 为 `[{source_term,locked_translation,term_type?,aliases?,notes?}]`；确认后约束版本 +1、清除冲突与未解决项并继续。任务不存在 / 已删除返回错误 |
 | `novel_translation_pause(jobId)` | 停止派发并停在最近检查点（`queued`/`running` → `pausing` → `paused`）；等待确认时要求先确认或取消；其它状态拒绝 |
-| `novel_translation_resume(jobId)` | 从检查点恢复（`paused`/`needs_attention`/`interrupted`/`queued`）；先校验缓存世代、资源版本与清单，不一致时拒绝静默续跑；内存中无句柄时从磁盘重建；不清空被拒块记忆（`content_refused`，ADR 0042） |
-| `novel_translation_grant_budget(jobId, amount)` | 手动追加模型调用预算：amount 1~10000，只增不减；返回追加后 `{used,limit,remaining,manual_extra}`。终态与等待确认的任务拒绝；重启后无句柄直接改 manifest，resume 时还原（ADR 0041） |
-| `novel_translation_skip_chunks(jobId, chunkIds)` | 用户显式跳过被内容政策拒绝的块：仅 `needs_attention`/`paused` 可调用；每个块必须在计划中且在 `refused_chunks` 清单，否则拒绝；通过后移入 `skipped_chunks` 并自动 `resume`（ADR 0042） |
+| `novel_translation_resume(jobId)` | 从检查点恢复（`paused`/`needs_attention`/`interrupted`/`queued`）；先校验缓存世代、资源版本与清单，不一致时拒绝静默续跑；内存中无句柄时从磁盘重建；不清空被拒块记忆（`content_refused`，ADR 0043） |
+| `novel_translation_grant_budget(jobId, amount)` | 手动追加模型调用预算：amount 1~10000，只增不减；返回追加后 `{used,limit,remaining,manual_extra}`。终态与等待确认的任务拒绝；重启后无句柄直接改 manifest，resume 时还原（ADR 0042） |
+| `novel_translation_skip_chunks(jobId, chunkIds)` | 用户显式跳过被内容政策拒绝的块：仅 `needs_attention`/`paused` 可调用；每个块必须在计划中且在 `refused_chunks` 清单，否则拒绝；通过后移入 `skipped_chunks` 并自动 `resume`（ADR 0043） |
 | `novel_translation_cancel(jobId)` | 立即传播取消信号并保留已提交产物与检查点；已取消时幂等；运行中先进入 `cancelling` 再收敛到 `cancelled` |
 | `novel_translation_delete(jobId)` | 删除整个 Job 目录（含 chunks / sessions / checkpoints / temporary / output 全部中间产物）；运行中拒绝，需先暂停或取消；清单损坏时提示通过清理翻译缓存处理 |
 | `novel_translation_preview(jobId, chunkId)` | 浮层预览：`{chunk_id,order,segments,translated,context_prev,context_next,draft_version,reviewed,needs_repair,review?}`；segments 含 `{id,page,line,text,kind}`，translated 为 `[{id,text}]`；未译块返回空译文列表，不伪造 |
@@ -1468,7 +1470,8 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_bookmark_remove(kind, id, bookmarkId)` | 取消收藏：插画走 ajax form，小说走旧式 `/novel/bookmark_setting.php` 表单 |
 | `app_exit` | 退出应用（前端确认框确认后调用，与 Cmd+Q 路径一致） |
 | `check_app_update` | 检查更新：解析 GitHub releases 页面取最新稳定版，返回 has_update/current_version/latest_version/release_url/platform/package_type；系统代理失败回退直连；启动检查无更新/失败静默，手动检查给提示 |
-| `download_app_update(version, progress)` | 下载并校验对应版本、当前平台/架构/包类型的 Release 包；progress 为 IPC Channel，返回 path/installer_opened/directory_opened/package_type；仅一个更新下载可在途 |
+| `download_app_update(version, progress)` | 下载并校验对应版本、当前平台/架构/包类型的 Release 包；progress 为 IPC Channel，返回 path/package_type，不打开安装包；仅一个更新下载可在途 |
+| `install_app_update` | 打开后端记录的已完成更新包；文件不存在或系统打开失败时返回错误并保持应用运行；安装前重新核对普通文件、下载时实际大小与 SHA256；系统接受打开请求后以 exit(0) 退出，跳过普通退出确认，不接受前端文件路径 |
 | `cancel_app_update` | 取消当前更新下载（含元数据请求），清理临时目录；无在途下载时幂等 |
 | `open_update_directory` | 打开最近一次已完成更新包目录，仅后端保留的路径，不接受前端任意文件路径 |
 
@@ -1549,7 +1552,7 @@ App 级单例，离开小说页或关闭浮层不断开；缓存清理成功后�
 ### 7.2 应用内更新
 
 启动 3s 后静默检查一次，仅新版弹确认；手动检查沿用账号菜单。用户确认后进入
-`UpdateDialog`：available → downloading → opening → guide；失败进入 error（重新下载 / 打开发布页），取消进入 cancelled（可重新下载）。
+`UpdateDialog`：available → downloading → ready；下载失败进入 error（重新下载 / 打开发布页），取消进入 cancelled（可重新下载）。下载中可关闭弹窗继续后台下载（Esc 同效），取消只由显式按钮触发；后台完成/失败通过通知提示，重新检查更新回到原状态。同一会话同一版本的已下载包保留，稍后安装无需重下。ready 提供“退出并安装更新 / 稍后安装 / 打开下载目录 / 重新下载”；存在活跃下载、未终结翻译 Job 或下载状态同步失败时，先在原弹窗进入 confirm，说明中断影响并确认一次，再进入 opening（ADR 0040）。
 更新不复用携带 Pixiv Cookie 的客户端，不引入本地 HTTP 服务。资产清单双源获取：首选 GitHub REST
 `/repos/gbandszxc/pixiv-tool/releases/tags/{tag}`（结构化、带精确大小与摘要），优先 v 前缀再裸 tag，
 仅接受精确版本稳定 Release；API 被匿名限额或网络失败时回退发布页 `expanded_assets/<tag>` 片段
@@ -1569,12 +1572,12 @@ debug/便携未知包类型提示发布页兜底。macOS 原生包优先同架�
 更新检查优先从重定向后的 URL 提取版本，成功即不读取 HTML；HTML 回退与
 Release JSON 均按实际响应字节累计限制在 4MB，不能仅依赖 Content-Length。
 
-`progress: Channel<UpdateProgress>` 载荷为 `{phase:downloading|opening,file_name,downloaded,total,bytes_per_second}`，
+`progress: Channel<UpdateProgress>` 载荷为 `{phase:downloading,file_name,downloaded,total,bytes_per_second}`，
 下载中最多约每 200ms 发一次、速度取近 2s 窗口，开始和完成各发一次；前端展示百分比、已下载/总大小、
-KB/MB/GB 与速度。Esc 在下载中取消，在 opening 状态等待；下载中关闭背景交互。
+KB/MB/GB 与速度。下载不自动打开安装包；opening 期间阻止关闭和重复点击。
 Windows 由系统文件关联启动 MSI/NSIS；macOS `open`、Linux `xdg-open` 检查退出状态（15s 上限），
-自动打开失败尝试文件管理器定位，失败再打开目录。两种系统打开均失败仍是下载成功，界面提供目录操作与完整路径。
-安装引导按 Windows/macOS/Linux 显示覆盖安装、关闭当前应用和重启步骤，不自动退出、不宣称安装已完成。
+仅在用户明确安装后执行打开；成功表示系统接受打开请求，不保证安装窗口已出现。后端打开成功后自动 exit(0)，避免再次弹普通退出确认；失败保留应用和已下载包，显示错误并允许重试、打开目录或重新下载。目录操作独立，不能作为安装启动成功的依据。
+安装引导按 Windows/macOS/Linux 显示覆盖安装和重启步骤；macOS 明确 DMG 打开后仍需拖入 Applications 替换。安装由系统和用户完成，不宣称安装完成，也不自动重启（ADR 0040）。
 离线回归：Rust 包匹配/来源验证/流式大小摘要测试 + `/tests/update.html` 真实组件 IPC mock（不会启动安装包）。
 
 ---
@@ -1783,9 +1786,11 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0037 | 翻译预览的归属、尾窗与稳定展示 | [adr/0037-translation-preview-ownership-and-stability.md](adr/0037-translation-preview-ownership-and-stability.md) |
 | 0038 | 翻译审查收敛与按块返工（审查分级、`revise_draft`、每块额度、`chunk_gate`） | [adr/0038-translation-review-convergence.md](adr/0038-translation-review-convergence.md) |
 | 0039 | ugoira 应用内播放与多 P 按页下载 | [adr/0039-ugoira-playback-and-page-download.md](adr/0039-ugoira-playback-and-page-download.md) |
-| 0040 | ruby 注释策略与标记不变量解耦（归一化 + 修订收敛闸） | [adr/0040-ruby-annotation-policy-decoupling.md](adr/0040-ruby-annotation-policy-decoupling.md) |
-| 0041 | 翻译调用预算手动追加（`novel_translation_grant_budget`） | [adr/0041-translation-budget-manual-grant.md](adr/0041-translation-budget-manual-grant.md) |
-| 0042 | 子任务内容拒绝快速失败与被拒块跳过（`novel_translation_skip_chunks`） | [adr/0042-content-refusal-fast-fail-and-skip.md](adr/0042-content-refusal-fast-fail-and-skip.md) |
+| 0041 | ruby 注释策略与标记不变量解耦（归一化 + 修订收敛闸） | [adr/0041-ruby-annotation-policy-decoupling.md](adr/0041-ruby-annotation-policy-decoupling.md) |
+| 0042 | 翻译调用预算手动追加（`novel_translation_grant_budget`） | [adr/0042-translation-budget-manual-grant.md](adr/0042-translation-budget-manual-grant.md) |
+| 0043 | 子任务内容拒绝快速失败与被拒块跳过（`novel_translation_skip_chunks`） | [adr/0043-content-refusal-fast-fail-and-skip.md](adr/0043-content-refusal-fast-fail-and-skip.md) |
+
+| 0040 | 更新下载与安装分离，系统交接成功后退出 | [adr/0040-update-install-and-exit.md](adr/0040-update-install-and-exit.md) |
 
 ADR 按需追加，不强制一次性写完。
 

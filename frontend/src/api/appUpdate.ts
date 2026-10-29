@@ -20,7 +20,7 @@ export async function checkAppUpdate(): Promise<UpdateCheckInfo> {
 }
 
 export interface UpdateProgress {
-  phase: "downloading" | "opening";
+  phase: "downloading";
   file_name: string;
   downloaded: number;
   total: number;
@@ -28,8 +28,6 @@ export interface UpdateProgress {
 }
 export interface UpdateDownloadResult {
   path: string;
-  installer_opened: boolean;
-  directory_opened: boolean;
   package_type: string;
 }
 export function downloadAppUpdate(version: string, onProgress: (value: UpdateProgress) => void) {
@@ -38,4 +36,5 @@ export function downloadAppUpdate(version: string, onProgress: (value: UpdatePro
   return invoke<UpdateDownloadResult>("download_app_update", { version, progress });
 }
 export function cancelAppUpdate() { return invoke<void>("cancel_app_update"); }
+export function installAppUpdate() { return invoke<void>("install_app_update"); }
 export function openUpdateDirectory() { return invoke<void>("open_update_directory"); }

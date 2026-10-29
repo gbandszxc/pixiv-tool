@@ -11,13 +11,52 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::ipc::Channel;
 use tauri_plugin_opener::OpenerExt;
-use tokio::{io::AsyncWriteExt, sync::watch};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    sync::watch,
+};
 
 use super::update_cmds::{is_stable_tag, read_metadata, shared_clients};
 
 const DOWNLOAD_PREFIX: &str = "https://github.com/gbandszxc/pixiv-tool/releases/download/";
 static ACTIVE: Mutex<Option<watch::Sender<bool>>> = Mutex::new(None);
-static COMPLETED: Mutex<Option<PathBuf>> = Mutex::new(None);
+static COMPLETED: Mutex<Option<CompletedUpdate>> = Mutex::new(None);
+
+#[derive(Clone)]
+struct CompletedUpdate {
+    path: PathBuf,
+    size: u64,
+    digest: String,
+}
+
+async fn verify_completed(update: &CompletedUpdate) -> Result<(), String> {
+    let mut file = tokio::fs::File::open(&update.path)
+        .await
+        .map_err(|_| "更新包已不存在或无法读取，请重新下载")?;
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|_| "无法读取更新包，请重新下载")?;
+    if !metadata.is_file() || metadata.len() != update.size {
+        return Err("更新包已变化，请重新下载".into());
+    }
+    let mut hash = Sha256::new();
+    let mut buffer = vec![0; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .await
+            .map_err(|_| "读取更新包失败，请重新下载")?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    if format!("sha256:{:x}", hash.finalize()) != update.digest {
+        return Err("更新包已变化，请重新下载".into());
+    }
+    Ok(())
+}
 
 #[derive(Clone, Debug, Deserialize)]
 struct Asset {
@@ -48,8 +87,6 @@ pub struct UpdateProgress {
 #[derive(Serialize)]
 pub struct UpdateDownloadResult {
     pub path: String,
-    pub installer_opened: bool,
-    pub directory_opened: bool,
     pub package_type: String,
 }
 
@@ -341,7 +378,7 @@ async fn transfer(
     asset: &Asset,
     part: &std::path::Path,
     progress: &Channel<UpdateProgress>,
-) -> Result<(), String> {
+) -> Result<(u64, String), String> {
     let response = request(&asset.browser_download_url, true).await?;
     // 大小校验：有精确大小（API 通道）时响应长度必须一致；未知大小（网页
     // 片段回退）时以响应 Content-Length 为基准，缺失则只剩摘要与来源校验。
@@ -411,15 +448,16 @@ async fn transfer(
     if !complete {
         return Err("更新包下载不完整，请重新下载".into());
     }
+    let digest = format!("sha256:{:x}", hash.finalize());
     if let Some(expected) = &asset.digest {
-        if !format!("sha256:{:x}", hash.finalize()).eq_ignore_ascii_case(expected) {
+        if !digest.eq_ignore_ascii_case(expected) {
             return Err("更新包 SHA256 校验失败，请重新下载".into());
         }
     }
     file.flush().await.map_err(|_| "保存更新包失败")?;
     file.sync_all().await.map_err(|_| "保存更新包失败")?;
-    emit("opening", downloaded, 0.0);
-    Ok(())
+    emit("downloading", downloaded, 0.0);
+    Ok((downloaded, digest))
 }
 
 struct ActiveGuard;
@@ -469,33 +507,46 @@ pub async fn download_app_update(
             .await
             .map_err(|_| "无法创建更新临时目录")?;
         let part = dir.join(format!("{}.part", asset.name));
-        transfer(&asset, &part, &progress).await?;
+        let (size, digest) = transfer(&asset, &part, &progress).await?;
         let path = dir.join(&asset.name);
         tokio::fs::rename(part, &path)
             .await
             .map_err(|_| "无法保存更新包")?;
-        Ok::<_, String>(path)
+        Ok::<_, String>(CompletedUpdate { path, size, digest })
     };
     let result = tokio::select! { biased;
         _ = receiver.changed() => Err("更新下载已取消".into()),
         result = download => result,
     };
-    let path = match result {
-        Ok(path) => path,
+    let completed = match result {
+        Ok(completed) => completed,
         Err(error) => {
             let _ = tokio::fs::remove_dir_all(&dir).await;
             return Err(error);
         }
     };
-    *COMPLETED.lock().map_err(|_| "更新状态不可用")? = Some(path.clone());
-    let installer_opened = system_open(&app, &path).await;
-    let directory_opened = !installer_opened && reveal(&app, &path).await;
+    let path = completed.path.to_string_lossy().into_owned();
+    *COMPLETED.lock().map_err(|_| "更新状态不可用")? = Some(completed);
     Ok(UpdateDownloadResult {
-        path: path.to_string_lossy().into_owned(),
-        installer_opened,
-        directory_opened,
+        path,
         package_type: kind,
     })
+}
+
+#[tauri::command]
+pub async fn install_app_update(app: tauri::AppHandle) -> Result<(), String> {
+    let path = COMPLETED
+        .lock()
+        .map_err(|_| "更新状态不可用")?
+        .clone()
+        .ok_or("尚无已下载的更新包，请先下载")?;
+    verify_completed(&path).await?;
+    if !system_open(&app, &path.path).await {
+        return Err("无法启动安装程序，应用未退出。请重试或打开下载目录手动安装".into());
+    }
+    // 系统接受打开请求后才退出；显式退出码绕过普通退出确认。
+    app.exit(0);
+    Ok(())
 }
 
 async fn system_open(app: &tauri::AppHandle, path: &std::path::Path) -> bool {
@@ -557,7 +608,7 @@ pub async fn open_update_directory(app: tauri::AppHandle) -> Result<(), String> 
         .map_err(|_| "更新状态不可用")?
         .clone()
         .ok_or("尚无已下载的更新包")?;
-    if reveal(&app, &path).await {
+    if reveal(&app, &path.path).await {
         Ok(())
     } else {
         Err("无法打开下载目录，请按显示的路径手动打开".into())
@@ -567,6 +618,30 @@ pub async fn open_update_directory(app: tauri::AppHandle) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn deferred_package_rechecks_content_type_and_existence() {
+        let dir =
+            std::env::temp_dir().join(format!("pixiv-update-verify-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir(&dir).await.unwrap();
+        let path = dir.join("update.msi");
+        tokio::fs::write(&path, b"abcdef").await.unwrap();
+        let update = CompletedUpdate {
+            path: path.clone(),
+            size: 6,
+            digest: format!("sha256:{:x}", Sha256::digest(b"abcdef")),
+        };
+        assert!(verify_completed(&update).await.is_ok());
+        tokio::fs::write(&path, b"abcdeg").await.unwrap();
+        assert!(verify_completed(&update).await.is_err());
+        tokio::fs::write(&path, b"abc").await.unwrap();
+        assert!(verify_completed(&update).await.is_err());
+        tokio::fs::remove_file(&path).await.unwrap();
+        assert!(verify_completed(&update).await.is_err());
+        tokio::fs::create_dir(&path).await.unwrap();
+        assert!(verify_completed(&update).await.is_err());
+        tokio::fs::remove_dir_all(dir).await.unwrap();
+    }
     fn asset(name: &str) -> Asset {
         Asset {
             name: name.into(),
@@ -695,11 +770,10 @@ mod tests {
             server.await.unwrap();
             let events = messages.lock().unwrap();
             assert!(events.iter().any(|json| json.contains("downloading")));
-            assert_eq!(
-                events.iter().any(|json| json.contains("opening")),
-                succeeds,
-                "opening 事件不符: size={asset_size} cl={content_length:?}"
-            );
+            assert!(events.iter().all(|json| !json.contains("opening")));
+            if succeeds {
+                assert!(events.last().unwrap().contains("\"downloaded\":6"));
+            }
             if succeeds {
                 assert_eq!(tokio::fs::read(&file).await.unwrap(), b"abcdef");
             }

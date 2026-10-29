@@ -1,4 +1,4 @@
-# ADR 0040：ruby 注释策略与标记不变量解耦
+# ADR 0041：ruby 注释策略与标记不变量解耦
 
 - 状态：已接受（细化 [ADR 0035](0035-whole-novel-agent-translation.md) 的约束冻结与
   [ADR 0038](0038-translation-review-convergence.md) 的修订收敛；不推翻既有决策）
