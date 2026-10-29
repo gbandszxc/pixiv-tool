@@ -208,6 +208,7 @@ export default {
     deleted: "已删除 {count} 个任务",
     batchDeleted: "已删除 {count} 个任务",
     clearCompleted: "清除所有已完成任务",
+    clearingCompleted: "正在清空…",
     clearCompletedConfirm: "确定清除全部 {count} 个已完成任务？已导出的文件不会被删除。",
     completedCleared: "已清除 {count} 个已完成任务",
     status: {
@@ -237,7 +238,7 @@ export default {
     viewDetail: "查看作品详情",
     openFolder: "打开所在文件夹",
     openFolderFailed: "打开文件夹失败",
-    deleteConfirm: "确定删除此记录？",
+    deleteConfirm: "确定删除此记录？将同时删除已导出的文件。",
     batchDelete: "批量删除",
     batchDeleteConfirm: "确定删除选中的 {count} 条记录？（不删除文件）",
     batchDeleted: "已删除 {count} 条记录",

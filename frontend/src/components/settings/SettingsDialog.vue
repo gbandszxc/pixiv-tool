@@ -15,8 +15,8 @@
       <div ref="body" class="settings-dialog-body"><SettingsPanel ref="settingsPanel" :section="activeSection" :active="show" /></div>
     </div>
     <footer class="settings-dialog-footer">
-      <md-text-button @click="handleCancel">{{ t("common.cancel") }}</md-text-button>
-      <md-filled-button @click="handleSave">{{ t("common.save") }}</md-filled-button>
+      <md-text-button :disabled="saving" @click="handleCancel">{{ t("common.cancel") }}</md-text-button>
+      <md-filled-button :disabled="saving" :aria-busy="saving" @click="handleSave">{{ t("common.save") }}</md-filled-button>
     </footer>
   </dialog>
   <dialog ref="unsavedDialog" class="m3-dialog unsaved-dialog" :aria-label="t('settings.unsavedTitle')" @cancel="onUnsavedCancel" @click="onUnsavedBackdropClick">
@@ -32,6 +32,8 @@
  * SettingsPanel 的 section），右侧为当前分组表单，底部为常驻的取消 / 保存
  * （保存为整表一次写入）。✕ / Esc / 点 backdrop 关闭前先问 SettingsPanel
  * 是否脏，有未保存改动则弹第二层确认弹窗；取消 → 回滚并关闭，保存成功 → 关闭。
+ * 保存（IPC 在途）期间 saving 置位：底部两键禁用，Esc / ✕ / backdrop 一律不响应，
+ * 防止重复提交或「取消回滚后再被成功分支关闭」的竞态；失败时 saving 复位留在弹窗。
  */
 import { computed, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -47,11 +49,15 @@ const unsavedDialog = ref<HTMLDialogElement | null>(null);
 const body = ref<HTMLElement | null>(null);
 const settingsPanel = ref<InstanceType<typeof SettingsPanel> | null>(null);
 const activeSection = ref<SettingsSection>("general");
+/** 保存 IPC 在途标记：防双击重复提交，期间禁用底部两键并拦下全部关闭路径（失败必复位）。 */
+const saving = ref(false);
 const navItems = computed(() => SETTINGS_SECTIONS.map(id => ({ id, label: t(`settings.groups.${id}`) })));
 watch(() => props.show, (show) => { if (!dialog.value) return; if (show) dialog.value.showModal(); else dialog.value.close(); });
 function selectSection(id: SettingsSection) { activeSection.value = id; if (body.value) body.value.scrollTop = 0; }
-/** Esc / ✕ / backdrop 的统一关闭请求：有未保存改动先确认，否则直接关。 */
+/** Esc / ✕ / backdrop 的统一关闭请求：保存中一律不关（IPC 在途，关了会与成功分支竞态）；
+ * 平时有未保存改动先确认，否则直接关。 */
 function requestClose(deferModal = false) {
+  if (saving.value) return;
   if (!settingsPanel.value?.hasUnsaved()) { closeDialog(); return; }
   // Esc 走浏览器 close watcher，在其 cancel 处理中同步 showModal 会被拦下（无用户激活），
   // 推迟一个任务再开；✕ / backdrop 是真实点击，直接开。
@@ -59,8 +65,13 @@ function requestClose(deferModal = false) {
   unsavedDialog.value?.showModal();
 }
 function closeDialog() { emit("update:show", false); }
-function handleCancel() { settingsPanel.value?.reset(); closeDialog(); }
-async function handleSave() { if (await settingsPanel.value?.save()) closeDialog(); }
+function handleCancel() { if (saving.value) return; settingsPanel.value?.reset(); closeDialog(); }
+/** 保存：进入即置 saving 拦重入，成功关闭、失败留在弹窗，finally 复位。 */
+async function handleSave() {
+  if (saving.value) return;
+  saving.value = true;
+  try { if (await settingsPanel.value?.save()) closeDialog(); } finally { saving.value = false; }
+}
 function closeUnsaved() { unsavedDialog.value?.close(); }
 function discardAndClose() { closeUnsaved(); settingsPanel.value?.reset(); notify(t("settings.unsaved")); closeDialog(); }
 /** Esc 触发原生 cancel：拦截后走统一关闭流程，保证脏检查先执行。 */

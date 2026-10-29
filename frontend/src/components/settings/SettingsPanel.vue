@@ -48,7 +48,7 @@
       </div>
       <div class="m3-field">
         <div class="field-label"><label for="max-wait">{{ t('settings.maxWait') }}</label><HelpTooltip :label="t('settings.maxWait')" :text="t('settings.maxWaitHint')" /></div>
-        <div class="m3-row"><md-outlined-text-field id="max-wait" class="settings-number-input" type="number" min="30" max="86400" step="30" :value="String(form.max_wait_seconds)" @input="form.max_wait_seconds = Number(($event.target as HTMLInputElement).value)" /></div>
+        <div class="m3-row"><md-outlined-text-field id="max-wait" class="settings-number-input" type="number" min="30" max="86400" step="30" :value="maxWaitDisplay" :error="Boolean(maxWaitError)" :error-text="maxWaitError" @input="onMaxWaitInput" /></div>
       </div>
     </template>
 
@@ -79,7 +79,7 @@
         </div>
         <div v-if="cacheMaxCustom" class="m3-field">
           <label for="image-cache-max-custom">{{ t("settings.imageCacheCustomLabel") }}</label>
-          <md-outlined-text-field id="image-cache-max-custom" class="settings-number-input" type="number" min="256" max="2048" step="64" :value="String(form.image_cache_max_mib)" @input="form.image_cache_max_mib = Number(($event.target as HTMLInputElement).value)" />
+          <md-outlined-text-field id="image-cache-max-custom" class="settings-number-input" type="number" min="256" max="2048" step="64" :value="cacheMaxDisplay" :error="Boolean(cacheMaxError)" :error-text="cacheMaxError" @input="onCacheMaxInput" />
         </div>
       </fieldset>
       <fieldset class="m3-field settings-fieldset">
@@ -488,7 +488,28 @@ const cacheMaxCustom = computed(() => !cachePresets.some((preset) => preset.valu
 const cacheMaxSelectValue = computed(() => (cacheMaxCustom.value ? "custom" : String(form.value.image_cache_max_mib)));
 /** 选「自定义」时保持当前数值原样，由自定义输入框接管；选预设直接落值。 */
 function changeCacheMax(value: string) {
-  if (value !== "custom") form.value.image_cache_max_mib = Number(value);
+  if (value !== "custom") { form.value.image_cache_max_mib = Number(value); cacheMaxError.value = ""; }
+}
+
+// ===== 数字字段草稿（下载等待上限 / 缓存上限自定义值）=====
+// 草稿态允许 NaN：清空输入不伪造 0（0 是会被 save 拦下的非法值，回写会打断输入），
+// 显示回落空串（同 TranslationAgentFields 的范式）；越界不在输入时拦，保存时字段级标红。
+
+/** 保存前校验错误（字段内 error-text 展示，输入 / 选预设即清）。 */
+const maxWaitError = ref("");
+const cacheMaxError = ref("");
+/** 清空 / 非数字显示为空串，避免「NaN」或回写的 0 出现在输入框。 */
+const maxWaitDisplay = computed(() => Number.isFinite(form.value.max_wait_seconds) ? String(form.value.max_wait_seconds) : "");
+const cacheMaxDisplay = computed(() => Number.isFinite(form.value.image_cache_max_mib) ? String(form.value.image_cache_max_mib) : "");
+function onMaxWaitInput(event: Event) {
+  const raw = (event.target as HTMLInputElement).value.trim();
+  form.value.max_wait_seconds = raw === "" ? Number.NaN : Number(raw);
+  maxWaitError.value = "";
+}
+function onCacheMaxInput(event: Event) {
+  const raw = (event.target as HTMLInputElement).value.trim();
+  form.value.image_cache_max_mib = raw === "" ? Number.NaN : Number(raw);
+  cacheMaxError.value = "";
 }
 
 function toggleFormat(format: string, checked: boolean) { form.value.output_formats = checked ? [...form.value.output_formats, format] : form.value.output_formats.filter((item) => item !== format); }
@@ -551,15 +572,26 @@ function reset() {
   form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
   templateErrors.value = { illust: "", novel: "", series: "" };
   outputDirError.value = "";
+  maxWaitError.value = "";
+  cacheMaxError.value = "";
   translationJsonError.value = "";
   resetTranslationDraft(); savedSnapshot.value = snapshot();
   if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
 }
 defineExpose({ save, reset, hasUnsaved });
 async function save(): Promise<boolean> {
-  if (!form.value.max_wait_seconds || form.value.max_wait_seconds < 30) { notify(t("settings.maxWaitInvalid")); return false; }
+  // 数字字段保存前预校验：空 / NaN / 越界在字段下方直接标红并阻止整表写入（同 output-dir 配方）。
+  if (!Number.isFinite(form.value.max_wait_seconds) || form.value.max_wait_seconds < 30) {
+    maxWaitError.value = t("settings.maxWaitInvalid");
+    notify(maxWaitError.value);
+    return false;
+  }
   const cacheMax = form.value.image_cache_max_mib;
-  if (!Number.isInteger(cacheMax) || cacheMax < 256 || cacheMax > 2048) { notify(t("settings.imageCacheMaxInvalid")); return false; }
+  if (!Number.isInteger(cacheMax) || cacheMax < 256 || cacheMax > 2048) {
+    cacheMaxError.value = t("settings.imageCacheMaxInvalid");
+    notify(cacheMaxError.value);
+    return false;
+  }
   // 运行参数（含二级隐藏分类）统一校验：失败时切到二级并把焦点落到出错字段，
   // 一级入口同时显示错误计数，用户不必自己翻分类找问题。
   const agentIssues = validateTranslationAgent(form.value);

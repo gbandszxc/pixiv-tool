@@ -207,6 +207,7 @@ export default {
     deleted: "Deleted {count} task(s)",
     batchDeleted: "Deleted {count} task(s)",
     clearCompleted: "Clear completed tasks",
+    clearingCompleted: "Clearing…",
     clearCompletedConfirm: "Clear all {count} completed task(s)? Exported files will be kept.",
     completedCleared: "Cleared {count} completed task(s)",
     status: {
@@ -236,7 +237,7 @@ export default {
     viewDetail: "View detail page",
     openFolder: "Open containing folder",
     openFolderFailed: "Failed to open folder",
-    deleteConfirm: "Delete this record?",
+    deleteConfirm: "Delete this record? The exported file(s) will also be deleted from disk.",
     batchDelete: "Batch Delete",
     batchDeleteConfirm: "Delete {count} selected record(s)? (files kept)",
     batchDeleted: "{count} record(s) deleted",

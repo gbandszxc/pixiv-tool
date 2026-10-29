@@ -12,7 +12,7 @@
           <div class="task-management">
           <label class="m3-choice"><md-checkbox :checked="allSelected" :indeterminate="someSelected" :disabled='!filteredTasks.length' @change='toggleAll(($event.target as HTMLInputElement).checked)' />{{ t("tasks.selectAllDeletable") }}</label>
           <md-outlined-button :disabled='!selectedTaskIds.length || batchDeleting' @click='openConfirm("batch")'>{{ batchDeleting ? "…" : t("tasks.batchDelete", { count: selectedTaskIds.length }) }}</md-outlined-button>
-          <md-text-button :disabled='!completedTaskCount || loading' @click='openConfirm("clear")'>{{ clearingCompleted ? "…" : t("tasks.clearCompleted") }}</md-text-button>
+          <md-text-button :disabled='!completedTaskCount || loading || clearingCompleted' :aria-busy='clearingCompleted' @click='openConfirm("clear")'>{{ clearingCompleted ? t("tasks.clearingCompleted") : t("tasks.clearCompleted") }}</md-text-button>
           </div>
         </div>
       </div>
