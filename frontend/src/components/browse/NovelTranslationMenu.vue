@@ -1479,15 +1479,14 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  width: min(420px, calc(100vw - var(--space-lg) * 2));
+  /* 384px = 24 × space-lg（与底栏任务菜单同写法）；高度自适应内容，max-height 封顶后由内容区内滚 */
+  width: min(calc(var(--space-lg) * 24), calc(100vw - var(--space-lg) * 2));
   max-width: calc(100vw - var(--space-lg) * 2);
-  height: min(72vh, 520px);
-  max-height: calc(100vh - 100px);
-  border-radius: 16px;
+  max-height: min(70vh, 560px);
+  border-radius: var(--radius-control);
   background: var(--md-sys-color-surface-container);
-  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 20%, transparent);
   color: var(--ink);
-  box-shadow: 0 8px 28px -4px rgba(0, 0, 0, 0.16), 0 3px 8px -2px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
   outline: none;
 }
 .translation-popover:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
@@ -1625,7 +1624,7 @@ onBeforeUnmount(() => {
   height: 16px;
 }
 
-/* tab 条：M3 Primary Tab 质感与平滑下划线指示条 */
+/* tab 条：等分宽度、36px 高；选中 secondary-container 填充，hover 8% primary 状态层 */
 .panel-tabs {
   flex: none;
   display: flex;
@@ -1634,7 +1633,6 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
 }
 .panel-tab {
-  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 36px;
@@ -1651,18 +1649,12 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   transition: color 150ms ease;
 }
-.panel-tab:hover:not(.selected) { color: var(--ink); background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent); }
+.panel-tab:hover:not(.selected) { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
 .panel-tab:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
-.panel-tab.selected { color: var(--md-sys-color-primary); font-weight: 600; }
-.panel-tab.selected::after {
-  content: "";
-  position: absolute;
-  bottom: -1px;
-  left: 14%;
-  right: 14%;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--md-sys-color-primary);
+.panel-tab.selected {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-weight: 600;
 }
 
 /* 内容区是唯一滚动容器：长文、问题列表、预览都在这里内滚。 */
@@ -1737,7 +1729,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: var(--space-xs);
   padding: var(--space-sm);
-  border-radius: 12px;
+  border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--md-sys-color-surface-container-low) 80%, transparent);
   border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 22%, transparent);
   transition: border-color 150ms ease;
@@ -1777,7 +1769,7 @@ onBeforeUnmount(() => {
 .style-mode-btn {
   height: 22px;
   padding: 0 8px;
-  font-size: 10.5px;
+  font-size: 11px;
   font-family: inherit;
   border: 0;
   border-radius: 999px;
@@ -1787,17 +1779,16 @@ onBeforeUnmount(() => {
   transition: all 140ms ease;
 }
 .style-mode-btn.active {
-  background: var(--md-sys-color-surface);
-  color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
   font-weight: 600;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 .style-mode-btn:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 1px;
 }
 .style-readonly-badge {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--ink-subtle);
   padding: 1px 6px;
   border-radius: 999px;
@@ -1828,7 +1819,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 4px;
   height: 26px;
-  padding: 0 10px;
+  padding: 0 8px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
   background: var(--surface);
@@ -1841,7 +1832,7 @@ onBeforeUnmount(() => {
   user-select: none;
 }
 .style-chip:hover:not(.selected) {
-  background: color-mix(in srgb, var(--md-sys-color-primary) 6%, transparent);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
   color: var(--ink);
   border-color: color-mix(in srgb, var(--md-sys-color-primary) 35%, transparent);
 }
@@ -1972,7 +1963,7 @@ onBeforeUnmount(() => {
 .chunk-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-subtle); }
 .chunk-dot.is-translated { background: var(--state-success-ink); }
 .chunk-dot.is-repair { background: var(--md-sys-color-error); }
-.chunk-state { color: inherit; font-size: 10px; opacity: 0.8; }
+.chunk-state { color: inherit; font-size: 11px; opacity: 0.8; }
 .chunk-detail { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
 .chunk-badges { display: flex; flex-wrap: wrap; gap: var(--space-xxs); }
 .chunk-badge { padding: 0 var(--space-xs); border-radius: 999px; background: var(--surface); color: var(--ink-muted); font-size: 11px; line-height: 1.8; }
@@ -2035,10 +2026,9 @@ onBeforeUnmount(() => {
 }
 .translation-mode:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
 .translation-mode.selected {
-  background: var(--md-sys-color-surface);
-  color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 .action-row {
   display: flex;

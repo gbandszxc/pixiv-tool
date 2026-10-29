@@ -1565,8 +1565,8 @@ watch(
   --md-text-button-label-text-weight: 600;
 }
 
-/* ugoira 播放控件：舞台右下角胶囊（32px 高）。浮于图片之上，与页码徽标同位置策略，
- * 但需响应指针（不 pointer-events: none）；浅色容器底保证任意画面下可读 */
+/* ugoira 播放控件：舞台右下角胶囊（32px 高）。浮于图片之上，与页码徽标同位置策略、
+ * 同配色配方（近黑底 + 白字，任意画面下可读）；但需响应指针（不 pointer-events: none） */
 .ugoira-controls {
   position: absolute;
   right: var(--space-sm);
@@ -1579,14 +1579,18 @@ watch(
   gap: var(--space-xs);
   padding: 0 var(--space-sm);
   border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--md-sys-color-surface-container) 88%, transparent);
+  background: rgb(0 0 0 / 0.78);
 }
 
-/* 32px 胶囊内的图标按钮收敛到 28px 触控域（Material 默认 40px 会撑破胶囊高度） */
+/* 32px 胶囊内的图标按钮收敛到 28px 触控域（Material 默认 40px 会撑破胶囊高度）；图标与状态层走白色系 */
 .ugoira-toggle {
   --md-icon-button-state-layer-height: calc(var(--space-xl) + var(--space-xxs));
   --md-icon-button-state-layer-width: calc(var(--space-xl) + var(--space-xxs));
   --md-icon-button-icon-size: 16px;
+  --md-icon-button-icon-color: rgb(255 255 255 / 0.92);
+  --md-icon-button-hover-state-layer-color: rgb(255 255 255 / 0.92);
+  --md-icon-button-focus-state-layer-color: rgb(255 255 255 / 0.92);
+  --md-icon-button-pressed-state-layer-color: rgb(255 255 255 / 0.92);
 }
 
 .ugoira-toggle svg {
@@ -1596,8 +1600,8 @@ watch(
 }
 
 .ugoira-count {
-  color: var(--ink-muted);
-  font-size: 11px;
+  color: rgb(255 255 255 / 0.92);
+  font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
 }

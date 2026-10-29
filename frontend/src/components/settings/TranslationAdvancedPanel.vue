@@ -146,9 +146,10 @@ const categoryHintKey = (category: TranslationAgentCategory) => `translation.age
   <div id="translation-advanced-page" class="translation-advanced">
     <div v-if="!openCategory" class="advanced-head">
       <div class="advanced-head-leading">
-        <md-icon-button class="advanced-back-button advanced-back-service" :aria-label="t('translation.agent.backToService')" :title="t('translation.agent.backToService')" @click="backToService">
+        <md-text-button class="advanced-back-button advanced-back-service" @click="backToService">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
-        </md-icon-button>
+          {{ t("translation.agent.backToService") }}
+        </md-text-button>
         <div class="advanced-title-group">
           <h3 class="advanced-title">{{ t("translation.agent.advancedSettingsTitle") }}</h3>
         </div>
@@ -188,9 +189,10 @@ const categoryHintKey = (category: TranslationAgentCategory) => `translation.age
     <template v-else>
       <div class="advanced-detail-head">
         <div class="advanced-head-leading">
-          <md-icon-button class="advanced-back-button advanced-back-index" :aria-label="t('translation.agent.backToIndex')" :title="t('translation.agent.backToIndex')" @click="backToIndex">
+          <md-text-button class="advanced-back-button advanced-back-index" @click="backToIndex">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
-          </md-icon-button>
+            {{ t("translation.agent.backToIndex") }}
+          </md-text-button>
           <div class="advanced-title-group">
             <h3 class="advanced-title">{{ t(categoryTitleKey(openCategory)) }}</h3>
           </div>
@@ -252,8 +254,9 @@ const categoryHintKey = (category: TranslationAgentCategory) => `translation.age
   border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
 }
 .advanced-head-leading { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+/* 返回为 md-text-button + 18px chevron（ListRefreshButton 的内联图标配方），-8px 抵消按钮内距与内容区左缘对齐 */
 .advanced-back-button { margin-left: -8px; }
-.advanced-back-button svg { width: 20px; height: 20px; }
+.advanced-back-button svg { width: 18px; height: 18px; margin-right: var(--space-xxs); vertical-align: middle; }
 .advanced-title-group { display: flex; align-items: center; min-width: 0; }
 .advanced-title { margin: 0; font-size: 17px; font-weight: 600; color: var(--ink); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .advanced-chip {
