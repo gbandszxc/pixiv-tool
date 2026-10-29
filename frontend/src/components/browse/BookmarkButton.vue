@@ -35,6 +35,8 @@ const { t } = useI18n();
 
 const busy = ref(false);
 const menuEl = ref<HTMLDetailsElement | null>(null);
+/** 触发器 summary：关闭菜单后回焦（Esc / 点外关闭会让焦点掉到 body）。 */
+const triggerEl = ref<HTMLElement | null>(null);
 
 const bookmarked = computed(() => !!props.state);
 const isPrivate = computed(() => props.state?.restrict === 1);
@@ -46,6 +48,8 @@ const apiKind = computed<"illust" | "novel">(() => (props.kind === "novel" ? "no
 
 function closeMenu(): void {
   if (menuEl.value) menuEl.value.open = false;
+  // 收起后焦点掉到 body：回焦触发器，保持键盘可达（参照 NovelBgPicker 的配方）
+  triggerEl.value?.focus();
 }
 
 /** 点击菜单外任意处关闭（pointerdown 捕获当前按下位置，先于 click 生效）。 */
@@ -91,7 +95,7 @@ async function remove(): Promise<void> {
 <template>
   <details ref="menuEl" class="bm-menu" @keydown.escape="closeMenu">
     <!-- 触发器用原生 summary（自带 button 语义与键盘激活），busy 时降透明度并拦截指针 -->
-    <summary class="bm-trigger" :class="{ busy, bookmarked }" :aria-busy="busy || undefined">
+    <summary ref="triggerEl" class="bm-trigger" :class="{ busy, bookmarked }" :aria-busy="busy || undefined">
       <svg
         class="bm-heart"
         :class="{ filled: bookmarked }"

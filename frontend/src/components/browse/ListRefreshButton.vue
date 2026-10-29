@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onActivated, onBeforeUnmount, onDeactivated, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
+import { scrollContentToTop } from "../../utils/scroll";
 
 const props = defineProps<{ busy?: boolean; disabled?: boolean }>();
 const emit = defineEmits<{ refresh: [] }>();
@@ -8,7 +9,7 @@ const { t } = useI18n();
 
 function refresh(): void {
   if (props.busy || props.disabled) return;
-  document.querySelector(".app-content")?.scrollTo({ top: 0, behavior: "instant" });
+  scrollContentToTop();
   emit("refresh");
 }
 

@@ -18,6 +18,7 @@ import { useRouter } from "vue-router";
 import { browseFollowLatest, type BrowseWorkItem, type FeedKind, type FeedMode } from "../../api/browse";
 import SectionTabs from "../../components/browse/SectionTabs.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
+import type { R18Filter } from "../../components/browse/r18Filter";
 import { useInfiniteList } from "../../composables/useInfiniteList";
 
 const { t } = useI18n();
@@ -27,6 +28,15 @@ const router = useRouter();
 
 const kind = ref<FeedKind>("illust");
 const mode = ref<FeedMode>("all");
+
+/**
+ * R-18 档传给 WorkGrid：范围 tab 选「R-18」时用户已显式圈定范围，
+ * 不再叠加全局 safe 档（否则整列表被滤空），传 "all" 放开渲染期过滤；
+ * 其余档不传，WorkGrid 落回全局档（settings.show_r18）。
+ */
+const gridR18Filter = computed<R18Filter | undefined>(() =>
+  mode.value === "r18" ? "all" : undefined
+);
 
 const kindTabs = computed(() => [
   { value: "illust", label: t("browse.feed.kindIllust") },
@@ -107,6 +117,7 @@ function goWork(item: BrowseWorkItem): void {
     <WorkGrid
       :items="items"
       :loading="loading"
+      :r18-filter="gridR18Filter"
       :error="error"
       :loading-more="loadingMore"
       :has-more="hasMore"

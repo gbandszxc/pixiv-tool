@@ -352,6 +352,8 @@ function onKeydown(event: KeyboardEvent): void {
   if (source instanceof Element && source.closest("input, select, [role=slider]")) {
     return;
   }
+  // 设置 / 登录 / 退出确认等模态 dialog 打开时 ←/→ 归 dialog 自己处理，不翻页（与 BrowseWorkView 同口径）
+  if (document.querySelector("dialog[open]")) return;
   if (event.key === "ArrowLeft") {
     event.preventDefault();
     gotoPage(page.value - 1);

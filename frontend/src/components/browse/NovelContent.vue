@@ -18,7 +18,8 @@
 import { computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { pxSrc } from "../../api/browse";
-import type { TranslatedLine, TranslationMode } from "../../api/translation";
+import { canonicalLanguage, TARGET_LANGUAGE_CODES, type TranslatedLine, type TranslationMode } from "../../api/translation";
+import { useSettingsStore } from "../../stores/settings";
 
 const props = defineProps<{
   /** 小说全文（保留原始标记） */
@@ -34,6 +35,17 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: "pages-change", total: number): void }>();
 
 const { t } = useI18n();
+const settings = useSettingsStore();
+
+/**
+ * 译文 lang 属性：目标语言设置（空串 = 跟随界面语言）经 canonicalLanguage 归一，
+ * 与后端 resolve_target_language 的解析同源；白名单外（脏值）回落 zh-CN。
+ */
+const translationLang = computed(() => {
+  const raw = settings.settings.translation_target_language.trim() || settings.settings.language;
+  const code = canonicalLanguage(raw);
+  return (TARGET_LANGUAGE_CODES as readonly string[]).includes(code) ? code : "zh-CN";
+});
 
 // ===== 标记解析 =====
 
@@ -146,7 +158,7 @@ const hasMorePages = computed(() => props.page < pages.value.length);
     <template v-for="(block, i) in blocks" :key="i">
       <h3 v-if="block.kind === 'chapter'" class="chapter">
         <span v-if="showOriginal">{{ block.text }}</span>
-        <span v-if="showTranslation && translatedLines.has(block.line)" class="translated-text" lang="zh-CN">{{ translatedLines.get(block.line) }}</span>
+        <span v-if="showTranslation && translatedLines.has(block.line)" class="translated-text" :lang="translationLang">{{ translatedLines.get(block.line) }}</span>
       </h3>
       <!-- 内嵌图：有 URL 出图，无 URL（pixivimage / 未收录 id）出占位块 -->
       <figure v-else-if="block.kind === 'image' && block.url" class="image-figure">
@@ -189,7 +201,7 @@ const hasMorePages = computed(() => props.page < pages.value.length);
         <template v-else v-for="(seg, j) in block.segments" :key="j">
           <img v-if="seg.kind === 'image'" class="novel-image novel-image-inline" :src="pxSrc(seg.url)" :alt="t('browse.novel.imageAlt')" loading="lazy" decoding="async" />
         </template>
-        <p v-if="showTranslation && translatedLines.has(block.line)" class="para translated-text" lang="zh-CN">{{ translatedLines.get(block.line) }}</p>
+        <p v-if="showTranslation && translatedLines.has(block.line)" class="para translated-text" :lang="translationLang">{{ translatedLines.get(block.line) }}</p>
       </div>
     </template>
     <div v-if="hasMorePages" class="page-divider" aria-hidden="true">· · ·</div>

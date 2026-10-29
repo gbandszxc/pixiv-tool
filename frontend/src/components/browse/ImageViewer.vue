@@ -154,6 +154,8 @@ function resetPages(): void {
   );
   focusedPage.value = 0;
   savedScrollTop = 0;
+  // 旧作品的页元素引用一并清掉：避免换作品后持有 detached DOM（新作品渲染时按 ref 回调重填）
+  itemEls.length = 0;
   // 换作品时浮层一并复位：旧的下标可能落在新数组之外
   fullscreen.value = false;
   fsPage.value = 0;
@@ -162,6 +164,7 @@ function resetPages(): void {
   fsLive.value = props.pages.map(() => false);
   fsVisible.value = [];
   fsSlotEls.length = 0;
+  thumbEls.length = 0;
   fsPendingPage = null;
   // 首屏先放最靠前的两页；其余交给滚动/布局同步
   activate(0, props.restricted ? 0 : 1, 0);

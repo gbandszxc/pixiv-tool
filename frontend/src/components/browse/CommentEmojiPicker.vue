@@ -30,10 +30,14 @@ const emit = defineEmits<{
 const { t } = useI18n();
 
 const menuEl = ref<HTMLDetailsElement | null>(null);
+/** 触发器 summary：面板收起后回焦（Esc / 点外 / 选中贴图收起都会让焦点掉到 body）。 */
+const triggerEl = ref<HTMLElement | null>(null);
 const tab = ref<"emoji" | "stamp">("emoji");
 
 function close(): void {
   if (menuEl.value) menuEl.value.open = false;
+  // 焦点回触发器，保持键盘可达（参照 NovelBgPicker 的配方）
+  triggerEl.value?.focus();
 }
 
 /** 点击面板外任意处关闭（pointerdown 捕获当前按下位置，先于 click 生效）。 */
@@ -49,6 +53,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocPointerDo
   <details ref="menuEl" class="emoji-menu" @keydown.escape="close">
     <!-- 触发器：纯图标按钮（无文案），与顶栏图标动作同为 20px lucide 线性图标 -->
     <summary
+      ref="triggerEl"
       class="emoji-trigger"
       :aria-label="t('browse.comments.emoji')"
       :title="t('browse.comments.emoji')"
@@ -70,24 +75,24 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocPointerDo
         <line x1="15" x2="15.01" y1="9" y2="9" />
       </svg>
     </summary>
-    <div class="emoji-popup" role="dialog" :aria-label="t('browse.comments.emoji')">
-      <div class="emoji-tabs" role="tablist">
+    <!-- 非模态气泡：不做 dialog 语义（无焦点圈闭与 Esc 归属），可读名由触发器的 aria-label 承担；
+         页签是无方向键协同的普通切换按钮组，用 aria-pressed 表达选中态 -->
+    <div class="emoji-popup">
+      <div class="emoji-tabs">
         <button
           type="button"
-          role="tab"
           class="emoji-tab"
           :class="{ current: tab === 'emoji' }"
-          :aria-selected="tab === 'emoji'"
+          :aria-pressed="tab === 'emoji'"
           @click="tab = 'emoji'"
         >
           {{ t("browse.comments.emojiTab") }}
         </button>
         <button
           type="button"
-          role="tab"
           class="emoji-tab"
           :class="{ current: tab === 'stamp' }"
-          :aria-selected="tab === 'stamp'"
+          :aria-pressed="tab === 'stamp'"
           @click="tab = 'stamp'"
         >
           {{ t("browse.comments.stampTab") }}
@@ -181,7 +186,7 @@ onBeforeUnmount(() => document.removeEventListener("pointerdown", onDocPointerDo
   padding: var(--space-sm);
   background: var(--md-sys-color-surface-container);
   border-radius: var(--radius-control);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 18%);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
 }
 
 .emoji-tabs {
