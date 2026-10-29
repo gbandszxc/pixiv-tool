@@ -176,8 +176,8 @@ async function confirmLogout() { logoutDialog.value?.close(); try { await authSt
 .menu-caret { flex: none; width: 16px; height: 16px; color: var(--ink-muted); }
 .menu-divider { margin: var(--space-xs) 0; border: 0; border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
 .menu-hint { margin: 0; padding: 0 var(--space-sm); color: var(--ink-muted); font-size: 12px; line-height: 40px; }
-/* danger 沿用 SettingsPanel .danger-button 的既有规范值 #ba1a1a */
-.menu-item.danger .menu-label { color: #ba1a1a; }
+/* danger 文案走 M3 标准 error 角色（与 SettingsPanel .danger-button 同源，深色自动切亮色错误文字） */
+.menu-item.danger .menu-label { color: var(--md-sys-color-error); }
 /* 底部 meta 行：左对齐版本回显，右对齐 GitHub 主页入口（28px 圆形 hover 状态层） */
 .menu-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); min-height: 36px; padding: 0 var(--space-sm); }
 .menu-version { color: var(--ink-muted); font-size: 12px; }

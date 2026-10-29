@@ -10,9 +10,13 @@ colors:
   on-secondary-container: "#101C2B"
   surface: "#F8F9FF"
   surface-container: "#EDF1F9"
+  surface-container-low: "#F1F4FB"
+  surface-container-highest: "#E2E7F1"
   on-surface: "#191C20"
   on-surface-variant: "#42474E"
   outline: "#72777F"
+  inverse-surface: "#2F3035"
+  inverse-on-surface: "#F0F0F4"
   error: "#BA1A1A"
   error-container: "#FFDAD6"
   on-error-container: "#410002"
@@ -75,7 +79,7 @@ Pixiv Tool 是一款以任务完成为中心的本地桌面工具。当前界面
 
 ## Colors
 
-前言中的 token 是浅色主题的规范值。`html.dark` 覆盖这些角色为：primary `#9DCBFF`、on-primary `#003354`、primary-container `#004B77`、on-primary-container `#CFE5FF`、surface `#101418`、surface-container `#1C2025`、on-surface `#E1E2E8`、on-surface-variant `#C2C7CF`、outline `#8C9199`。主题由设置项和系统 `prefers-color-scheme` 共同决定。
+前言中的 token 是浅色主题的规范值。`html.dark` 覆盖这些角色为：primary `#9DCBFF`、on-primary `#003354`、primary-container `#004B77`、on-primary-container `#CFE5FF`、surface `#101418`、surface-container `#1C2025`、surface-container-low `#16191E`、surface-container-highest `#24292F`、on-surface `#E1E2E8`、on-surface-variant `#C2C7CF`、outline `#8C9199`、inverse-surface `#E1E2E8`、inverse-on-surface `#2D3034`。主题由设置项和系统 `prefers-color-scheme` 共同决定。
 
 ### Color palettes
 
@@ -86,7 +90,7 @@ Pixiv Tool 是一款以任务完成为中心的本地桌面工具。当前界面
 - Secondary container / on-secondary-container：Material Web select 选项的当前选择态；深色主题下使用低亮度容器与浅色文字，不能回退到组件默认紫色。
 - Surface / surface container：应用底色与低强调层级；侧栏、表单卡、列表、表格及对话框使用 container。
 - On-surface / on-surface-variant / outline：正文、辅助文本和分隔线。分隔线以 outline 的半透明 `color-mix()` 呈现。
-- Error 与 warning container：当前自定义 alert、任务状态使用已定义的浅色危险和警告组合；文字和颜色必须一起表达状态。完成/成功状态共用一组绿色（`--state-success-container` / `--state-success-ink`，任务完成徽标与翻译状态一致，深色主题换深底浅字）；错误文字与状态指示点用 M3 标准 error 角色（`--md-sys-color-error`，浅色 #BA1A1A / 深色 #FFB4AB）。颜色只作补充，状态本身始终有可读文字。
+- Error 与 warning container：当前自定义 alert、任务状态使用已定义的浅色危险和警告组合；文字和颜色必须一起表达状态。完成/成功状态共用一组绿色（`--state-success-container` / `--state-success-ink`，任务完成徽标与翻译状态一致，深色主题换深底浅字）；警告/暂停状态共用一组琥珀色（`--state-warning-container` / `--state-warning-ink`，warning alert 与任务暂停徽标一致，浅色 #FFDDB2 / #2A1700，深色主题换深底浅字 #4D3705 / #FFDDB2）；错误文字与状态指示点用 M3 标准 error 角色（`--md-sys-color-error`，浅色 #BA1A1A / 深色 #FFB4AB）。颜色只作补充，状态本身始终有可读文字。
 
 **The Semantic State Rule.** primary 不代表成功、失败或警告；错误、警告、进度与任务状态始终要有可读文字。
 
@@ -149,7 +153,7 @@ Material Web 控件继承库的 M3 外观。应用自定义的 control 圆角为
 - `md-filled-button`：主提交、恢复和确认操作；`md-outlined-button`：浏览、同步、批量删除等次要操作；`md-text-button`：取消、删除等低强调操作；`md-icon-button`：工具栏和行级图标动作。
 - `md-outlined-text-field`、`md-outlined-select`、`md-radio` 与 `md-checkbox`：所有可编辑字段和选择；字段以标签、12px–16px 间距和至少 40px 的 choice 行组织。
 - `md-tabs` / `md-primary-tab`：登录方式切换；`md-secondary-tab`（SectionTabs 封装）：关注 / 我的分区与下载页顶部页签（下载页页签即子路由导航）；`md-linear-progress`：任务进度。Material Web 负责它们的默认交互状态。
-- 原生 `dialog`：登录、退出/删除确认与模态设置弹窗；容器与内部结构收敛于 `main.css` 的「原生 dialog 通用层」（`.m3-dialog`：surface-container、28px 圆角、24px 内边距、35% scrim、标题 18px/700；紧随标题的说明文字为 on-surface-variant，`.dialog-actions` 右对齐操作行、上间距 24px）。退出确认弹窗为「标题 + 说明」的 360px 窄弹窗；历史/任务的删除确认是无标题的单行正文式，正文保持主文案层级。自定义 `.m3-snackbar` 固定在右上角，通知在 3.2 秒后消失。页面不应另建成功提示条。
+- 原生 `dialog`：登录、退出/删除确认与模态设置弹窗；容器与内部结构收敛于 `main.css` 的「原生 dialog 通用层」（`.m3-dialog`：surface-container、28px 圆角、24px 内边距、35% scrim、标题 18px/700；紧随标题的说明文字为 on-surface-variant，`.dialog-actions` 右对齐操作行、上间距 24px）。退出确认弹窗为「标题 + 说明」的 360px 窄弹窗；历史/任务的删除确认是无标题的单行正文式，正文保持主文案层级。自定义 `.m3-snackbar` 固定在右上角，底色走 inverse-surface / inverse-on-surface 角色（浅色 #2F3035 / #F0F0F4、深色 #E1E2E8 / #2D3034，两种主题都保持高对比），control 圆角（12px）、12px 16px 内距，通知在 3.2 秒后消失。页面不应另建成功提示条。
 - 左侧导航：四个核心入口「发现 / 关注 / 我的 / 下载」、无分组标题；图标加文字，hover 使用 8% primary 的状态层，active 使用 primary-container。账号区位于侧栏底部，为头像 chip（头像 + 账号名 + 向上箭头，hover 8% primary 状态层；折叠态居中只显示头像），点击在 chip 上方弹出账号菜单。
 - 账号菜单：锚定头像 chip 上方的轻量 popover——宽 264px、surface-container 底、12px 圆角、既定轻阴影 `0 4px 12px rgb(0 0 0 / 18%)`，无深色 scrim，透明遮罩仅负责点击外部关闭（Esc 同效）；内容为账号列表（当前账号 ✓，点击切换）/ 添加账号 + 分隔线 + 「设置」入口（图标 + 文案 + 右侧箭头）与退出登录（danger 色文案，未登录置灰，经原生 confirm 弹窗确认后执行），菜单行高 40px、hover 8% primary 状态层；「设置」与「退出登录」之间以一条分隔线隔出 meta 行——左对齐版本回显（12px muted 文案，`getVersion()` 动态读取真实 app 版本，读不到显示 `--`）+ 右对齐 GitHub 主页图标入口（16px GitHub mark、28px 圆形按钮，hover 8% primary 状态层，点击关菜单并经系统默认浏览器打开）。弹出过渡复用既有 0.15s ease、transform-origin 左下（reduced-motion 由全局兜底），层级低于 snackbar。
 - 设置弹窗：账号菜单「设置」入口打开的模态 `dialog`（菜单先自行关闭，同一时刻只留一层浮层）——宽 `min(840px, 94vw)`、高 `min(680px, 88vh)`（**定高，不用 min-/max-height**：各分组字段数不同，由内容撑高会让弹窗随分组跳动；超出高度的分组在右栏内部滚动，头部与底部保存栏不动）、surface-container 底、28px 圆角与既定 scrim。三行结构：头部为标题 + 关闭按钮；主区为 `176px | 1fr` 两列 grid（行高 `minmax(0, 1fr)`，否则列内 `overflow-y` 不生效）——**左分组栏**按 `components/settings/sections.ts` 的顺序列出分组（通用 / 外观 / 下载 / 浏览与图片 / 小说翻译 / 维护，文案键 `settings.groups.*`），条目沿用应用侧栏的导航配方（primary-container 选中、8% primary hover、focus-visible primary 2px 外环）按弹窗密度压到 40px 高 / 20px 胶囊、宽不扣边距，与右栏以 outline 35% 的竖直 divider 分隔；两栏各自滚动，右栏承载 SettingsPanel 的当前分组字段；**底部为常驻保存栏**（divider + 右对齐「取消」「保存」），不随表单滚动，保存为整表一次写入（分组建模不设分组级保存）。Esc、点 backdrop 或标题栏 ✕ 关闭前先做脏检查：有未保存改动时弹第二层 `360px` 窄确认弹窗（标题「未保存的修改」+「继续编辑」/「放弃修改」，与登录/退出确认同配方），确认放弃即回滚到已保存值并提示；无改动直接关。640px 以下左分组栏改为横排可滚的胶囊行、表单落下一行。层级低于 snackbar。

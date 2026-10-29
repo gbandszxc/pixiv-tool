@@ -250,9 +250,9 @@ onActivated(load);
   gap: var(--space-sm) var(--space-md);
 }
 
-/* danger 文案色沿用既有规范值 #ba1a1a（AccountMenu / SettingsPanel） */
+/* danger 文案走 M3 标准 error 角色，与 AccountMenu / SettingsPanel 的 danger 文案一致 */
 .clear-btn {
-  --md-text-button-label-text-color: #ba1a1a;
+  --md-text-button-label-text-color: var(--md-sys-color-error);
 }
 
 /* 类别筛选胶囊：与频道页「内容筛选」同一 recipe（透明底、outline 60% 描边、选中 secondary-container） */

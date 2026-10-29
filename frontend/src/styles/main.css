@@ -7,17 +7,26 @@
   --md-sys-color-on-secondary-container: #101c2b;
   --md-sys-color-surface: #f8f9ff;
   --md-sys-color-surface-container: #edf1f9;
+  /* surface-container 阶梯补全：low 介于 surface 与 container 之间，
+   * highest 比 container 更深一档（浮窗分层背景引用，缺定义会让 color-mix() 整条失效）。 */
+  --md-sys-color-surface-container-low: #f1f4fb;
+  --md-sys-color-surface-container-highest: #e2e7f1;
   --md-sys-color-on-surface: #191c20;
   --md-sys-color-on-surface-variant: #42474e;
   --md-sys-color-outline: #72777f;
-  /* 语义状态色（DESIGN.md Semantic State Rule）：成功/错误必须与可读文字同时出现。
+  /* 语义状态色（DESIGN.md Semantic State Rule）：成功/警告/错误必须与可读文字同时出现。
    * error 采用 M3 标准角色，供 .credential-error、翻译状态等文本与指示点使用；
-   * 成功沿用任务完成徽标既有的绿色对（container/ink），深浅主题各一组。 */
+   * 成功沿用任务完成徽标既有的绿色对（container/ink），警告为琥珀对，深浅主题各一组。 */
   --md-sys-color-error: #ba1a1a;
   --md-sys-color-error-container: #ffdad6;
   --md-sys-color-on-error-container: #410002;
   --state-success-container: #c8f7d0;
   --state-success-ink: #0d3b18;
+  --state-warning-container: #ffddb2;
+  --state-warning-ink: #2a1700;
+  /* M3 inverse 角色：snackbar 等反色浮层的底/字对（浅色深底亮字，深色反转为亮底暗字）。 */
+  --md-sys-color-inverse-surface: #2f3035;
+  --md-sys-color-inverse-on-surface: #f0f0f4;
   --surface: var(--md-sys-color-surface);
   --ink: var(--md-sys-color-on-surface);
   --ink-muted: var(--md-sys-color-on-surface-variant);
@@ -49,6 +58,8 @@ html.dark {
   --md-sys-color-on-secondary-container: #d7e3f8;
   --md-sys-color-surface: #101418;
   --md-sys-color-surface-container: #1c2025;
+  --md-sys-color-surface-container-low: #16191e;
+  --md-sys-color-surface-container-highest: #24292f;
   --md-sys-color-on-surface: #e1e2e8;
   --md-sys-color-on-surface-variant: #c2c7cf;
   --md-sys-color-outline: #8c9199;
@@ -57,6 +68,10 @@ html.dark {
   --md-sys-color-on-error-container: #ffdad6;
   --state-success-container: #1c4b2c;
   --state-success-ink: #a9f0bb;
+  --state-warning-container: #4d3705;
+  --state-warning-ink: #ffddb2;
+  --md-sys-color-inverse-surface: #e1e2e8;
+  --md-sys-color-inverse-on-surface: #2d3034;
 }
 
 :root[data-palette="indigo"] { --md-sys-color-primary:#445e91; --md-sys-color-on-primary:#fff; --md-sys-color-primary-container:#d9e2ff; --md-sys-color-on-primary-container:#001a41; --md-sys-color-secondary:#575e71; --md-sys-color-on-secondary:#fff; --md-sys-color-secondary-container:#dbe2f9; --md-sys-color-on-secondary-container:#141b2c; }
@@ -312,12 +327,12 @@ textarea {
   width: 0;
   height: 0;
 }
-.m3-alert.error { background: #ffdad6; color: #410002; }
-.m3-alert.warning { background: #ffddb2; color: #2a1700; }
+.m3-alert.error { background: var(--md-sys-color-error-container); color: var(--md-sys-color-on-error-container); }
+.m3-alert.warning { background: var(--state-warning-container); color: var(--state-warning-ink); }
 .m3-table { width: 100%; border-collapse: collapse; background: var(--md-sys-color-surface-container); border-radius: 16px; overflow: hidden; }
 .m3-table th, .m3-table td { padding: 12px 16px; border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent); text-align: left; vertical-align: middle; }
 .m3-table th { color: var(--ink-muted); font-size: 12px; font-weight: 600; }
-.m3-snackbar { position: fixed; z-index: 1000; top: 24px; right: 24px; max-width: min(420px, calc(100vw - 48px)); padding: 14px 18px; border-radius: 8px; background: #2f3035; color: #f3f0f4; box-shadow: 0 4px 12px rgb(0 0 0 / 18%); }
+.m3-snackbar { position: fixed; z-index: 1000; top: 24px; right: 24px; max-width: min(420px, calc(100vw - 48px)); padding: 12px 16px; border-radius: var(--radius-control); background: var(--md-sys-color-inverse-surface); color: var(--md-sys-color-inverse-on-surface); box-shadow: 0 4px 12px rgb(0 0 0 / 18%); }
 
 /* ── 原生 dialog 通用层 ─────────────────────────────────────
  * M3 basic dialog 配方全局唯一一份：surface-container 容器、28px 圆角、

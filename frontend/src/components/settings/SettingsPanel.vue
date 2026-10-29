@@ -680,7 +680,7 @@ fieldset.translation-group > .m3-field:last-child { margin-bottom: 0; }
 .translation-advanced-meta { color: var(--ink-muted); font-size: 12px; }
 .translation-advanced-error { flex: none; color: var(--md-sys-color-error); font-size: 12px; font-weight: 600; }
 .translation-advanced-chevron { flex: none; width: 18px; height: 18px; color: var(--ink-muted); }
-.danger-button { --md-text-button-label-text-color: #ba1a1a; }
+.danger-button { --md-text-button-label-text-color: var(--md-sys-color-error); }
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
 /* 维护组：名称与帮助图标在左、动作按钮在右，行间以 divider 分隔 */
 .settings-maintenance { display: grid; margin-top: var(--space-md); border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
