@@ -6,6 +6,8 @@
 
 # ===== Rust / Tauri =====
 src-tauri/target/
+# 本地隔离测试运行目录（dev 实例占用 target 时用 CARGO_TARGET_DIR 指到这里跑测试）
+src-tauri/target-testrun/
 # tauri-build 每次构建重新生成的 schema
 src-tauri/gen/schemas/
 
