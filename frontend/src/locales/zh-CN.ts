@@ -428,6 +428,7 @@ export default {
     statusBarTranslatingCount: "后台 {count} 个翻译任务正在进行",
     statusBarTranslatingCountShort: "{count} 个翻译中",
     statusBarTasks: "选择要查看的翻译任务",
+    statusBarQuickCancel: "取消此翻译任务",
     statusBarTaskMeta: "第 {page} 页 · {phase} · 已用 {time}",
     // 整篇翻译 Job（浮层四 tab / 状态栏 / 阅读器状态）
     job: {

@@ -427,6 +427,7 @@ export default {
     statusBarTranslatingCount: "{count} translation tasks running in background",
     statusBarTranslatingCountShort: "{count} translating",
     statusBarTasks: "Choose a translation task to open",
+    statusBarQuickCancel: "Cancel this translation job",
     statusBarTaskMeta: "Page {page} · {phase} · {time} elapsed",
     // Whole-work translation job (panel tabs / status bar / reader status)
     job: {

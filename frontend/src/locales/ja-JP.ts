@@ -412,6 +412,7 @@ export default {
     statusBarTranslatingCount: "バックグラウンドで {count} 件の翻訳タスクを実行中",
     statusBarTranslatingCountShort: "{count} 件翻訳中",
     statusBarTasks: "表示する翻訳タスクを選択",
+    statusBarQuickCancel: "この翻訳タスクをキャンセル",
     statusBarTaskMeta: "{page} ページ目 · {phase} · 経過時間 {time}",
     // 作品全体の翻訳 Job（パネルのタブ / ステータスバー / リーダー状態）
     job: {

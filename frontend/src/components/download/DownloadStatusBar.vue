@@ -12,7 +12,8 @@ import { useRoute, useRouter } from "vue-router";
 import { taskFailedCount, taskProgress, useTaskStore } from "../../stores/tasks";
 import { useDownloadPanelStore } from "../../stores/downloadPanel";
 import { useTranslationStore } from "../../stores/translation";
-import type { TranslationJobSnapshot } from "../../api/translation";
+import { isTerminalJobState, type TranslationJobSnapshot } from "../../api/translation";
+import { errorMessage } from "../../api/tauri";
 const tasks = useTaskStore(); const panel = useDownloadPanelStore(); const translation = useTranslationStore();
 const router = useRouter(); const route = useRoute(); const { t } = useI18n();
 function openTasks() { if (route.path !== '/tools/tasks') void router.push('/tools/tasks'); }
@@ -72,6 +73,27 @@ const countLabel = computed(() =>
     : t("translation.job.statusBarCountIdle", { count: jobs.value.length })
 );
 
+/** 快速取消：底栏 / 浮窗直达，不进小说页；同一时间只放行一个在途取消。 */
+const pendingCancel = ref("");
+const cancelError = ref("");
+async function quickCancel(job: TranslationJobSnapshot) {
+  if (pendingCancel.value) return;
+  pendingCancel.value = job.job_id;
+  cancelError.value = "";
+  try {
+    await translation.cancel(job.job_id);
+  } catch (error) {
+    // 取消失败行不消失（任务仍是活跃态），错误留在浮层 / 底栏供重试或进页面处理。
+    cancelError.value = errorMessage(error);
+  } finally {
+    pendingCancel.value = "";
+  }
+}
+/** 取消入口的可达名：任务名进可达名，标题只留动作避免与徽标文案重复。 */
+function cancelLabel(job: TranslationJobSnapshot): string {
+  return `${t("translation.statusBarQuickCancel")}：${jobTitle(job)}`;
+}
+
 async function onKeydown(event: KeyboardEvent) {
   if (event.key === "Escape" && !document.querySelector("dialog[open]")) closePicker();
 }
@@ -104,7 +126,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       </template>
       <span v-else>{{ t('workspace.idle') }}</span>
     </button>
-    <!-- 单任务：整条文案即返回入口（标题 · 页码 · 状态） -->
+    <!-- 单任务：整条文案即返回入口（标题 · 页码 · 状态），右侧直达取消 -->
     <button
       v-if="jobs.length === 1"
       class="status-translation"
@@ -115,6 +137,17 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       <span class="translation-full">{{ badgeText(jobs[0]) }}</span>
       <span class="translation-short">{{ t('translation.job.statusBarShort') }}</span>
     </button>
+    <button
+      v-if="jobs.length === 1 && !isTerminalJobState(jobs[0].state)"
+      class="status-cancel"
+      :aria-label="cancelLabel(jobs[0])"
+      :title="t('translation.statusBarQuickCancel')"
+      :disabled="pendingCancel === jobs[0].job_id"
+      @click="quickCancel(jobs[0])"
+    >
+      <svg class="cancel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+    </button>
+    <span v-if="cancelError" role="status" class="bar-cancel-error">{{ cancelError }}</span>
     <!-- 多任务：计数入口 + 上方任务选择菜单（同一浮层配方） -->
     <div v-else-if="jobs.length > 1" class="translation-menu">
       <button ref="trigger" class="status-translation status-translation-count" :aria-label="countLabel" :title="countLabel" aria-haspopup="menu" :aria-expanded="pickerOpen" @click="togglePicker">
@@ -124,13 +157,27 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
       <div v-if="pickerOpen" class="translation-backdrop" @click="closePicker"></div>
       <div v-if="pickerOpen" ref="picker" class="translation-picker" role="menu" :aria-label="t('translation.statusBarTasks')" tabindex="-1" @keydown.esc="closePicker">
         <span class="picker-title">{{ t('translation.statusBarTasks') }}</span>
-        <button v-for="job in jobs" :key="job.job_id" role="menuitem" class="picker-item" @click="goToNovel(job.novel_id)">
-          <span class="picker-dot" :class="`is-${job.state}`" aria-hidden="true"></span>
-          <span class="picker-body">
-            <span class="picker-name">{{ jobTitle(job) }}</span>
-            <span class="picker-meta">{{ pickerMeta(job) }}</span>
-          </span>
-        </button>
+        <!-- 行 = 导航按钮 + 快速取消；button 不能嵌套，导航与取消拆成兄弟控件 -->
+        <div v-for="job in jobs" :key="job.job_id" class="picker-item">
+          <button role="menuitem" class="picker-item-main" @click="goToNovel(job.novel_id)">
+            <span class="picker-dot" :class="`is-${job.state}`" aria-hidden="true"></span>
+            <span class="picker-body">
+              <span class="picker-name">{{ jobTitle(job) }}</span>
+              <span class="picker-meta">{{ pickerMeta(job) }}</span>
+            </span>
+          </button>
+          <button
+            v-if="!isTerminalJobState(job.state)"
+            class="picker-cancel"
+            :aria-label="cancelLabel(job)"
+            :title="t('translation.statusBarQuickCancel')"
+            :disabled="pendingCancel === job.job_id"
+            @click="quickCancel(job)"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
+          </button>
+        </div>
+        <span v-if="cancelError" role="status" class="picker-cancel-error">{{ cancelError }}</span>
       </div>
     </div>
     <button class="new-download" @click="panel.open()">{{ t('workspace.newDownload') }}</button>
@@ -155,9 +202,24 @@ button:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-of
 .translation-backdrop { position:fixed; inset:0; z-index:890; }
 .translation-picker { position:absolute; right:0; bottom:calc(100% + var(--space-sm)); z-index:900; display:flex; flex-direction:column; gap:var(--space-xxs); box-sizing:border-box; width:calc(var(--space-lg) * 24); max-width:calc(100vw - var(--space-lg) * 2); max-height:min(60vh,320px); overflow-y:auto; padding:var(--space-sm); border-radius:var(--radius-control); background:var(--md-sys-color-surface-container); color:var(--ink); box-shadow:0 4px 12px rgb(0 0 0 / 18%); outline:none; transform-origin:bottom right; }
 .picker-title { padding:0 var(--space-sm); color:var(--ink-muted); font-size:12px; font-weight:600; line-height:32px; }
-.picker-item { display:flex; align-items:flex-start; gap:var(--space-sm); width:100%; min-height:48px; padding:var(--space-sm); color:var(--ink); font:inherit; text-align:left; background:transparent; border:0; border-radius:var(--radius-control); cursor:pointer; }
-.picker-item:hover { background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent); }
-.picker-item:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-offset:-2px; }
+/* 行容器只做布局；导航与取消是兄弟 button（button 不能嵌套），悬停底色跟导航区走 */
+.picker-item { display:flex; align-items:stretch; width:100%; min-height:48px; border-radius:var(--radius-control); }
+.picker-item-main { flex:1; min-width:0; display:flex; align-items:flex-start; gap:var(--space-sm); padding:var(--space-sm); color:var(--ink); text-align:left; }
+.picker-item-main:hover { background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent); }
+.picker-item-main:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-offset:-2px; }
+/* 快速取消：32px 命中区，悬停用 error 语义色提示破坏性动作，不新增颜色字面值 */
+.picker-cancel { flex:none; align-self:center; width:calc(var(--space-lg) * 2); height:calc(var(--space-lg) * 2); margin:0 var(--space-xxs) 0 0; display:flex; align-items:center; justify-content:center; color:var(--ink-muted); }
+.picker-cancel:hover { background:color-mix(in srgb,var(--md-sys-color-error) 10%,transparent); color:var(--md-sys-color-error); }
+.picker-cancel:focus-visible { outline:2px solid var(--md-sys-color-error); outline-offset:-2px; }
+.picker-cancel:disabled { opacity:0.5; cursor:default; }
+.picker-cancel:disabled:hover { background:transparent; color:var(--ink-muted); }
+.picker-cancel-error { padding:0 var(--space-sm) var(--space-xxs); color:var(--md-sys-color-error); font-size:12px; line-height:1.4; overflow:hidden; text-overflow:ellipsis; }
+/* 单任务底栏的直达取消：与浮窗同语义，图标 16px 居中 */
+.status-cancel { flex:none; width:calc(var(--space-lg) * 2); display:flex; align-items:center; justify-content:center; color:var(--ink-muted); }
+.status-cancel:hover { background:color-mix(in srgb,var(--md-sys-color-error) 10%,transparent); color:var(--md-sys-color-error); }
+.status-cancel:focus-visible { outline:2px solid var(--md-sys-color-error); outline-offset:-2px; }
+.status-cancel:disabled { opacity:0.5; cursor:default; }
+.bar-cancel-error { flex:none; max-width:30%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--md-sys-color-error); }
 /* 状态点：进行中 primary、完成绿、需处理 error、暂停 / 待确认中性（不新增语义色） */
 .picker-dot { flex:none; width:8px; height:8px; margin-top:6px; border-radius:50%; background:var(--ink-subtle); }
 .picker-dot.is-running, .picker-dot.is-queued, .picker-dot.is-pausing, .picker-dot.is-cancelling { background:var(--md-sys-color-primary); }
