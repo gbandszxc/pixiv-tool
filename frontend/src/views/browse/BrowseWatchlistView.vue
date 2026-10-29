@@ -12,7 +12,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  * manga 为 watchlist 语义、映射到 /browse/series/illust/:id）。追更为用户主动订阅，
  * 页面不做 R-18 渲染期过滤。
  */
-import { computed, onMounted, ref, shallowRef } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import {
@@ -38,26 +38,36 @@ const data = shallowRef<WatchlistSnapshot | null>(null);
 const loading = ref(false);
 const error = ref("");
 
+/** 请求序号守卫：快速切页签 / 刷新时只收最新响应（与 BrowseChannelView 的 requestId 同款）。 */
+let loadSeq = 0;
+
 async function load(): Promise<void> {
+  const seq = ++loadSeq;
   loading.value = true;
   error.value = "";
   try {
-    data.value = await browseWatchlist(kind.value);
+    const snapshot = await browseWatchlist(kind.value);
+    if (seq === loadSeq) data.value = snapshot;
   } catch (err) {
-    error.value = errorMessage(err);
+    if (seq === loadSeq) error.value = errorMessage(err);
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
 function onKindChange(value: string): void {
   if (value === kind.value) return;
   kind.value = value as WatchKind;
+  // 切类型先清旧档：失败即落入整页错误分支（文案 + 重试），不再静默挂旧类型数据
+  data.value = null;
   void load();
   scrollContentToTop();
 }
 
 onMounted(load);
+onBeforeUnmount(() => {
+  loadSeq += 1; // 卸载后作废在途请求
+});
 
 const items = computed(() => data.value?.items ?? []);
 
@@ -94,14 +104,20 @@ function openSeries(item: BrowseWatchlistItem): void {
       </div>
     </div>
 
+    <!-- 持有旧数据时的刷新失败：顶部轻量错误条（列表语义保留旧数据，不静默） -->
+    <div v-if="error && data" class="refresh-error" role="alert">
+      <span class="state-text">{{ error }}</span>
+      <md-text-button @click="load">{{ t("common.retry") }}</md-text-button>
+    </div>
+
     <!-- 整页错误（快照尚未到手）→ 文案 + 重试 -->
     <div v-if="error && !data" class="watchlist-state" role="alert">
       <p class="state-text">{{ error }}</p>
       <md-filled-button @click="load">{{ t("common.retry") }}</md-filled-button>
     </div>
 
-    <!-- 骨架：纯 surface-container 色块，不做闪烁动画 -->
-    <div v-else-if="loading" class="watchlist-grid" aria-hidden="true">
+    <!-- 骨架：纯 surface-container 色块，不做闪烁动画（仅快照未到手时；刷新中保持旧列表展示） -->
+    <div v-else-if="loading && !data" class="watchlist-grid" aria-hidden="true">
       <div v-for="i in 4" :key="i" class="watch-card skeleton">
         <div class="sk-cover"></div>
         <div class="sk-lines">
@@ -307,6 +323,14 @@ function openSeries(item: BrowseWatchlistItem): void {
   gap: var(--space-sm);
   padding: var(--space-xl) 0;
   text-align: center;
+}
+
+/* 顶部轻量错误条：刷新失败但旧列表仍在时就地提示（配方同评论区追加失败行） */
+.refresh-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-md);
 }
 
 .state-text {

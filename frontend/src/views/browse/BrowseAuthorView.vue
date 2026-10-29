@@ -74,17 +74,26 @@ async function toggleFollow(): Promise<void> {
   }
 }
 
+/** 请求序号守卫：作者间快速跳转时丢弃过期响应——每次进入都发起请求并递增序号，
+ * 慢的旧作者响应不再写入新作者页面（与 BrowseChannelView 的 requestId 同款）。 */
+let profileSeq = 0;
+
 async function loadProfile(): Promise<void> {
-  if (profileLoading.value || followBusy.value) return;
+  const seq = ++profileSeq;
+  const requestId = props.id;
   profileLoading.value = true;
   profileError.value = "";
   try {
-    profile.value = await browseUserProfile(props.id);
+    const data = await browseUserProfile(requestId);
+    if (seq !== profileSeq || props.id !== requestId) return;
+    profile.value = data;
   } catch (err) {
     // 未登录 / 无权限等按 api 层错误文案直接展示（未登录时 api 层已派发登录弹窗事件）
+    if (seq !== profileSeq || props.id !== requestId) return;
     profileError.value = errorMessage(err);
   } finally {
-    profileLoading.value = false;
+    // 过期请求不清 loading：此时必有更新的请求在途、由它负责收尾
+    if (seq === profileSeq && props.id === requestId) profileLoading.value = false;
   }
 }
 

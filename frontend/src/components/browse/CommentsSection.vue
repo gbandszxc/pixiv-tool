@@ -52,8 +52,11 @@ const closed = ref(false);
 /** 首屏是否成功加载过：发表后重拉首页时不让发表区随 loading 卸载重建（避免闪烁与草稿区闪失） */
 const loaded = ref(false);
 
-/** 请求序号：快速切换作品时丢弃过期响应（回复请求沿用同一序号快照） */
+/** 请求序号：快速切换作品时丢弃过期 roots 响应 */
 let reqSeq = 0;
+/** 回复请求独立序号族：仅作品整体重置（resetAll）时作废在途——roots 侧请求
+ * （加载更多 / 发表成功重拉首页）不得误伤在途回复，否则其加载态将永久滞留 */
+let repliesSeq = 0;
 
 async function fetchPage(offset: number): Promise<void> {
   const seq = ++reqSeq;
@@ -121,24 +124,24 @@ function ensureRepliesStates(list: BrowseComment[]): void {
 }
 
 async function loadRepliesPage(comment: BrowseComment, page: number): Promise<void> {
-  const seq = reqSeq;
+  const seq = ++repliesSeq;
   const st = state(comment.id);
   if (page <= 1) st.loading = true;
   else st.loadingMore = true;
   st.error = "";
   try {
     const data = await browseCommentReplies({ kind: props.kind, commentId: comment.id, page });
-    if (seq !== reqSeq) return;
+    if (seq !== repliesSeq) return;
     st.items = page <= 1 ? data.comments : [...st.items, ...data.comments];
     st.next = data.next ?? null;
   } catch (err) {
-    if (seq !== reqSeq) return;
+    if (seq !== repliesSeq) return;
     st.error = errorMessage(err) || t("common.browseLoadFailed");
   } finally {
-    if (seq === reqSeq) {
-      st.loading = false;
-      st.loadingMore = false;
-    }
+    // 无条件清本条加载态：被作品重置作废时 st 已是脱离 repliesMap 的旧对象，清了无害；
+    // 若不清，roots 侧/后续请求会让 loading 永久滞留、「更多回复」永久禁用
+    st.loading = false;
+    st.loadingMore = false;
   }
 }
 
@@ -291,6 +294,7 @@ function contentSegments(text: string): { text: string; emojiId?: number }[] {
 
 function resetAll(): void {
   reqSeq += 1; // 在途请求全部过期
+  repliesSeq += 1; // 在途回复请求一并作废（独立序号族，见 loadRepliesPage）
   comments.value = [];
   nextOffset.value = 0;
   loading.value = false;

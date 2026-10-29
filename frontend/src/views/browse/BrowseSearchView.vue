@@ -314,6 +314,24 @@ function runSearch(sig: string): void {
   void load();
 }
 
+/**
+ * 头部刷新（ListRefreshButton）：与 runSearch 不同，保留当前页码与筛选状态
+ * （DESIGN.md：页码列表刷新保留当前页），仅使结果集缓存失效后按当前显示页重拉，
+ * total / lastPage 由响应重算。
+ */
+function refreshCurrent(): void {
+  if (!word.value.trim()) return;
+  // 接口页缓存整体失效：本次重拉之外，后续翻页也重新请求
+  apiPages.clear();
+  // 本页排序的计数缓存一并失效：刷新应重新拉取，防止旧计数遮蔽新数据；
+  // 版本号自增驱动 sortedItems 立即按新数据重算
+  if (sortKey.value) {
+    for (const it of items.value) countsCache.delete(countKey(it));
+    countsVersion.value += 1;
+  }
+  void load();
+}
+
 // ===== URL ⇄ 状态 =====
 
 function applyQuery(): void {
@@ -456,7 +474,7 @@ const typeTabs = computed(() => [
       <div class="browse-list-header">
         <div class="page-heading"><PageBackButton /><h1 class="page-title">{{ t("nav.browseSearch") }}</h1></div>
         <md-text-button @click="router.push('/saucenao')">{{ t('nav.saucenao') }}</md-text-button>
-        <ListRefreshButton :busy="loading" :disabled="!word.trim()" @refresh="runSearch(sigOf(currentParams()))" />
+        <ListRefreshButton :busy="loading" :disabled="!word.trim()" @refresh="refreshCurrent" />
       </div>
 
       <!-- 搜索工具行：大而醒目的输入框 + 搜索按钮 -->

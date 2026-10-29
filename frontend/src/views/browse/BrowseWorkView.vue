@@ -467,10 +467,11 @@ onBeforeUnmount(detachKeydown);
       </div>
     </header>
 
-    <!-- 错误态（404 / 无权限等）：可读文案 + 返回 -->
+    <!-- 错误态（404 / 无权限等）：可读文案 + 重试 / 返回（重试即 loadDetail，进入 loading 后本分支切走骨架，无需额外禁用） -->
     <div v-if="error" class="work-error" role="alert">
       <p class="error-title">{{ t("browse.work.errorTitle") }}</p>
       <p class="error-text">{{ error }}</p>
+      <md-filled-button @click="loadDetail">{{ t("common.retry") }}</md-filled-button>
       <md-outlined-button @click="goBack(router)">{{ t("browse.work.back") }}</md-outlined-button>
     </div>
 
