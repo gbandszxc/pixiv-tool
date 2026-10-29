@@ -703,7 +703,7 @@ export default {
     clearAuthHint: "从系统凭据存储中移除登录信息，之后需重新登录。",
     maxWait: "下载等待上限",
     maxWaitHint: "任务运行超过该时长自动标记失败，暂停时间不计入。默认 180s。",
-    maxWaitInvalid: "最大等待时间必须 ≥ 30 秒",
+    maxWaitInvalid: "最大等待时间必须在 30~86400 秒之间",
     // 缩略图档位与内容显示（取值集合见 src-tauri/src/settings.rs 的 THUMB_*_TIERS）
     imageQuality: "图片与缩略图",
     thumbGrid: "列表 / 网格封面",

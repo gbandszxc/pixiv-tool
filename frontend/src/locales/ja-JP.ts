@@ -676,7 +676,7 @@ export default {
     clearAuthHint: "システムの資格情報ストアからログイン情報を削除します。次回は再ログインが必要です。",
     maxWait: "ダウンロードの制限時間",
     maxWaitHint: "タスクの実行時間がこの値を超えると、自動的に失敗として扱います。一時停止中の時間は含みません。初期設定は 180 秒です。",
-    maxWaitInvalid: "制限時間は 30 秒以上で指定してください",
+    maxWaitInvalid: "制限時間は 30〜86400 秒で指定してください",
     imageQuality: "画像とサムネイル",
     thumbGrid: "リスト・グリッドの表紙",
     thumbDetail: "詳細ページのメイン画像",

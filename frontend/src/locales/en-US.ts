@@ -702,7 +702,7 @@ export default {
     clearAuthHint: "Remove the login from the system credential store; you will need to sign in again.",
     maxWait: "Download wait limit",
     maxWaitHint: "Tasks auto-fail after running longer than this (pause time excluded). Default 180s.",
-    maxWaitInvalid: "Max wait time must be at least 30 seconds",
+    maxWaitInvalid: "Max wait time must be between 30 and 86400 seconds",
     // Thumbnail tiers and content display (value sets mirror THUMB_*_TIERS in src-tauri/src/settings.rs)
     imageQuality: "Images & Thumbnails",
     thumbGrid: "List & grid covers",

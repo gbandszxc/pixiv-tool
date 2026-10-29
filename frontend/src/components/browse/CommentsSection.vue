@@ -54,9 +54,6 @@ const loaded = ref(false);
 
 /** 请求序号：快速切换作品时丢弃过期 roots 响应 */
 let reqSeq = 0;
-/** 回复请求独立序号族：仅作品整体重置（resetAll）时作废在途——roots 侧请求
- * （加载更多 / 发表成功重拉首页）不得误伤在途回复，否则其加载态将永久滞留 */
-let repliesSeq = 0;
 
 async function fetchPage(offset: number): Promise<void> {
   const seq = ++reqSeq;
@@ -107,6 +104,8 @@ interface RepliesState {
   loading: boolean;
   loadingMore: boolean;
   error: string;
+  /** 每条评论自己的请求序号：并发展开多条评论互不干扰；作品重置随 repliesMap 清理自然作废 */
+  reqSeq: number;
 }
 
 const repliesMap = reactive<Record<string, RepliesState>>({});
@@ -114,7 +113,7 @@ const repliesMap = reactive<Record<string, RepliesState>>({});
 const expandedIds = reactive(new Set<string>());
 
 function state(commentId: string): RepliesState {
-  return repliesMap[commentId] ?? (repliesMap[commentId] = { items: [], next: 1, loading: false, loadingMore: false, error: "" });
+  return repliesMap[commentId] ?? (repliesMap[commentId] = { items: [], next: 1, loading: false, loadingMore: false, error: "", reqSeq: 0 });
 }
 
 function ensureRepliesStates(list: BrowseComment[]): void {
@@ -124,24 +123,25 @@ function ensureRepliesStates(list: BrowseComment[]): void {
 }
 
 async function loadRepliesPage(comment: BrowseComment, page: number): Promise<void> {
-  const seq = ++repliesSeq;
   const st = state(comment.id);
+  const seq = ++st.reqSeq;
   if (page <= 1) st.loading = true;
   else st.loadingMore = true;
   st.error = "";
   try {
     const data = await browseCommentReplies({ kind: props.kind, commentId: comment.id, page });
-    if (seq !== repliesSeq) return;
+    if (seq !== st.reqSeq) return;
     st.items = page <= 1 ? data.comments : [...st.items, ...data.comments];
     st.next = data.next ?? null;
   } catch (err) {
-    if (seq !== repliesSeq) return;
+    if (seq !== st.reqSeq) return;
     st.error = errorMessage(err) || t("common.browseLoadFailed");
   } finally {
-    // 无条件清本条加载态：被作品重置作废时 st 已是脱离 repliesMap 的旧对象，清了无害；
-    // 若不清，roots 侧/后续请求会让 loading 永久滞留、「更多回复」永久禁用
-    st.loading = false;
-    st.loadingMore = false;
+    // 仅最新请求收尾：被同评论新请求或作品重置作废时，不得清掉后继请求的加载态
+    if (seq === st.reqSeq) {
+      st.loading = false;
+      st.loadingMore = false;
+    }
   }
 }
 
@@ -293,8 +293,7 @@ function contentSegments(text: string): { text: string; emojiId?: number }[] {
 // ===== kind / id 变化：整体重置并重拉首屏 =====
 
 function resetAll(): void {
-  reqSeq += 1; // 在途请求全部过期
-  repliesSeq += 1; // 在途回复请求一并作废（独立序号族，见 loadRepliesPage）
+  reqSeq += 1; // 在途请求全部过期；回复请求随 repliesMap 清理自然作废（序号在各 st 上）
   comments.value = [];
   nextOffset.value = 0;
   loading.value = false;

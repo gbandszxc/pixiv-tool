@@ -710,17 +710,20 @@ function chunkStatus(id: string): "translated" | "untranslated" | "repair" | "pe
 async function loadChunk(id: string): Promise<void> {
   const current = job.value;
   if (!current || previews.value.has(id) || failedPreviews.value.has(id) || loadingPreviews.value.has(id)) return;
+  const token = previewToken; // 快照：清空重取（flush）后此响应整体过期，写回与收尾都不得干扰新一轮
   loadingPreviews.value = new Set(loadingPreviews.value).add(id);
   try {
     const data = await store.preview(current.job_id, id);
-    if (job.value?.job_id !== current.job_id) return;
+    if (token !== previewToken || job.value?.job_id !== current.job_id) return;
     previews.value = new Map(previews.value).set(id, data);
   } catch {
-    if (job.value?.job_id === current.job_id) failedPreviews.value = new Set(failedPreviews.value).add(id);
+    if (token === previewToken && job.value?.job_id === current.job_id) failedPreviews.value = new Set(failedPreviews.value).add(id);
   } finally {
-    const next = new Set(loadingPreviews.value);
-    next.delete(id);
-    loadingPreviews.value = next;
+    if (token === previewToken && job.value?.job_id === current.job_id) {
+      const next = new Set(loadingPreviews.value);
+      next.delete(id);
+      loadingPreviews.value = next;
+    }
   }
 }
 
@@ -892,6 +895,7 @@ function flushPreviewRefresh(): void {
   previewToken += 1;
   previews.value = new Map();
   failedPreviews.value = new Set();
+  loadingPreviews.value = new Set(); // 同批清在途标记：旧响应已过期，新一轮须可重新发起
   if (!chunkIds.value.includes(selectedChunk.value)) selectedChunk.value = chunkIds.value[0] ?? "";
   if (open.value) void prefetchChunks();
 }

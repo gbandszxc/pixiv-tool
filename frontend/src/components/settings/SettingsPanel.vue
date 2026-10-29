@@ -581,7 +581,7 @@ function reset() {
 defineExpose({ save, reset, hasUnsaved });
 async function save(): Promise<boolean> {
   // 数字字段保存前预校验：空 / NaN / 越界在字段下方直接标红并阻止整表写入（同 output-dir 配方）。
-  if (!Number.isFinite(form.value.max_wait_seconds) || form.value.max_wait_seconds < 30) {
+  if (!Number.isFinite(form.value.max_wait_seconds) || form.value.max_wait_seconds < 30 || form.value.max_wait_seconds > 86400) {
     maxWaitError.value = t("settings.maxWaitInvalid");
     notify(maxWaitError.value);
     return false;
