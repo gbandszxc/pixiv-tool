@@ -177,6 +177,9 @@ const rangeLabel = computed(() => {
  */
 const r18Filter = useGlobalR18Filter();
 const visibleItems = computed(() => filterByR18(items.value, r18Filter.value));
+/** R-18 渲染期过滤隐藏数：整页被滤空时在空态下补辅助行——WorkGrid 收到的是空数组、
+ *  内建 hiddenCount 恒 0，感知不到页级过滤口径，须由本页补齐。 */
+const hiddenCount = computed(() => items.value.length - visibleItems.value.length);
 
 /** YYYYMMDD → YYYY-MM-DD（非法格式原样返回）。 */
 function formatYmd(ymd: string): string {
@@ -236,8 +239,14 @@ function openWork(item: BrowseWorkItem): void {
       </div>
     </div>
 
-    <!-- 骨架 / 错误重试 / 空态交给 WorkGrid；条目分支自绘单元格以叠加 rank 徽标 -->
-    <WorkGrid v-if="loading || error || !visibleItems.length" :items="[]" :loading="loading" :error="error" @retry="load" />
+    <!-- 骨架 / 错误重试 / 空态交给 WorkGrid；条目分支自绘单元格以叠加 rank 徽标。
+         整页被 R-18 滤空时经 #action 插槽在空态内补隐藏计数辅助行（WorkGrid 收到空数组、
+         内建 hiddenCount 恒 0；条目分支保持自绘网格，徽标结构不受影响） -->
+    <WorkGrid v-if="loading || error || !visibleItems.length" :items="[]" :loading="loading" :error="error" @retry="load">
+      <template v-if="!loading && !error && hiddenCount > 0" #action>
+        <p class="r18-hidden-note">{{ t("common.browseR18Hidden", { count: hiddenCount }) }}</p>
+      </template>
+    </WorkGrid>
     <div v-else class="ranking-grid">
       <div v-for="item in visibleItems" :key="`${item.kind}:${item.id}`" class="rank-cell">
         <span
@@ -274,8 +283,11 @@ function openWork(item: BrowseWorkItem): void {
   margin-bottom: var(--space-lg);
 }
 
+/* 类型 tabs 按内容定宽（DESIGN.md：页内筛选禁止均分整页宽度；与发现页 section-tabs
+ * 的 width: max-content 同配方），max-width 兜底窄窗、配合工具行 flex-wrap 自然换行 */
 .kind-tabs {
-  flex: 1 1 280px;
+  width: max-content;
+  max-width: 100%;
 }
 
 .toolbar-controls {
@@ -342,6 +354,15 @@ function openWork(item: BrowseWorkItem): void {
 .rank-badge.top {
   background: var(--md-sys-color-primary-container);
   color: var(--md-sys-color-on-primary-container);
+}
+
+/* 整页被 R-18 滤空的隐藏计数辅助行（经 WorkGrid #action 插槽注入空态内）：
+ * 隐藏计数沿用辅助行层级（DESIGN.md：12px、--ink-subtle），不升标题、不占卡片徽标 */
+.r18-hidden-note {
+  margin: 0;
+  color: var(--ink-subtle);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 /* AppPagination 落位：仅负责与网格的间距，行内布局由组件自身承担 */

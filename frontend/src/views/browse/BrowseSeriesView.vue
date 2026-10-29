@@ -369,11 +369,15 @@ function openInPixiv(): void {
   min-width: 0;
 }
 
-/* 标题行在吸顶页头内，自身不再吃间距；下距由 .series-head 承担 */
+/* 标题行在吸顶页头内，自身不再吃间距；下距由 .series-head 承担。
+ * 标题单行省略（DESIGN.md：标题单行省略、640px 下换行）：flex: 1 占满返回键与刷新键
+ * 之间的中段，min-width: 0 + 省略三件套让长标题收缩截断，不把刷新键挤出吸顶行
+ * （flex 子项默认 min-width: auto 会被长标题撑破，全局的 overflow-wrap: anywhere
+ * 多行折行口径对本行不适用） */
 .series-heading { margin-bottom: 0; }
-.series-heading .page-title { flex: 1; }
-
-.head-info .page-title {
+.series-heading .page-title {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -424,7 +428,8 @@ function openInPixiv(): void {
     width: 100%;
   }
 
-  .head-info .page-title {
+  /* 窄窗标题恢复换行（DESIGN.md 640px 豁免） */
+  .series-heading .page-title {
     white-space: normal;
   }
 }

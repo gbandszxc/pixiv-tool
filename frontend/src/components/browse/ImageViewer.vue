@@ -17,7 +17,8 @@ const viewerPrefs = { spread: false, rtl: true, vertical: false, verticalScale: 
  * - 档位：主图 thumb_quality_detail（默认 medium = 接口 regular 原样，URL 与改造前逐字一致），
  *   先铺 medium 档（540px）占位层再换高清；全屏浮层走 thumb_quality_fullscreen，
  *   胶卷缩略图走 thumb_quality_grid；
- * - 全屏滚轮 / PgUp / PgDn 按页或跨页组前后切换，胶卷仍原生滚动；
+ * - 全屏滚轮 / PgUp / PgDn 按页或跨页组前后切换，胶卷仍原生滚动；非竖屏一律吞掉滚轮
+ *   不滚动背景（单页无翻页可言）；
  * - 浮层另有竖屏模式（连续纵向滚动，条漫友好）：固定单列、从上到下，与双图（跨页）
  *   模式互斥——进入竖屏即按单列渲染、双页开关随之隐藏，退出后开关恢复可见并保持此前
  *   选择；不提供方向切换；滚轮与 ↑/↓ 为原生滚动，PgUp/PgDn 走全局按屏滚动，←/→
@@ -27,7 +28,8 @@ const viewerPrefs = { spread: false, rtl: true, vertical: false, verticalScale: 
  * - 舞台页框宽度占比 stageScale（0.5~1，父视图持久化到设置键 detail_image_scale）
  *   只收窄页框宽度并居中，默认 1 = 撑满 = 既有观感；
  * - 键盘：本组件在 capture 阶段监听并 stopImmediatePropagation，避免与父视图的同名
- *   按键（Esc 返回）二次处理；浮层内 Esc 只关浮层；
+ *   按键（Esc 返回）二次处理；浮层内 Esc 只关浮层；浮层内 Tab 在可聚焦控件间圈闭
+ *   （aria-modal 语义，不穿透背景页面）；
  * - 加载中纯色占位、失败显示重试；
  * - R-18 遮罩：blur(24px) + 中央文案 + 「显示」按钮（是否遮罩由父视图决定），
  *   遮罩期间只加载首页、不可进入全屏浮层；
@@ -725,6 +727,77 @@ function openFullscreen(index: number): void {
   fullscreen.value = true;
 }
 
+/**
+ * 页框键盘激活：失败态的重试按钮是页框（role="button" 全屏入口）的后代，按钮上的
+ * Enter/Space 会冒泡到页框——若照常截走会误开全屏、按钮自身的激活也被取消（键盘用户
+ * 无法重试）。入口处做来源守卫：事件源自可交互后代时不翻页、不 preventDefault，交给
+ * 原生激活（按钮 click 已被 @click.stop 挡住，不会二次触发全屏）。md-* 控件的键盘
+ * 事件经 shadow DOM retarget，composedPath 里是 shadow 内部元素，closest 判定即可；
+ * 自定义元素宿主本身（MD- 前缀标签）也直接放行。
+ */
+function onShotKeydown(index: number, e: KeyboardEvent): void {
+  const fromControl = e
+    .composedPath()
+    .some(
+      (node) =>
+        node instanceof Element &&
+        (node.tagName.startsWith("MD-") ||
+          node.closest("button, a, input, select, textarea, [role='slider']") !== null)
+    );
+  if (fromControl) return;
+  // role="button" 接管 Enter/Space：抑制 Space 在滚动容器里的原生滚动
+  e.preventDefault();
+  openFullscreen(index);
+}
+
+/**
+ * 浮层焦点圈闭（aria-modal="true" 语义）：Tab / Shift+Tab 在浮层内可聚焦元素的首尾
+ * 回绕，不穿透到背景页面。可聚焦查询覆盖原生控件与 md-* 自定义元素宿主（Material
+ * 组件 delegatesFocus，焦点落在宿主上）；disabled 与未渲染（display:none）的跳过
+ * ——opacity: 0 的悬浮控件仍占布局、键盘聚焦后显现，属既定可达设计，须计入圈闭。
+ */
+function overlayFocusables(): HTMLElement[] {
+  const overlay = overlayEl.value;
+  if (!overlay) return [];
+  const selector =
+    "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])," +
+    " md-filled-button, md-outlined-button, md-text-button, md-icon-button, md-slider";
+  return Array.from(overlay.querySelectorAll<HTMLElement>(selector)).filter((el) => {
+    if ((el as HTMLButtonElement).disabled === true) return false;
+    if (el.getAttribute("aria-disabled") === "true") return false;
+    return el.getClientRects().length > 0;
+  });
+}
+
+function onOverlayTab(e: KeyboardEvent): void {
+  const items = overlayFocusables();
+  if (items.length === 0) {
+    // 浮层内无可聚焦元素：Tab 原地回绕（焦点留在浮层容器）
+    e.preventDefault();
+    overlayEl.value?.focus();
+    return;
+  }
+  const first = items[0];
+  const last = items[items.length - 1];
+  const active =
+    document.activeElement instanceof HTMLElement && items.includes(document.activeElement)
+      ? document.activeElement
+      : null;
+  if (!active) {
+    // 焦点在浮层容器或非圈闭元素上：Tab 进首个，Shift+Tab 进末个
+    e.preventDefault();
+    (e.shiftKey ? last : first).focus();
+    return;
+  }
+  if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    first.focus();
+  } else if (e.shiftKey && active === first) {
+    e.preventDefault();
+    last.focus();
+  }
+}
+
 function closeFullscreen(): void {
   fullscreen.value = false;
   // 退出后纵向舞台对齐到浮层最后停留的那一页（瞬时，避免浮层背后的滚动动画）
@@ -751,12 +824,16 @@ function stepPage(delta: number): void {
 }
 
 /** 一次滚轮手势限速，防止触控板惯性或密集滚轮事件连续跳过多页。胶卷仍原生滚动。
- *  竖屏模式下不拦截：滚轮交给原生连续滚动（条漫自由浏览，无整页翻页）。 */
+ *  竖屏模式下不拦截：滚轮交给浮层内自持滚动容器原生连续滚动（条漫自由浏览，无整页翻页）。
+ *  非竖屏一律 preventDefault——模态窗口内不滚动背景：多页按跨页步进翻页，单页吞掉滚轮不动作。 */
 let lastWheelPageAt = -Infinity;
 function onFullscreenWheel(e: WheelEvent): void {
-  if (verticalOn.value || !multi.value || e.ctrlKey || e.metaKey || !e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  if (verticalOn.value) return;
   if (e.composedPath().some(node => node instanceof HTMLElement && node.classList.contains("fs-filmstrip"))) return;
   e.preventDefault();
+  // 缩放组合键（Ctrl/⌘+滚轮）与水平主导手势不参与翻页
+  if (e.ctrlKey || e.metaKey || !e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  if (!multi.value) return;
   const now = performance.now();
   if (now - lastWheelPageAt < 250) return;
   lastWheelPageAt = now;
@@ -979,7 +1056,9 @@ watch(
           class="page-item"
         >
           <!-- 页框：纵横比先占位，图片加载完成后不再改变高度；页框本身即全屏入口
-               （点击 / Enter / Space，openFullscreen 内有就绪与遮罩守卫），遮罩态不可聚焦 -->
+               （点击 / Enter / Space——键盘入口经 onShotKeydown 来源守卫，可交互后代
+               （失败态重试按钮）上的按键放行原生激活，openFullscreen 内有就绪与遮罩守卫），
+               遮罩态不可聚焦 -->
           <div
             class="shot"
             :class="{ ready: stageReady(i) && !restricted }"
@@ -989,8 +1068,8 @@ watch(
             :aria-label="`${altOf(i)} · ${t('browse.work.fullscreen')}`"
             :title="stageReady(i) && !restricted ? t('browse.work.fullscreen') : undefined"
             @click="openFullscreen(i)"
-            @keydown.enter.prevent="openFullscreen(i)"
-            @keydown.space.prevent="openFullscreen(i)"
+            @keydown.enter="onShotKeydown(i, $event)"
+            @keydown.space="onShotKeydown(i, $event)"
           >
             <!-- ugoira 帧轮播：单张 <img> 换 src（不重挂载，避免闪烁）；帧地址与封面同源，
                  已预载的帧直接复用缓存。点击/键盘仍按既有行为进全屏（首帧就绪后开放）；
@@ -1103,7 +1182,8 @@ watch(
       </template>
     </p>
 
-    <!-- 全屏浮层：左右切换 + 右侧胶卷缩略图（不复用舞台内控件，后者被浮层盖住） -->
+    <!-- 全屏浮层：左右切换 + 右侧胶卷缩略图（不复用舞台内控件，后者被浮层盖住）；
+         Tab 键在浮层内圈闭（onOverlayTab，aria-modal 语义），滚轮非竖屏一律吞掉不滚背景 -->
     <div
       v-if="fullscreen"
       ref="overlayEl"
@@ -1114,6 +1194,7 @@ watch(
       tabindex="-1"
       @click.self="closeFullscreen"
       @wheel="onFullscreenWheel"
+      @keydown.tab="onOverlayTab"
     >
       <div
         class="fs-stage"
