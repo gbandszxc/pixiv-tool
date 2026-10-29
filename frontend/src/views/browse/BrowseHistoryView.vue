@@ -232,7 +232,7 @@ onActivated(load);
     />
 
     <!-- 清空二次确认：无标题的单行正文式（对齐历史页删除确认） -->
-    <dialog ref="confirmDialog" class="m3-dialog">
+    <dialog ref="confirmDialog" class="m3-dialog" :aria-label='t("browseHistory.clearAllConfirm")'>
       <p>{{ t("browseHistory.clearAllConfirm") }}</p>
       <div class="m3-row dialog-actions">
         <md-text-button @click="confirmDialog?.close()">{{ t("common.cancel") }}</md-text-button>

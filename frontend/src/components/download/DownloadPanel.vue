@@ -185,7 +185,7 @@ async function submit() {
         :disabled="panel.submitting"
       />
     </div>
-    <dialog ref="confirm" class="m3-dialog" @cancel="panel.pendingTarget = null" @close="panel.pendingTarget = null"><h2>{{ t('workspace.replaceSource') }}</h2><p>{{ t('workspace.replaceSourceHint') }}</p><div class="dialog-actions m3-row"><md-text-button @click="panel.pendingTarget = null">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="panel.confirmTarget()">{{ t('common.confirm') }}</md-filled-button></div></dialog>
+    <dialog ref="confirm" class="m3-dialog" aria-labelledby="replace-source-dialog-title" @cancel="panel.pendingTarget = null" @close="panel.pendingTarget = null"><h2 id="replace-source-dialog-title">{{ t('workspace.replaceSource') }}</h2><p>{{ t('workspace.replaceSourceHint') }}</p><div class="dialog-actions m3-row"><md-text-button @click="panel.pendingTarget = null">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="panel.confirmTarget()">{{ t('common.confirm') }}</md-filled-button></div></dialog>
   </aside>
 </template>
 

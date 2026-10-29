@@ -35,7 +35,7 @@
       </section>
       <AppPagination class="pagination" v-model:current-page="page" :total="filteredTasks.length" :page-size="pageSize" :page-size-options="pageSizes" @change="onPagerChange" />
     </template>
-    <dialog ref="confirmDialog" class="m3-dialog" @close="pendingAction = null"><p>{{ confirmText }}</p><div class="m3-row dialog-actions"><md-text-button @click='confirmDialog?.close()'>{{ t("common.cancel") }}</md-text-button><md-filled-button @click="runPendingAction">{{ t("common.delete") }}</md-filled-button></div></dialog>
+    <dialog ref="confirmDialog" class="m3-dialog" :aria-label="confirmText" @close="pendingAction = null"><p>{{ confirmText }}</p><div class="m3-row dialog-actions"><md-text-button @click='confirmDialog?.close()'>{{ t("common.cancel") }}</md-text-button><md-filled-button @click="runPendingAction">{{ t("common.delete") }}</md-filled-button></div></dialog>
   </div>
 </template>
 

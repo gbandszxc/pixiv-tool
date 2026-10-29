@@ -211,8 +211,8 @@
       </div>
     </template>
 
-    <dialog ref="confirmDialog" class="m3-dialog">
-      <h2>{{ t("settings.clearAuth") }}</h2>
+    <dialog ref="confirmDialog" class="m3-dialog" aria-labelledby="clear-auth-dialog-title">
+      <h2 id="clear-auth-dialog-title">{{ t("settings.clearAuth") }}</h2>
       <p>{{ t("settings.clearAuthConfirm") }}</p>
       <div class="m3-row dialog-actions"><md-text-button @click="closeConfirm">{{ t("common.cancel") }}</md-text-button><md-filled-button @click="handleConfirm">{{ t("settings.clearAuth") }}</md-filled-button></div>
     </dialog>
