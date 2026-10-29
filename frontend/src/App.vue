@@ -5,8 +5,8 @@
         <template v-if="!siderCollapsed"><img src="./assets/icon.png" alt="" /><span class="sider-title">pixiv-tool</span></template>
         <md-icon-button class="collapse" :aria-label="siderCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')" :title="siderCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')" @click="siderCollapsed = !siderCollapsed"><svg v-if="siderCollapsed" class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m14 9 3 3-3 3" /></svg><svg v-else class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m16 15-3-3 3-3" /></svg></md-icon-button>
       </header>
-      <nav aria-label="Primary">
-        <button v-for="item in menuItems" :key="item.path" class="nav-item" :class="{ active: activeGroup === item.group }" :aria-label="item.label" :title="siderCollapsed ? item.label : undefined" :aria-current="activeGroup === item.group ? 'page' : undefined" @click="navigate(item.path)"><SidebarIcon :name="item.icon" /><span v-if="!siderCollapsed" class="nav-label">{{ item.label }}</span><span v-if="item.group === 'downloads' && taskStore.activeTasks.length" class="task-count">{{ taskStore.activeTasks.length }}</span></button>
+      <nav :aria-label="t('nav.primary')">
+        <button v-for="item in menuItems" :key="item.path" class="nav-item" :class="{ active: activeGroup === item.group }" :aria-label="navItemLabel(item)" :title="siderCollapsed ? item.label : undefined" :aria-current="activeGroup === item.group ? 'page' : undefined" @click="navigate(item.path)"><SidebarIcon :name="item.icon" /><span v-if="!siderCollapsed" class="nav-label">{{ item.label }}</span><span v-if="item.group === 'downloads' && taskStore.activeTasks.length" class="task-count" aria-hidden="true">{{ taskStore.activeTasks.length }}</span></button>
       </nav>
       <footer class="sider-footer">
         <AccountMenu :collapsed="siderCollapsed" @add-account="showLoginDialog = true" @open-settings="openSettings" />
@@ -29,7 +29,7 @@
     <DownloadStatusBar />
     </section>
   </div>
-  <dialog ref="exitDialog" class="m3-dialog exit-dialog" @close="showExitConfirm = false"><h2>{{ t('app.exitConfirmTitle') }}</h2><p>{{ t('app.exitConfirmBody') }}</p><div class="m3-row dialog-actions"><md-text-button @click="showExitConfirm = false">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="invoke('app_exit').catch(() => {})">{{ t('app.exit') }}</md-filled-button></div></dialog>
+  <dialog ref="exitDialog" class="m3-dialog exit-dialog" aria-labelledby="exit-dialog-title" @close="showExitConfirm = false"><h2 id="exit-dialog-title">{{ t('app.exitConfirmTitle') }}</h2><p>{{ t('app.exitConfirmBody') }}</p><div class="m3-row dialog-actions"><md-text-button @click="showExitConfirm = false">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="invoke('app_exit').catch(() => {})">{{ t('app.exit') }}</md-filled-button></div></dialog>
   <LoginDialog v-model:show="showLoginDialog" />
   <SettingsDialog v-model:show="showSettings" />
   <div v-if="notification" class="m3-snackbar" role="status">{{ notification }}</div>
@@ -100,6 +100,12 @@ function restoreLayout() {
   const main = contentEl.value; if (!main) return;
   if (layoutAnchor?.element.isConnected) main.scrollTop += layoutAnchor.element.getBoundingClientRect().top - main.getBoundingClientRect().top - layoutAnchor.offset;
   else main.scrollTop = layoutTop;
+}
+/** 滚动事件逐帧合帧：连续 scroll 只在下一帧测一次布局（querySelectorAll + getBoundingClientRect 不逐事件执行）。 */
+let scrollFrame = 0;
+function onContentScroll(): void {
+  if (scrollFrame) return;
+  scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; captureLayout(); });
 }
 
 const cachedBrowseViews = [
@@ -182,6 +188,13 @@ const menuItems = computed<MenuItem[]>(() => [
   { path: groupRoots.library, label: t("workspace.library"), icon: "bookmark", group: "library" },
   { path: groupRoots.downloads, label: t("workspace.downloads"), icon: "tasks", group: "downloads" },
 ]);
+/** 可访问名：下载项有活跃任务时把计数读出来（视觉徽标不进名称树）。 */
+function navItemLabel(item: MenuItem): string {
+  if (item.group === "downloads" && taskStore.activeTasks.length > 0) {
+    return t("nav.downloadWithTasks", { count: taskStore.activeTasks.length });
+  }
+  return item.label;
+}
 watch([() => panel.visible, siderCollapsed], async () => { captureLayout(); await nextTick(); restoreLayout(); }, { flush: "pre" });
 let resizeObserver: ResizeObserver | undefined;
 let lastWidth = 0;
@@ -203,9 +216,9 @@ onMounted(() => {
   window.addEventListener('pixiv-tool:image-fullscreen', onImageFullscreen);
   resizeObserver = new ResizeObserver(entries => { const width = entries[0]?.contentRect.width ?? 0; if (lastWidth && width !== lastWidth) restoreLayout(); lastWidth = width; captureLayout(); });
   if (workspaceEl.value) resizeObserver.observe(workspaceEl.value);
-  contentEl.value?.addEventListener('scroll', captureLayout, { passive: true });
+  contentEl.value?.addEventListener('scroll', onContentScroll, { passive: true });
   media.addEventListener("change", onMediaChange); authStore.fetchAccounts(); if (isTauri()) void listen("app://confirm-exit", () => { if (!disposed) showExitConfirm.value = true; }).then(fn => { if (disposed) fn(); else unlistenExit = fn; }).catch(() => {}); window.addEventListener("pixiv-tool:notify", onNotification); window.addEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.addEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); observeStickyHead(); });
-onBeforeUnmount(() => { disposed = true; clearTimeout(toastTimer); layoutAnchor = undefined; stopTasks?.(); resizeObserver?.disconnect(); window.removeEventListener('keydown', onWorkspaceKey); window.removeEventListener('pixiv-tool:image-fullscreen', onImageFullscreen); contentEl.value?.removeEventListener('scroll', captureLayout); media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
+onBeforeUnmount(() => { disposed = true; clearTimeout(toastTimer); layoutAnchor = undefined; if (scrollFrame) cancelAnimationFrame(scrollFrame); scrollFrame = 0; stopTasks?.(); resizeObserver?.disconnect(); window.removeEventListener('keydown', onWorkspaceKey); window.removeEventListener('pixiv-tool:image-fullscreen', onImageFullscreen); contentEl.value?.removeEventListener('scroll', onContentScroll); media.removeEventListener("change", onMediaChange); unlistenExit?.(); window.removeEventListener("pixiv-tool:notify", onNotification); window.removeEventListener(OPEN_LOGIN_EVENT, onOpenLogin); window.removeEventListener(OPEN_SETTINGS_EVENT, onOpenSettings); });
 </script>
 
 <style scoped>

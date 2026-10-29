@@ -49,6 +49,7 @@ let stopped = false;
 let generation = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let lastInfo = 0;
+let lastLogs = 0;
 let refreshing = false;
 function formatBytes(bytes: number): string {
   const units = ['B', 'KiB', 'MiB', 'GiB'];
@@ -64,12 +65,16 @@ async function refresh(force = false): Promise<void> {
       catch (error) { if (!stopped && version === generation) infoError.value = errorMessage(error); }
     })(),
     (async () => {
+      // 日志读取与 info 同款 10s 节流，但只限自动轮询路径（force=false）；
+      // 重试 / 清理后的显式刷新走 force=true 直通，清理完立即能看到空日志。
+      if (!force && Date.now() - lastLogs < 10000) return;
       try {
         const result = await readLogs();
         if (!stopped && version === generation) {
           const element = logElement.value;
           const follow = !logs.value || !element || element.scrollTop + element.clientHeight >= element.scrollHeight - 2;
           logs.value = result; logError.value = '';
+          lastLogs = Date.now();
           if (follow) { await nextTick(); if (!stopped && version === generation && logElement.value) logElement.value.scrollTop = logElement.value.scrollHeight; }
         }
       }

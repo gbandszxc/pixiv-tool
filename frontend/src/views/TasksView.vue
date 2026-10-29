@@ -27,7 +27,7 @@
               <md-text-button v-if='task.status === "running"' @click='taskStore.pauseTask(task.task_id)'>{{ t("tasks.pause") }}</md-text-button>
               <md-filled-button v-if='task.status === "paused"' @click='taskStore.resumeTask(task.task_id)'>{{ t("tasks.resume") }}</md-filled-button>
               <md-text-button v-if='["running", "paused"].includes(task.status)' @click='taskStore.cancelTask(task.task_id)'>{{ t("tasks.cancel") }}</md-text-button>
-              <md-text-button v-if='task.status === "done" && failedCount(task) > 0' @click='taskStore.retryFailed(task.task_id)'>{{ t("tasks.retryFailed") }}</md-text-button>
+              <md-text-button v-if='task.status === "done" && taskFailedCount(task) > 0' @click='taskStore.retryFailed(task.task_id)'>{{ t("tasks.retryFailed") }}</md-text-button>
               <md-text-button :disabled='deletingTaskIds.has(task.task_id)' @click='openConfirm(task.task_id)'>{{ deletingTaskIds.has(task.task_id) ? "…" : t("common.delete") }}</md-text-button>
             </div>
           </div>
@@ -46,7 +46,7 @@ import AppPagination from "../components/common/AppPagination.vue";
 import { isTauri } from "../api/tauri";
 
 
-import { taskProgress, useTaskStore } from "../stores/tasks";
+import { taskProgress, taskFailedCount, useTaskStore } from "../stores/tasks";
 import type { Task } from "../stores/tasks";
 import { notify } from "../ui/notify";
 
@@ -68,8 +68,7 @@ const confirmText = computed(() => { if (pendingAction.value === "clear") return
 function categoryLabel(task: Task) { return task.category === "illustration" ? t("tasks.category.illustration") : t("tasks.category.novel"); }
 function sourceLabel(task: Task) { if (task.category === "illustration") return task.source_type === "user" ? t("illust.user") : t("illust.single"); return t(({ single: "crawl.single", series: "crawl.series", user: "crawl.user" } as Record<string, string>)[task.source_type] || "crawl.single"); }
 function statusLabel(status: string) { const key = `tasks.status.${status}`; return t(key) === key ? status : t(key); }
-function failedCount(task: Task) { try { return JSON.parse(task.failed_ids || "[]").length; } catch { return 0; } }
-function progressDetail(task: Task) { return t("tasks.progressDetail", { done: task.done, total: task.total, skipped: task.skipped, failed: failedCount(task) }); }
+function progressDetail(task: Task) { return t("tasks.progressDetail", { done: task.done, total: task.total, skipped: task.skipped, failed: taskFailedCount(task) }); }
 function changeCategory(value: "all" | "novel" | "illustration") { categoryFilter.value = value; page.value = 1; } function toggleTask(id: string, checked: boolean) { selectedTaskIds.value = checked ? [...selectedTaskIds.value, id] : selectedTaskIds.value.filter((item) => item !== id); }
 /** 分页回调：页码经 v-model:currentPage 已回写；容量切换由父级回第 1 页（纯前端切片，无需重查）。 */
 function onPagerChange({ pageSize: nextSize }: { page: number; pageSize: number | undefined }) { if (nextSize !== undefined && nextSize !== pageSize.value) { pageSize.value = nextSize; page.value = 1; } }

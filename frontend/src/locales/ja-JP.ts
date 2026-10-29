@@ -110,6 +110,8 @@ export default {
     browseHistory: "履歴",
     browseMe: "プロフィール",
     saucenao: "画像から探す",
+    primary: "メインナビゲーション",
+    downloadWithTasks: "ダウンロード、進行中タスク {count} 件",
   },
   auth: {
     openAccountMenu: "アカウントメニューを開く",

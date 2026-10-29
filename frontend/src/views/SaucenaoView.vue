@@ -127,7 +127,8 @@ const errorText = ref("");
 const brokenThumbs = ref<Set<number>>(new Set());
 
 const hasKey = computed(() => settingsStore.settings.saucenao_api_key.trim().length > 0);
-const canSearch = computed(() => phase.value !== "loading" && (filePath.value != null || urlInput.value.trim().length > 0));
+// 无 Key 时按钮直接禁用（引导条仍在，信息不丢），不再留一个点了没反应的可点状态。
+const canSearch = computed(() => hasKey.value && phase.value !== "loading" && (filePath.value != null || urlInput.value.trim().length > 0));
 
 function resetResult(): void {
   phase.value = "idle";
@@ -146,7 +147,7 @@ function sortResults(items: SaucenaoResult[]): SaucenaoResult[] {
 
 async function doSearch(): Promise<void> {
   if (!canSearch.value) return;
-  // key 为空：不打请求（引导条已可见）；后端也有同款防御
+  // key 为空不发生（按钮已禁用）；此处仅作防御，后端也有同款防御
   if (!hasKey.value) return;
   let sourceType: "file" | "url";
   let source: string;

@@ -856,6 +856,7 @@ function resetJobData(): void {
   issueData.value = null;
   issuesUnavailable.value = false;
   issuesLoading.value = false;
+  cancelPreviewRefresh();
   previewToken += 1;
 }
 
@@ -874,6 +875,27 @@ watch(() => job.value?.constraint_version, (next, previous) => {
 // 进度计数变化说明有块完成翻译 / 审查：丢弃本地旧预览并重新预取，
 // 否则早期读到的「未译」会一直留在列表里，与顶部计数矛盾。
 // store 的 applySnapshot 会同步失效该 Job 的预览缓存，这里的重取才真正回到后端拿新内容。
+// 长篇数百块时每块完成都会推一次计数，逐次清空+全量重取是 O(n) 风暴：
+// 尾随防抖把窗口内的连续跳动合并为一轮重取；终态（结束 / 取消）立即冲刷，未译块最终仍会被刷新。
+const PREVIEW_REFRESH_DEBOUNCE_MS = 2000;
+let previewRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+
+function cancelPreviewRefresh(): void {
+  if (previewRefreshTimer === undefined) return;
+  clearTimeout(previewRefreshTimer);
+  previewRefreshTimer = undefined;
+}
+
+function flushPreviewRefresh(): void {
+  cancelPreviewRefresh();
+  if (!previews.value.size) return;
+  previewToken += 1;
+  previews.value = new Map();
+  failedPreviews.value = new Set();
+  if (!chunkIds.value.includes(selectedChunk.value)) selectedChunk.value = chunkIds.value[0] ?? "";
+  if (open.value) void prefetchChunks();
+}
+
 watch(
   () => {
     const counts = job.value?.counts;
@@ -881,11 +903,18 @@ watch(
   },
   (next, previous) => {
     if (next === previous || !previews.value.size) return;
-    previewToken += 1;
-    previews.value = new Map();
-    failedPreviews.value = new Set();
-    if (!chunkIds.value.includes(selectedChunk.value)) selectedChunk.value = chunkIds.value[0] ?? "";
-    if (open.value) void prefetchChunks();
+    cancelPreviewRefresh();
+    previewRefreshTimer = setTimeout(() => { previewRefreshTimer = undefined; flushPreviewRefresh(); }, PREVIEW_REFRESH_DEBOUNCE_MS);
+  },
+);
+
+// 任务进入终态（completed / cancelled / interrupted / deleted）时不再有后续计数推送，
+// 立即执行挂着的重取，不等防抖窗口。注册在计数 watch 之后，同帧先排程再冲刷。
+watch(
+  () => job.value?.state,
+  (next, previous) => {
+    if (next === previous || !next || isActiveJobState(next)) return;
+    if (previewRefreshTimer !== undefined) flushPreviewRefresh();
   },
 );
 
@@ -937,6 +966,8 @@ watch(open, (value) => {
   } else {
     window.removeEventListener("keydown", onKeydown);
     window.removeEventListener("resize", clampPanel);
+    // 关面板丢掉挂着的重取：下次打开预览 tab 会重新全量预取，语义不变。
+    cancelPreviewRefresh();
     trigger.value?.focus();
   }
 });
@@ -945,6 +976,7 @@ onMounted(() => {
   if (job.value && isActiveJobState(job.value.state)) open.value = true;
 });
 onBeforeUnmount(() => {
+  cancelPreviewRefresh();
   window.removeEventListener("keydown", onKeydown);
   window.removeEventListener("resize", clampPanel);
 });

@@ -52,8 +52,8 @@
         </button>
       </div>
     </Transition>
-    <dialog ref="logoutDialog" class="m3-dialog logout-dialog" @close="logoutConfirmOpen = false">
-      <h2>{{ t('auth.logoutConfirmTitle') }}</h2>
+    <dialog ref="logoutDialog" class="m3-dialog logout-dialog" aria-labelledby="logout-dialog-title" @close="logoutConfirmOpen = false">
+      <h2 id="logout-dialog-title">{{ t('auth.logoutConfirmTitle') }}</h2>
       <p>{{ t('auth.logoutConfirmText') }}</p>
       <div class="m3-row dialog-actions">
         <md-text-button @click="cancelLogout">{{ t('common.cancel') }}</md-text-button>

@@ -107,6 +107,8 @@ export default {
     browseHistory: "History",
     browseMe: "Profile",
     saucenao: "Image Search",
+    primary: "Primary",
+    downloadWithTasks: "Downloads, {count} active tasks",
   },
   auth: {
     openAccountMenu: "Open account menu",

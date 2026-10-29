@@ -30,7 +30,7 @@ const show = computed(() => group.value && group.value !== "downloads" && route.
 .browse-navigation { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-sm) var(--space-lg); margin:0 0 var(--space-xl); }
 .channels { border-left:1px solid color-mix(in srgb,var(--md-sys-color-outline) 30%,transparent); padding-left:var(--space-lg); }
 .channel-links { display:flex; flex-wrap:wrap; gap:var(--space-sm); }
-a { padding:var(--space-sm) var(--space-md); border-radius:var(--radius-navigation, 24px); color:var(--ink-muted); text-decoration:none; }
+a { padding:var(--space-sm) var(--space-md); border-radius:24px; color:var(--ink-muted); text-decoration:none; }
 a:hover { background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent); }
 a[aria-current] { background:var(--md-sys-color-primary-container); color:var(--md-sys-color-on-primary-container); }
 a:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-offset:2px; }

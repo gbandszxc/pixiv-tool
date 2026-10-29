@@ -336,17 +336,6 @@ function clearAll(): void {
   height: 10px;
 }
 
-.picker-footer {
-  display: flex;
-  justify-content: flex-start;
-  min-width: 0;
-}
-
-/* 窄容器内不允许主按钮把容器撑出横向滚动 */
-.picker-footer md-filled-button {
-  max-width: 100%;
-}
-
 .picker-empty {
   margin: 0;
   color: var(--ink-muted);

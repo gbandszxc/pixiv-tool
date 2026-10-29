@@ -107,6 +107,8 @@ export default {
     browseHistory: "历史",
     browseMe: "主页",
     saucenao: "以图识图",
+    primary: "主导航",
+    downloadWithTasks: "下载，{count} 个进行中任务",
   },
   auth: {
     openAccountMenu: "打开账号菜单",
