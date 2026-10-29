@@ -75,6 +75,13 @@ function isSelected(index: number): boolean {
   return selected.value.has(index);
 }
 
+/** 可达名区分已下载页：视觉徽标「已下载」读屏不可达，改在 aria-label 中表达（全选未下载页依赖该信息）。 */
+function pageAccessibleName(index: number): string {
+  return savedPages.value.has(index)
+    ? t("browse.work.pageLabelSaved", { page: index + 1 })
+    : t("browse.work.pageSelectLabel", { page: index + 1 });
+}
+
 /** 提交升序页码，父级无需再排序 */
 function commit(pages: Iterable<number>): void {
   const next = [...pages].sort((a, b) => a - b);
@@ -139,7 +146,7 @@ function clearAll(): void {
           class="page-cell"
           :class="{ selected: isSelected(i) }"
           :aria-pressed="isSelected(i)"
-          :aria-label="t('browse.work.pageSelectLabel', { page: i + 1 })"
+          :aria-label="pageAccessibleName(i)"
           :title="t('browse.work.pageSelectLabel', { page: i + 1 })"
           @click="toggle(i)"
         >

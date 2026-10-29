@@ -813,6 +813,8 @@ export default {
       pageSelectNone: "選択解除",
       pageAlreadySaved: "ダウンロード済み",
       pageSelectLabel: "{page} ページ目",
+      pageLabelSaved: "{page} ページ目（ダウンロード済み）",
+      loadedCount: "{count} 件読み込み済み",
       pageDownloadStarted: "ダウンロードタスクを作成しました：{count} 項目",
       pageDownloadFailed: "ダウンロードタスクを作成できませんでした",
       pageAllSaved: "すべてのページをダウンロード済みです",

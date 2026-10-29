@@ -147,7 +147,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
     >
       <svg class="cancel-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></svg>
     </button>
-    <span v-if="cancelError" role="status" class="bar-cancel-error">{{ cancelError }}</span>
+    <span v-if="cancelError" role="status" class="bar-cancel-error" :title="cancelError">{{ cancelError }}</span>
     <!-- 多任务：计数入口 + 上方任务选择菜单（同一浮层配方） -->
     <div v-else-if="jobs.length > 1" class="translation-menu">
       <button ref="trigger" class="status-translation status-translation-count" :aria-label="countLabel" :title="countLabel" aria-haspopup="menu" :aria-expanded="pickerOpen" @click="togglePicker">

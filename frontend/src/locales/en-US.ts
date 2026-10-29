@@ -856,6 +856,8 @@ export default {
       pageSelectNone: "Clear",
       pageAlreadySaved: "Downloaded",
       pageSelectLabel: "Page {page}",
+      pageLabelSaved: "Page {page} (downloaded)",
+      loadedCount: "{count} items loaded",
       pageDownloadStarted: "Download task created: {count} items",
       pageDownloadFailed: "Failed to create download task",
       pageAllSaved: "All pages already downloaded",

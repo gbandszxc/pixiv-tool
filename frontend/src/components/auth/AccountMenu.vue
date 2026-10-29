@@ -1,6 +1,7 @@
 <template>
   <div class="account-menu">
     <button
+      ref="chip"
       class="account-chip"
       :class="{ collapsed }"
       :aria-label="t('auth.openAccountMenu')"
@@ -16,8 +17,8 @@
     </button>
     <div v-if="show" class="menu-backdrop" @click="close()" />
     <Transition name="menu">
-      <div v-if="show" ref="popover" class="menu-popover" role="menu" :aria-label="t('auth.accounts')" tabindex="-1" @keydown.esc="close()">
-        <p v-if="!authStore.accounts.length" class="menu-hint">{{ t('auth.notLoggedInHint') }}</p>
+      <div v-if="show" ref="popover" class="menu-popover" role="menu" :aria-label="t('auth.accounts')" tabindex="-1" @keydown="onMenuKeydown">
+        <p v-if="!authStore.accounts.length" class="menu-hint" role="none">{{ t('auth.notLoggedInHint') }}</p>
         <button v-for="account in authStore.accounts" :key="account.user_id" role="menuitem" class="menu-item" :disabled="authStore.isSwitching || account.user_id === authStore.activeAccountId" @click="switchAccount(account.user_id)">
           <img v-if="account.avatar_url" class="avatar avatar-image" :src="account.avatar_url" alt="" />
           <span v-else class="avatar">{{ accountInitial(account) }}</span>
@@ -39,7 +40,7 @@
           <span class="menu-label">{{ t('auth.checkUpdate') }}</span>
         </button>
         <hr class="menu-divider" />
-        <div class="menu-meta">
+        <div class="menu-meta" role="none">
           <span class="menu-version">{{ t('auth.versionLabel', { version: appVersion }) }}</span>
           <button class="menu-github" :aria-label="t('auth.githubHome')" :title="t('auth.githubHome')" @click="openGitHub()">
             <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" /></svg>
@@ -85,7 +86,7 @@ import UpdateDialog from "./UpdateDialog.vue";
 defineProps<{ collapsed: boolean }>();
 const emit = defineEmits<{ (e: "add-account"): void; (e: "open-settings"): void }>();
 const { t } = useI18n(); const authStore = useAuthStore();
-const show = ref(false); const popover = ref<HTMLElement | null>(null);
+const show = ref(false); const popover = ref<HTMLElement | null>(null); const chip = ref<HTMLButtonElement | null>(null);
 const logoutDialog = ref<HTMLDialogElement | null>(null); const logoutConfirmOpen = ref(false);
 const updateDialog = ref<InstanceType<typeof UpdateDialog> | null>(null);
 const updateChecking = ref(false);
@@ -140,7 +141,38 @@ function toggle() { show.value = !show.value; }
 function close() { show.value = false; }
 /** Esc 关菜单；设置确认等原生 dialog 打开时让位（Esc 优先关闭最上层 dialog）。 */
 function onWindowKeydown(event: KeyboardEvent) { if (event.key === "Escape" && !document.querySelector("dialog[open]")) close(); }
-watch(show, (open) => { if (open) { window.addEventListener("keydown", onWindowKeydown); nextTick(() => popover.value?.focus()); } else window.removeEventListener("keydown", onWindowKeydown); });
+/** menu 键盘形态（NovelBgPicker 同源关闭回焦）：↑↓ 在可用 menuitem 间循环移动焦点，
+ * Home/End 跳首/末；Tab 退出菜单（menu 内部不做 Tab 停留），Esc/遮罩/选择后焦点回头像 chip。 */
+function onMenuKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") { close(); return; }
+  if (event.key === "Tab") { event.preventDefault(); close(); return; }
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  const items = Array.from(popover.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []).filter((item) => !item.disabled);
+  if (!items.length) return;
+  event.preventDefault();
+  const current = items.indexOf(document.activeElement as HTMLButtonElement);
+  let next = current;
+  if (event.key === "ArrowDown") next = current + 1;
+  else if (event.key === "ArrowUp") next = current - 1;
+  else if (event.key === "Home") next = 0;
+  else next = items.length - 1;
+  if (next < 0) next = items.length - 1;
+  if (next >= items.length) next = 0;
+  items[next]?.focus();
+}
+watch(show, (open) => {
+  if (open) {
+    window.addEventListener("keydown", onWindowKeydown);
+    // 打开后焦点落在第一个可用 menuitem 上（容器 tabindex=-1 仅兜底），键盘用户可直接 ↑↓ 操作
+    void nextTick(() => {
+      const first = popover.value?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)');
+      (first ?? popover.value)?.focus();
+    });
+  } else {
+    window.removeEventListener("keydown", onWindowKeydown);
+    chip.value?.focus();
+  }
+});
 onBeforeUnmount(() => window.removeEventListener("keydown", onWindowKeydown));
 
 function displayName(account: AccountEntry) { return account.pixiv_id || account.name || account.user_id; }

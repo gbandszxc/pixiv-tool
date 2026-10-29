@@ -63,6 +63,18 @@ const r18Filter = useGlobalR18Filter();
 const visibleItems = computed(() => filterByR18(props.items, props.r18Filter ?? r18Filter.value));
 const hiddenCount = computed(() => props.items.length - visibleItems.value.length);
 
+/**
+ * 无限滚动的读屏播报（视觉隐藏 aria-live 行）：加载完成报「已加载 N 件」，到底复用
+ * 「没有更多」既有文案；首屏 / 追加加载中与空列表不播报，避免骨架期刷屏。
+ * paginated 模式有自己的页码 aria，此行不渲染。
+ */
+const liveText = computed(() => {
+  if (props.paginated || props.loading || props.loadingMore || props.error) return "";
+  if (!visibleItems.value.length) return "";
+  if (!props.hasMore) return t("common.browseNoMore");
+  return t("browse.work.loadedCount", { count: visibleItems.value.length });
+});
+
 const sentinel = ref<HTMLElement | null>(null);
 let observer: IntersectionObserver | null = null;
 let active = true;
@@ -169,13 +181,28 @@ onBeforeUnmount(() => {
       <p v-if="!paginated && !hasMore" class="grid-end">{{ t("common.browseNoMore") }}</p>
     </template>
 
+    <!-- 读屏播报区：恒挂载保持 aria-live 区域稳定，内容空时不占位不播报 -->
+    <p class="grid-live" aria-live="polite">{{ liveText }}</p>
+
     <div v-if="!paginated" ref="sentinel" class="grid-sentinel" aria-hidden="true"></div>
   </div>
 </template>
 
 <style scoped>
 .work-grid-wrap {
+  position: relative;
   min-height: 240px;
+}
+
+/* 读屏专用播报行：视觉隐藏但保留在可访问性树（display:none / visibility:hidden 均不播报）。
+ * 项目内无现成视觉隐藏配方，按无障碍惯例内联 clip-path 方案。 */
+.grid-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .work-grid {

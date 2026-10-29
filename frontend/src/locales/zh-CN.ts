@@ -856,6 +856,8 @@ export default {
       pageSelectNone: "清空",
       pageAlreadySaved: "已下载",
       pageSelectLabel: "第 {page} 页",
+      pageLabelSaved: "第 {page} 页（已下载）",
+      loadedCount: "已加载 {count} 件",
       pageDownloadStarted: "已创建下载任务：{count} 项",
       pageDownloadFailed: "创建下载任务失败",
       pageAllSaved: "全部页面已下载",
