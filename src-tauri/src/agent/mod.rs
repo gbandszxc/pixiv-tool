@@ -178,6 +178,8 @@ pub struct JobCounts {
     pub reviewed: u32,
     pub needs_repair: u32,
     pub terms: u32,
+    /// 用户显式跳过的块数（如内容政策被拒）：不计入翻译 / 审查目标。
+    pub skipped: u32,
 }
 
 impl JobCounts {

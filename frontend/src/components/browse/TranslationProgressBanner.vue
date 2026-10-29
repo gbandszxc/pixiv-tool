@@ -25,6 +25,12 @@ const countsText = computed(() => {
   return t("translation.job.counts", { translated, reviewed, repair, chunks });
 });
 
+/** 跳过计数：内容政策拒绝后用户跳过的块；旧快照可能缺省该字段，按 0 处理。 */
+const skippedText = computed(() => {
+  const skipped = props.job.counts.skipped ?? 0;
+  return skipped > 0 ? t("translation.job.skippedCount", { count: skipped }) : "";
+});
+
 /** 进度比例（0~1）：块数未知为 0；终态完成按 1 收敛。 */
 const progress = computed(() => {
   const { chunks, translated } = props.job.counts;
@@ -132,6 +138,10 @@ onBeforeUnmount(() => {
       <span class="progress-phase">{{ phaseText }}</span>
       <span class="progress-sep" aria-hidden="true">·</span>
       <span class="progress-counts">{{ countsText }}</span>
+      <template v-if="skippedText">
+        <span class="progress-sep" aria-hidden="true">·</span>
+        <span class="progress-skipped">{{ skippedText }}</span>
+      </template>
     </div>
     <div class="progress-meta">
       <span class="progress-elapsed">{{ t("translation.job.elapsed", { time: elapsedText }) }}</span>

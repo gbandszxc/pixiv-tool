@@ -22,11 +22,13 @@ import {
   getNovelTranslationPreview,
   getNovelTranslationResult,
   getTranslationJob,
+  grantTranslationJobBudget,
   isActiveJobState,
   isTerminalJobState,
   listTranslationJobs,
   pauseTranslationJob,
   resumeTranslationJob,
+  skipRefusedChunks,
   startTranslationJob,
   subscribeTranslationJob,
   type ChunkPreview,
@@ -67,7 +69,7 @@ function snapshotFromEvent(event: TranslationJobEvent, existing?: TranslationJob
     novel_id: event.novel_id,
     state: event.state,
     phase: event.phase,
-    counts: event.counts ?? { pages: 0, chunks: 0, translated: 0, reviewed: 0, needs_repair: 0, terms: 0 },
+    counts: event.counts ?? { pages: 0, chunks: 0, translated: 0, reviewed: 0, needs_repair: 0, skipped: 0, terms: 0 },
     current: event.current ?? null,
     usage: event.usage ?? { input: 0, output: 0, total: 0 },
     elapsed_ms: event.elapsed_ms ?? 0,
@@ -79,6 +81,9 @@ function snapshotFromEvent(event: TranslationJobEvent, existing?: TranslationJob
     budget: existing?.budget ?? { used: 0, limit: 0, remaining: 0, manual_extra: 0 },
     already_target_language: false,
     target_language: existing?.target_language ?? "",
+    // 旧事件载荷可能缺省被拒 / 跳过清单：缺省时保留既有快照的值，不用空集覆盖。
+    refused_chunks: event.refused_chunks ?? existing?.refused_chunks,
+    skipped_chunks: event.skipped_chunks ?? existing?.skipped_chunks,
   };
 }
 
@@ -402,6 +407,16 @@ export const useTranslationStore = defineStore("translation", () => {
     return runAction(jobId, resumeTranslationJob);
   }
 
+  /** 手动追加整篇调用预算；后端追加后不自动继续，是否 resume 由调用方决定。 */
+  function grantBudget(jobId: string, amount: number): Promise<void> {
+    return runAction(jobId, async (id) => { await grantTranslationJobBudget(id, amount); });
+  }
+
+  /** 跳过被内容政策拒绝的块；后端校验通过后自动恢复任务。 */
+  function skipRefused(jobId: string, chunkIds: string[]): Promise<void> {
+    return runAction(jobId, (id) => skipRefusedChunks(id, chunkIds));
+  }
+
   function cancel(jobId: string): Promise<void> {
     return runAction(jobId, cancelTranslationJob);
   }
@@ -509,6 +524,8 @@ export const useTranslationStore = defineStore("translation", () => {
     start,
     pause,
     resume,
+    grantBudget,
+    skipRefused,
     cancel,
     remove,
     confirm,

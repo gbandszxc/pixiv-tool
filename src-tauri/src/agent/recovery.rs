@@ -17,6 +17,9 @@ pub enum FailureClass {
     /// 提供商内容过滤拒绝：过滤判断含采样随机性，按可重试退避重发；
     /// 重试耗尽后转人工（更换模型 / 网关）。
     ContentFiltered,
+    /// 子 Agent 按内容政策显式拒绝该工作单元（失败摘要上报）：同一内容重试
+    /// 结果确定相同，不重试；只阻塞本块，不升级整批 fatal，等用户决定跳过。
+    ContentRefused,
     /// 鉴权、余额、模型不存在、配置不兼容：暂停并提示修正设置。
     Permanent,
     /// 已发送但结果未知：保留现场，默认等待用户恢复。
@@ -43,6 +46,7 @@ impl FailureClass {
             Self::NotSent => "not_sent",
             Self::Retryable => "retryable",
             Self::ContentFiltered => "content_filtered",
+            Self::ContentRefused => "content_refused",
             Self::Permanent => "permanent",
             Self::UnknownOutcome => "unknown_outcome",
             Self::InputTooLarge => "input_too_large",
@@ -54,12 +58,18 @@ impl FailureClass {
 
     /// 是否允许自动重试同一请求。
     pub fn is_retryable(self) -> bool {
-        matches!(self, Self::NotSent | Self::Retryable | Self::ContentFiltered)
+        matches!(
+            self,
+            Self::NotSent | Self::Retryable | Self::ContentFiltered
+        )
     }
 
     /// 是否可以自动恢复（不重放同一请求，而是压缩/缩块/纠正）。
     pub fn is_recoverable(self) -> bool {
-        !matches!(self, Self::Permanent | Self::UnknownOutcome)
+        !matches!(
+            self,
+            Self::Permanent | Self::UnknownOutcome | Self::ContentRefused
+        )
     }
 }
 

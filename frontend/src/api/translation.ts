@@ -91,6 +91,8 @@ export interface JobCounts {
   translated: number;
   reviewed: number;
   needs_repair: number;
+  /** 用户显式跳过的块数（内容政策拒绝后选择跳过）；旧后端快照可能缺省。 */
+  skipped: number;
   terms: number;
 }
 
@@ -146,6 +148,10 @@ export interface TranslationJobSnapshot {
   target_language: string;
   /** 分块计划的块 ID（顺序即合并顺序）；细分后 ID 不连续，不能按序号拼。 */
   chunk_ids?: string[];
+  /** 被模型按内容政策拒绝的块 ID（升序）；旧事件载荷可能缺省。 */
+  refused_chunks?: string[];
+  /** 用户显式跳过的块 ID（升序）；旧事件载荷可能缺省。 */
+  skipped_chunks?: string[];
 }
 
 /** 任务列表（seq = 所有 Job 的最大事件序号）。 */
@@ -174,6 +180,10 @@ export interface TranslationJobEvent {
   preview: JobPreview;
   message: string;
   error_code: string | null;
+  /** 被模型按内容政策拒绝的块 ID（升序）；旧事件载荷可能缺省。 */
+  refused_chunks?: string[];
+  /** 用户显式跳过的块 ID（升序）；旧事件载荷可能缺省。 */
+  skipped_chunks?: string[];
 }
 
 /** 发布状态：complete = 全部块已审查通过；partial = 有未解决块但可读；needs_attention = 需处理。 */
@@ -374,6 +384,32 @@ export async function resumeTranslationJob(jobId: string): Promise<void> {
   return invoke("novel_translation_resume", { jobId });
 }
 
+/** 手动追加整篇调用预算（amount 1~10000）；追加后不自动继续，需再显式 resume。 */
+export async function grantTranslationJobBudget(jobId: string, amount: number): Promise<JobBudget> {
+  if (!isTauri()) {
+    const job = mockState.jobs.get(jobId);
+    if (!job) throw new Error("任务不存在");
+    const limit = job.budget.limit + amount;
+    const budget: JobBudget = { used: job.budget.used, limit, remaining: limit - job.budget.used, manual_extra: job.budget.manual_extra + amount };
+    mockEmit(job, { budget });
+    return budget;
+  }
+  return invoke("novel_translation_grant_budget", { jobId, amount });
+}
+
+/** 把被拒块移入跳过清单并自动恢复任务（后端校验块归属后生效）。 */
+export async function skipRefusedChunks(jobId: string, chunkIds: string[]): Promise<void> {
+  if (!isTauri()) {
+    const job = mockState.jobs.get(jobId);
+    if (!job) throw new Error("任务不存在");
+    const skipped_chunks = [...new Set([...(job.skipped_chunks ?? []), ...chunkIds])].sort();
+    const refused_chunks = (job.refused_chunks ?? []).filter((id) => !chunkIds.includes(id));
+    mockPatch(jobId, { skipped_chunks, refused_chunks, state: "running", message: "chunks_skipped" });
+    return;
+  }
+  return invoke("novel_translation_skip_chunks", { jobId, chunkIds });
+}
+
 export async function cancelTranslationJob(jobId: string): Promise<void> {
   if (!isTauri()) { mockPatch(jobId, { state: "cancelled", message: "cancelled" }); return; }
   return invoke("novel_translation_cancel", { jobId });
@@ -475,7 +511,7 @@ interface MockState {
 
 const mockState: MockState = { seq: 0, started: 0, jobs: new Map(), subscribers: new Set(), timers: new Map() };
 
-const MOCK_COUNTS: JobCounts = { pages: 2, chunks: 6, translated: 0, reviewed: 0, needs_repair: 0, terms: 0 };
+const MOCK_COUNTS: JobCounts = { pages: 2, chunks: 6, translated: 0, reviewed: 0, needs_repair: 0, skipped: 0, terms: 0 };
 const MOCK_STEPS: { at: number; patch: Partial<TranslationJobSnapshot> }[] = [
   { at: 0, patch: { state: "queued", phase: "prepare_source", message: "queued" } },
   { at: 400, patch: { state: "running", phase: "prepare_source", message: "prepare_source" } },
@@ -500,6 +536,7 @@ function mockEmit(job: TranslationJobSnapshot, patch: Partial<TranslationJobSnap
     seq: next.seq, job_id: next.job_id, novel_id: next.novel_id, state: next.state, phase: next.phase,
     counts: next.counts, current: next.current, usage: next.usage, elapsed_ms: next.elapsed_ms,
     preview: next.preview, message: next.message, error_code: next.error_code,
+    refused_chunks: next.refused_chunks, skipped_chunks: next.skipped_chunks,
   };
   for (const subscriber of mockState.subscribers) subscriber(event);
 }

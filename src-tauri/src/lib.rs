@@ -238,6 +238,8 @@ pub fn run() {
             commands::translation_cmds::novel_translation_confirm,
             commands::translation_cmds::novel_translation_pause,
             commands::translation_cmds::novel_translation_resume,
+            commands::translation_cmds::novel_translation_skip_chunks,
+            commands::translation_cmds::novel_translation_grant_budget,
             commands::translation_cmds::novel_translation_cancel,
             commands::translation_cmds::novel_translation_delete,
             commands::translation_cmds::novel_translation_preview,

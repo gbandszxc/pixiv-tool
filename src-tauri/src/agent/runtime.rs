@@ -152,6 +152,10 @@ pub enum RunError {
         code: Option<String>,
         message: String,
     },
+    /// 子 Agent 按内容政策显式拒绝该工作单元（失败摘要上报）。同一内容重试
+    /// 结果确定相同：调用方不得重试，只标记该块并等待用户决定。
+    #[error("模型按内容政策拒绝处理该块（{}）：{}", reason, message)]
+    Refused { reason: String, message: String },
     #[error("运行内部错误: {0}")]
     Internal(String),
 }
@@ -168,6 +172,7 @@ impl RunError {
             Self::InvalidToolArgs => "invalid_tool_args",
             Self::MaxTurns(_) => "max_turns",
             Self::Provider { class, .. } => class.as_str(),
+            Self::Refused { .. } => "content_refused",
             Self::Internal(_) => "internal",
         }
     }
@@ -180,7 +185,18 @@ impl RunError {
             Self::CompactionFailed(_) => RunStatus::CompactionFailed,
             Self::InputTooLarge => RunStatus::InputTooLarge,
             Self::MaxTurns(_) => RunStatus::MaxTurns,
-            Self::InvalidToolArgs | Self::Provider { .. } | Self::Internal(_) => RunStatus::Failed,
+            Self::InvalidToolArgs
+            | Self::Provider { .. }
+            | Self::Refused { .. }
+            | Self::Internal(_) => RunStatus::Failed,
+        }
+    }
+
+    /// `Refused` 时的原因码与脱敏说明；其余变体返回 `None`。
+    pub fn refusal(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Refused { reason, message } => Some((reason, message)),
+            _ => None,
         }
     }
 }

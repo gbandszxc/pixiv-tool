@@ -569,6 +569,73 @@ fn is_han(ch: char) -> bool {
 }
 
 // ----------------------------------------------------------------------
+// 注释策略归一化
+// ----------------------------------------------------------------------
+
+/// 扫描「注释策略」中与标记不变量冲突的表述。
+///
+/// ruby 标记的数量与结构由 [`validate_draft_with_language`] 强制保持（`ruby_markup`），
+/// 因此注释策略只允许约束「读音内容」的处理方式；一旦扫描提出「删除标记 /
+/// 只取本体」类要求，翻译子 Agent 将陷入「满足风格则提交被拒、满足校验则审查
+/// 判违规」的死锁。这里在提交 / 冻结前把冲突表述归一为可执行的规范值。
+const ANNOTATION_POLICY_CONFLICT_MARKERS: &[&str] = &[
+    "只取本体",
+    "去注音",
+    "不注音",
+    "删除注音",
+    "去掉注音",
+    "去除注音",
+    "删除标记",
+    "去掉标记",
+    "去除标记",
+    "删除ruby",
+    "去掉ruby",
+    "去除ruby",
+    "删除ruby标记",
+    "去标记",
+];
+
+/// 与标记保持校验不冲突的规范注释策略值。
+pub const CANONICAL_ANNOTATION_POLICY: &str =
+    "保留 [rb:原文>读音] 标记结构，读音本地化为目标语言拼音；不保留日文假名读音";
+
+/// 归一化扫描提交的风格 JSON 中的「注释策略」维度。
+///
+/// `style` 是协调者 `submit_scan` 提交的八维度 JSON 字符串。检测到与标记
+/// 不变量冲突的注释策略时，返回 `(归一化后的 style JSON, 冲突说明)`；无冲突
+/// 或 `style` 不是合法 JSON 对象时返回 `None`（不触碰原值，其余维度原样保留）。
+pub fn normalize_annotation_policy(style: &str) -> Option<(String, String)> {
+    let mut value: serde_json::Value = serde_json::from_str(style).ok()?;
+    let object = value.as_object_mut()?;
+    let original = object.get("注释策略")?.as_str()?.to_string();
+    let lower = original.to_lowercase();
+    let conflicted = ANNOTATION_POLICY_CONFLICT_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker));
+    if !conflicted {
+        return None;
+    }
+    let note = format!(
+        "注释策略「{}」要求删除注音标记，与标记保持校验（ruby_markup）冲突，已归一为保留结构、读音本地化",
+        truncate_chars(&original, 80),
+    );
+    object.insert(
+        "注释策略".to_string(),
+        serde_json::Value::String(CANONICAL_ANNOTATION_POLICY.to_string()),
+    );
+    Some((value.to_string(), note))
+}
+
+/// 按字符数截断（不截断到多字节字符中间），超出追加省略号。
+fn truncate_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let truncated: String = text.chars().take(limit).collect();
+    format!("{truncated}…")
+}
+
+// ----------------------------------------------------------------------
 // 单元测试
 // ----------------------------------------------------------------------
 #[cfg(test)]
@@ -955,5 +1022,32 @@ mod tests {
         let pages = merge_pages(&chunks, &drafts);
         let report = validate_merge(&chunks, &drafts, &pages);
         assert!(report.duplicate_ids.contains(&"p001-l000-s0".to_string()));
+    }
+
+    #[test]
+    fn annotation_policy_conflict_is_normalized() {
+        let style = r#"{"文本类型":"小说","注释策略":"ruby只取本体不注音，不加译注","禁止事项":"不得省略拟声"}"#;
+        let (normalized, note) = normalize_annotation_policy(style).expect("冲突策略应被归一");
+        let value: serde_json::Value = serde_json::from_str(&normalized).unwrap();
+        assert_eq!(
+            value["注释策略"].as_str(),
+            Some(CANONICAL_ANNOTATION_POLICY)
+        );
+        // 其余维度原样保留。
+        assert_eq!(value["文本类型"].as_str(), Some("小说"));
+        assert_eq!(value["禁止事项"].as_str(), Some("不得省略拟声"));
+        assert!(note.contains("ruby_markup"));
+        assert!(note.contains("只取本体"));
+    }
+
+    #[test]
+    fn annotation_policy_clean_value_is_untouched() {
+        let style = r#"{"注释策略":"保留 [rb:原文>读音] 结构，读音本地化为拼音"}"#;
+        assert!(normalize_annotation_policy(style).is_none());
+    }
+
+    #[test]
+    fn annotation_policy_invalid_json_is_untouched() {
+        assert!(normalize_annotation_policy("不是 JSON").is_none());
     }
 }

@@ -8,6 +8,7 @@
 //! deleted + 无 `.deleting` 标记」。校验失败只返回错误，**不重建目录**。
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write as _,
     path::{Component, Path, PathBuf},
@@ -76,6 +77,14 @@ pub struct Manifest {
     pub attempts: AttemptBudget,
     pub constraint_version: ConstraintVersion,
     pub last_error: Option<SafeError>,
+    /// 用户显式跳过的块（如内容政策被拒）：不再派发，发布时回退原文。
+    /// 跳过是持久决策，跨重启与恢复保留，只有重新发起任务才清空。
+    #[serde(default)]
+    pub skipped_chunks: BTreeSet<String>,
+    /// 被模型按内容政策拒绝的块（块 ID → 原因码）：恢复与重启都不自动重派，
+    /// 直到用户显式跳过（移入 `skipped_chunks`）或重新发起任务。
+    #[serde(default)]
+    pub refused_chunks: BTreeMap<String, String>,
 }
 
 /// 当前 manifest schema 版本。
@@ -104,6 +113,8 @@ impl Manifest {
             attempts: AttemptBudget::default(),
             constraint_version: 0,
             last_error: None,
+            skipped_chunks: BTreeSet::new(),
+            refused_chunks: BTreeMap::new(),
         }
     }
 }

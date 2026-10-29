@@ -181,6 +181,9 @@ pub struct Control {
     /// 按块的返工轮次：只统计 `dispatch_translation` 对「待返工块」的派发。
     /// 首次翻译与 `revise_draft` 不计；用户手动恢复任务时清空。
     rework_rounds: StdMutex<BTreeMap<String, u32>>,
+    /// 按块的定点修订（`revise_draft`）轮次：修订不消耗返工额度，但也要有界，
+    /// 防止「修订 → 复审仍 needs_fix」的循环烧调用预算；用户手动恢复任务时清空。
+    revise_rounds: StdMutex<BTreeMap<String, u32>>,
     reset_notes: StdMutex<Vec<String>>,
     stop: StdMutex<CancelToken>,
     pub cancel: CancelToken,
@@ -304,6 +307,46 @@ impl Control {
         }
     }
 
+    /// 单块定点修订轮次 +1，返回累计值（允许超过上限，便于诊断）。
+    pub fn bump_revise(&self, chunk_id: &str) -> u32 {
+        let mut rounds = self
+            .revise_rounds
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let used = rounds.entry(chunk_id.to_string()).or_insert(0);
+        *used = used.saturating_add(1);
+        *used
+    }
+
+    /// 单块已用定点修订轮次。
+    pub fn revise_rounds(&self, chunk_id: &str) -> u32 {
+        self.revise_rounds
+            .lock()
+            .map(|rounds| rounds.get(chunk_id).copied().unwrap_or(0))
+            .unwrap_or(0)
+    }
+
+    /// 额度未用尽则记一轮并返回 `true`；已用尽返回 `false`（不记账）。
+    pub fn try_reserve_revise(&self, chunk_id: &str, limit: u32) -> bool {
+        let mut rounds = self
+            .revise_rounds
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let used = rounds.entry(chunk_id.to_string()).or_insert(0);
+        if *used >= limit {
+            return false;
+        }
+        *used += 1;
+        true
+    }
+
+    /// 清空全部块的定点修订计数（仅用户手动恢复任务时调用）。
+    pub fn clear_revise(&self) {
+        if let Ok(mut rounds) = self.revise_rounds.lock() {
+            rounds.clear();
+        }
+    }
+
     pub fn note_reset(&self, phase: Phase, reason: &str) {
         if let Ok(mut notes) = self.reset_notes.lock() {
             notes.push(json!({"phase": phase, "reason": reason}).to_string());
@@ -412,6 +455,10 @@ pub struct JobContext {
     /// 结果未知且按设置不自动重放的块：再次派发直接跳过，避免续跑时反复
     /// 重发同一请求；用户手动恢复时清空。
     unknown_blocked: StdMutex<BTreeSet<String>>,
+    /// 被模型按内容政策拒绝的块（块 ID → 原因码）：重试结果确定相同，恢复与
+    /// 重启都不自动重派；只有用户显式跳过（移入 manifest.skipped_chunks）才
+    /// 解除。内存镜像与 `manifest.refused_chunks` 同步落盘，重启后还原。
+    refused_blocked: StdMutex<BTreeMap<String, String>>,
     /// 产物访问器（持有 `Arc<JobStore>`，与上下文同寿命）。
     io: StoreIo,
 }
@@ -538,6 +585,51 @@ impl JobContext {
         if let Ok(mut set) = self.unknown_blocked.lock() {
             set.clear();
         }
+    }
+
+    /// 该块是否已被内容政策拒绝。
+    pub fn is_refused(&self, chunk_id: &str) -> bool {
+        self.refused_blocked
+            .lock()
+            .map(|set| set.contains_key(chunk_id))
+            .unwrap_or(false)
+    }
+
+    /// 标记块被内容政策拒绝（块 ID → 原因码），同步落盘 `manifest.refused_chunks`。
+    pub fn block_refused(&self, chunk_id: &str, reason: &str) {
+        if let Ok(mut set) = self.refused_blocked.lock() {
+            set.insert(chunk_id.to_string(), reason.to_string());
+        }
+        let _ = self.update_manifest(|manifest| {
+            manifest
+                .refused_chunks
+                .insert(chunk_id.to_string(), reason.to_string());
+        });
+    }
+
+    /// 被拒块快照（块 ID → 原因码）。
+    pub fn refused_map(&self) -> BTreeMap<String, String> {
+        self.refused_blocked
+            .lock()
+            .map(|set| set.clone())
+            .unwrap_or_default()
+    }
+
+    /// 从磁盘清单还原被拒块镜像（rehydrate 路径调用）。
+    pub fn restore_refused(&self, refused: BTreeMap<String, String>) {
+        if let Ok(mut set) = self.refused_blocked.lock() {
+            *set = refused;
+        }
+    }
+
+    /// 用户显式跳过该块：解除拒绝标记（移入 `skipped_chunks` 由调用方落盘）。
+    pub fn unblock_refused(&self, chunk_id: &str) {
+        if let Ok(mut set) = self.refused_blocked.lock() {
+            set.remove(chunk_id);
+        }
+        let _ = self.update_manifest(|manifest| {
+            manifest.refused_chunks.remove(chunk_id);
+        });
     }
 
     /// 运行层（主会话与子任务）的事件出口：统一归一化为预览，不推进 Job 状态机。
@@ -737,6 +829,12 @@ pub struct TranslationJobSnapshot {
     /// 序号拼 ID；缺失时为空，由前端回退到旧行为。
     #[serde(default)]
     pub chunk_ids: Vec<String>,
+    /// 被模型按内容政策拒绝的块 ID（升序）。
+    #[serde(default)]
+    pub refused_chunks: Vec<String>,
+    /// 用户显式跳过的块 ID（升序）。
+    #[serde(default)]
+    pub skipped_chunks: Vec<String>,
 }
 
 /// 任务列表。
@@ -1133,6 +1231,8 @@ impl TranslationService {
                 already_target_language: true,
                 target_language: target_code.to_string(),
                 chunk_ids: Vec::new(),
+                refused_chunks: Vec::new(),
+                skipped_chunks: Vec::new(),
             });
         }
 
@@ -1283,6 +1383,7 @@ impl TranslationService {
             plan_cache: StdMutex::new(None),
             usage: StdMutex::new(TokenUsage::default()),
             unknown_blocked: StdMutex::new(BTreeSet::new()),
+        refused_blocked: StdMutex::new(BTreeMap::new()),
             io: StoreIo::new(store),
         });
         let handle = Arc::new(JobHandle {
@@ -1564,11 +1665,12 @@ impl TranslationService {
             .unwrap_or_else(|error| error.into_inner());
         let budget = handle.ctx.budget.snapshot();
         // 约束版本以 manifest 为准（工具冻结 / 用户确认后只有它被原子更新）。
-        let constraint_version = handle
+        // 顺带取跳过块清单：被拒块走内存镜像（与 manifest 同步落盘）。
+        let (constraint_version, skipped_chunks) = handle
             .ctx
             .read_manifest()
-            .map(|manifest| manifest.constraint_version)
-            .unwrap_or(runtime.constraint_version);
+            .map(|manifest| (manifest.constraint_version, manifest.skipped_chunks))
+            .unwrap_or((runtime.constraint_version, Default::default()));
         TranslationJobSnapshot {
             job_id: handle.ctx.scope.job_id.clone(),
             novel_id: handle.ctx.scope.novel_id,
@@ -1592,6 +1694,8 @@ impl TranslationService {
             already_target_language: false,
             target_language: handle.ctx.target_language.clone(),
             chunk_ids,
+            refused_chunks: handle.ctx.refused_map().into_keys().collect(),
+            skipped_chunks: skipped_chunks.into_iter().collect(),
         }
     }
 
@@ -1824,10 +1928,128 @@ impl TranslationService {
         // 用户显式恢复 = 接受重新请求上次结果未知的块。
         handle.ctx.clear_unknown_blocks();
         // 用户显式恢复 = 重置按块的返工额度（自动续跑 / 暂停恢复 / 限流重试
-        // 都不清空，避免额度被悄悄刷新）。
+        // 都不清空，避免额度被悄悄刷新）。定点修订额度同理清空。
         handle.ctx.control.clear_rework();
+        handle.ctx.control.clear_revise();
         self.transition(handle, JobState::Queued, "resumed", None);
         Ok(())
+    }
+
+    /// 用户显式跳过被拒块：解除拒绝标记、写入 `manifest.skipped_chunks`，
+    /// 随后自动恢复任务让其余块继续。
+    ///
+    /// 每个块必须在计划中且在被拒清单里——跳过是对「模型拒绝」的人工兜底，
+    /// 不是绕过翻译的通用手段。进程内没有句柄时（应用重启后）先从磁盘重建。
+    pub async fn skip_chunks(&self, job_id: &str, chunk_ids: &[String]) -> Result<(), String> {
+        let handle = match self.handle(job_id) {
+            Some(handle) => handle,
+            None => self.rehydrate(job_id).await?,
+        };
+        let state = handle
+            .runtime
+            .lock()
+            .map(|runtime| runtime.state)
+            .unwrap_or(JobState::Interrupted);
+        // 只有停在需要人工处理 / 暂停态的任务才允许改跳过清单；运行中改会与
+        // 在途派发竞争。
+        if !matches!(state, JobState::NeedsAttention | JobState::Paused) {
+            return Err("只有暂停或需人工处理的任务才能跳过分块".into());
+        }
+        let requested: BTreeSet<String> = chunk_ids.iter().cloned().collect();
+        if requested.is_empty() {
+            return Err("未指定要跳过的分块".into());
+        }
+        let plan_ids = tools::plan_ids_cached(&handle.ctx)?;
+        for chunk_id in &requested {
+            if !plan_ids.contains(chunk_id) {
+                return Err(format!("分块不在当前计划中：{chunk_id}"));
+            }
+            if !handle.ctx.refused_map().contains_key(chunk_id) {
+                return Err("该块不在被拒清单中，不能跳过".into());
+            }
+        }
+        for chunk_id in &requested {
+            handle.ctx.unblock_refused(chunk_id);
+            let id = chunk_id.clone();
+            handle
+                .ctx
+                .update_manifest(move |manifest| {
+                    manifest.skipped_chunks.insert(id);
+                })?;
+        }
+        handle.ctx.refresh_counts();
+        let message = format!("已跳过 {} 个被拒块，任务继续", requested.len());
+        self.transition(&handle, JobState::Queued, &message, None);
+        self.resume(job_id).await
+    }
+
+    /// 手动追加任务调用预算，返回追加后的快照。
+    ///
+    /// 进程内有句柄时走 `BudgetTracker` 并持久化 `manual_extra`；无句柄
+    /// （应用重启后）直接读改 manifest。终态与等待确认的任务不可追加。
+    pub fn grant_budget(&self, job_id: &str, amount: u32) -> Result<BudgetSnapshot, String> {
+        if !(1..=10_000).contains(&amount) {
+            return Err("追加额度必须在 1 ~ 10000 次调用之间".into());
+        }
+        if let Some(handle) = self.handle(job_id) {
+            let state = handle
+                .runtime
+                .lock()
+                .map(|runtime| runtime.state)
+                .unwrap_or(JobState::Interrupted);
+            if matches!(
+                state,
+                JobState::Completed
+                    | JobState::Cancelled
+                    | JobState::Deleted
+                    | JobState::AwaitingConfirmation
+            ) {
+                return Err("任务已结束或正在等待确认，不能追加预算".into());
+            }
+            let snapshot = handle.ctx.budget.add_manual(amount, "user_grant");
+            let manual_extra = snapshot.manual_extra;
+            let _ = handle
+                .ctx
+                .update_manifest(|manifest| manifest.attempts.manual_extra = manual_extra);
+            return Ok(BudgetSnapshot {
+                used: snapshot.used,
+                limit: snapshot.limit,
+                remaining: snapshot.remaining,
+                manual_extra,
+            });
+        }
+        // 磁盘路径：与 cancel 的离线取消同一套定位与校验。
+        let (manifest, corrupt) = self.find_manifest(job_id)?;
+        if corrupt {
+            return Err("任务清单损坏，无法追加预算".into());
+        }
+        if matches!(
+            manifest.state,
+            JobState::Completed
+                | JobState::Cancelled
+                | JobState::Deleted
+                | JobState::AwaitingConfirmation
+        ) {
+            return Err("任务已结束，不能追加预算".into());
+        }
+        let used = manifest.attempts.model_calls;
+        let manual_extra = manifest.attempts.manual_extra.saturating_add(amount);
+        let scope = JobScope {
+            novel_id: manifest.novel_id,
+            job_id: manifest.job_id.clone(),
+            generation: manifest.generation,
+        };
+        let store = JobStore::open(&self.inner.paths, &scope).map_err(|error| error.to_string())?;
+        store
+            .update_manifest(|manifest| manifest.attempts.manual_extra = manual_extra)
+            .map_err(|error| error.to_string())?;
+        let limit = manifest.attempts.limit.saturating_add(manual_extra);
+        Ok(BudgetSnapshot {
+            used,
+            limit,
+            remaining: limit.saturating_sub(used),
+            manual_extra,
+        })
     }
 
     /// 从磁盘重建一个 Job 的内存上下文（重启后的恢复路径）。
@@ -1959,6 +2181,7 @@ impl TranslationService {
             plan_cache: StdMutex::new(None),
             usage: StdMutex::new(usage),
             unknown_blocked: StdMutex::new(BTreeSet::new()),
+        refused_blocked: StdMutex::new(BTreeMap::new()),
             io: StoreIo::new(Arc::new(
                 JobStore::open_guarded(&self.inner.paths, &scope, self.inner.generation.clone())
                     .map_err(|error| error.to_string())?,
@@ -1966,6 +2189,7 @@ impl TranslationService {
         });
         // 原文记录只用于 `prepare_source`（恢复时计划已存在，不会重新切块）。
         let _ = &input;
+        ctx.restore_refused(manifest.refused_chunks.clone());
         let handle = Arc::new(JobHandle {
             ctx,
             started: Instant::now(),
@@ -2695,18 +2919,27 @@ impl TranslationService {
                 "原文尚未完成分块".into(),
             ));
         }
+        // 用户跳过的块：不算未完成待办，定位与续跑提示都不再点名它们。
+        let skipped = ctx
+            .read_manifest()
+            .map(|manifest| manifest.skipped_chunks)
+            .unwrap_or_default();
+        let active: Vec<&String> = chunk_ids
+            .iter()
+            .filter(|chunk_id| !skipped.contains(*chunk_id))
+            .collect();
         let versions = tools::phase_versions(ctx);
-        let scanned = chunk_ids
+        let scanned = active
             .iter()
             .filter(|chunk_id| {
                 tools::read_scan_for_progress_with(ctx, chunk_id, &versions).is_some()
             })
             .count();
-        if scanned < chunk_ids.len() {
+        if scanned < active.len() {
             return Some((
                 "incomplete_scan",
                 Phase::PrepareSource,
-                format!("还有 {} 个分块未完成扫描", chunk_ids.len() - scanned),
+                format!("还有 {} 个分块未完成扫描", active.len() - scanned),
             ));
         }
         let frozen = ctx.with_artifacts(|artifacts| {
@@ -2726,17 +2959,32 @@ impl TranslationService {
         let mut pending_translate = Vec::new();
         let mut pending_rework = Vec::new();
         let mut pending_review = Vec::new();
-        for chunk_id in chunk_ids.iter() {
+        for chunk_id in &active {
             let gate = tools::chunk_gate(ctx, chunk_id, &versions);
             if !gate.draft_valid {
-                pending_translate.push(chunk_id.clone());
+                pending_translate.push((*chunk_id).clone());
             } else if gate.needs_rework {
-                pending_rework.push(chunk_id.clone());
+                pending_rework.push((*chunk_id).clone());
             } else if !gate.review_pass {
-                pending_review.push(chunk_id.clone());
+                pending_review.push((*chunk_id).clone());
             }
         }
         if !pending_translate.is_empty() {
+            // 全部未译块都在被拒清单：继续自动派发只会重复同样的拒绝，
+            // 需要用户显式跳过后任务才能推进。
+            let refused = ctx.refused_map();
+            if pending_translate.iter().all(|id| refused.contains_key(id)) {
+                let n = pending_translate.len();
+                let ids = pending_translate.join("、");
+                return Some((
+                    "content_refused",
+                    Phase::Translate,
+                    format!(
+                        "{} 个分块当前模型无法处理（{}）：已重试仍被拒绝，可跳过这些分块后继续其余部分",
+                        n, ids
+                    ),
+                ));
+            }
             return Some((
                 "incomplete_translate",
                 Phase::Translate,
@@ -2798,9 +3046,17 @@ impl TranslationService {
             Ok(chunk_ids) => chunk_ids,
             Err(_) => return 0,
         };
+        // 用户跳过的块不计进展也不算待办：避免续跑被误判无进展或死循环。
+        let skipped = ctx
+            .read_manifest()
+            .map(|manifest| manifest.skipped_chunks)
+            .unwrap_or_default();
         let versions = tools::phase_versions(ctx);
         let mut progress = 0u64;
         for chunk_id in chunk_ids.iter() {
+            if skipped.contains(chunk_id) {
+                continue;
+            }
             // 扫描是 Pass 1 的主要工作量，计入进展避免扫描中途的续跑被误判无进展。
             if tools::read_scan_for_progress_with(ctx, chunk_id, &versions).is_some() {
                 progress += 1;
@@ -2845,6 +3101,19 @@ impl TranslationService {
         let Ok(chunks) = tools::plan_chunks(ctx) else {
             return false;
         };
+        if chunks.is_empty() {
+            return false;
+        }
+        // 用户跳过的块直接视为满足：不要求草稿 / 审查，也不参与合并校验
+        // （产物页行中已回退原文，与 compute_merge 同一口径）。
+        let skipped = ctx
+            .read_manifest()
+            .map(|manifest| manifest.skipped_chunks)
+            .unwrap_or_default();
+        let chunks: Vec<Chunk> = chunks
+            .into_iter()
+            .filter(|chunk| !skipped.contains(&chunk.id))
+            .collect();
         if chunks.is_empty() {
             return false;
         }
@@ -3509,6 +3778,8 @@ fn snapshot_from_manifest(
         already_target_language: false,
         target_language: manifest.target_language.clone(),
         chunk_ids,
+        refused_chunks: manifest.refused_chunks.keys().cloned().collect(),
+        skipped_chunks: manifest.skipped_chunks.iter().cloned().collect(),
     }
 }
 
@@ -3638,6 +3909,7 @@ pub(crate) fn test_job_context(
         plan_cache: StdMutex::new(None),
         usage: StdMutex::new(TokenUsage::default()),
         unknown_blocked: StdMutex::new(BTreeSet::new()),
+        refused_blocked: StdMutex::new(BTreeMap::new()),
         io: StoreIo::new(store),
     })
 }
@@ -3999,14 +4271,20 @@ mod tests {
         let (service, handle, _scope, dir) = job_fixture("resume-rework", settings());
         handle.ctx.control.bump_rework("c0001");
         handle.ctx.control.bump_rework("c0001");
+        handle.ctx.control.bump_revise("c0002");
         handle.ctx.block_unknown("c0002");
         assert_eq!(handle.ctx.control.rework_rounds("c0001"), 2);
+        assert_eq!(handle.ctx.control.revise_rounds("c0002"), 1);
 
         service.resume_prepare(&handle).expect("可恢复");
 
         assert!(
             handle.ctx.control.rework_map().is_empty(),
             "手动恢复清空按块返工计数"
+        );
+        assert!(
+            handle.ctx.control.revise_rounds("c0002") == 0,
+            "定点修订额度一并清空"
         );
         assert!(
             !handle.ctx.is_unknown_blocked("c0002"),
@@ -4429,6 +4707,202 @@ mod tests {
         assert_eq!(code, "incomplete_review");
         assert_eq!(phase, Phase::Review);
         assert!(message.contains("未通过审查"), "得到 {message}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 两块夹具：`c0001` 无草稿（未翻译），`c0002` 草稿 + 审查通过，约束已冻结。
+    fn seed_translate_pending_job(handle: &Arc<JobHandle>) {
+        let pass_draft = Draft {
+            chunk_id: "c0002".into(),
+            version: 1,
+            segments: vec![crate::translation::artifacts::TranslatedSegment {
+                id: "p002-l000-s0".into(),
+                text: "再见".into(),
+            }],
+            usage: crate::translation::artifacts::TokenUsage::default(),
+            reviewed: true,
+            needs_repair: false,
+        };
+        let chunk = |id: &str, order: u32, segment: &str, text: &str| Chunk {
+            id: id.into(),
+            order,
+            segments: vec![crate::translation::source::SourceSegment {
+                id: segment.into(),
+                text: text.into(),
+                kind: crate::translation::source::SegmentKind::Text,
+            }],
+            prev_context: String::new(),
+            next_context: String::new(),
+            chars: text.chars().count() as u32,
+        };
+        tools::seed_for_tests(
+            &handle.ctx,
+            &[
+                (chunk("c0001", 1, "p001-l000-s0", "こんにちは"), None, None),
+                (
+                    chunk("c0002", 2, "p002-l000-s0", "さようなら"),
+                    Some(pass_draft),
+                    Some(Review {
+                        chunk_id: "c0002".into(),
+                        draft_version: 1,
+                        verdict: ReviewVerdict::Pass,
+                        issues: Vec::new(),
+                        notes: String::new(),
+                    }),
+                ),
+            ],
+        );
+        handle.ctx.with_artifacts(|artifacts| {
+            artifacts
+                .write_constraints(&Constraints {
+                    version: 1,
+                    terms: Vec::new(),
+                    style: String::new(),
+                    conflicts: Vec::new(),
+                    unresolved: Vec::new(),
+                    frozen: true,
+                })
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn incomplete_stage_reports_content_refused_for_all_refused_pending() {
+        let (_service, handle, _scope, dir) = job_fixture("incomplete-refused", settings());
+        seed_translate_pending_job(&handle);
+        handle.ctx.block_refused("c0001", "policy_refusal");
+
+        let (code, phase, message) =
+            TranslationService::incomplete_stage(&handle.ctx).expect("可定位阶段");
+        assert_eq!(code, "content_refused");
+        assert_eq!(phase, Phase::Translate);
+        assert!(message.contains("无法处理"), "得到 {message}");
+        assert!(message.contains("c0001"), "点名被拒块：{message}");
+        assert!(message.contains("跳过"), "引导用户跳过：{message}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn incomplete_stage_keeps_incomplete_translate_for_mixed_pending() {
+        let (_service, handle, _scope, dir) = job_fixture("incomplete-mixed", settings());
+        seed_translate_pending_job(&handle);
+        // c0001 未译且未被拒：维持笼统的 incomplete_translate。
+        let (code, phase, _message) =
+            TranslationService::incomplete_stage(&handle.ctx).expect("可定位阶段");
+        assert_eq!(code, "incomplete_translate");
+        assert_eq!(phase, Phase::Translate);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn skipped_chunks_leave_pending_lists_and_count_as_skipped() {
+        let (_service, handle, _scope, dir) = job_fixture("skipped-pending", settings());
+        seed_translate_pending_job(&handle);
+        let _ = handle.ctx.update_manifest(|manifest| {
+            manifest.skipped_chunks.insert("c0001".into());
+        });
+
+        let pending = tools::pending_state(&handle.ctx);
+        assert!(pending.pending_translate.is_empty(), "跳过块不算未译待办");
+        assert!(pending.pending_scan.is_empty(), "跳过块不算扫描待办");
+
+        let counts = tools::compute_counts(&handle.ctx);
+        assert_eq!(counts.skipped, 1, "跳过块单列计数");
+        assert_eq!(counts.translated, 1, "正常块计数不受影响");
+
+        // 跳过后定位不再卡在翻译阶段：其余块已完成时只剩 global_review / publish。
+        let (code, _phase, _message) =
+            TranslationService::incomplete_stage(&handle.ctx).expect("可定位阶段");
+        assert_ne!(code, "incomplete_translate", "跳过块不进定位：{code}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn skip_chunks_only_allows_refused_plan_chunks_and_resumes() {
+        let (service, handle, scope, dir) = job_fixture("skip-chunks", settings());
+        seed_translate_pending_job(&handle);
+        handle.ctx.block_refused("c0001", "policy_refusal");
+
+        // 不在计划中的块不能跳过。
+        let error = service
+            .skip_chunks(&scope.job_id, &["c9999".to_string()])
+            .await
+            .expect_err("不在计划中的块应拒绝");
+        assert!(error.contains("不在当前计划中"), "得到 {error}");
+
+        // 计划内但不在拒绝清单：跳过是「模型拒绝」的人工兜底，不是通用绕过。
+        let error = service
+            .skip_chunks(&scope.job_id, &["c0002".to_string()])
+            .await
+            .expect_err("未被拒的块应拒绝");
+        assert!(error.contains("不在被拒清单中"), "得到 {error}");
+
+        // 运行中不允许改跳过清单。
+        {
+            let mut runtime = handle.runtime.lock().unwrap();
+            runtime.state = JobState::Running;
+        }
+        let error = service
+            .skip_chunks(&scope.job_id, &["c0001".to_string()])
+            .await
+            .expect_err("运行中应拒绝");
+        assert!(error.contains("暂停或需人工处理"), "得到 {error}");
+        {
+            let mut runtime = handle.runtime.lock().unwrap();
+            runtime.state = JobState::Paused;
+        }
+
+        service
+            .skip_chunks(&scope.job_id, &["c0001".to_string()])
+            .await
+            .expect("跳过成功并自动恢复");
+        assert!(!handle.ctx.is_refused("c0001"), "跳过后解除拒绝标记");
+        let manifest = handle.ctx.read_manifest().expect("读 manifest");
+        assert!(
+            manifest.skipped_chunks.contains("c0001"),
+            "跳过决定要落盘"
+        );
+        assert_eq!(manifest.counts.skipped, 1, "计数单列跳过块");
+
+        // 快照暴露跳过 / 被拒清单（内存构造点）。
+        let snapshot = service.snapshot(&scope.job_id).await.expect("快照");
+        assert_eq!(snapshot.skipped_chunks, ["c0001".to_string()]);
+        assert!(snapshot.refused_chunks.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn grant_budget_persists_manual_extra_in_memory_and_on_disk() {
+        // 内存路径：BudgetTracker 记账 + manifest 落盘；参数越界拒绝。
+        let (service, handle, scope, dir) = job_fixture("grant-memory", settings());
+        let snapshot = service.grant_budget(&scope.job_id, 10).expect("追加成功");
+        assert_eq!(snapshot.manual_extra, 10);
+        assert_eq!(snapshot.limit, 64 + 10, "生效上限 = 基础 64 + 追加");
+        let manifest = handle.ctx.read_manifest().expect("读 manifest");
+        assert_eq!(manifest.attempts.manual_extra, 10, "追加要落盘");
+        assert!(service.grant_budget(&scope.job_id, 0).is_err(), "下限 1");
+        assert!(
+            service.grant_budget(&scope.job_id, 10_001).is_err(),
+            "上限 10000"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+
+        // 磁盘路径：句柄离开注册表（应用重启后）仍可追加。
+        let (service, handle, scope, dir) = job_fixture("grant-disk", settings());
+        service.inner.jobs.lock().unwrap().remove(&scope.job_id);
+        let base_limit = handle
+            .ctx
+            .read_manifest()
+            .expect("读 manifest")
+            .attempts
+            .limit;
+        let snapshot = service
+            .grant_budget(&scope.job_id, 5)
+            .expect("磁盘路径追加成功");
+        assert_eq!(snapshot.manual_extra, 5);
+        assert_eq!(snapshot.limit, base_limit.saturating_add(5));
+        let manifest = handle.ctx.read_manifest().expect("读 manifest");
+        assert_eq!(manifest.attempts.manual_extra, 5, "磁盘路径也要落盘");
         let _ = std::fs::remove_dir_all(dir);
     }
 

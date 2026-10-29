@@ -92,7 +92,7 @@ submit_review(
 
 - `omission`：漏翻段落、句子、列表项、表格项、注释、括号内容或片段。
 - `mistranslation`：否定、数量、时间、条件、因果、比较级、专名或限定关系译错。
-- `pass1_noncompliance`：未遵守冻结的术语、风格、语体、注释或保留原文策略。
+- `pass1_noncompliance`：未遵守冻结的术语、风格、语体、注释或保留原文策略。译文保留 `[rb:...]` 标记结构本身不是违规，不因“存在标记”记本条；注释策略只约束 ruby 的“读音”内容，判据见判定规则。
 - `terminology`：锁定术语被替换、变体混用或跨块不一致。
 - `tone_shift`：正式度、情绪色彩、叙述距离或整体基调偏移。
 - `style_drift`：文风、句式策略或文体层次漂移。
@@ -106,7 +106,7 @@ submit_review(
 - `polishing`：不改变原意的表达优化。
 - `formatting`：标题、列表、引用、代码、表格、强调等结构被破坏。
 - `markdown_preservation`：Markdown 语法、链接目标、图片路径、引用 ID、脚注、front matter 或 HTML/MDX 被改动。
-- `markup_preservation`：Pixiv 页面、章节、ruby、图片、跳转等受保护标记被改动。
+- `markup_preservation`：Pixiv 页面、章节、ruby、图片、跳转等受保护标记被改动。ruby 按 `[rb:原文>读音]` 原位保留是提交校验的强制不变量，译文存在标记不是违规；只有标记数量、顺序、位置或结构被破坏时才记本条。
 - `context_boundary`：把邻接上下文翻入正文，或因切分导致首尾衔接错误。
 
 ## 判定规则
@@ -115,6 +115,7 @@ submit_review(
 - 原文本身有歧义时，先判断译文是否选择了可接受的一种；只有译文明显偏离语境或冻结约束时才记录问题。
 - 术语问题必须引用冻结表中的条目；冻结表未覆盖的新词，按块内一致性与目标语言习惯判断，不要求不存在的“官方译名”。
 - 日译中自然语言区域出现未处理假名、日语语尾、助词、拟声拟态词或片假名专名残留时，必须记录 `target_language_purity` / `japanese_residue` / `onomatopoeia_translation` / `proper_noun_romanization` 中对应类型。影响可读性或成段残留记为 `major` / `critical` 并使 `verdict=needs_fix`；仅个别可辨识残留且不改变理解的润色项可记为 `minor` 并随 `pass` 保留。代码、URL、路径、保留语料示例与用户明确要求保留的引用除外。
+- ruby 注音判据：译文保留 `[rb:...]` 标记本身不是违规，不因“存在标记”记 `pass1_noncompliance` 或 `markup_preservation`；只有“读音内容”违反冻结注释策略时才记录问题，例如策略为拼音本地化却残留日文假名读音，按 `target_language_purity` / `japanese_residue` 处理，严重度沿用上一条纯净度口径。修复方向不得提出删除标记或减少标记数量，该修法必然被提交校验拒绝；合规修法是只改写 `>` 后的读音内容（如假名改拼音），标记结构原样保持。
 - 片假名专名检查以字符形态为准，不只看句义；通顺段落中的残留同样记录。
 - 格式检查逐项核对：图片语法与目标、链接 URL 与引用 ID、脚注、代码围栏、inline code、表格列数、HTML/MDX 标签、front matter、Pixiv 受保护标记。
 - 译文语义正确但目标语言不自然时，记录 `fluency` / `chinese_naturalness` 或 `polishing`，修改方向不得扩写、删减或改变事实。

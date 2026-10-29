@@ -102,6 +102,28 @@ pub async fn novel_translation_resume(
     service.resume(&job_id).await
 }
 
+/// 跳过被模型拒绝的分块（写入跳过清单）并自动继续任务。
+#[tauri::command]
+pub async fn novel_translation_skip_chunks(
+    state: State<'_, AppState>,
+    job_id: String,
+    chunk_ids: Vec<String>,
+) -> Result<(), String> {
+    let service = state.translation_service.clone();
+    service.skip_chunks(&job_id, &chunk_ids).await
+}
+
+/// 手动追加任务调用预算，返回追加后的预算快照。
+#[tauri::command]
+pub async fn novel_translation_grant_budget(
+    state: State<'_, AppState>,
+    job_id: String,
+    amount: u32,
+) -> Result<crate::translation::service::BudgetSnapshot, String> {
+    let service = state.translation_service.clone();
+    service.grant_budget(&job_id, amount)
+}
+
 /// 立即取消（保留检查点与已提交产物）。
 #[tauri::command]
 pub async fn novel_translation_cancel(

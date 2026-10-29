@@ -1000,6 +1000,24 @@ fn submit_scan_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                 if style.chars().count() > 4_000 {
                     return Err(tool_error("invalid_args", "style 超过 4000 字符"));
                 }
+                // 注释策略与标记保持校验冲突时归一为规范值（冻结前不拦截，
+                // 避免扫描产物永远缺一角）；note 只含策略描述，不含原文。
+                let style = match
+                    crate::translation::validation::normalize_annotation_policy(&style)
+                {
+                    Some((normalized, note)) => {
+                        warn_job(
+                            &ctx.scope,
+                            "coordinator",
+                            Phase::PrepareConstraints,
+                            Some(&chunk_id),
+                            "annotation_policy_normalized",
+                            &[("note", &note)],
+                        );
+                        normalized
+                    }
+                    None => style,
+                };
                 let notes = args
                     .get("notes")
                     .and_then(Value::as_str)
@@ -1152,6 +1170,22 @@ fn freeze_constraints_impl(
             }
         }
     }
+    // 冻结前兜底：旧任务 / 旧缓存恢复的扫描值可能未经归一，这里对合并后的
+    // 风格再做一次注释策略归一；note 只含策略描述，不含原文。
+    let style = match crate::translation::validation::normalize_annotation_policy(&style) {
+        Some((normalized, note)) => {
+            warn_job(
+                &ctx.scope,
+                "coordinator",
+                Phase::PrepareConstraints,
+                None,
+                "annotation_policy_normalized",
+                &[("note", &note)],
+            );
+            normalized
+        }
+        None => style,
+    };
     let version = previous
         .as_ref()
         .map(|previous| previous.version)
@@ -1459,6 +1493,12 @@ fn plan_dispatch(
     // 否则两个并发 dispatch_one 会对同一块重复请求模型（双倍 token、草稿版本
     // 的读改写竞争）。
     let ids = dedup_strings(ids);
+    // 用户跳过的块来自 manifest（同步读取）：派发规划在请求模型之前短路，
+    // manifest 读取失败按「无跳过清单」处理，让块走正常派发判定。
+    let skipped = ctx
+        .read_manifest()
+        .map(|manifest| manifest.skipped_chunks)
+        .unwrap_or_default();
     let rework_cap = rework_limit(ctx);
     let rework_set: BTreeSet<String> = if kind == DispatchKind::Translate {
         rework_targets(ctx, versions, &ids)?.into_iter().collect()
@@ -1473,6 +1513,24 @@ fn plan_dispatch(
         rework_cap,
     };
     for id in ids {
+        // 派发短路（Translate / Review 两种派发都适用）：用户跳过 / 模型拒绝
+        // 的块不再请求模型——不消耗预算、不计 fatal / failed，同批其他块照常。
+        if skipped.contains(&id) {
+            plan.outcomes.push(ChunkOutcome::failed(
+                &id,
+                "skipped",
+                "已跳过（用户跳过被拒块）",
+            ));
+            continue;
+        }
+        if ctx.is_refused(&id) {
+            plan.outcomes.push(ChunkOutcome::failed(
+                &id,
+                "content_refused",
+                "该块此前被模型拒绝（content_refused），不再自动重派",
+            ));
+            continue;
+        }
         let chunk = match read_chunk(ctx, &id).map_err(|error| tool_error("storage", &error))? {
             Some(chunk) => chunk,
             None => {
@@ -1824,6 +1882,23 @@ async fn dispatch_one_inner(
                         }
                         continue;
                     }
+                    FailureClass::ContentRefused => {
+                        // 子 Agent 按内容政策显式拒绝：采样有随机性，第一次被拒
+                        // 可能是偶发，立即原样重试一次（不做退避——内容拒绝与
+                        // 负载无关）；仍被拒视为确定性拒绝，阻塞本块并快速失败。
+                        // 不升级整批 fatal（同批其他块照常），等用户决定跳过。
+                        if attempt == 0 {
+                            attempt = attempt.saturating_add(1);
+                            continue;
+                        }
+                        let (reason, _) = error.refusal().unwrap_or(("content_policy", ""));
+                        ctx.block_refused(chunk_id, reason);
+                        return Ok(vec![ChunkOutcome::failed(
+                            chunk_id,
+                            "content_refused",
+                            "当前模型无法处理该块内容（已重试 1 次）。可选择跳过该块继续翻译其余部分",
+                        )]);
+                    }
                     FailureClass::Retryable | FailureClass::NotSent => {
                         if !policy.allows(attempt) {
                             return Ok(vec![ChunkOutcome::failed(
@@ -1887,8 +1962,83 @@ fn classify_run_error(error: &RunError) -> FailureClass {
         RunError::InputTooLarge => FailureClass::InputTooLarge,
         RunError::CompactionFailed(_) => FailureClass::Retryable,
         RunError::Provider { class, .. } => *class,
+        RunError::Refused { .. } => FailureClass::ContentRefused,
         RunError::Internal(_) => FailureClass::Permanent,
     }
+}
+
+/// 从一行失败摘要中提取 `key=` 的值：值到行尾或下一个「空白 + 键 + =」token
+/// 为止；键前必须是行首或空白，避免 `sub_reason=` 误匹配 `reason=`。
+fn summary_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("{key}=");
+    let mut from = 0;
+    while let Some(offset) = line[from..].find(&needle) {
+        let at = from + offset;
+        let at_boundary = at == 0
+            || line[..at]
+                .chars()
+                .next_back()
+                .is_some_and(char::is_whitespace);
+        let start = at + needle.len();
+        if at_boundary {
+            let rest = &line[start..];
+            let end = rest
+                .char_indices()
+                .filter(|(_, ch)| ch.is_whitespace())
+                .find(|(index, ch)| looks_like_summary_key(&rest[index + ch.len_utf8()..]))
+                .map(|(index, _)| index)
+                .unwrap_or(rest.len());
+            return Some(rest[..end].trim_end());
+        }
+        from = start;
+    }
+    None
+}
+
+/// 空白之后是否紧跟「键 =」形式的 token（键为字母 / 数字 / 下划线 / 连字符）。
+fn looks_like_summary_key(text: &str) -> bool {
+    let mut seen_key_char = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            return false;
+        }
+        if ch == '=' {
+            return seen_key_char;
+        }
+        if ch.is_alphanumeric() || ch == '_' || ch == '-' {
+            seen_key_char = true;
+            continue;
+        }
+        return false;
+    }
+    false
+}
+
+/// 解析子 Agent 最终文本中的失败摘要（`translator.md` / `reviewer.md` 的失败
+/// 上报格式）：`chunk_id=<ID> status=failed reason=<原因码> detail=<说明>`。
+///
+/// 逐行查找含 `status=failed` 的行；`reason` / `detail` 的值到行尾或下一个键
+/// token 为止，`detail` 经 `safe_text(.., 200)` 截断。缺少 `reason=` 键的行
+/// 不视为失败摘要。返回 `(原因码, 说明)`。
+fn parse_failure_summary(text: &str) -> Option<(String, String)> {
+    for line in text.lines() {
+        if !line.contains("status=failed") {
+            continue;
+        }
+        let Some(reason) = summary_value(line, "reason") else {
+            continue;
+        };
+        let detail = summary_value(line, "detail").unwrap_or_default();
+        return Some((reason.trim().to_string(), safe_text(detail, 200)));
+    }
+    None
+}
+
+/// 原因码是否指向内容政策拒绝：子 Agent 不上报内容，只能按原因码识别。
+fn reason_indicates_refusal(reason: &str) -> bool {
+    const MARKERS: [&str; 6] = ["polic", "prohibited", "refus", "safety", "违规", "政策"];
+    let lower = reason.to_lowercase();
+    MARKERS.iter().any(|marker| lower.contains(marker))
 }
 
 /// 子任务的预览归属：页码取本块首个片段（块不跨页），块 ID 直接使用。
@@ -1954,8 +2104,18 @@ async fn run_translator(
     .with_request_params(max_tokens, params);
     let outcome = runtime::run(request, ctx.control.cancel.child()).await?;
     accumulate_usage(ctx, outcome.usage);
-    // 模型可能只结束而没有提交：以产物为准判断成败。
+    // 模型可能只结束而没有提交：以产物为准判断成败。最终文本带失败摘要时
+    // 先解析（translator.md 的失败上报格式）——内容政策拒绝要归类为 Refused
+    // 让 dispatch_one 只重试一次并阻塞本块，而不是笼统的 Internal 整批 fatal。
     let Some(saved) = read_draft(ctx, chunk_id).ok().flatten() else {
+        if let Some((reason, detail)) = parse_failure_summary(&outcome.text)
+            && reason_indicates_refusal(&reason)
+        {
+            return Err(RunError::Refused {
+                reason,
+                message: detail,
+            });
+        }
         return Err(RunError::Internal("翻译子任务没有提交草稿".into()));
     };
     if validate_draft_with_language(&chunk, &saved, Some(&ctx.target_language)).is_err() {
@@ -2112,7 +2272,16 @@ async fn run_reviewer(
     let outcome = runtime::run(request, ctx.control.cancel.child()).await?;
     accumulate_usage(ctx, outcome.usage);
     // 审查结论必须对应本次草稿版本，否则视为未完成（防止旧结论冒充）。
+    // 同 run_translator：没有产物时先解析失败摘要，内容拒绝归类为 Refused。
     let Some(saved) = read_review(ctx, chunk_id).ok().flatten() else {
+        if let Some((reason, detail)) = parse_failure_summary(&outcome.text)
+            && reason_indicates_refusal(&reason)
+        {
+            return Err(RunError::Refused {
+                reason,
+                message: detail,
+            });
+        }
         return Err(RunError::Internal("审查子任务没有提交结论".into()));
     };
     if saved.draft_version != draft.version {
@@ -2415,8 +2584,22 @@ fn compute_merge(ctx: &JobContext) -> Result<MergeOutcome, String> {
     if chunks.is_empty() {
         return Err("没有可合并的分块".into());
     }
+    // 用户跳过的块（如内容政策被拒）不参与校验与完成状态判定；产物页行中
+    // 回退原文（片段 ID 不变的直通草稿），保证阅读器输出行完整。
+    let skipped = ctx
+        .read_manifest()
+        .map(|manifest| manifest.skipped_chunks)
+        .unwrap_or_default();
+    let active_chunks: Vec<Chunk> = chunks
+        .iter()
+        .filter(|chunk| !skipped.contains(&chunk.id))
+        .cloned()
+        .collect();
+    if active_chunks.is_empty() {
+        return Err("全部分块都被跳过，没有可合并的内容".into());
+    }
     let mut drafts = Vec::new();
-    for chunk in &chunks {
+    for chunk in &active_chunks {
         if let Some(draft) = read_draft(ctx, &chunk.id)?
             && stamped(ctx, "draft", &chunk.id, versions.translate)
         {
@@ -2424,7 +2607,7 @@ fn compute_merge(ctx: &JobContext) -> Result<MergeOutcome, String> {
         }
     }
     let mut reviews = Vec::new();
-    for chunk in &chunks {
+    for chunk in &active_chunks {
         if let Some(review) = read_review(ctx, &chunk.id)?
             && stamped(ctx, "review", &chunk.id, versions.review)
         {
@@ -2433,15 +2616,42 @@ fn compute_merge(ctx: &JobContext) -> Result<MergeOutcome, String> {
     }
     let global = read_global_review(ctx)?
         .filter(|_| stamped(ctx, "global_review", "global", versions.global_review));
-    let pages = merge_pages(&chunks, &drafts);
-    let report = validate_merge_with_language(&chunks, &drafts, &pages, Some(&ctx.target_language));
+    let pages = merge_pages(&active_chunks, &drafts);
+    let report = validate_merge_with_language(&active_chunks, &drafts, &pages, Some(&ctx.target_language));
     let status = publish_status_with_language(
-        &chunks,
+        &active_chunks,
         &drafts,
         &reviews,
         global.as_ref(),
         Some(&ctx.target_language),
     );
+    // 被跳过块的行回退原文：直通草稿只进产物页行，不进校验与状态判定。
+    let pages = if skipped.is_empty() {
+        pages
+    } else {
+        let mut all_drafts = drafts.clone();
+        for chunk in &chunks {
+            if !skipped.contains(&chunk.id) {
+                continue;
+            }
+            all_drafts.push(Draft {
+                chunk_id: chunk.id.clone(),
+                version: 0,
+                segments: chunk
+                    .segments
+                    .iter()
+                    .map(|segment| TranslatedSegment {
+                        id: segment.id.clone(),
+                        text: segment.text.clone(),
+                    })
+                    .collect(),
+                usage: artifacts::TokenUsage::default(),
+                reviewed: true,
+                needs_repair: false,
+            });
+        }
+        merge_pages(&chunks, &all_drafts)
+    };
     let unresolved = reviews
         .iter()
         .flat_map(|review| review.issues.iter())
@@ -2710,10 +2920,20 @@ fn scan_pending_and_counts(ctx: &JobContext) -> (PendingState, crate::agent::Job
         chunk_ids: chunk_ids.as_ref().clone(),
         ..PendingState::default()
     };
+    let manifest = ctx.read_manifest().ok();
+    // 用户跳过的块：不进任何待办列表，也不计入翻译 / 审查进展（计数以
+    // skipped 单列），否则收尾判据与续跑提示会把它们当成未完成待办。
+    let skipped = manifest
+        .as_ref()
+        .map(|manifest| manifest.skipped_chunks.clone())
+        .unwrap_or_default();
     let mut translated = 0u32;
     let mut reviewed = 0u32;
     let mut needs_repair = 0u32;
     for chunk_id in &state.chunk_ids {
+        if skipped.contains(chunk_id) {
+            continue;
+        }
         if read_scan_for_progress_with(ctx, chunk_id, &versions).is_none() {
             state.pending_scan.push(chunk_id.clone());
         }
@@ -2747,7 +2967,6 @@ fn scan_pending_and_counts(ctx: &JobContext) -> (PendingState, crate::agent::Job
     let terms = constraints
         .map(|constraints| constraints.terms.len() as u32)
         .unwrap_or(0);
-    let manifest = ctx.read_manifest().ok();
     // 计划尚未落盘时保留启动时的估算块数，避免状态切换把计数清成 0。
     let planned_chunks = Some(chunk_ids.len() as u32).filter(|count| *count > 0);
     let counts = crate::agent::JobCounts {
@@ -2763,6 +2982,11 @@ fn scan_pending_and_counts(ctx: &JobContext) -> (PendingState, crate::agent::Job
         reviewed,
         needs_repair,
         terms,
+        // 只有计划中出现的跳过块才计数：清缓存残留的旧清单不虚增。
+        skipped: chunk_ids
+            .iter()
+            .filter(|chunk_id| skipped.contains(*chunk_id))
+            .count() as u32,
     };
     (state, counts)
 }
@@ -3152,6 +3376,17 @@ fn revise_draft_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                 let patches: Vec<DraftPatchArg> = serde_json::from_value(raw).map_err(|error| {
                     tool_error("invalid_args", &format!("patches 结构无效：{error}"))
                 })?;
+                // 修订不消耗返工额度，但同一块连续修订仍要有界：超过说明问题
+                // 不在译文，继续修订只是烧预算（现实案例：注音策略与结构校验
+                // 冲突导致无限修订循环）。
+                const REVISE_LIMIT: u32 = 4;
+                if !ctx.control.try_reserve_revise(&chunk_id, REVISE_LIMIT) {
+                    return Err(tool_error(
+                        "revise_limit",
+                        "该块定点修订已达 4 轮上限：请改用 dispatch_translation 整块返工；\
+                         若同类问题反复出现，说明是约束本身冲突，应 reset_phase 重做准备或上报人工",
+                    ));
+                }
                 let draft = apply_draft_patches(&existing, &patches)?;
                 // 先校验再写：补丁把结构弄坏时不产生任何副作用。
                 if let Err(issues) =
@@ -3954,6 +4189,241 @@ mod tests {
         assert_eq!(plan.planned(), ["c0001".to_string()]);
         assert!(plan.rework_used().is_empty());
         assert!(ctx.control.rework_map().is_empty(), "审查不消耗返工额度");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn plan_dispatch_short_circuits_skipped_and_refused_chunks() {
+        let (ctx, dir) = empty_fixture("skip-shortcut", 5);
+        let mut second = gate_chunk();
+        second.id = "c0002".into();
+        second.order = 2;
+        second.segments[0].id = "p002-l000-s0".into();
+        seed_for_tests(
+            &ctx,
+            &[(gate_chunk(), None, None), (second, None, None)],
+        );
+        ctx.block_refused("c0001", "policy_refusal");
+        let _ = ctx.update_manifest(|manifest| {
+            manifest.skipped_chunks.insert("c0002".into());
+        });
+        let versions = phase_versions(&ctx);
+
+        // 翻译派发：两块都短路，不进 planned，分别给出确定性状态。
+        let plan = plan_dispatch(
+            &ctx,
+            DispatchKind::Translate,
+            vec!["c0001".into(), "c0002".into()],
+            &versions,
+        )
+        .expect("规划成功");
+        assert!(plan.planned().is_empty(), "跳过 / 被拒块不请求模型");
+        assert_eq!(plan.outcome_status("c0001"), Some("content_refused"));
+        assert_eq!(plan.outcome_status("c0002"), Some("skipped"));
+
+        // 审查派发同样短路。
+        let plan = plan_dispatch(
+            &ctx,
+            DispatchKind::Review,
+            vec!["c0001".into(), "c0002".into()],
+            &versions,
+        )
+        .expect("规划成功");
+        assert!(plan.planned().is_empty());
+        assert_eq!(plan.outcome_status("c0001"), Some("content_refused"));
+        assert_eq!(plan.outcome_status("c0002"), Some("skipped"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- 失败摘要解析 / 内容拒绝分类 ----
+
+    #[test]
+    fn failure_summary_parser_extracts_reason_and_detail() {
+        // 标准一行式（translator.md 失败上报格式）。
+        let (reason, detail) = parse_failure_summary(
+            "chunk_id=c0001 status=failed reason=policy_refusal detail=无法处理该块",
+        )
+        .expect("解析成功");
+        assert_eq!(reason, "policy_refusal");
+        assert_eq!(detail, "无法处理该块");
+
+        // detail 含空白：到行尾为止（后面的词不带 `=` 不是键）。
+        let (reason, detail) =
+            parse_failure_summary("status=failed reason=violates_policy detail=内容 与 政策 冲突")
+                .expect("解析成功");
+        assert_eq!(reason, "violates_policy");
+        assert_eq!(detail, "内容 与 政策 冲突");
+
+        // detail 在下一个键 token 处截断。
+        let (_, detail) =
+            parse_failure_summary("status=failed reason=x detail=说明 chunk_id=c0002")
+                .expect("解析成功");
+        assert_eq!(detail, "说明");
+
+        // 键前缀边界：`sub_reason=` 不冒充 `reason=`。
+        let (reason, _) =
+            parse_failure_summary("status=failed sub_reason=ignored reason=real")
+                .expect("解析成功");
+        assert_eq!(reason, "real");
+
+        // 缺 reason 键的行不是失败摘要；没有摘要行返回 None。
+        assert!(parse_failure_summary("status=failed detail=无原因").is_none());
+        assert!(parse_failure_summary("一切正常 chunk_id=c0001").is_none());
+
+        // detail 超长按 safe_text 截断到 200 字符 + 省略号。
+        let long = "长".repeat(260);
+        let (_, detail) =
+            parse_failure_summary(&format!("status=failed reason=x detail={long}"))
+                .expect("解析成功");
+        assert_eq!(detail.chars().count(), 201, "200 字 + 省略号");
+    }
+
+    #[test]
+    fn refusal_reason_markers_are_recognized_case_insensitively() {
+        for reason in [
+            "policy_refusal",
+            "PROHIBITED_CONTENT",
+            "content_policy",
+            "safety_block",
+            "refused_by_model",
+            "违规内容",
+            "内容政策",
+        ] {
+            assert!(reason_indicates_refusal(reason), "应识别 {reason}");
+        }
+        for reason in ["constraint_conflict", "unknown_segment", "内部错误"] {
+            assert!(!reason_indicates_refusal(reason), "不应识别 {reason}");
+        }
+    }
+
+    #[test]
+    fn classify_run_error_maps_refusal_to_content_refused() {
+        let error = RunError::Refused {
+            reason: "policy_refusal".into(),
+            message: "无法处理".into(),
+        };
+        assert_eq!(classify_run_error(&error), FailureClass::ContentRefused);
+        assert_eq!(error.code(), "content_refused");
+        assert_eq!(error.refusal(), Some(("policy_refusal", "无法处理")));
+    }
+
+    // ---- 修订收敛闸 / 注释策略归一化 ----
+
+    /// 冻结约束 + 单块草稿的最小修订夹具。
+    fn revise_fixture(tag: &str) -> (std::sync::Arc<JobContext>, std::path::PathBuf) {
+        let (ctx, dir) = empty_fixture(tag, 5);
+        seed_for_tests(&ctx, &[(gate_chunk(), Some(gate_draft(1, false)), None)]);
+        ctx.with_artifacts(|artifacts| {
+            artifacts
+                .write_constraints(&Constraints {
+                    version: 1,
+                    terms: Vec::new(),
+                    style: String::new(),
+                    conflicts: Vec::new(),
+                    unresolved: Vec::new(),
+                    frozen: true,
+                })
+                .unwrap();
+        });
+        (ctx, dir)
+    }
+
+    #[tokio::test]
+    async fn revise_draft_is_bounded_per_chunk_until_manual_resume() {
+        let (ctx, dir) = revise_fixture("revise-limit");
+        let revise = coordinator_tools(&ctx)
+            .into_iter()
+            .find(|tool| tool.name().as_str() == "revise_draft")
+            .expect("修订工具存在");
+        let call = |_version: u64| {
+            json!({
+                "chunk_id": "c0001",
+                "patches": [{
+                    "segment_id": "p001-l000-s0",
+                    // 补丁文本不能引入原文没有的数字（number_mismatch 校验）。
+                    "text": "你好",
+                }],
+            })
+        };
+        for round in 1..=4 {
+            revise
+                .run(call(round))
+                .await
+                .unwrap_or_else(|error| panic!("第 {round} 轮修订应成功：{error}"));
+        }
+        let error = revise.run(call(5)).await.expect_err("第 5 轮应被拒绝");
+        assert_eq!(error_payload(&error)["error"]["code"], "revise_limit");
+
+        // 手动恢复任务清空修订额度（resume_prepare 调 clear_revise），可继续。
+        ctx.control.clear_revise();
+        assert!(revise.run(call(6)).await.is_ok(), "清空额度后可继续");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn submit_scan_normalizes_conflicting_annotation_policy() {
+        let (ctx, dir) = revise_fixture("annotation-policy");
+        let submit_scan = coordinator_tools(&ctx)
+            .into_iter()
+            .find(|tool| tool.name().as_str() == "submit_scan")
+            .expect("扫描工具存在");
+        submit_scan
+            .run(json!({
+                "chunk_id": "c0001",
+                "terms": [],
+                "style": json!({"注释策略": "去除ruby标记", "语体": "原文语体"}).to_string(),
+                "notes": "",
+                "confidence": "high",
+            }))
+            .await
+            .expect("扫描提交成功");
+        let note = read_scan(&ctx, "c0001")
+            .expect("读取扫描")
+            .expect("扫描存在");
+        assert!(
+            note.style.contains(crate::translation::validation::CANONICAL_ANNOTATION_POLICY),
+            "注释策略应归一为规范值：{}",
+            note.style
+        );
+        assert!(note.style.contains("语体"), "其余维度原样保留");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn merge_treats_skipped_chunks_as_fallback_to_source() {
+        let (ctx, dir) = empty_fixture("merge-skip", 5);
+        let mut second = gate_chunk();
+        second.id = "c0002".into();
+        second.order = 2;
+        second.segments[0].id = "p002-l000-s0".into();
+        seed_for_tests(
+            &ctx,
+            &[
+                (
+                    gate_chunk(),
+                    Some(gate_draft(1, false)),
+                    Some(gate_review(1, ReviewVerdict::Pass)),
+                ),
+                (second, None, None),
+            ],
+        );
+        let _ = ctx.update_manifest(|manifest| {
+            manifest.skipped_chunks.insert("c0002".into());
+        });
+
+        let outcome = compute_merge(&ctx).expect("合并成功");
+        assert!(
+            outcome.report.coverage_ok && outcome.report.missing_ids.is_empty(),
+            "跳过块不进校验范围：{:?}",
+            outcome.report
+        );
+        // 产物回退原文：被跳过块的片段以原文进入页行。
+        let fallback = outcome
+            .pages
+            .values()
+            .flat_map(|lines| lines.iter())
+            .any(|line| line.text == "こんにちは");
+        assert!(fallback, "被跳过块的行应回退原文");
         let _ = std::fs::remove_dir_all(dir);
     }
 

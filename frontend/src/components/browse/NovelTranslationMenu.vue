@@ -221,7 +221,33 @@ const tone = computed(() => {
 
 const canStart = computed(() => !props.disabled && !busy.value && !awaiting.value);
 const canPause = computed(() => Boolean(job.value && ["queued", "running"].includes(job.value.state)));
-const canResume = computed(() => Boolean(job.value && ["paused", "needs_attention", "interrupted"].includes(job.value.state)));
+
+/**
+ * 两种待处理形态（错误码只在 needs_attention / interrupted 下有意义）：
+ * - budget_exhausted：调用预算用尽，直接「继续」会立刻再停，只能先追加预算；
+ * - content_refused：部分分块被模型按内容政策拒绝，可跳过后继续。
+ */
+const budgetPending = computed(() => {
+  const current = job.value;
+  if (!current || (current.state !== "needs_attention" && current.state !== "interrupted")) return false;
+  return current.error_code === "budget_exhausted";
+});
+const refusedPending = computed(() => {
+  const current = job.value;
+  if (!current || (current.state !== "needs_attention" && current.state !== "interrupted")) return false;
+  return current.error_code === "content_refused";
+});
+/** 追加档位（+64 / +128 / +256），默认 +64。 */
+const BUDGET_TIERS = [64, 128, 256] as const;
+const budgetTier = ref<number>(64);
+/** 被拒块明细：空数组时禁用跳过按钮并提示暂无明细。 */
+const refusedIds = computed(() => job.value?.refused_chunks ?? []);
+
+const canResume = computed(() => {
+  if (!job.value || !["paused", "needs_attention", "interrupted"].includes(job.value.state)) return false;
+  // 预算耗尽时不出现原「继续」：没有余量，点了只会立刻再次停下。
+  return !budgetPending.value;
+});
 const canCancel = computed(() => Boolean(job.value && isActiveJobState(job.value.state)));
 /** 可重新发起（整篇原文一次提交）：从未开始、已完成或已取消。 */
 const startable = computed(() => !job.value || job.value.state === "completed" || job.value.state === "cancelled" || job.value.state === "deleted");
@@ -294,6 +320,27 @@ function requestStart(force: boolean): void {
 function pauseJob(): void { if (job.value) void run("pause", () => store.pause(job.value!.job_id)); }
 function resumeJob(): void { if (job.value) void run("resume", () => store.resume(job.value!.job_id)); }
 function cancelJob(): void { if (job.value) void run("cancel", () => store.cancel(job.value!.job_id)); }
+
+/** 追加预算并继续：后端追加后不自动恢复，成功后显式续跑；任一步失败走 actionError。 */
+function grantBudgetAndResume(): void {
+  const current = job.value;
+  if (!current) return;
+  void run("budget", async () => {
+    await store.grantBudget(current.job_id, budgetTier.value);
+    await store.resume(current.job_id);
+  });
+}
+
+/** 跳过被拒块：后端校验通过后自动恢复任务，成功后轻提示（计数区也会显示已跳过）。 */
+function skipRefusedChunks(): void {
+  const current = job.value;
+  if (!current) return;
+  const ids = current.refused_chunks ?? [];
+  void run("refused", async () => {
+    await store.skipRefused(current.job_id, ids);
+    notify(t("translation.job.refusedSkipDone", { count: ids.length }));
+  });
+}
 
 // ===== 术语与风格 =====
 
@@ -927,6 +974,41 @@ onBeforeUnmount(() => {
 
       <!-- 底部动作：常驻，不随内容滚走 -->
       <div class="panel-actions">
+        <!-- 预算耗尽：用量 + 追加档位 + 主按钮；此形态下原「继续」不出现（没有余量，点了只会再停） -->
+        <div v-if="budgetPending && job" class="panel-rescue">
+          <p class="rescue-line">
+            {{ t('translation.job.budgetUsage', { used: job.budget.used, limit: job.budget.limit }) }}
+            <span v-if="job.budget.manual_extra > 0" class="rescue-hint">{{ t('translation.job.budgetManualExtra', { amount: job.budget.manual_extra }) }}</span>
+          </p>
+          <div class="budget-tiers" role="group" :aria-label="t('translation.job.budgetTierLabel')">
+            <button
+              v-for="tier in BUDGET_TIERS"
+              :key="tier"
+              type="button"
+              class="budget-tier"
+              :class="{ selected: budgetTier === tier }"
+              :aria-pressed="budgetTier === tier"
+              @click="budgetTier = tier"
+            >+{{ tier }}</button>
+          </div>
+          <md-filled-button
+            class="rescue-button"
+            :disabled="Boolean(pending)"
+            :aria-busy="pending === 'budget'"
+            @click="grantBudgetAndResume"
+          >{{ pending === 'budget' ? t('translation.job.working') : t('translation.job.budgetGrant') }}</md-filled-button>
+        </div>
+        <!-- 内容拒绝：中性说明 + 跳过被拒块（后端校验后自动恢复任务）；无明细时禁用并提示 -->
+        <div v-else-if="refusedPending" class="panel-rescue">
+          <p class="rescue-note">{{ t('translation.job.refusedNotice') }}</p>
+          <p v-if="!refusedIds.length" class="rescue-hint">{{ t('translation.job.refusedEmpty') }}</p>
+          <md-filled-button
+            class="rescue-button"
+            :disabled="Boolean(pending) || !refusedIds.length"
+            :aria-busy="pending === 'refused'"
+            @click="skipRefusedChunks"
+          >{{ pending === 'refused' ? t('translation.job.working') : t('translation.job.refusedSkip') }}</md-filled-button>
+        </div>
         <div class="translation-modes" role="group" :aria-label="t('translation.displayMode')">
           <button
             v-for="mode in (['original', 'translated', 'bilingual'] as const)"
@@ -1333,7 +1415,46 @@ onBeforeUnmount(() => {
 }
 .cancel-button { --md-text-button-label-text-color: var(--md-sys-color-error); margin-inline-start: auto; }
 
+/* 待处理区（预算耗尽 / 内容拒绝）：中性底色、面向行动，不渲染成错误告警。 */
+.panel-rescue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  padding: var(--space-sm);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 60%, transparent);
+}
+.rescue-line { margin: 0; color: var(--ink); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
+.rescue-note { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.rescue-hint { color: var(--ink-muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.budget-tiers { display: flex; gap: var(--space-xxs); }
+.budget-tier {
+  min-width: 52px;
+  height: 28px;
+  padding: 0 var(--space-sm);
+  border: 1px solid var(--md-sys-color-outline);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+.budget-tier:hover:not(.selected) {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
+}
+.budget-tier:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
+.budget-tier.selected {
+  border-color: transparent;
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+.rescue-button { align-self: flex-start; }
+
 @media (prefers-reduced-motion: reduce) {
-  .panel-tab, .translation-mode, .chunk-item { transition: none; }
+  .panel-tab, .translation-mode, .chunk-item, .budget-tier { transition: none; }
 }
 </style>
