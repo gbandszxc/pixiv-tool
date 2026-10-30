@@ -14,10 +14,12 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   自带类型不受 tab 影响；未命中按关键词搜索。
  * - 端点映射：kind=illust|manga → artworks 检索（type=illust|manga）；
  *   kind=novel → novels 检索（不传 type）。
- * - 结果 WorkGrid + 「约 N 件」total；页码分页（AppPagination）：接口每页 60 条
- *   固定，前端切 3 个显示页（20/页），接口页缓存在内存供跨页复用。
+ * - 结果 WorkGrid + 「约 N 件」total；页码分页（AppPagination）：接口每页条数按
+ *   端点区分（实测见 docs/PIXIV-API.md §搜索）——插画/漫画 artworks 每页 60 条
+ *   切 3 个显示页（20/页），小说 novels 每页 30 条即 1 个显示页（30/页）；
+ *   接口页缓存在内存供跨页复用。
  * - 本页排序：维度（点赞/收藏/浏览）下拉 + 升降方向切换（SortDirectionToggle），
- *   仅对当前显示页 20 条本地排序；
+ *   仅对当前显示页本地排序；
  *   优先复用列表已有计数（小说自带收藏数），仅所选维度缺失时经 browse_work_counts
  *   整页一次性补取（全局限速），补齐后只重排一次，缺失项垫底。
  */
@@ -103,12 +105,13 @@ function sigOf(p: SearchParams): string {
   return [p.word, p.kind, p.order, p.mode, p.sMode].join("\u0000");
 }
 
-// ===== 结果列表（页码分页：接口每页 60 条固定，前端切 3 个显示页）=====
+// ===== 结果列表（页码分页：接口每页条数按端点区分，前端切显示页）=====
 
-/** 显示页条数（AppPagination 每页容量）。 */
-const PAGE_SIZE = 20;
-/** 一个接口页（60 条）切成几个显示页。 */
-const SEGMENTS_PER_API_PAGE = 3;
+/** 显示页条数（AppPagination 每页容量）：artworks 接口页 60 条切 3 页（20/页）；
+ * novels 接口页 30 条整页显示（30/页，与 pixiv 官网小说搜索一致）。 */
+const PAGE_SIZE = computed(() => (kind.value === "novel" ? 30 : 20));
+/** 一个接口页切成几个显示页。 */
+const SEGMENTS_PER_API_PAGE = computed(() => (kind.value === "novel" ? 1 : 3));
 /** 接口页缓存上限（超出淘汰最旧；被淘汰页再访问时重新请求）。 */
 const MAX_API_PAGES = 30;
 
@@ -119,15 +122,15 @@ const items = shallowRef<BrowseWorkItem[]>([]);
 const loading = ref(false);
 const error = ref("");
 
-/** 接口页缓存（apiPage → 60 条）；搜索参数变化时清空，跨显示页复用避免重复请求。 */
+/** 接口页缓存（apiPage → 接口页条目）；搜索参数变化时清空，跨显示页复用避免重复请求。 */
 const apiPages = new Map<number, BrowseWorkItem[]>();
 /** 请求序号守卫：快速翻页 / 切条件时丢弃过期响应。 */
 let seq = 0;
 
-/** 显示页数：total÷20 与 lastPage×3 取小（lastPage 是 pixiv 端硬上限）。 */
+/** 显示页数：total÷显示页条数 与 lastPage×切分数 取小（lastPage 是 pixiv 端硬上限）。 */
 const pageCount = computed<number | null>(() => {
-  const byTotal = total.value != null ? Math.ceil(total.value / PAGE_SIZE) : null;
-  const byLast = lastPage.value != null ? lastPage.value * SEGMENTS_PER_API_PAGE : null;
+  const byTotal = total.value != null ? Math.ceil(total.value / PAGE_SIZE.value) : null;
+  const byLast = lastPage.value != null ? lastPage.value * SEGMENTS_PER_API_PAGE.value : null;
   if (byTotal == null) return byLast;
   if (byLast == null) return byTotal;
   return Math.min(byTotal, byLast);
@@ -140,11 +143,11 @@ async function load(): Promise<void> {
   const token = ++seq;
   loading.value = true;
   error.value = "";
-  const apiPage = Math.ceil(page.value / SEGMENTS_PER_API_PAGE);
-  const offset = ((page.value - 1) % SEGMENTS_PER_API_PAGE) * PAGE_SIZE;
+  const apiPage = Math.ceil(page.value / SEGMENTS_PER_API_PAGE.value);
+  const offset = ((page.value - 1) % SEGMENTS_PER_API_PAGE.value) * PAGE_SIZE.value;
   const cached = apiPages.get(apiPage);
   if (cached) {
-    items.value = cached.slice(offset, offset + PAGE_SIZE);
+    items.value = cached.slice(offset, offset + PAGE_SIZE.value);
     loading.value = false;
     afterLoad();
     return;
@@ -165,7 +168,7 @@ async function load(): Promise<void> {
     }
     total.value = data.total ?? null;
     lastPage.value = data.last_page ?? null;
-    items.value = data.items.slice(offset, offset + PAGE_SIZE);
+    items.value = data.items.slice(offset, offset + PAGE_SIZE.value);
   } catch (err) {
     if (token !== seq) return;
     items.value = [];
@@ -522,7 +525,7 @@ const typeTabs = computed(() => [
             <md-select-option value="s_tc">{{ t("browse.search.sModeTc") }}</md-select-option>
           </md-outlined-select>
         </label>
-        <!-- 本页排序：维度下拉 + 升降方向切换；仅对当前显示页 20 条本地排序（计数按需补取） -->
+        <!-- 本页排序：维度下拉 + 升降方向切换；仅对当前显示页本地排序（计数按需补取） -->
         <div class="local-sort">
           <span class="local-sort-label" aria-hidden="true">{{ t("browse.search.localSortLabel") }}</span>
           <md-outlined-select
@@ -560,13 +563,14 @@ const typeTabs = computed(() => [
         :items="sortedItems"
         :loading="loading"
         :error="error"
+        :page-size="PAGE_SIZE"
         paginated
         @retry="load()"
         @select="goWork"
       />
     </div>
 
-    <!-- 页码分页（显示页 20 条；接口每页 60 条由本页切成 3 页） -->
+    <!-- 页码分页（插画/漫画 20 条/页 = 接口页 60 条切 3 页；小说 30 条/页 = 接口页整页） -->
     <AppPagination
       v-if="pageCount !== null && pageCount > 1"
       class="pager"
@@ -636,7 +640,8 @@ const typeTabs = computed(() => [
   min-width: 0;
 }
 
-/* 分页网格的查询容器：WorkGrid.paginated 按内容宽度切换 2/4/5/10 列（20 条的因数） */
+/* 分页网格的查询容器：WorkGrid.paginated 按内容宽度切换列数档位（每页条数的因数：
+   插画/漫画 20 条 → 2/4/5/10 列，小说 30 条 → 2/3/5/10 列） */
 .grid-host {
   container-type: inline-size;
 }

@@ -207,7 +207,7 @@
 
 | 字段 | 类型 | 含义 |
 |---|---|---|
-| `illustManga`（或 `novel`）.data | Array[≤60] | 作品列表，字段与 §2 `thumbnails.illust|novel` 一致（artworks 多 `profileImageUrl/isOriginal/is_howto`；novels 多 `seriesId/seriesTitle/seriesContentOrder/language`） |
+| `illustManga`（artworks）/ `novel`（novels）.data | Array[60]（artworks）/ Array[≤30]（novels，2026-10-30 勘误，原统一记 ≤60） | 作品列表，字段与 §2 `thumbnails.illust|novel` 一致（artworks 多 `profileImageUrl/isOriginal/is_howto`；novels 多 `seriesId/seriesTitle/seriesContentOrder/language`） |
 | `.total` | number | 搜索结果总数（UI 显示"投稿超过 1 万件"即由此而来） |
 | `.lastPage` | number | 最后一页页码（**分页终止条件**；也用于 UI 限制最大可跳转页） |
 | `.bookmarkRanges` | Array | 收藏数区间过滤（`30000users入り` 等 chip 的依据） |
@@ -221,7 +221,10 @@
 > （字段名一致）。官方搜索页卡片上的收藏数（❤️N）为**逐项请求详情端点**所得
 > （登录态抓包：一次搜索页加载触发 60 个 `/ajax/illust/{id}` 请求）；应用侧对应
 > `browse_work_counts`（详见 `docs/PIXIV-API.md` §搜索）。
-> **每页固定 60 条**：`limit` / `per_page` / `rows` / `count` 参数实测均无效
+> **每页条数按端点区分（2026-10-30 勘误）**：artworks 60 条/页、novels 30 条/页
+> （2026-10-02 原统一记 60 条有误；实测 novels len=30、total=744、lastPage=25，
+> artworks len=60、total=32020、lastPage=534，各自 total÷每页条数与 lastPage 吻合）。
+> `limit` / `per_page` / `rows` / `count` 参数实测均无效
 > （返回条数不变）；`lastPage` 上限 1000。
 
 ### 按 ID 直达的 URL 形态（客户端路由）

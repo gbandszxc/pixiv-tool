@@ -108,7 +108,8 @@ pub struct BrowseList {
     pub next_page: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_last_page: Option<bool>,
-    /// search 专用：最后一页页码（接口每页 60，pixiv 上限 1000）；
+    /// search 专用：最后一页页码（pixiv 上限 1000；每页条数按端点：artworks 60、
+    /// novels 30，实测见 docs/PIXIV-API.md §搜索）；
     /// 供前端页码分页换算总页数（接口页 × 每接口页的显示页数）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_page: Option<i64>,
