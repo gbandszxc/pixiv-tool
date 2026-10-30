@@ -150,19 +150,23 @@ pub struct IllustrationRow {
 
 /// history 联合查询行（统一形状，见 `Db::list_history`）。
 #[derive(Debug, Clone, Serialize)]
-pub struct HistoryRow {
-    pub id: i64,
-    /// "novel" | "illustration"
-    pub category: String,
-    pub title: String,
-    pub author_name: Option<String>,
-    pub pages: Option<i64>,
-    /// 仅小说有；插画为 None。
-    pub series_id: Option<i64>,
-    /// 仅插画有；小说为 None。
-    pub illust_type: Option<i64>,
-    pub captured_at: String,
-}
+ pub struct HistoryRow {
+     pub id: i64,
+     /// "novel" | "illustration"
+     pub category: String,
+     pub title: String,
+     pub author_name: Option<String>,
+     pub pages: Option<i64>,
+     /// 仅小说有；插画为 None。
+     pub series_id: Option<i64>,
+     /// 仅插画有；小说为 None。
+     pub illust_type: Option<i64>,
+     pub captured_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_text: Option<String>,
+ }
 
 /// browse_history 表插入参数（INSERT OR REPLACE；visited_at 由调用方给 now_iso()）。
 #[derive(Debug, Clone)]
@@ -879,16 +883,18 @@ impl Db {
         } else {
             ""
         };
-        let novel_sql = format!(
+         let novel_sql = format!(
             "SELECT novel_id AS id, 'novel' AS category, title, author_name, \
-             page_count AS pages, series_id, NULL AS illust_type, captured_at \
+             page_count AS pages, series_id, NULL AS illust_type, captured_at, \
+             txt_path, md_path, NULL AS saved_paths \
              FROM novels{novel_where}"
-        );
-        let illust_sql = format!(
+         );
+         let illust_sql = format!(
             "SELECT artwork_id AS id, 'illustration' AS category, title, author_name, \
-             page_count AS pages, NULL AS series_id, illust_type, captured_at \
+             page_count AS pages, NULL AS series_id, illust_type, captured_at, \
+             NULL AS txt_path, NULL AS md_path, saved_paths \
              FROM illustrations{illust_where}"
-        );
+         );
         let union = match category {
             "novel" => novel_sql,
             "illustration" => illust_sql,
@@ -1206,18 +1212,85 @@ fn task_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskRow> {
     })
 }
 
-fn history_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRow> {
-    Ok(HistoryRow {
-        id: row.get("id")?,
-        category: row.get("category")?,
-        title: row.get("title")?,
-        author_name: row.get("author_name")?,
-        pages: row.get("pages")?,
-        series_id: row.get("series_id")?,
-        illust_type: row.get("illust_type")?,
-        captured_at: row.get("captured_at")?,
-    })
+fn read_novel_preview(path_str: &str) -> Option<String> {
+    use std::io::Read;
+    let path = std::path::Path::new(path_str);
+    if !path.is_file() {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; 1024];
+    let n = file.read(&mut buf).ok()?;
+    if n == 0 {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&buf[..n]);
+    let cleaned_lines: Vec<&str> = text
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if cleaned_lines.is_empty() {
+        return None;
+    }
+    let mut combined = String::new();
+    for line in cleaned_lines.into_iter().take(6) {
+        if !combined.is_empty() {
+            combined.push('\n');
+        }
+        combined.push_str(line);
+        if combined.chars().count() >= 180 {
+            break;
+        }
+    }
+    let truncated: String = combined.chars().take(180).collect();
+    Some(truncated)
 }
+
+ fn history_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryRow> {
+    let category: String = row.get("category")?;
+    let txt_path: Option<String> = row.get("txt_path")?;
+    let md_path: Option<String> = row.get("md_path")?;
+    let saved_paths: Option<String> = row.get("saved_paths")?;
+
+    let mut cover_path = None;
+    let mut preview_text = None;
+
+    if category == "illustration" {
+        if let Some(sp) = saved_paths {
+            let paths: Vec<String> = serde_json::from_str(&sp).unwrap_or_default();
+            for p in paths {
+                let ext = std::path::Path::new(&p)
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
+                    cover_path = Some(p);
+                    break;
+                }
+            }
+        }
+    } else if category == "novel" {
+        let path_to_read = txt_path.as_deref().or(md_path.as_deref());
+        if let Some(p) = path_to_read {
+            preview_text = read_novel_preview(p);
+        }
+    }
+
+     Ok(HistoryRow {
+         id: row.get("id")?,
+        category,
+         title: row.get("title")?,
+         author_name: row.get("author_name")?,
+         pages: row.get("pages")?,
+         series_id: row.get("series_id")?,
+         illust_type: row.get("illust_type")?,
+         captured_at: row.get("captured_at")?,
+        cover_path,
+        preview_text,
+     })
+ }
 
 fn browse_history_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BrowseHistoryRow> {
     Ok(BrowseHistoryRow {

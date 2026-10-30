@@ -189,6 +189,61 @@ pub fn run() {
                 responder.respond(response);
             });
         })
+        // 本地已下载插画缩略图协议：读取本地已保存的图片文件
+        // 前端 convertFileSrc(filePath, "pixiv-download")
+        // Windows: http://pixiv-download.localhost/<path>
+        // 其它平台: pixiv-download://localhost/<path>
+        .register_uri_scheme_protocol("pixiv-download", |_ctx, request| {
+            use std::borrow::Cow;
+            let uri_path = request.uri().path();
+            let decoded = image_proxy::percent_decode(uri_path).unwrap_or_else(|| uri_path.to_string());
+            let mut s = decoded.trim();
+            #[cfg(target_os = "windows")]
+            {
+                while s.starts_with('/') || s.starts_with('\\') {
+                    if s.len() >= 3 && s.chars().nth(2) == Some(':') {
+                        s = &s[1..];
+                        break;
+                    } else if s.len() >= 2 && s.chars().nth(1) == Some(':') {
+                        break;
+                    }
+                    s = &s[1..];
+                }
+            }
+            let path = std::path::PathBuf::from(s);
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+            let mime = match ext.as_str() {
+                "jpg" | "jpeg" => "image/jpeg",
+                "png" => "image/png",
+                "webp" => "image/webp",
+                "gif" => "image/gif",
+                _ => {
+                    log::warn!("pixiv-download 协议拒绝非图片请求: {:?}", path);
+                    return tauri::http::Response::builder()
+                        .status(403)
+                        .header("Cache-Control", "no-store")
+                        .body(Cow::Borrowed(&[][..]))
+                        .expect("静态 403 响应构造不会失败");
+                }
+            };
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    tauri::http::Response::builder()
+                        .header("Content-Type", mime)
+                        .header("Cache-Control", "public, max-age=86400")
+                        .body(Cow::Owned(bytes))
+                        .expect("带 Content-Type 的响应构造不会失败")
+                }
+                Err(err) => {
+                    log::warn!("pixiv-download 本地图片读取失败: {:?} ({err})", path);
+                    tauri::http::Response::builder()
+                        .status(404)
+                        .header("Cache-Control", "no-store")
+                        .body(Cow::Borrowed(&[][..]))
+                        .expect("静态 404 响应构造不会失败")
+                }
+            }
+        })
         .setup(move |app| {
             let settings = Settings::load_or_init(&paths.config_dir);
             let db = Db::open(&paths.data_dir.join("app.db"))?;

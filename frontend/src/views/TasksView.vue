@@ -19,16 +19,28 @@
       <section class="task-list" :aria-label='t("tasks.title")'>
         <article v-for="task in pagedTasks" :key="task.task_id" class="task-item">
           <label class="task-select"><md-checkbox :checked='selectedTaskIds.includes(task.task_id)' :aria-label='t("tasks.selectTask", { id: task.task_id })' @change='toggleTask(task.task_id, ($event.target as HTMLInputElement).checked)' /></label>
-          <div>
-            <div class="task-heading"><div><span class="m3-label">{{ categoryLabel(task) }}</span><span class="task-source">{{ sourceLabel(task) }} — {{ task.source_id }}</span></div><span class="m3-status" :class='`status-${task.status}`'>{{ statusLabel(task.status) }}</span></div>
-            <md-linear-progress :value='taskProgress(task)' :aria-label="progressDetail(task)" />
-            <div class="task-progress-meta">{{ progressDetail(task) }}</div>
-            <div class="task-actions">
-              <md-text-button v-if='task.status === "running"' @click='taskStore.pauseTask(task.task_id)'>{{ t("tasks.pause") }}</md-text-button>
-              <md-filled-button v-if='task.status === "paused"' @click='taskStore.resumeTask(task.task_id)'>{{ t("tasks.resume") }}</md-filled-button>
-              <md-text-button v-if='["running", "paused"].includes(task.status)' @click='taskStore.cancelTask(task.task_id)'>{{ t("tasks.cancel") }}</md-text-button>
-              <md-text-button v-if='task.status === "done" && taskFailedCount(task) > 0' @click='taskStore.retryFailed(task.task_id)'>{{ t("tasks.retryFailed") }}</md-text-button>
-              <md-text-button :disabled='deletingTaskIds.has(task.task_id)' @click='openConfirm(task.task_id)'>{{ deletingTaskIds.has(task.task_id) ? "…" : t("common.delete") }}</md-text-button>
+          <div class="task-content">
+            <div class="task-heading">
+              <div class="task-title-group">
+                <span class="m3-label">{{ categoryLabel(task) }}</span>
+                <span class="task-source">{{ sourceLabel(task) }} — {{ task.source_id }}</span>
+              </div>
+              <span class="m3-status" :class='`status-${task.status}`'>{{ statusLabel(task.status) }}</span>
+            </div>
+            <div class="task-progress-row">
+              <div class="task-progress-track">
+                <md-linear-progress class="task-progress-bar" :value='taskProgress(task)' :aria-label="progressDetail(task)" />
+                <span class="task-progress-meta">{{ progressDetail(task) }}</span>
+              </div>
+              <div class="task-actions">
+                <md-text-button v-if='task.status === "running"' @click='taskStore.pauseTask(task.task_id)'>{{ t("tasks.pause") }}</md-text-button>
+                <md-filled-button v-if='task.status === "paused"' @click='taskStore.resumeTask(task.task_id)'>{{ t("tasks.resume") }}</md-filled-button>
+                <md-text-button v-if='["running", "paused"].includes(task.status)' @click='taskStore.cancelTask(task.task_id)'>{{ t("tasks.cancel") }}</md-text-button>
+                <md-text-button v-if='task.status === "done" && taskFailedCount(task) > 0' @click='taskStore.retryFailed(task.task_id)'>{{ t("tasks.retryFailed") }}</md-text-button>
+                <md-icon-button class="task-delete-btn" :disabled='deletingTaskIds.has(task.task_id)' :aria-label='t("common.delete")' @click='openConfirm(task.task_id)'>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 11v6" /><path d="M14 11v6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                </md-icon-button>
+              </div>
             </div>
           </div>
         </article>
@@ -106,5 +118,5 @@ onUnmounted(() => { disposed = true; });
 .tasks-toolbar { display:flex; align-items:center; justify-content:space-between; gap:var(--space-lg) var(--space-xl); padding-bottom:var(--space-sm); }
 .tasks-toolbar .m3-radio-group { gap:var(--space-md); }
 @media (max-width:640px) { .task-management { margin-left:0; } }
-.task-heading,.task-actions,.pagination{display:flex;align-items:center;gap:var(--space-md)}.tasks-toolbar,.m3-radio-group,.task-actions{flex-wrap:wrap}.tasks-toolbar{margin-bottom:0}.m3-radio-group{display:flex;gap:var(--space-sm)}.task-list{overflow:hidden;border-radius:16px;background:var(--md-sys-color-surface-container)}.task-item{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--space-sm);padding:var(--space-lg);border-bottom:1px solid color-mix(in srgb,var(--md-sys-color-outline) 30%,transparent)}.task-item:last-child{border-bottom:0}.task-select{padding-top:2px}.task-heading{justify-content:space-between;margin-bottom:var(--space-sm)}.task-source{margin-left:var(--space-sm)}.m3-label,.m3-status{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}.m3-status{background:color-mix(in srgb,var(--md-sys-color-outline) 18%,transparent);color:var(--ink-muted)}.status-done{background:var(--state-success-container);color:var(--state-success-ink)}.status-failed{background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container)}.status-paused{background:var(--state-warning-container);color:var(--state-warning-ink)}.task-progress-meta{margin:var(--space-xs) 0}.pagination{margin-top:var(--space-md)}.m3-empty,.m3-loading{padding:var(--space-xl);color:var(--ink-muted);text-align:center}@media (max-width:640px){.task-heading{align-items:flex-start;flex-direction:column}.task-source{display:block;margin:var(--space-xs) 0 0}}
+.task-heading,.pagination{display:flex;align-items:center;gap:var(--space-md)}.tasks-toolbar,.m3-radio-group{flex-wrap:wrap}.tasks-toolbar{margin-bottom:0}.m3-radio-group{display:flex;gap:var(--space-sm)}.task-list{overflow:hidden;border-radius:16px;background:var(--md-sys-color-surface-container)}.task-item{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:var(--space-xl);row-gap:var(--space-sm);padding:var(--space-md) var(--space-lg);border-bottom:1px solid color-mix(in srgb,var(--md-sys-color-outline) 20%,transparent);align-items:center}.task-item:last-child{border-bottom:0}.task-select{display:flex;align-items:center;padding-right:var(--space-xs)}.task-content{display:flex;flex-direction:column;gap:var(--space-sm);min-width:0}.task-heading{justify-content:space-between}.task-title-group{display:flex;align-items:center;min-width:0;flex-wrap:wrap;gap:var(--space-xs)}.task-source{margin-left:var(--space-xs);font-weight:500;color:var(--md-sys-color-on-surface)}.m3-label,.m3-status{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}.m3-status{background:color-mix(in srgb,var(--md-sys-color-outline) 18%,transparent);color:var(--ink-muted)}.status-done{background:var(--state-success-container);color:var(--state-success-ink)}.status-failed{background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container)}.status-paused{background:var(--state-warning-container);color:var(--state-warning-ink)}.task-progress-row{display:flex;align-items:center;justify-content:space-between;gap:var(--space-md);flex-wrap:wrap}.task-progress-track{display:flex;align-items:center;gap:var(--space-lg);flex:1;min-width:260px}.task-progress-bar{flex:1;max-width:620px}.task-progress-meta{font-size:12px;color:var(--ink-muted);white-space:nowrap}.task-actions{display:flex;align-items:center;gap:var(--space-xs);margin-left:auto}.task-delete-btn{--md-icon-button-icon-color:var(--md-sys-color-error);color:var(--md-sys-color-error)}.task-delete-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:2}.pagination{margin-top:var(--space-md)}.m3-empty,.m3-loading{padding:var(--space-xl);color:var(--ink-muted);text-align:center}@media (max-width:640px){.task-heading{align-items:flex-start;flex-direction:column}.task-source{display:block;margin:var(--space-xs) 0 0}.task-progress-track{min-width:100%}.task-progress-bar{max-width:100%}.task-actions{margin-left:0;width:100%;justify-content:flex-end}}
 </style>

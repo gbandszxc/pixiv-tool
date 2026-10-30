@@ -232,6 +232,12 @@ export default {
     deleteAllConfirm: "すべての履歴を削除しますか？この操作は取り消せません（ファイルは削除されません）。",
     cleared: "すべての履歴を削除しました",
     empty: "取得履歴はまだありません。作品の取得を試してみましょう",
+    viewMode: "表示形式",
+    viewList: "リスト表示",
+    viewGrid: "グリッド表示",
+    pagesCount: "{count}P",
+    openFile: "ファイルを開く",
+    noPreview: "プレビュー本文はありません",
   },
   browseHistory: {
     title: "閲覧履歴",

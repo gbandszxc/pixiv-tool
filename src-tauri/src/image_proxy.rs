@@ -82,7 +82,7 @@ mod sha256 {
 
 /// percent-decode（`%XX` → 字节；不做表单 `+`→空格转换）。
 /// 非法转义（截断或非 hex）或结果非 UTF-8 → None（pximg URL 恒为 ASCII）。
-fn percent_decode(input: &str) -> Option<String> {
+pub(crate) fn percent_decode(input: &str) -> Option<String> {
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

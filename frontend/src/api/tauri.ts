@@ -9,7 +9,7 @@
  *   c) invoke reject 一个 { code, field?, message } 结构化载荷（ADR 0044，
  *      settings_save 率先采用），用 errorPayload() 取形、errorMessage() 取兜底文案。
  */
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 declare global {
@@ -236,7 +236,18 @@ export interface HistoryItem {
   pages: number | null;
   series_id: number | null;
   illust_type: number | null;
-  captured_at: string;
+   captured_at: string;
+  cover_path?: string | null;
+  preview_text?: string | null;
+ }
+
+/**
+ * 本地已下载插画缩略图协议 URL（pixiv-download 协议）。
+ * 前端图片展示直接从本地文件读取，无需网络。
+ */
+export function localDownloadSrc(path?: string | null): string {
+  if (!isTauri() || !path) return "";
+  return convertFileSrc(path, "pixiv-download");
 }
 
 export interface HistoryListResponse {

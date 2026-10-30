@@ -248,6 +248,12 @@ export default {
     deleteAllConfirm: "确定清空全部历史记录？此操作不可恢复（不删除文件）。",
     cleared: "已清空全部历史记录",
     empty: "还没有抓取记录，去抓取页试试",
+    viewMode: "视图模式",
+    viewList: "列表模式",
+    viewGrid: "宫格模式",
+    pagesCount: "{count}P",
+    openFile: "打开文件",
+    noPreview: "暂无预览正文",
   },
   browseHistory: {
     title: "浏览历史",

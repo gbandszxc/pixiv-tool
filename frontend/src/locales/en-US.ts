@@ -247,6 +247,12 @@ export default {
     deleteAllConfirm: "Clear ALL history records? This cannot be undone. (files kept)",
     cleared: "All history records cleared",
     empty: "No crawl records yet. Try the crawl page.",
+    viewMode: "View Mode",
+    viewList: "List View",
+    viewGrid: "Grid View",
+    pagesCount: "{count}P",
+    openFile: "Open File",
+    noPreview: "No preview text available",
   },
   browseHistory: {
     title: "Browsing History",

@@ -146,7 +146,7 @@ pixiv-tool/
 │  ├─ resources/agent/          # 内置 Agent 资源：prompts/、agents/（coordinator/translator/reviewer）、skills/smart-translator/
 │  ├─ tests/                    # pixiv_api/（pixiv 接口测试唯一入口）/ agent_protocol_wire.rs / agent_runtime.rs / translation_job_e2e.rs / smoke_commands.rs
 │  └─ src/
-│     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、pixiv-img / pixiv-ugoira 协议、dialog 插件、关闭确认、翻译恢复）
+│     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、pixiv-img / pixiv-ugoira / pixiv-download 协议、dialog 插件、关闭确认、翻译恢复）
 │     ├─ state.rs               # AppState：paths/settings/db/cookies/tasks/accounts/translation_service
 │     ├─ agent/                 # 通用 Agent 内核：runtime / scheduler / budget / compaction / recovery / events / resources / storage / model（Rig wire + wreq 传输）
 │     ├─ translation/           # 整篇翻译 Job：service / source / chunking / artifacts / tools / validation / publish / legacy
@@ -1014,7 +1014,7 @@ token 的写路径自愈覆盖全部 POST 写方法（Auth/Client 失败或 200+
 | 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab；工具行首部预留可选 `lead` 插槽，供 `/browse/me` 的动作组与刷新同行；「主页」复用本页组件，见上） | ✅ |
 | 以图识图 | `/saucenao`（SauceNAO 反搜：本地文件/拖拽/URL，pixiv 结果跳作品详情；需在设置中配置 API Key） | ✅ |
 
-**下载页**：页签壳 ToolsView（/tools），默认 /tools/tasks，页签为任务 / 下载历史，右侧新建下载打开面板。旧表单路径重定向到任务页并带 downloadForm/sourceType/sourceId，面板消费后清理这三个 query 键，其余 query/hash 保留。
+**下载页**：页签壳 ToolsView（/tools），默认 /tools/tasks，页签为任务 / 下载历史，右侧新建下载打开面板。任务卡片采用两行紧凑布局（自适应收窄进度条与红色删除图标同行动作区并排对齐）；下载历史支持「列表 / 宫格」双模式切换（ADR 0045，本地已下载图片走 pixiv-download 协议回显首图，小说呈现专属立体书本封面并摘录前几行试读），偏好经 localStorage 持久化。旧表单路径重定向到任务页并带 downloadForm/sourceType/sourceId，面板消费后清理这三个 query 键，其余 query/hash 保留。
 
 **侧边栏**：发现 / 关注 / 我的 / 下载四个核心项，二级入口在各页面内逐步展开；所属分组高亮，详情继承实际来路，直达归发现。展开宽 256px、折叠宽 72px，头部为 logo / 标题 / 收起按钮，窗口高度不足时导航自身滚动。侧栏底部为**头像 chip**
 （头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击在 chip 上方弹出**账号
