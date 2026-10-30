@@ -35,11 +35,6 @@ const props = withDefaults(
      * 不显示「没有更多」），翻页完全由父级 AppPagination 驱动。
      */
     paginated?: boolean;
-    /**
-     * 页码分页每页条数（列数档位取其因数保证每行排满）：
-     * 20 → 2 / 4 / 5 / 10 列；30（小说搜索）→ 2 / 3 / 5 / 10 列。
-     */
-    pageSize?: number;
   }>(),
   {
     loading: false,
@@ -51,7 +46,6 @@ const props = withDefaults(
     removable: false,
     hideR18Hint: false,
     paginated: false,
-    pageSize: 20,
   }
 );
 
@@ -135,7 +129,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="work-grid-wrap">
     <!-- 首屏骨架：纯 surface-container 色块，不做闪烁动画（DESIGN.md 克制动效 / reduced-motion） -->
-    <div v-if="loading && !visibleItems.length" class="work-grid" :class="{ paginated, 'page-30': pageSize === 30 }" aria-hidden="true">
+    <div v-if="loading && !visibleItems.length" class="work-grid" :class="{ paginated }" aria-hidden="true">
       <div v-for="n in skeletonCount" :key="n" class="skeleton-card">
         <div class="skeleton-cover" :class="{ portrait: n % 5 === 0 }"></div>
         <div class="skeleton-line w70"></div>
@@ -164,7 +158,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
-      <div class="work-grid" :class="{ paginated, 'page-30': pageSize === 30 }">
+      <div class="work-grid" :class="{ paginated }">
         <WorkCard
           v-for="(item, index) in visibleItems"
           :key="`${item.kind}:${item.id}`"
@@ -218,10 +212,8 @@ onBeforeUnmount(() => {
 }
 
 /*
- * 页码分页模式：列数只取每页条数的因数，保证任何响应宽度下每行都排满、末行不残缺。
- * 默认 20 条/页 → 2 / 4 / 5 / 10 列；30 条/页（小说搜索）→ 2 / 3 / 5 / 10 列
- * （.page-30 的中档改 3 列，5 / 10 列为 30 的公因数直接共用）。
- * 档位由外层查询容器宽度决定（搜索页 `.grid-host`
+ * 页码分页模式：每页条数固定（搜索页 20 条），列数只取该页数的因数（2 / 4 / 5 / 10），
+ * 保证任何响应宽度下每行都排满。档位由外层查询容器宽度决定（搜索页 `.grid-host`
  * 提供 container-type: inline-size）；无容器时退回基础 2 列。
  * 阈值 = 列数 × 140px 最小卡宽 + (列数 - 1) × 16px 列间距。
  */
@@ -232,10 +224,6 @@ onBeforeUnmount(() => {
 @container (min-width: 608px) {
   .work-grid.paginated {
     grid-template-columns: repeat(4, 1fr);
-  }
-
-  .work-grid.paginated.page-30 {
-    grid-template-columns: repeat(3, 1fr);
   }
 }
 
