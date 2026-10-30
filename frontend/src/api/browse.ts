@@ -525,11 +525,13 @@ export async function browseFollowLatest(
   return invokeBrowse<BrowseList>("browse_follow_latest", { kind, mode, page });
 }
 
-/** browse_search：搜索（含 total；type 过滤 illust/manga/ugoira）。 */
+/** browse_search：搜索（含 total；type 过滤 illust/manga/ugoira）。
+ * users_iri：users入り 收藏数档位过滤（"100"|"500"|"1000"|"5000"|"10000"），
+ * 不传/undefined = 不过滤；后端按档位把 `{N}users入り` 拼进搜索词（过滤而非排序）。 */
 export async function browseSearch(
   kind: ListWorkKind,
   word: string,
-  options?: { order?: string; mode?: string; s_mode?: string; type?: string; page?: number }
+  options?: { order?: string; mode?: string; s_mode?: string; users_iri?: string; type?: string; page?: number }
 ): Promise<BrowseList> {
   const page = options?.page ?? 1;
   if (!isTauri()) return mockPaginated(`search:${kind}:${word}`, page, [kind], { withTotal: true });
@@ -539,6 +541,7 @@ export async function browseSearch(
     order: options?.order,
     mode: options?.mode,
     sMode: options?.s_mode,
+    usersIri: options?.users_iri,
     type: options?.type,
     page,
   });

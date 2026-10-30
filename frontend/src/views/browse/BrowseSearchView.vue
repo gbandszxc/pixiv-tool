@@ -6,7 +6,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·搜索页（F2）。
  *
- * - URL 查询参数 `?word=&kind=&order=&mode=&s_mode=` 回显：挂载/前进后退时恢复
+ * - URL 查询参数 `?word=&kind=&order=&mode=&s_mode=&users_iri=` 回显：挂载/前进后退时恢复
  *   状态并自动搜索；执行搜索或切换过滤时 `router.replace` 写回（单一真相源是
  *   路由查询参数，本地 ref 仅作受控回显）。
  * - ID 直达：输入先经 `parseBrowseInput` 解析，命中链接/纯数字直接跳站内路由，
@@ -18,6 +18,10 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   对齐（实测见 docs/PIXIV-API.md §搜索）——插画/漫画 artworks 60 条切 3 个显示页
  *   （20/页），小说 novels 30 条即 1 个显示页（30/页，一页恰一次请求）；
  *   接口页缓存在内存供跨页复用。
+ * - users入り 档位过滤：收藏数下限档位（100/500/1000/5000/10000）经 IPC `users_iri`
+ *   透传，后端按档位把 `{N}users入り` 拼进搜索词（搜索词过滤而非排序）；不过滤时
+ *   不传参。与 s_tag_full（标签完全一致）互斥——组合词在该匹配下必然失效，双向收口
+ *   回落 s_tag（见 normalizeSMode）。
  * - 本页排序：维度（点赞/收藏/浏览）下拉 + 升降方向切换（SortDirectionToggle），
  *   仅对当前显示页本地排序；
  *   优先复用列表已有计数（小说自带收藏数），仅所选维度缺失时经 browse_work_counts
@@ -50,13 +54,29 @@ type SearchKind = "illust" | "manga" | "novel";
 const ORDERS = ["date_d", "date", "popular_d"] as const;
 const MODES = ["all", "safe", "r18"] as const;
 const S_MODES = ["s_tag", "s_tag_full", "s_tc"] as const;
+/** users入り 收藏数档位（搜索词过滤，非排序）；空串 = 不过滤（不向后端传参）。 */
+const USERS_IRI_LEVELS = ["100", "500", "1000", "5000", "10000"] as const;
 type Order = (typeof ORDERS)[number];
 type Mode = (typeof MODES)[number];
 type SMode = (typeof S_MODES)[number];
+type UsersIri = "" | (typeof USERS_IRI_LEVELS)[number];
 
 /** 值域校验：非法值回落默认（手工改 URL 也不会把页面带崩）。 */
 function oneOf<T extends string>(allowed: readonly T[], value: string, fallback: T): T {
   return (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
+}
+
+/** users_iri 解析：非法值（含空串/缺参）回落不过滤。 */
+function usersIriOf(value: string): UsersIri {
+  return (USERS_IRI_LEVELS as readonly string[]).includes(value) ? (value as UsersIri) : "";
+}
+
+/**
+ * s_mode 冲突规则：users入り 档位过滤靠 `{词} {N}users入り` 组合词命中标签，
+ * 在 s_tag_full（标签完全一致）下组合词必然失效——启用档位时统一回落 s_tag。
+ */
+function normalizeSMode(usersIri: UsersIri, sMode: SMode): SMode {
+  return usersIri && sMode === "s_tag_full" ? "s_tag" : sMode;
 }
 
 function queryStr(q: LocationQuery, key: string): string {
@@ -71,15 +91,20 @@ interface SearchParams {
   order: Order;
   mode: Mode;
   sMode: SMode;
+  usersIri?: UsersIri;
 }
 
 function paramsFromQuery(q: LocationQuery): SearchParams {
+  const usersIri = usersIriOf(queryStr(q, "users_iri"));
+  const sMode = oneOf(S_MODES, queryStr(q, "s_mode"), "s_tag");
   return {
     word: queryStr(q, "word").trim(),
     kind: oneOf(["illust", "manga", "novel"] as const, queryStr(q, "kind"), "illust"),
     order: oneOf(ORDERS, queryStr(q, "order"), "date_d"),
     mode: oneOf(MODES, queryStr(q, "mode"), "all"),
-    sMode: oneOf(S_MODES, queryStr(q, "s_mode"), "s_tag"),
+    // 手工改 URL 带入冲突组合（s_tag_full + users_iri）时同批规范化
+    sMode: normalizeSMode(usersIri, sMode),
+    usersIri,
   };
 }
 
@@ -90,6 +115,7 @@ const kind = ref<SearchKind>("illust");
 const order = ref<Order>("date_d");
 const mode = ref<Mode>("all");
 const sMode = ref<SMode>("s_tag");
+const usersIri = ref<UsersIri>("");
 
 function currentParams(): SearchParams {
   return {
@@ -98,11 +124,12 @@ function currentParams(): SearchParams {
     order: order.value,
     mode: mode.value,
     sMode: sMode.value,
+    usersIri: usersIri.value,
   };
 }
 
 function sigOf(p: SearchParams): string {
-  return [p.word, p.kind, p.order, p.mode, p.sMode].join("\u0000");
+  return [p.word, p.kind, p.order, p.mode, p.sMode, p.usersIri].join("\u0000");
 }
 
 // ===== 结果列表（页码分页：接口每页条数按端点对齐，前端切显示页）=====
@@ -157,6 +184,8 @@ async function load(): Promise<void> {
       order: order.value,
       mode: mode.value,
       s_mode: sMode.value,
+      // users入り 档位过滤：空串 = 不过滤，不向后端传参
+      users_iri: usersIri.value || undefined,
       // novel 走 novels 端点不带 type；illust/manga 走 artworks 端点并带 type
       type: kind.value === "novel" ? undefined : kind.value,
       page: apiPage,
@@ -346,6 +375,7 @@ function applyQuery(): void {
   order.value = params.order;
   mode.value = params.mode;
   sMode.value = params.sMode;
+  usersIri.value = params.usersIri ?? "";
   if (!params.word) {
     // 无关键词（如从侧栏重新进入）：回到初始空态
     lastFetchedSig = "";
@@ -375,6 +405,8 @@ function buildQuery(): Record<string, string> {
     s_mode: p.sMode,
   };
   if (p.word) query.word = p.word;
+  // 不过滤时不写入，分享链接保持干净（回显侧空/缺参/非法值都回落不过滤）
+  if (p.usersIri) query.users_iri = p.usersIri;
   return query;
 }
 
@@ -421,6 +453,22 @@ function onModeChange(event: Event): void {
 
 function onSModeChange(event: Event): void {
   sMode.value = oneOf(S_MODES, (event.target as HTMLSelectElement).value, "s_tag");
+  // 冲突双向收口：显式改匹配方式为 s_tag_full 时，最新操作优先——放弃档位过滤，
+  // 保证「档位过滤 + 标签完全一致」组合永不产生（详见 normalizeSMode）
+  if (sMode.value === "s_tag_full" && usersIri.value) {
+    usersIri.value = "";
+  }
+  commit();
+}
+
+function onUsersIriChange(event: Event): void {
+  // "none" 是「不过滤」选项哨兵值（md-select-option 不用空串 value）
+  const raw = (event.target as HTMLSelectElement).value;
+  usersIri.value = raw === "none" ? "" : usersIriOf(raw);
+  // 启用档位过滤时 s_tag_full 组合必然失效，同步回落 s_tag（URL 与请求同批生效）
+  if (usersIri.value && sMode.value === "s_tag_full") {
+    sMode.value = "s_tag";
+  }
   commit();
 }
 
@@ -496,7 +544,7 @@ const typeTabs = computed(() => [
         <HelpTooltip :label="t('common.search')" :text="t('browse.search.help')" />
       </div>
 
-      <!-- 过滤行：类型 tabs + 排序 / 对象 / 匹配下拉 -->
+      <!-- 过滤行：类型 tabs + 排序 / 对象 / 匹配 / users入り 档位下拉 -->
       <div class="filter-row">
         <div class="type-tabs-wrap" role="group" :aria-label="t('browse.search.typeLabel')">
           <SectionTabs class="type-tabs" :tabs="typeTabs" :value="kind" @change="onKindChange" />
@@ -523,6 +571,18 @@ const typeTabs = computed(() => [
             <md-select-option value="s_tag">{{ t("browse.search.sModeTag") }}</md-select-option>
             <md-select-option value="s_tag_full">{{ t("browse.search.sModeTagFull") }}</md-select-option>
             <md-select-option value="s_tc">{{ t("browse.search.sModeTc") }}</md-select-option>
+          </md-outlined-select>
+        </label>
+        <!-- users入り 收藏数档位过滤（搜索词过滤非排序，选项「N+」表达下限语义） -->
+        <label class="select-item">
+          <span>{{ t("browse.search.usersIriLabel") }}</span>
+          <md-outlined-select
+            :value="usersIri || 'none'"
+            :aria-label="t('browse.search.usersIriLabel')"
+            @change="onUsersIriChange"
+          >
+            <md-select-option value="none">{{ t("browse.search.usersIriNone") }}</md-select-option>
+            <md-select-option v-for="lv in USERS_IRI_LEVELS" :key="lv" :value="lv">{{ lv }}+</md-select-option>
           </md-outlined-select>
         </label>
         <!-- 本页排序：维度下拉 + 升降方向切换；仅对当前显示页本地排序（计数按需补取） -->

@@ -959,6 +959,8 @@ export default {
       sModeTag: "标签部分匹配",
       sModeTagFull: "标签完全匹配",
       sModeTc: "标题与说明",
+      usersIriLabel: "users入り",
+      usersIriNone: "不过滤",
       total: "约 {count} 件",
       localSortLabel: "本页排序",
       localSortDefault: "默认顺序",

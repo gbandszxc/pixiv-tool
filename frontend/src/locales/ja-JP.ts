@@ -916,6 +916,8 @@ export default {
       sModeTag: "タグ（部分一致）",
       sModeTagFull: "タグ（完全一致）",
       sModeTc: "タイトル・キャプション",
+      usersIriLabel: "users入り",
+      usersIriNone: "フィルターなし",
       total: "約 {count} 件",
       localSortLabel: "このページの並び替え",
       localSortDefault: "標準の並び順",
