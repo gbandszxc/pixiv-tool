@@ -1475,7 +1475,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
 | `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |
 | `browse_follow_latest(kind, mode, page)` | 关注的新作品（p + isLastPage）；mode = all|safe|r18，动态页范围 tab 三档直传 |
-| `browse_search(kind, word, order, mode, s_mode, type, page)` | 插画/漫画/小说搜索（total + lastPage；透传已有可选 like_count/bookmark_count/view_count，小说自带收藏数） |
+| `browse_search(kind, word, order, mode, s_mode, type, page, users_iri?)` | 插画/漫画/小说搜索（total + lastPage；透传已有可选 like_count/bookmark_count/view_count，小说自带收藏数）；users_iri = `100`/`500`/`1000`/`5000`/`10000` 可选收藏数档位过滤（后端拼词 `{word} {N}users入り` 借社区标签实现收藏数下限过滤，非排序；缺省不拼词行为不变；白名单外含空串报错；与 s_mode=s_tag_full 组合报错） |
 | `browse_work_counts(kind, ids)` | 作品三项计数批量（搜索页本页排序用；逐项请求详情端点，ids ≤ 60；单项失败跳过，全局限速排队） |
 | `browse_ranking(kind, mode, page, date)` | 排行榜：illust/manga/ugoira 走 ranking.php?format=json，novel 走 /ajax/ranking/novel（每页 50，含 prev/next_date） |
 | `browse_work_detail(kind, id)` | 作品详情：illust+pages+ugoira_meta / novel 全文（含 series 导航 + 正文内嵌图索引 `embedded_images`） |

@@ -2015,6 +2015,10 @@ const SEARCH_ORDERS: [&str; 4] = ["date_d", "date", "date_asc", "popular_d"];
 const SEARCH_MODES: [&str; 3] = ["all", "safe", "r18"];
 const SEARCH_S_MODES: [&str; 3] = ["s_tag_full", "s_tag", "s_tc"];
 const SEARCH_TYPES: [&str; 3] = ["illust", "manga", "ugoira"];
+/// users入り 收藏数档位白名单（社区最常用 5 档；不做裸档——空串视为非法值）。
+/// 机制为借社区评价标签 `<N>users入り` 在搜索词 → tag 子串匹配中实现收藏数
+/// 下限过滤，见 docs/PIXIV-API.md §4.2。
+const USERS_IRI_LEVELS: [&str; 5] = ["100", "500", "1000", "5000", "10000"];
 /// 排行榜 mode 合法值（实测；Premium 限定榜不在表内）。
 const RANKING_MODES_ILLUST: [&str; 6] = [
     "daily",
@@ -2046,6 +2050,7 @@ fn sanitize_search_word(word: &str) -> Result<String, PixivError> {
 }
 
 /// 搜索请求路径（word 在路径段，query 为白名单 ASCII 参数）。
+#[allow(clippy::too_many_arguments)]
 fn search_path(
     kind: &str,
     word: &str,
@@ -2054,8 +2059,9 @@ fn search_path(
     s_mode: Option<&str>,
     type_: Option<&str>,
     page: i64,
+    users_iri: Option<&str>,
 ) -> Result<String, PixivError> {
-    let word = sanitize_search_word(word)?;
+    let mut word = sanitize_search_word(word)?;
     let order = order.unwrap_or("date_d");
     if !SEARCH_ORDERS.contains(&order) {
         return Err(PixivError::Client(format!("不支持的排序方式: {order}")));
@@ -2070,6 +2076,21 @@ fn search_path(
             return Err(PixivError::Client(format!("不支持的检索方式: {s_mode}")));
         }
         params.push(format!("s_mode={s_mode}"));
+    }
+    // users_iri 档位过滤：在 sanitize 之后、percent-encode 之前拼进搜索词
+    // （`{word} {N}users入り`，单空格分隔）；`word` 入参语义不变（IPC 入参
+    // 与显示均为原词）。与 s_tag_full 组合报错：组合词在标签完全一致匹配
+    // 下必然失效（前端负责规范化，此处兜底拒绝）。
+    if let Some(level) = users_iri {
+        if !USERS_IRI_LEVELS.contains(&level) {
+            return Err(PixivError::Client(format!("不支持的收藏数档位: {level}")));
+        }
+        if s_mode == Some("s_tag_full") {
+            return Err(PixivError::Client(
+                "标签完全一致检索（s_tag_full）不支持收藏数档位过滤".into(),
+            ));
+        }
+        word.push_str(&format!(" {level}users入り"));
     }
     let (seg, type_effective) = if kind == "novel" {
         ("novels", None)
@@ -2353,9 +2374,10 @@ impl PixivApi {
         s_mode: Option<&str>,
         type_: Option<&str>,
         page: i64,
+        users_iri: Option<&str>,
     ) -> Result<Value, PixivError> {
         let page = page.max(1);
-        let path = search_path(kind, word, order, mode, s_mode, type_, page)?;
+        let path = search_path(kind, word, order, mode, s_mode, type_, page, users_iri)?;
         let body = self.client().get_json(&path).await?;
         Ok(to_value(&parse_search(&body, kind, page)))
     }
@@ -4574,40 +4596,164 @@ mod tests {
             Some("s_tag"),
             None,
             2,
+            None,
         )
         .unwrap();
         assert_eq!(
             path,
             "/ajax/search/artworks/%E6%9D%B1%E6%96%B9?order=date&mode=r18&s_mode=s_tag&type=illust&ai_type=0&p=2&lang=zh"
         );
-        let path = search_path("novel", "オリジナル", None, None, None, Some("manga"), 1).unwrap();
+        let path = search_path(
+            "novel",
+            "オリジナル",
+            None,
+            None,
+            None,
+            Some("manga"),
+            1,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             path,
             "/ajax/search/novels/%E3%82%AA%E3%83%AA%E3%82%B8%E3%83%8A%E3%83%AB?order=date_d&mode=all&p=1&lang=zh",
             "novel 不带 type/ai_type，type_ 被忽略"
         );
-        let path = search_path("manga", "w", None, None, None, Some("ugoira"), 0).unwrap();
+        let path = search_path("manga", "w", None, None, None, Some("ugoira"), 0, None).unwrap();
         assert!(path.contains("type=ugoira"), "显式 type 优先");
         assert!(path.contains("p=1"), "页码下限 1");
         // 白名单校验
-        assert!(search_path("illust", "w", Some("bogus"), None, None, None, 1).is_err());
-        assert!(search_path("illust", "w", None, Some("x"), None, None, 1).is_err());
-        assert!(search_path("illust", "w", None, None, Some("y"), None, 1).is_err());
-        assert!(search_path("illust", "w", None, None, None, Some("z"), 1).is_err());
-        assert!(search_path("video", "w", None, None, None, None, 1).is_err());
-        assert!(search_path("illust", "", None, None, None, None, 1).is_err());
+        assert!(search_path("illust", "w", Some("bogus"), None, None, None, 1, None).is_err());
+        assert!(search_path("illust", "w", None, Some("x"), None, None, 1, None).is_err());
+        assert!(search_path("illust", "w", None, None, Some("y"), None, 1, None).is_err());
+        assert!(search_path("illust", "w", None, None, None, Some("z"), 1, None).is_err());
+        assert!(search_path("video", "w", None, None, None, None, 1, None).is_err());
+        assert!(search_path("illust", "", None, None, None, None, 1, None).is_err());
     }
 
     /// 搜索词编码：ASCII 保留、非 ASCII 与保留字符编码、`?`/`#` 已在
     /// sanitize 阶段剥除；编码后不得再出现裸的非 ASCII 字节。
     #[test]
     fn search_path_percent_encodes_non_ascii_word() {
-        let path = search_path("illust", "風景 100%", None, None, None, None, 1).unwrap();
+        let path = search_path("illust", "風景 100%", None, None, None, None, 1, None).unwrap();
         assert!(
             path.starts_with("/ajax/search/artworks/%E9%A2%A8%E6%99%AF%20100%25?"),
             "空格与 % 均应编码，实际: {path}"
         );
         assert!(path.is_ascii(), "路径必须全 ASCII（wreq 不会自动编码）");
+    }
+
+    /// users入り 收藏数档位过滤：artworks/novels 拼词 `{word} {N}users入り`
+    /// 后整体 percent-encode；缺省（None）不拼词；白名单外（含空串，不做
+    /// 裸档）报错；与 s_tag_full 组合报错、其余 s_mode 与缺省不冲突。
+    #[test]
+    fn search_path_users_iri_tier_filter() {
+        // artworks：非 ASCII 词拼接后编码（「東方 1000users入り」）
+        let path = search_path(
+            "illust",
+            "東方",
+            Some("date_d"),
+            Some("all"),
+            Some("s_tag"),
+            None,
+            1,
+            Some("1000"),
+        )
+        .unwrap();
+        assert!(
+            path.starts_with(
+                "/ajax/search/artworks/%E6%9D%B1%E6%96%B9%201000users%E5%85%A5%E3%82%8A?"
+            ),
+            "users入り 应在编码前按单空格拼入词尾并整体编码，实际: {path}"
+        );
+        assert!(path.is_ascii(), "拼接后路径仍须全 ASCII，实际: {path}");
+        // novels 同样生效（「オリジナル 500users入り」）
+        let path = search_path(
+            "novel",
+            "オリジナル",
+            None,
+            None,
+            None,
+            None,
+            1,
+            Some("500"),
+        )
+        .unwrap();
+        assert!(
+            path.starts_with(
+                "/ajax/search/novels/%E3%82%AA%E3%83%AA%E3%82%B8%E3%83%8A%E3%83%AB%20500users%E5%85%A5%E3%82%8A?"
+            ),
+            "实际: {path}"
+        );
+        // 缺省不拼词（None 与既有行为逐字节一致）
+        let path = search_path("illust", "東方", None, None, None, None, 1, None).unwrap();
+        assert!(
+            path.starts_with("/ajax/search/artworks/%E6%9D%B1%E6%96%B9?"),
+            "实际: {path}"
+        );
+        // 白名单 5 档全部可用
+        for level in USERS_IRI_LEVELS {
+            assert!(search_path("illust", "w", None, None, None, None, 1, Some(level)).is_ok());
+        }
+        // 白名单外报错：未收录数值、空串（不做裸档）、非数值、含空白
+        for bad in [
+            "300",
+            "50",
+            "",
+            "users入り",
+            "1000users入り",
+            " 1000",
+            "abc",
+        ] {
+            assert!(
+                search_path("illust", "w", None, None, None, None, 1, Some(bad)).is_err(),
+                "非法档位应报错: {bad:?}"
+            );
+        }
+        // s_tag_full 冲突报错；s_tag / s_tc / 缺省均可启用
+        assert!(
+            search_path(
+                "illust",
+                "w",
+                None,
+                None,
+                Some("s_tag_full"),
+                None,
+                1,
+                Some("1000")
+            )
+            .is_err()
+        );
+        assert!(
+            search_path(
+                "illust",
+                "w",
+                None,
+                None,
+                Some("s_tag"),
+                None,
+                1,
+                Some("1000")
+            )
+            .is_ok()
+        );
+        assert!(
+            search_path(
+                "illust",
+                "w",
+                None,
+                None,
+                Some("s_tc"),
+                None,
+                1,
+                Some("1000")
+            )
+            .is_ok()
+        );
+        assert!(
+            search_path("illust", "w", None, None, None, None, 1, Some("1000")).is_ok(),
+            "s_mode 缺省不构成冲突"
+        );
     }
 
     #[test]

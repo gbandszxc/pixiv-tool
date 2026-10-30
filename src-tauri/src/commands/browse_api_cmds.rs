@@ -366,7 +366,7 @@ pub async fn browse_follow_latest_impl(
         .map_err(|err| err.to_string())
 }
 
-/// 搜索（含 total；order/s_mode/type 缺省由 api 层兜底）。
+/// 搜索（含 total；order/s_mode/type/users_iri 缺省由 api 层兜底或校验）。
 /// `type` 为 Rust 关键字：形参用 r#type，Tauri 宏 unraw 后与前端键名 "type" 对齐。
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -379,6 +379,7 @@ pub async fn browse_search(
     s_mode: Option<String>,
     r#type: Option<String>,
     page: i64,
+    users_iri: Option<String>,
 ) -> Result<Value, String> {
     browse_search_impl(
         &state,
@@ -389,6 +390,7 @@ pub async fn browse_search(
         s_mode.as_deref(),
         r#type.as_deref(),
         page,
+        users_iri.as_deref(),
     )
     .await
 }
@@ -403,11 +405,12 @@ pub async fn browse_search_impl(
     s_mode: Option<&str>,
     type_: Option<&str>,
     page: i64,
+    users_iri: Option<&str>,
 ) -> Result<Value, String> {
     validate_search(kind, word, mode)?;
     validate_page(page)?;
     build_browse_api(state)?
-        .get_search(kind, word, order, mode, s_mode, type_, page)
+        .get_search(kind, word, order, mode, s_mode, type_, page, users_iri)
         .await
         .map_err(|err| err.to_string())
 }

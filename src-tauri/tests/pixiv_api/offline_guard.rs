@@ -252,9 +252,19 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         NOT_LOGGED_IN
     );
     assert_eq!(
-        browse_search_impl(&state, "novel", "オリジナル", None, None, None, None, 1)
-            .await
-            .unwrap_err(),
+        browse_search_impl(
+            &state,
+            "novel",
+            "オリジナル",
+            None,
+            None,
+            None,
+            None,
+            1,
+            None
+        )
+        .await
+        .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(
@@ -430,13 +440,13 @@ async fn invalid_params_rejected_before_login_guard() {
 
     // 空 word（含全空白）
     assert_eq!(
-        browse_search_impl(&state, "illust", "", None, None, None, None, 1)
+        browse_search_impl(&state, "illust", "", None, None, None, None, 1, None)
             .await
             .unwrap_err(),
         "搜索词不能为空"
     );
     assert_eq!(
-        browse_search_impl(&state, "novel", "   ", None, None, None, None, 1)
+        browse_search_impl(&state, "novel", "   ", None, None, None, None, 1, None)
             .await
             .unwrap_err(),
         "搜索词不能为空"
@@ -460,7 +470,7 @@ async fn invalid_params_rejected_before_login_guard() {
         "不支持的追更类型: illust"
     );
     assert_eq!(
-        browse_search_impl(&state, "video", "w", None, None, None, None, 1)
+        browse_search_impl(&state, "video", "w", None, None, None, None, 1, None)
             .await
             .unwrap_err(),
         "不支持的搜索类型: video"
@@ -524,9 +534,19 @@ async fn invalid_params_rejected_before_login_guard() {
         "不支持的过滤模式: safe_x"
     );
     assert_eq!(
-        browse_search_impl(&state, "illust", "w", None, Some("strict"), None, None, 1)
-            .await
-            .unwrap_err(),
+        browse_search_impl(
+            &state,
+            "illust",
+            "w",
+            None,
+            Some("strict"),
+            None,
+            None,
+            1,
+            None
+        )
+        .await
+        .unwrap_err(),
         "不支持的过滤模式: strict"
     );
     // 排行榜 mode 按 kind 区分白名单（male 仅 novel，rookie 仅作品）
@@ -568,7 +588,7 @@ async fn invalid_params_rejected_before_login_guard() {
         "页码必须从 1 开始"
     );
     assert_eq!(
-        browse_search_impl(&state, "illust", "w", None, None, None, None, -1)
+        browse_search_impl(&state, "illust", "w", None, None, None, None, -1, None)
             .await
             .unwrap_err(),
         "页码必须从 1 开始"

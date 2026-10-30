@@ -52,7 +52,7 @@ async fn novel_with_series() -> (i64, i64) {
         }
     }
     let search = api
-        .get_search("novel", "original", None, None, None, None, 1)
+        .get_search("novel", "original", None, None, None, None, 1, None)
         .await
         .expect("小说搜索请求失败（系列样本兜底）");
     for item in common::assert_list_envelope(&search, "小说搜索") {
@@ -413,7 +413,7 @@ async fn live_search_artworks_novels() {
 
     // ① 插画（ASCII 词，路径全 ASCII，可正常往返）
     let art = api
-        .get_search("illust", "original", None, None, None, None, 1)
+        .get_search("illust", "original", None, None, None, None, 1, None)
         .await
         .expect("/ajax/search/artworks 应成功（ASCII 搜索词）");
     let total = art["total"]
@@ -476,7 +476,7 @@ async fn live_search_artworks_novels() {
 
     // ② 小说（ASCII 词）
     let novel = api
-        .get_search("novel", "original", None, None, None, None, 1)
+        .get_search("novel", "original", None, None, None, None, 1, None)
         .await
         .expect("/ajax/search/novels 应成功（ASCII 搜索词）");
     let novel_total = novel["total"]
@@ -527,7 +527,7 @@ async fn live_search_artworks_novels() {
     // percent-encode（%E3%82%AA…）后 200。search_path 已改为 percent_encode
     // （2026-10-01 修复），此处即该修复的在线回归。
     let jp = api
-        .get_search("illust", "オリジナル", None, None, None, None, 1)
+        .get_search("illust", "オリジナル", None, None, None, None, 1, None)
         .await
         .expect("日文搜索词应可用（search_path 对 word 做 percent-encode）");
     assert!(
