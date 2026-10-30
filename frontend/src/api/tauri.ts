@@ -3,9 +3,11 @@
  *
  * 约定（与 Rust 命令契约一致）：
  * - 调用参数用 camelCase 键；返回体保持与旧 HTTP 响应相同的 snake_case。
- * - 业务错误两种形态：
+ * - 业务错误三种形态：
  *   a) 返回值内含 { error: string }（旧 200+error 风格，调用方自行判断）；
- *   b) invoke reject 一个 string（旧 4xx/5xx detail），统一用 errorMessage() 归一化。
+ *   b) invoke reject 一个 string（旧 4xx/5xx detail），统一用 errorMessage() 归一化；
+ *   c) invoke reject 一个 { code, field?, message } 结构化载荷（ADR 0044，
+ *      settings_save 率先采用），用 errorPayload() 取形、errorMessage() 取兜底文案。
  */
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -39,8 +41,39 @@ export async function invoke<T = unknown>(
 }
 
 /**
+ * 结构化错误载荷（ADR 0044）：后端 command 返回的可序列化 Err 对象。
+ * code 是稳定错误码（i18n 键 `settings.errors.<code>` 的依据），
+ * field 是设置键名（字段停靠依据，整体性错误为 null），
+ * message 是后端中文兜底文案（i18n 缺失时的降级显示）。
+ */
+export interface StructuredError {
+  code: string;
+  field: string | null;
+  message: string;
+}
+
+/**
+ * 从任意 reject 值提取结构化错误载荷；非 { code, message } 形状返回 null。
+ * 后续命令渐进采用结构化载荷后，各调用方经此统一取形。
+ */
+export function errorPayload(err: unknown): StructuredError | null {
+  if (err && typeof err === "object" && !Array.isArray(err)) {
+    const candidate = err as { code?: unknown; field?: unknown; message?: unknown };
+    if (typeof candidate.code === "string" && typeof candidate.message === "string") {
+      return {
+        code: candidate.code,
+        field: typeof candidate.field === "string" ? candidate.field : null,
+        message: candidate.message,
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * 错误归一化：把任意错误形状转成可直接展示的 string。
  * - Tauri invoke reject 的 string → 原样（后端 4xx/5xx detail 风格）
+ * - 结构化载荷（ADR 0044）→ message 兜底文案
  * - Error → message
  * - 旧 axios 形状（err.response.data.error / .detail）→ 取 detail（过渡兼容）
  * - 其他 → String(err)
@@ -48,6 +81,8 @@ export async function invoke<T = unknown>(
 export function errorMessage(err: unknown): string {
   if (typeof err === "string") return err;
   if (err && typeof err === "object") {
+    const payload = errorPayload(err);
+    if (payload?.message) return payload.message;
     // 过渡兼容：旧 axios 错误形状。注意 axios 错误同时是 Error 实例，
     // 因此先取 response.data 里的业务错误，取不到再落到 message。
     const data = (err as { response?: { data?: { error?: unknown; detail?: unknown } } })

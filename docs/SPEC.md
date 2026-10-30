@@ -908,8 +908,34 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   上下文窗口；越界或冲突拒绝保存并定位到二级分类字段。非法值在加载期回落到默认。
   `translation_timeout_seconds`（见上条）同样归二级「模型能力与上下文」分类，但不属于
   本表 22 个 Agent 运行参数键。
-- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 48 个键，
+- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 49 个键，
   含兼容保留的 `backend_port`；`saucenao_api_key` 为用户凭据，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
+- `settings_save` 校验 / 保存失败返回结构化错误载荷 `{ code, field, message }`
+  （ADR 0044）：`code` 是稳定错误码（前端 i18n 键 `settings.errors.<code>` 的依据）、
+  `field` 是触发键名（前端字段停靠依据，整体性错误为 `null`）、`message` 是中文
+  兜底文案（日志与 i18n 缺失时降级显示，脱敏口径见 ADR 0027）。其余命令暂返回
+  `Err(String)`，按 ADR 0044 渐进迁移。错误码对照表：
+
+  | code | field |
+  |---|---|
+  | `output_dir_empty` / `output_dir_invalid` / `output_dir_create_failed` | `output_dir` |
+  | `max_wait_invalid` | `max_wait_seconds` |
+  | `translation_timeout_invalid` | `translation_timeout_seconds` |
+  | `image_cache_max_invalid` | `image_cache_max_mib` |
+  | `detail_image_scale_invalid` | `detail_image_scale` |
+  | `novel_font_scale_invalid` | `novel_font_scale` |
+  | `novel_bg_color_invalid` | `novel_bg_color` |
+  | `palette_invalid` | `theme_color` |
+  | `startup_page_invalid` | `startup_page` |
+  | `thumb_tier_invalid` | `thumb_quality_grid` / `thumb_quality_detail` / `thumb_quality_fullscreen` |
+  | `filename_template_invalid` | `illust_filename_template` / `novel_filename_template` / `novel_series_filename_template` |
+  | `translation_models_invalid` | `translation_models` |
+  | `agent_int_invalid` / `agent_bool_invalid` | 对应运行参数键 |
+  | `agent_settings_invalid` | `null`（交叉约束冲突） |
+  | `show_r18_invalid` | `show_r18` |
+  | `saucenao_key_invalid` | `saucenao_api_key` |
+  | `translation_key_invalid` / `credential_save_failed` | `translation_api_key`（回滚失败为 `null`） |
+  | `translation_settings_invalid` / `settings_invalid` / `save_failed` / `internal` | `null` |
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
 
@@ -1411,7 +1437,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 48 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板；API Key 独立写入，仅返回 configured 状态，见 §5.2） |
+| `settings_get` / `settings_save(settings)` | 配置读写（白名单 49 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板；API Key 独立写入，仅返回 configured 状态，见 §5.2）。`settings_save` 失败返回结构化载荷 `{code, field, message}`（ADR 0044，错误码表见 §5.2） |
 | `novel_translation_start(novel, force)` | 启动或加入整篇翻译 Job；novel=`{novel_id,title,tags,description,content}`（content ≤ 8MB，非法 id / 空内容拒绝）。启动前校验设置、URL、模型与 Key，任何失败不创建 Job；原文已是目标语言且 `force=false` 时返回 `already_target_language:true` 与未落库的空快照。同一作品、原文版本、目标语言重复启动加入既有 Job，`force=true` 新建。返回 `{job: TranslationJobSnapshot, already_target_language}`，命令立即返回、后台 tokio 继续执行。目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言（ADR 0018） |
 | `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
 | `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds,refused_chunks,skipped_chunks}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms,skipped}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；`refused_chunks` 是被模型按内容政策拒绝的块 ID、`skipped_chunks` 是用户显式跳过的块 ID（均升序，serde 默认兼容旧载荷，ADR 0043）；任务不存在或清单损坏返回可读错误 |

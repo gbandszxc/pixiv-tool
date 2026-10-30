@@ -16,6 +16,7 @@ pub mod cookies;
 pub mod core;
 pub mod db;
 pub mod image_proxy;
+pub mod ipc_error;
 pub mod logging;
 #[cfg(windows)]
 mod menu_bar;

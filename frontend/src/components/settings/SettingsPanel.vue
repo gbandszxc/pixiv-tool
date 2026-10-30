@@ -245,14 +245,14 @@ import {
 import { useSettingsStore } from "../../stores/settings";
 import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
-import { errorMessage, setWindowTheme, type Settings } from "../../api/tauri";
+import { errorMessage, errorPayload, setWindowTheme, type Settings } from "../../api/tauri";
 import { formatTemplatePlaceholders, ILLUST_TEMPLATE_PLACEHOLDERS, NOVEL_TEMPLATE_PLACEHOLDERS, validateFilenameTemplate, type FilenameTemplateKind } from "../../utils/filenameTemplate";
 import { notify } from "../../ui/notify";
 import type { SettingsSection } from "./sections";
 
 const props = withDefaults(defineProps<{ section: SettingsSection; active?: boolean }>(), { active: true });
 
-const { t, locale } = useI18n();
+const { t, te, locale } = useI18n();
 const settingsStore = useSettingsStore();
 const authStore = useAuthStore();
 const formats = ["txt", "markdown"];
@@ -579,6 +579,15 @@ function reset() {
   if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
 }
 defineExpose({ save, reset, hasUnsaved });
+/** 后端结构化错误 field → 错误 ref 回填（ADR 0044）；未列出的键落 Snackbar 兜底。 */
+const FIELD_ERROR_SETTERS: Record<string, (text: string) => void> = {
+  output_dir: (text) => { outputDirError.value = text; },
+  max_wait_seconds: (text) => { maxWaitError.value = text; },
+  image_cache_max_mib: (text) => { cacheMaxError.value = text; },
+  illust_filename_template: (text) => { templateErrors.value.illust = text; },
+  novel_filename_template: (text) => { templateErrors.value.novel = text; },
+  novel_series_filename_template: (text) => { templateErrors.value.series = text; },
+};
 async function save(): Promise<boolean> {
   // 数字字段保存前预校验：空 / NaN / 越界在字段下方直接标红并阻止整表写入（同 output-dir 配方）。
   if (!Number.isFinite(form.value.max_wait_seconds) || form.value.max_wait_seconds < 30 || form.value.max_wait_seconds > 86400) {
@@ -642,10 +651,18 @@ async function save(): Promise<boolean> {
     form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
     resetTranslationDraft(); savedSnapshot.value = snapshot(); notify(t("settings.saved")); return true;
   } catch (err) {
-    const message = errorMessage(err) || t("settings.saveFailed");
-    // 后端 validate_output_dir 的中文文案都含「输出目录」：落到字段下方，同时保留通知
-    if (message.includes("输出目录")) outputDirError.value = message;
-    notify(message);
+    // 结构化载荷（ADR 0044）：按 field 停靠字段、按 code 取三语文案（缺失键回落后端兜底文案）；
+    // 未映射 field / 非结构化错误（旧字符串路径）维持 Snackbar 兜底。
+    const payload = errorPayload(err);
+    const fallback = errorMessage(err) || t("settings.saveFailed");
+    let text = fallback;
+    if (payload) {
+      text = te(`settings.errors.${payload.code}`) ? t(`settings.errors.${payload.code}`) : fallback;
+      const setter = payload.field ? FIELD_ERROR_SETTERS[payload.field] : undefined;
+      if (setter) setter(text);
+      else text = fallback;
+    }
+    notify(text);
     return false;
   }
 }

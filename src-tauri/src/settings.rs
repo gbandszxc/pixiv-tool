@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::filename_template::{self, TemplateKind};
+use crate::ipc_error::SettingsError;
 use crate::paths::default_output_dir;
 
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
@@ -422,41 +423,66 @@ pub fn translation_agent_int_rule(key: &str) -> Option<&'static TranslationIntRu
 pub fn validate_translation_agent_int_value(
     key: &str,
     value: &Value,
-) -> Option<Result<i64, String>> {
+) -> Option<Result<i64, SettingsError>> {
     let rule = translation_agent_int_rule(key)?;
     Some(match value.as_i64() {
         Some(n) if !value.is_boolean() && rule.contains(n) => Ok(n),
-        _ => Err(rule.message()),
+        _ => Err(SettingsError::new(
+            "agent_int_invalid",
+            Some(rule.key),
+            rule.message(),
+        )),
     })
 }
 
 /// 保存前交叉校验：单项区间之外，还要保证输出 / 摘要 / 分块预算自洽。
-pub fn validate_translation_agent_settings(settings: &Settings) -> Result<(), String> {
+pub fn validate_translation_agent_settings(settings: &Settings) -> Result<(), SettingsError> {
     for rule in TRANSLATION_AGENT_INT_RULES {
         let value = settings.agent_int(rule.key).unwrap_or(rule.default);
         if !rule.contains(value) {
-            return Err(rule.message());
+            return Err(SettingsError::new(
+                "agent_int_invalid",
+                Some(rule.key),
+                rule.message(),
+            ));
         }
     }
     if settings.translation_agent_chunk_target_chars > settings.translation_agent_chunk_max_chars {
-        return Err("分块目标字符数不能超过分块字符上限".into());
+        return Err(SettingsError::new(
+            "agent_settings_invalid",
+            None,
+            "分块目标字符数不能超过分块字符上限",
+        ));
     }
     if settings.translation_agent_output_cap > settings.translation_agent_context_window {
-        return Err("单请求输出上限不能超过未知模型上下文窗口".into());
+        return Err(SettingsError::new(
+            "agent_settings_invalid",
+            None,
+            "单请求输出上限不能超过未知模型上下文窗口",
+        ));
     }
     if settings.translation_agent_recent_history_tokens + settings.translation_agent_summary_tokens
         > settings.translation_agent_context_window
     {
-        return Err("保留近期历史与摘要目标之和不能超过上下文窗口".into());
+        return Err(SettingsError::new(
+            "agent_settings_invalid",
+            None,
+            "保留近期历史与摘要目标之和不能超过上下文窗口",
+        ));
     }
     Ok(())
 }
 
-/// 缩略图档位校验：非字符串或不在 `allowed` 集合内 → Err(message)。
-pub fn validate_thumb_tier(value: &Value, allowed: &[&str], message: &str) -> Result<(), String> {
+/// 枚举字符串校验：非字符串或不在 `allowed` 集合内 → Err(调用方预构造的载荷)。
+/// `settings_save` 里缩略图档位与启动页共用（code / field 由调用点给定）。
+pub fn validate_thumb_tier(
+    value: &Value,
+    allowed: &[&str],
+    error: SettingsError,
+) -> Result<(), SettingsError> {
     match value.as_str() {
         Some(tier) if allowed.contains(&tier) => Ok(()),
-        _ => Err(message.to_string()),
+        _ => Err(error),
     }
 }
 
@@ -750,19 +776,28 @@ fn backup_corrupt(path: &Path) {
     }
 }
 
-/// 校验输出目录并返回锚定后的绝对路径。错误消息中文，与旧 Python 一致：
-/// - 空白 → "输出目录不能为空"
-/// - 含控制字符（< 0x20）→ "输出目录包含非法控制字符"
-/// - Windows 含 `*?"<>|` → "输出目录包含非法字符: {found}"（按出现顺序去重）
+/// 校验输出目录并返回锚定后的绝对路径（错误载荷 field 固定 `output_dir`，ADR 0044）：
+/// - 空 / 全空白 → code `output_dir_empty`
+/// - 含控制字符（< 0x20）→ code `output_dir_invalid`
+/// - Windows 含 `*?"<>|` → code `output_dir_invalid`（message 列出非法字符，按出现顺序去重）
 /// - 相对路径 → 锚定 data_dir
-/// - 指向已存在文件 → "输出目录指向一个已有文件"
-/// - create_dir_all 失败 → "无法创建输出目录: {err}"
-pub fn validate_output_dir(value: &str, data_dir: &Path) -> Result<PathBuf, String> {
+/// - 指向已存在文件 → code `output_dir_invalid`
+/// - create_dir_all 失败 → code `output_dir_create_failed`（message 含系统错误原因）
+pub fn validate_output_dir(value: &str, data_dir: &Path) -> Result<PathBuf, SettingsError> {
+    const FIELD: &str = "output_dir";
     if value.trim().is_empty() {
-        return Err("输出目录不能为空".into());
+        return Err(SettingsError::new(
+            "output_dir_empty",
+            Some(FIELD),
+            "输出目录不能为空",
+        ));
     }
     if value.chars().any(|c| (c as u32) < 32) {
-        return Err("输出目录包含非法控制字符".into());
+        return Err(SettingsError::new(
+            "output_dir_invalid",
+            Some(FIELD),
+            "输出目录包含非法控制字符",
+        ));
     }
     #[cfg(target_os = "windows")]
     {
@@ -773,7 +808,11 @@ pub fn validate_output_dir(value: &str, data_dir: &Path) -> Result<PathBuf, Stri
             .filter(|c| illegal.contains(c) && seen.insert(*c))
             .collect();
         if !found.is_empty() {
-            return Err(format!("输出目录包含非法字符: {found}"));
+            return Err(SettingsError::new(
+                "output_dir_invalid",
+                Some(FIELD),
+                format!("输出目录包含非法字符: {found}"),
+            ));
         }
     }
     let mut path = PathBuf::from(value);
@@ -781,47 +820,76 @@ pub fn validate_output_dir(value: &str, data_dir: &Path) -> Result<PathBuf, Stri
         path = data_dir.join(path);
     }
     if path.exists() && !path.is_dir() {
-        return Err("输出目录指向一个已有文件".into());
+        return Err(SettingsError::new(
+            "output_dir_invalid",
+            Some(FIELD),
+            "输出目录指向一个已有文件",
+        ));
     }
-    std::fs::create_dir_all(&path).map_err(|err| format!("无法创建输出目录: {err}"))?;
+    std::fs::create_dir_all(&path).map_err(|err| {
+        SettingsError::new(
+            "output_dir_create_failed",
+            Some(FIELD),
+            format!("无法创建输出目录: {err}"),
+        )
+    })?;
     Ok(path)
 }
 
-/// JSON 值形式的输出目录校验（非字符串 → "输出目录必须是字符串"）。
-pub fn validate_output_dir_value(value: &Value, data_dir: &Path) -> Result<PathBuf, String> {
+/// JSON 值形式的输出目录校验（非字符串 → code `output_dir_invalid`）。
+pub fn validate_output_dir_value(
+    value: &Value,
+    data_dir: &Path,
+) -> Result<PathBuf, SettingsError> {
     match value.as_str() {
         Some(s) => validate_output_dir(s, data_dir),
-        None => Err("输出目录必须是字符串".into()),
+        None => Err(SettingsError::new(
+            "output_dir_invalid",
+            Some("output_dir"),
+            "输出目录必须是字符串",
+        )),
     }
 }
 
 /// 校验最大等待时间：必须是 30..=86400 的整数。
-pub fn validate_max_wait(v: i64) -> Result<(), String> {
+pub fn validate_max_wait(v: i64) -> Result<(), SettingsError> {
     if (30..=86400).contains(&v) {
         Ok(())
     } else {
-        Err("最大等待时间必须是 30~86400 秒之间的整数".into())
+        Err(SettingsError::new(
+            "max_wait_invalid",
+            Some("max_wait_seconds"),
+            "最大等待时间必须是 30~86400 秒之间的整数",
+        ))
     }
 }
 
 /// JSON 值形式的最大等待时间校验（bool / 非整数 / 越界都拒绝），通过时返回该整数。
-pub fn validate_max_wait_value(v: &Value) -> Result<i64, String> {
+pub fn validate_max_wait_value(v: &Value) -> Result<i64, SettingsError> {
     if v.is_boolean() {
-        return Err("最大等待时间必须是 30~86400 秒之间的整数".into());
+        return Err(max_wait_error());
     }
     match v.as_i64() {
         Some(n) => {
             validate_max_wait(n)?;
             Ok(n)
         }
-        None => Err("最大等待时间必须是 30~86400 秒之间的整数".into()),
+        None => Err(max_wait_error()),
     }
 }
 
+fn max_wait_error() -> SettingsError {
+    SettingsError::new(
+        "max_wait_invalid",
+        Some("max_wait_seconds"),
+        "最大等待时间必须是 30~86400 秒之间的整数",
+    )
+}
+
 /// JSON 值形式的翻译超时校验（bool / 非整数 / 越界都拒绝），通过时返回该整数。
-pub fn validate_translation_timeout_value(v: &Value) -> Result<i64, String> {
+pub fn validate_translation_timeout_value(v: &Value) -> Result<i64, SettingsError> {
     if v.is_boolean() {
-        return Err(translation_timeout_message());
+        return Err(translation_timeout_error());
     }
     match v.as_i64() {
         Some(n)
@@ -829,70 +897,110 @@ pub fn validate_translation_timeout_value(v: &Value) -> Result<i64, String> {
         {
             Ok(n)
         }
-        _ => Err(translation_timeout_message()),
+        _ => Err(translation_timeout_error()),
     }
 }
 
-/// 翻译超时校验文案：区间与常量同源，避免改常量忘改文案。
-fn translation_timeout_message() -> String {
-    format!(
-        "翻译超时时间必须是 {TRANSLATION_TIMEOUT_MIN_SECONDS}~{TRANSLATION_TIMEOUT_MAX_SECONDS} 秒之间的整数"
+/// 翻译超时校验载荷：区间与常量同源，避免改常量忘改文案。
+fn translation_timeout_error() -> SettingsError {
+    SettingsError::new(
+        "translation_timeout_invalid",
+        Some("translation_timeout_seconds"),
+        format!(
+            "翻译超时时间必须是 {TRANSLATION_TIMEOUT_MIN_SECONDS}~{TRANSLATION_TIMEOUT_MAX_SECONDS} 秒之间的整数"
+        ),
     )
 }
 
 /// JSON 值形式的图片缓存上限校验（bool / 非整数 / 越界都拒绝），通过时返回该整数。
-pub fn validate_image_cache_max_value(v: &Value) -> Result<i64, String> {
-    let message =
-        || format!("图片缓存上限必须是 {IMAGE_CACHE_MIN_MIB}~{IMAGE_CACHE_MAX_MIB} MiB 之间的整数");
+pub fn validate_image_cache_max_value(v: &Value) -> Result<i64, SettingsError> {
+    let error = || {
+        SettingsError::new(
+            "image_cache_max_invalid",
+            Some("image_cache_max_mib"),
+            format!(
+                "图片缓存上限必须是 {IMAGE_CACHE_MIN_MIB}~{IMAGE_CACHE_MAX_MIB} MiB 之间的整数"
+            ),
+        )
+    };
     if v.is_boolean() {
-        return Err(message());
+        return Err(error());
     }
     match v.as_i64() {
         Some(n) if (IMAGE_CACHE_MIN_MIB..=IMAGE_CACHE_MAX_MIB).contains(&n) => Ok(n),
-        _ => Err(message()),
+        _ => Err(error()),
     }
 }
 
 /// JSON 值形式的小说字号缩放校验：bool / 非数字 / 非有限值（NaN/inf）/ 越界都拒绝。
-pub fn validate_novel_font_scale_value(v: &Value) -> Result<(), String> {
+pub fn validate_novel_font_scale_value(v: &Value) -> Result<(), SettingsError> {
     let Some(scale) = v.as_f64().filter(|s| s.is_finite()) else {
-        return Err("小说字号缩放必须是 0.75~2.0 之间的数字".into());
+        return Err(novel_font_scale_error());
     };
     if (0.75..=2.0).contains(&scale) {
         Ok(())
     } else {
-        Err("小说字号缩放必须是 0.75~2.0 之间的数字".into())
+        Err(novel_font_scale_error())
     }
 }
 
+fn novel_font_scale_error() -> SettingsError {
+    SettingsError::new(
+        "novel_font_scale_invalid",
+        Some("novel_font_scale"),
+        "小说字号缩放必须是 0.75~2.0 之间的数字",
+    )
+}
+
 /// JSON 值形式的详情页图片缩放校验：bool / 非数字 / 非有限值（NaN/inf）/ 越界都拒绝。
-pub fn validate_detail_image_scale_value(v: &Value) -> Result<(), String> {
-    let message = "详情页图片缩放必须是 0.5~1.0 之间的数字";
+pub fn validate_detail_image_scale_value(v: &Value) -> Result<(), SettingsError> {
     let Some(scale) = v.as_f64().filter(|s| s.is_finite()) else {
-        return Err(message.into());
+        return Err(detail_image_scale_error());
     };
     if (DETAIL_IMAGE_SCALE_MIN..=DETAIL_IMAGE_SCALE_MAX).contains(&scale) {
         Ok(())
     } else {
-        Err(message.into())
+        Err(detail_image_scale_error())
     }
+}
+
+fn detail_image_scale_error() -> SettingsError {
+    SettingsError::new(
+        "detail_image_scale_invalid",
+        Some("detail_image_scale"),
+        "详情页图片缩放必须是 0.5~1.0 之间的数字",
+    )
 }
 
 /// JSON 值形式的小说阅读背景色校验：必须是白名单语义键或空串（空串 = 跟随主题），
 /// 非字符串 / 白名单外的值一律拒绝。
-pub fn validate_novel_bg_color_value(v: &Value) -> Result<(), String> {
+pub fn validate_novel_bg_color_value(v: &Value) -> Result<(), SettingsError> {
     match v.as_str() {
         Some(color) if color.is_empty() || NOVEL_BG_COLORS.contains(&color) => Ok(()),
-        _ => Err("阅读背景色无效".to_string()),
+        _ => Err(SettingsError::new(
+            "novel_bg_color_invalid",
+            Some("novel_bg_color"),
+            "阅读背景色无效",
+        )),
     }
 }
 
 /// JSON 值形式的下载文件名模板校验：非字符串拒绝；内容按用途经
-/// [`filename_template::validate_template`] 校验（错误文案可直接展示给用户）。
-pub fn validate_filename_template_value(v: &Value, kind: TemplateKind) -> Result<(), String> {
+/// [`filename_template::validate_template`] 校验（模板明细语义放 message，code 到字段粒度）。
+pub fn validate_filename_template_value(
+    v: &Value,
+    kind: TemplateKind,
+    field: &'static str,
+) -> Result<(), SettingsError> {
     match v.as_str() {
-        Some(template) => filename_template::validate_template(template, kind),
-        None => Err("文件名模板必须是字符串".to_string()),
+        Some(template) => filename_template::validate_template(template, kind).map_err(|message| {
+            SettingsError::new("filename_template_invalid", Some(field), message)
+        }),
+        None => Err(SettingsError::new(
+            "filename_template_invalid",
+            Some(field),
+            "文件名模板必须是字符串",
+        )),
     }
 }
 
@@ -1092,11 +1200,10 @@ mod tests {
             json!(true),
             json!(null),
         ] {
-            assert_eq!(
-                validate_novel_font_scale_value(&bad).unwrap_err(),
-                message,
-                "bad={bad}"
-            );
+            let err = validate_novel_font_scale_value(&bad).unwrap_err();
+            assert_eq!(err.code, "novel_font_scale_invalid", "bad={bad}");
+            assert_eq!(err.field, Some("novel_font_scale"), "bad={bad}");
+            assert_eq!(err.message, message, "bad={bad}");
         }
     }
 
@@ -1139,11 +1246,10 @@ mod tests {
             json!(true),
             json!(null),
         ] {
-            assert_eq!(
-                validate_detail_image_scale_value(&bad).unwrap_err(),
-                message,
-                "bad={bad}"
-            );
+            let err = validate_detail_image_scale_value(&bad).unwrap_err();
+            assert_eq!(err.code, "detail_image_scale_invalid", "bad={bad}");
+            assert_eq!(err.field, Some("detail_image_scale"), "bad={bad}");
+            assert_eq!(err.message, message, "bad={bad}");
         }
     }
 
@@ -1173,11 +1279,10 @@ mod tests {
         }
         let message = "阅读背景色无效";
         for bad in [json!("hotpink"), json!(1), json!(true), json!(null)] {
-            assert_eq!(
-                validate_novel_bg_color_value(&bad).unwrap_err(),
-                message,
-                "bad={bad}"
-            );
+            let err = validate_novel_bg_color_value(&bad).unwrap_err();
+            assert_eq!(err.code, "novel_bg_color_invalid", "bad={bad}");
+            assert_eq!(err.field, Some("novel_bg_color"), "bad={bad}");
+            assert_eq!(err.message, message, "bad={bad}");
         }
     }
 
@@ -1226,51 +1331,78 @@ mod tests {
         assert!(
             validate_filename_template_value(
                 &json!(filename_template::ILLUST_FILENAME_TEMPLATE_DEFAULT),
-                TemplateKind::Illust
+                TemplateKind::Illust,
+                "illust_filename_template"
             )
             .is_ok()
         );
         assert!(
             validate_filename_template_value(
                 &json!(filename_template::NOVEL_FILENAME_TEMPLATE_DEFAULT),
-                TemplateKind::Novel
+                TemplateKind::Novel,
+                "novel_filename_template"
             )
             .is_ok()
         );
         assert!(
             validate_filename_template_value(
                 &json!(filename_template::NOVEL_SERIES_FILENAME_TEMPLATE_DEFAULT),
-                TemplateKind::NovelSeries
+                TemplateKind::NovelSeries,
+                "novel_series_filename_template"
             )
             .is_ok()
         );
         // 非字符串拒绝（文案统一）
         for bad in [json!(42), json!(true), json!(null)] {
-            assert_eq!(
-                validate_filename_template_value(&bad, TemplateKind::Illust).unwrap_err(),
-                "文件名模板必须是字符串",
-                "bad={bad}"
-            );
+            let err = validate_filename_template_value(
+                &bad,
+                TemplateKind::Illust,
+                "illust_filename_template",
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "filename_template_invalid", "bad={bad}");
+            assert_eq!(err.field, Some("illust_filename_template"), "bad={bad}");
+            assert_eq!(err.message, "文件名模板必须是字符串", "bad={bad}");
         }
         // 各类非法内容：未知占位符 / 非法字符 / 缺必含项 / 空串
-        for (template, kind, message_part) in [
-            ("{foo}_{pid}_p{page}", TemplateKind::Illust, "未知占位符"),
+        for (template, kind, field, message_part) in [
+            (
+                "{foo}_{pid}_p{page}",
+                TemplateKind::Illust,
+                "illust_filename_template",
+                "未知占位符",
+            ),
             (
                 "{title}_{pid}_p{page}/x",
                 TemplateKind::Illust,
+                "illust_filename_template",
                 "不允许的字符",
             ),
-            ("{title}_{pid}", TemplateKind::Illust, "必须包含 {page}"),
+            (
+                "{title}_{pid}",
+                TemplateKind::Illust,
+                "illust_filename_template",
+                "必须包含 {page}",
+            ),
             (
                 "{title}_{nid}",
                 TemplateKind::NovelSeries,
+                "novel_series_filename_template",
                 "必须包含 {order}",
             ),
-            ("", TemplateKind::Novel, "模板不能为空"),
+            (
+                "",
+                TemplateKind::Novel,
+                "novel_filename_template",
+                "模板不能为空",
+            ),
         ] {
-            let err = validate_filename_template_value(&json!(template), kind).unwrap_err();
+            let err =
+                validate_filename_template_value(&json!(template), kind, field).unwrap_err();
+            assert_eq!(err.code, "filename_template_invalid");
+            assert_eq!(err.field, Some(field));
             assert!(
-                err.contains(message_part),
+                err.message.contains(message_part),
                 "template={template:?} kind={kind:?} err={err}"
             );
         }
@@ -1374,12 +1506,12 @@ mod tests {
             validate_image_cache_max_value(&serde_json::json!(512)).unwrap(),
             512
         );
-        // 越界 / 非整数 / bool / null 全部拒绝，文案精确匹配
+        // 越界 / 非整数 / bool / null 全部拒绝
         for bad in [255, 2049, 0, -5] {
-            assert_eq!(
-                validate_image_cache_max_value(&serde_json::json!(bad)).unwrap_err(),
-                message
-            );
+            let err = validate_image_cache_max_value(&serde_json::json!(bad)).unwrap_err();
+            assert_eq!(err.code, "image_cache_max_invalid", "bad={bad}");
+            assert_eq!(err.field, Some("image_cache_max_mib"), "bad={bad}");
+            assert_eq!(err.message, message, "bad={bad}");
         }
         for bad in [
             serde_json::json!(true),
@@ -1387,7 +1519,9 @@ mod tests {
             serde_json::json!(null),
             serde_json::json!(512.5),
         ] {
-            assert_eq!(validate_image_cache_max_value(&bad).unwrap_err(), message);
+            let err = validate_image_cache_max_value(&bad).unwrap_err();
+            assert_eq!(err.code, "image_cache_max_invalid", "bad={bad}");
+            assert_eq!(err.message, message, "bad={bad}");
         }
     }
 
@@ -1396,7 +1530,11 @@ mod tests {
         let ok = validate_thumb_tier(
             &serde_json::json!("large"),
             &THUMB_GRID_TIERS,
-            "列表缩略图档位无效",
+            SettingsError::new(
+                "thumb_tier_invalid",
+                Some("thumb_quality_grid"),
+                "列表缩略图档位无效",
+            ),
         );
         assert!(ok.is_ok());
         for bad in [
@@ -1404,10 +1542,19 @@ mod tests {
             serde_json::json!(1),
             serde_json::json!(null),
         ] {
-            assert_eq!(
-                validate_thumb_tier(&bad, &THUMB_GRID_TIERS, "列表缩略图档位无效").unwrap_err(),
-                "列表缩略图档位无效"
-            );
+            let err = validate_thumb_tier(
+                &bad,
+                &THUMB_GRID_TIERS,
+                SettingsError::new(
+                    "thumb_tier_invalid",
+                    Some("thumb_quality_grid"),
+                    "列表缩略图档位无效",
+                ),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, "thumb_tier_invalid", "bad={bad}");
+            assert_eq!(err.field, Some("thumb_quality_grid"), "bad={bad}");
+            assert_eq!(err.message, "列表缩略图档位无效", "bad={bad}");
         }
     }
 
@@ -1459,14 +1606,13 @@ mod tests {
     #[test]
     fn validate_output_dir_rules() {
         let data_dir = std::env::temp_dir();
-        assert_eq!(
-            validate_output_dir("   ", &data_dir).unwrap_err(),
-            "输出目录不能为空"
-        );
-        assert_eq!(
-            validate_output_dir("ab\u{1}cd", &data_dir).unwrap_err(),
-            "输出目录包含非法控制字符"
-        );
+        let err = validate_output_dir("   ", &data_dir).unwrap_err();
+        assert_eq!(err.code, "output_dir_empty");
+        assert_eq!(err.field, Some("output_dir"));
+        assert_eq!(err.message, "输出目录不能为空");
+        let err = validate_output_dir("ab\u{1}cd", &data_dir).unwrap_err();
+        assert_eq!(err.code, "output_dir_invalid");
+        assert_eq!(err.message, "输出目录包含非法控制字符");
         // 相对路径锚定 data_dir
         let anchored = validate_output_dir("pixiv-out", &data_dir).unwrap();
         assert!(anchored.starts_with(&data_dir));
@@ -1474,10 +1620,9 @@ mod tests {
         // 指向已有文件
         let file = data_dir.join(format!("pixiv-tool-test-file-{}", uuid::Uuid::new_v4()));
         std::fs::write(&file, b"x").unwrap();
-        assert_eq!(
-            validate_output_dir(&file.to_string_lossy(), &data_dir).unwrap_err(),
-            "输出目录指向一个已有文件"
-        );
+        let err = validate_output_dir(&file.to_string_lossy(), &data_dir).unwrap_err();
+        assert_eq!(err.code, "output_dir_invalid");
+        assert_eq!(err.message, "输出目录指向一个已有文件");
         let _ = std::fs::remove_file(&file);
     }
 
@@ -1487,10 +1632,10 @@ mod tests {
         assert!(validate_max_wait(86400).is_ok());
         assert!(validate_max_wait(29).is_err());
         assert!(validate_max_wait(86401).is_err());
-        assert_eq!(
-            validate_max_wait(10).unwrap_err(),
-            "最大等待时间必须是 30~86400 秒之间的整数"
-        );
+        let err = validate_max_wait(10).unwrap_err();
+        assert_eq!(err.code, "max_wait_invalid");
+        assert_eq!(err.field, Some("max_wait_seconds"));
+        assert_eq!(err.message, "最大等待时间必须是 30~86400 秒之间的整数");
         // JSON 值形式：bool / 字符串拒绝
         assert!(validate_max_wait_value(&serde_json::json!(180)).is_ok());
         assert!(validate_max_wait_value(&serde_json::json!(true)).is_err());
@@ -1513,12 +1658,17 @@ mod tests {
             validate_translation_timeout_value(&serde_json::json!(600)).unwrap(),
             600
         );
-        // 越界 / 非整数 / bool / null 全部拒绝，文案精确匹配
+        // 越界 / 非整数 / bool / null 全部拒绝
         for bad in [29, 3601, 0, -5] {
+            let err =
+                validate_translation_timeout_value(&serde_json::json!(bad)).unwrap_err();
+            assert_eq!(err.code, "translation_timeout_invalid", "bad={bad}");
             assert_eq!(
-                validate_translation_timeout_value(&serde_json::json!(bad)).unwrap_err(),
-                message
+                err.field,
+                Some("translation_timeout_seconds"),
+                "bad={bad}"
             );
+            assert_eq!(err.message, message, "bad={bad}");
         }
         for bad in [
             serde_json::json!(true),
@@ -1526,10 +1676,9 @@ mod tests {
             serde_json::json!(null),
             serde_json::json!(600.5),
         ] {
-            assert_eq!(
-                validate_translation_timeout_value(&bad).unwrap_err(),
-                message
-            );
+            let err = validate_translation_timeout_value(&bad).unwrap_err();
+            assert_eq!(err.code, "translation_timeout_invalid", "bad={bad}");
+            assert_eq!(err.message, message, "bad={bad}");
         }
     }
 
@@ -1597,15 +1746,14 @@ mod tests {
         let mut settings = Settings::default();
         settings.translation_agent_output_cap = 100_000;
         settings.translation_agent_context_window = 32_768;
-        assert_eq!(
-            validate_translation_agent_settings(&settings).unwrap_err(),
-            "单请求输出上限不能超过未知模型上下文窗口"
-        );
+        let err = validate_translation_agent_settings(&settings).unwrap_err();
+        assert_eq!(err.code, "agent_settings_invalid");
+        assert_eq!(err.field, None);
+        assert_eq!(err.message, "单请求输出上限不能超过未知模型上下文窗口");
         let mut settings = Settings::default();
         settings.translation_agent_chunk_target_chars = 10_000;
-        assert_eq!(
-            validate_translation_agent_settings(&settings).unwrap_err(),
-            "分块目标字符数不能超过分块字符上限"
-        );
+        let err = validate_translation_agent_settings(&settings).unwrap_err();
+        assert_eq!(err.code, "agent_settings_invalid");
+        assert_eq!(err.message, "分块目标字符数不能超过分块字符上限");
     }
 }

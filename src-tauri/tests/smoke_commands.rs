@@ -73,14 +73,16 @@ fn settings_apply_round_trip_via_temp_config() {
     // 未出现在 patch 里的键保持默认
     assert_eq!(reloaded.output_dir, Settings::default().output_dir);
 
-    // 非法 patch 被中文校验拒绝且不落盘
+    // 非法 patch 被结构化校验拒绝（ADR 0044）且不落盘
     let err = apply_settings_patch(
         &reloaded,
         &json!({ "max_wait_seconds": 86401 }),
         &state.paths.data_dir,
     )
     .unwrap_err();
-    assert_eq!(err, "最大等待时间必须是 30~86400 秒之间的整数");
+    assert_eq!(err.code, "max_wait_invalid");
+    assert_eq!(err.field, Some("max_wait_seconds"));
+    assert_eq!(err.message, "最大等待时间必须是 30~86400 秒之间的整数");
     assert_eq!(
         Settings::load_or_init(&state.paths.config_dir).max_wait_seconds,
         3600,

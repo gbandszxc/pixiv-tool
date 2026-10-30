@@ -2,14 +2,8 @@
 //!
 //! 返回体与旧 HTTP 后端一致：
 //! - settings_get → Settings（snake_case 字段，等价旧 GET /api/settings）
-//! - settings_save → {"status":"success"}；output_dir 非法 → Err(中文校验消息)；
-//!   max_wait_seconds 非法 → Err("最大等待时间必须是 30~86400 秒之间的整数")；
-//!   translation_timeout_seconds 非法 → Err("翻译超时时间必须是 30~3600 秒之间的整数")；
-//!   image_cache_max_mib 非法 → Err("图片缓存上限必须是 256~2048 MiB 之间的整数")；
-//!   detail_image_scale 非法 → Err("详情页图片缩放必须是 0.5~1.0 之间的数字")；
-//!   novel_font_scale 非法 → Err("小说字号缩放必须是 0.75~2.0 之间的数字")；
-//!   novel_bg_color 非法 → Err("阅读背景色无效")；
-//!   文件名模板非法 → Err（模板校验的中文消息，如「未知占位符：…」「模板不能为空」）
+//! - settings_save → {"status":"success"}；校验 / 保存失败 → Err(SettingsError)
+//!   结构化载荷（{code, field, message}，错误码对照表见 SPEC §5.2 与 ADR 0044）
 //! - clear_logs → {"status":"success"}（清空 <data_dir>/logs 下当前及轮转 .log 文件）
 
 use std::path::Path;
@@ -18,6 +12,7 @@ use serde_json::{Value, json};
 use tauri::State;
 
 use crate::core::filename_template::TemplateKind;
+use crate::ipc_error::SettingsError;
 use crate::settings::{
     STARTUP_PAGES, Settings, THUMB_DETAIL_TIERS, THUMB_FULLSCREEN_TIERS, THUMB_GRID_TIERS,
     TRANSLATION_AGENT_BOOL_KEYS, TRANSLATION_AGENT_INT_RULES, validate_detail_image_scale_value,
@@ -100,34 +95,61 @@ pub async fn settings_get(state: State<'_, AppState>) -> Result<Value, String> {
 }
 
 /// 更新配置并持久化。settings 是 partial JSON（只更新出现的键）。
+/// 校验 / 保存失败返回 `SettingsError`（ADR 0044），前端按 field 停靠、按 code 取 i18n 文案。
 #[tauri::command]
-pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Result<Value, String> {
+pub async fn settings_save(
+    state: State<'_, AppState>,
+    settings: Value,
+) -> Result<Value, SettingsError> {
     let mut guard = state
         .settings
         .lock()
-        .map_err(|_| "设置表锁中毒".to_string())?;
+        .map_err(|_| SettingsError::new("internal", None, "设置表锁中毒"))?;
     let previous = guard.clone();
     let updated = apply_settings_patch(&previous, &settings, &state.paths.data_dir)?;
     let key_patch = settings
         .get("translation_api_key")
         .map(|value| {
-            let key = value.as_str().ok_or("翻译 API Key 必须是字符串")?.trim();
+            let key = value
+                .as_str()
+                .ok_or_else(|| {
+                    SettingsError::new(
+                        "translation_key_invalid",
+                        Some("translation_api_key"),
+                        "翻译 API Key 必须是字符串",
+                    )
+                })?
+                .trim();
             if key.encode_utf16().count() > 1200 || key.chars().any(char::is_control) {
-                return Err("翻译 API Key 过长或含控制字符");
+                return Err(SettingsError::new(
+                    "translation_key_invalid",
+                    Some("translation_api_key"),
+                    "翻译 API Key 过长或含控制字符",
+                ));
             }
             Ok(key)
         })
         .transpose()?;
     // 先落盘再更新内存：磁盘失败时内存保持旧值，避免两处状态漂移
-    updated
-        .save(&state.paths.config_dir)
-        .map_err(|err| format!("保存设置失败: {err}"))?;
+    updated.save(&state.paths.config_dir).map_err(|err| {
+        SettingsError::new("save_failed", None, format!("保存设置失败: {err}"))
+    })?;
     if let Some(key) = key_patch {
         if let Err(error) = crate::translation::write_api_key(key) {
             previous
                 .save(&state.paths.config_dir)
-                .map_err(|_| "凭据保存失败且配置回滚失败，请重新保存设置")?;
-            return Err(error);
+                .map_err(|_| {
+                    SettingsError::new(
+                        "credential_save_failed",
+                        None,
+                        "凭据保存失败且配置回滚失败，请重新保存设置",
+                    )
+                })?;
+            return Err(SettingsError::new(
+                "credential_save_failed",
+                Some("translation_api_key"),
+                error,
+            ));
         }
     }
     *guard = updated;
@@ -135,25 +157,30 @@ pub async fn settings_save(state: State<'_, AppState>, settings: Value) -> Resul
 }
 
 /// partial JSON → 新 Settings（纯函数，离线可测）：
-/// 1. output_dir / max_wait_seconds / translation_timeout_seconds / theme_color /
-///    缩略图档位 / image_cache_max_mib / show_r18 / detail_image_scale /
-///    novel_font_scale / novel_bg_color / 三个下载文件名模板先做中文校验
-///    （失败即 Err，旧 400 文案）
+/// 1. 白名单值域键先做结构化校验（失败即 Err(SettingsError)，code 对照表见 SPEC §5.2）
 /// 2. 白名单键覆盖到当前配置序列化结果上，再反解回 Settings
-///    （类型不合法的值在反解时以中文错误拒绝）
+///    （类型不合法的值在反解时以 `settings_invalid` 拒绝）
 pub fn apply_settings_patch(
     current: &Settings,
     patch: &Value,
     data_dir: &Path,
-) -> Result<Settings, String> {
+) -> Result<Settings, SettingsError> {
     let Some(patch_obj) = patch.as_object() else {
-        return Err("settings 必须是 JSON 对象".to_string());
+        return Err(SettingsError::new(
+            "settings_invalid",
+            None,
+            "settings 必须是 JSON 对象",
+        ));
     };
     if let Some(value) = patch_obj.get("output_dir") {
         validate_output_dir_value(value, data_dir)?;
     }
     if let Some(value) = patch_obj.get("startup_page") {
-        validate_thumb_tier(value, &STARTUP_PAGES, "应用启动页无效")?;
+        validate_thumb_tier(
+            value,
+            &STARTUP_PAGES,
+            SettingsError::new("startup_page_invalid", Some("startup_page"), "应用启动页无效"),
+        )?;
     }
     if let Some(value) = patch_obj.get("max_wait_seconds") {
         validate_max_wait_value(value)?;
@@ -163,7 +190,11 @@ pub fn apply_settings_patch(
     }
     if let Some(value) = patch_obj.get("translation_models") {
         if !value.is_array() {
-            return Err("模型列表必须是数组".to_string());
+            return Err(SettingsError::new(
+                "translation_models_invalid",
+                Some("translation_models"),
+                "模型列表必须是数组",
+            ));
         }
     }
     // 运行参数与加载期回落共用 settings.rs 的同一张区间表。
@@ -175,23 +206,57 @@ pub fn apply_settings_patch(
     }
     for key in TRANSLATION_AGENT_BOOL_KEYS {
         if patch_obj.get(key).is_some_and(|value| !value.is_boolean()) {
-            return Err(format!("设置项 {key} 必须是布尔值"));
+            return Err(SettingsError::new(
+                "agent_bool_invalid",
+                Some(key),
+                format!("设置项 {key} 必须是布尔值"),
+            ));
         }
     }
     if let Some(value) = patch_obj.get("theme_color") {
-        let color = value.as_str().ok_or_else(|| "主题色板无效".to_string())?;
+        let color = value.as_str().ok_or_else(|| {
+            SettingsError::new("palette_invalid", Some("theme_color"), "主题色板无效")
+        })?;
         if !["pixiv", "indigo", "jade", "violet", "amber"].contains(&color) {
-            return Err("主题色板无效".to_string());
+            return Err(SettingsError::new(
+                "palette_invalid",
+                Some("theme_color"),
+                "主题色板无效",
+            ));
         }
     }
     if let Some(value) = patch_obj.get("thumb_quality_grid") {
-        validate_thumb_tier(value, &THUMB_GRID_TIERS, "列表缩略图档位无效")?;
+        validate_thumb_tier(
+            value,
+            &THUMB_GRID_TIERS,
+            SettingsError::new(
+                "thumb_tier_invalid",
+                Some("thumb_quality_grid"),
+                "列表缩略图档位无效",
+            ),
+        )?;
     }
     if let Some(value) = patch_obj.get("thumb_quality_detail") {
-        validate_thumb_tier(value, &THUMB_DETAIL_TIERS, "详情页缩略图档位无效")?;
+        validate_thumb_tier(
+            value,
+            &THUMB_DETAIL_TIERS,
+            SettingsError::new(
+                "thumb_tier_invalid",
+                Some("thumb_quality_detail"),
+                "详情页缩略图档位无效",
+            ),
+        )?;
     }
     if let Some(value) = patch_obj.get("thumb_quality_fullscreen") {
-        validate_thumb_tier(value, &THUMB_FULLSCREEN_TIERS, "全屏缩略图档位无效")?;
+        validate_thumb_tier(
+            value,
+            &THUMB_FULLSCREEN_TIERS,
+            SettingsError::new(
+                "thumb_tier_invalid",
+                Some("thumb_quality_fullscreen"),
+                "全屏缩略图档位无效",
+            ),
+        )?;
     }
     if let Some(value) = patch_obj.get("image_cache_max_mib") {
         validate_image_cache_max_value(value)?;
@@ -200,7 +265,11 @@ pub fn apply_settings_patch(
         .get("show_r18")
         .is_some_and(|value| !value.is_boolean())
     {
-        return Err("R-18 展示开关必须是布尔值".to_string());
+        return Err(SettingsError::new(
+            "show_r18_invalid",
+            Some("show_r18"),
+            "R-18 展示开关必须是布尔值",
+        ));
     }
     if let Some(value) = patch_obj.get("detail_image_scale") {
         validate_detail_image_scale_value(value)?;
@@ -212,19 +281,31 @@ pub fn apply_settings_patch(
         validate_novel_bg_color_value(value)?;
     }
     if let Some(value) = patch_obj.get("illust_filename_template") {
-        validate_filename_template_value(value, TemplateKind::Illust)?;
+        validate_filename_template_value(value, TemplateKind::Illust, "illust_filename_template")?;
     }
     if let Some(value) = patch_obj.get("novel_filename_template") {
-        validate_filename_template_value(value, TemplateKind::Novel)?;
+        validate_filename_template_value(value, TemplateKind::Novel, "novel_filename_template")?;
     }
     if let Some(value) = patch_obj.get("novel_series_filename_template") {
-        validate_filename_template_value(value, TemplateKind::NovelSeries)?;
+        validate_filename_template_value(
+            value,
+            TemplateKind::NovelSeries,
+            "novel_series_filename_template",
+        )?;
     }
     let mut merged = serde_json::to_value(current)
-        .map_err(|err| format!("序列化设置失败: {err}"))?
+        .map_err(|err| {
+            SettingsError::new(
+                "settings_invalid",
+                None,
+                format!("序列化设置失败: {err}"),
+            )
+        })?
         .as_object()
         .cloned()
-        .ok_or_else(|| "序列化设置失败: 结构异常".to_string())?;
+        .ok_or_else(|| {
+            SettingsError::new("settings_invalid", None, "序列化设置失败: 结构异常")
+        })?;
     for key in WRITABLE_KEYS {
         if let Some(value) = patch_obj.get(key) {
             merged.insert(key.to_string(), value.clone());
@@ -233,17 +314,24 @@ pub fn apply_settings_patch(
     // saucenao_api_key 保存前 trim（必须字符串；不做长度上限，保持简单）。
     // key 属用户凭据：只进配置文件，任何日志不得输出该值。
     if let Some(value) = patch_obj.get("saucenao_api_key") {
-        let key = value
-            .as_str()
-            .ok_or("SauceNAO API Key 必须是字符串".to_string())?;
+        let key = value.as_str().ok_or_else(|| {
+            SettingsError::new(
+                "saucenao_key_invalid",
+                Some("saucenao_api_key"),
+                "SauceNAO API Key 必须是字符串",
+            )
+        })?;
         merged.insert(
             "saucenao_api_key".to_string(),
             Value::String(key.trim().to_string()),
         );
     }
-    let updated: Settings = serde_json::from_value(Value::Object(merged))
-        .map_err(|_| "设置字段格式不正确".to_string())?;
-    crate::translation::validate_settings(&updated)?;
+    let updated: Settings = serde_json::from_value(Value::Object(merged)).map_err(|_| {
+        SettingsError::new("settings_invalid", None, "设置字段格式不正确")
+    })?;
+    crate::translation::validate_settings(&updated).map_err(|message| {
+        SettingsError::new("translation_settings_invalid", None, message)
+    })?;
     validate_translation_agent_settings(&updated)?;
     Ok(updated)
 }
@@ -276,6 +364,18 @@ mod tests {
 
     fn cleanup(dir: &std::path::Path) {
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// 断言 Err 的 code / field（错误码契约见 SPEC §5.2 / ADR 0044）。
+    fn assert_code(
+        result: Result<Settings, SettingsError>,
+        code: &str,
+        field: Option<&str>,
+    ) -> SettingsError {
+        let err = result.unwrap_err();
+        assert_eq!(err.code, code, "code={}", err.code);
+        assert_eq!(err.field, field, "code={}", err.code);
+        err
     }
 
     #[test]
@@ -340,14 +440,14 @@ mod tests {
             );
         }
         for bad in [json!("/unknown"), json!(42), json!(null)] {
-            assert_eq!(
+            assert_code(
                 apply_settings_patch(
                     &Settings::default(),
                     &json!({"startup_page": bad}),
                     &data_dir
-                )
-                .unwrap_err(),
-                "应用启动页无效"
+                ),
+                "startup_page_invalid",
+                Some("startup_page"),
             );
         }
         cleanup(&data_dir);
@@ -356,19 +456,23 @@ mod tests {
     #[test]
     fn patch_rejects_bad_output_dir() {
         let data_dir = temp_data_dir("outdir");
-        let err = apply_settings_patch(
-            &Settings::default(),
-            &json!({"output_dir": "   "}),
-            &data_dir,
-        )
-        .unwrap_err();
-        assert_eq!(err, "输出目录不能为空");
-        // 非字符串
-        assert_eq!(
-            apply_settings_patch(&Settings::default(), &json!({"output_dir": 42}), &data_dir)
-                .unwrap_err(),
-            "输出目录必须是字符串"
+        let err = assert_code(
+            apply_settings_patch(
+                &Settings::default(),
+                &json!({"output_dir": "   "}),
+                &data_dir,
+            ),
+            "output_dir_empty",
+            Some("output_dir"),
         );
+        assert_eq!(err.message, "输出目录不能为空");
+        // 非字符串
+        let err = assert_code(
+            apply_settings_patch(&Settings::default(), &json!({"output_dir": 42}), &data_dir),
+            "output_dir_invalid",
+            Some("output_dir"),
+        );
+        assert_eq!(err.message, "输出目录必须是字符串");
         // 合法相对路径锚定成功
         assert!(
             apply_settings_patch(
@@ -386,16 +490,16 @@ mod tests {
         let data_dir = temp_data_dir("maxwait");
         let message = "最大等待时间必须是 30~86400 秒之间的整数";
         for bad in [json!(10), json!(true), json!("180"), json!(86401)] {
-            assert_eq!(
+            let err = assert_code(
                 apply_settings_patch(
                     &Settings::default(),
                     &json!({"max_wait_seconds": bad}),
                     &data_dir
-                )
-                .unwrap_err(),
-                message,
-                "bad={bad}"
+                ),
+                "max_wait_invalid",
+                Some("max_wait_seconds"),
             );
+            assert_eq!(err.message, message, "bad={bad}");
         }
         assert!(
             apply_settings_patch(
@@ -420,16 +524,16 @@ mod tests {
         assert_eq!(updated.image_cache_max_mib, 1024);
         let message = "图片缓存上限必须是 256~2048 MiB 之间的整数";
         for bad in [json!(255), json!(2049), json!(true), json!("512")] {
-            assert_eq!(
+            let err = assert_code(
                 apply_settings_patch(
                     &Settings::default(),
                     &json!({"image_cache_max_mib": bad}),
                     &data_dir
-                )
-                .unwrap_err(),
-                message,
-                "bad={bad}"
+                ),
+                "image_cache_max_invalid",
+                Some("image_cache_max_mib"),
             );
+            assert_eq!(err.message, message, "bad={bad}");
         }
         cleanup(&data_dir);
     }
@@ -446,16 +550,16 @@ mod tests {
             json!("600"),
             json!(null),
         ] {
-            assert_eq!(
+            let err = assert_code(
                 apply_settings_patch(
                     &Settings::default(),
                     &json!({"translation_timeout_seconds": bad}),
                     &data_dir
-                )
-                .unwrap_err(),
-                message,
-                "bad={bad}"
+                ),
+                "translation_timeout_invalid",
+                Some("translation_timeout_seconds"),
             );
+            assert_eq!(err.message, message, "bad={bad}");
         }
         // 区间两端与默认值通过
         for ok in [json!(30), json!(3600), json!(600)] {
@@ -473,37 +577,44 @@ mod tests {
     #[test]
     fn patch_rejects_non_object_and_bad_types() {
         let data_dir = temp_data_dir("shape");
-        assert_eq!(
-            apply_settings_patch(&Settings::default(), &json!("x"), &data_dir).unwrap_err(),
-            "settings 必须是 JSON 对象"
+        let err = assert_code(
+            apply_settings_patch(&Settings::default(), &json!("x"), &data_dir),
+            "settings_invalid",
+            None,
         );
-        assert_eq!(
-            apply_settings_patch(&Settings::default(), &json!(null), &data_dir).unwrap_err(),
-            "settings 必须是 JSON 对象"
+        assert_eq!(err.message, "settings 必须是 JSON 对象");
+        assert_code(
+            apply_settings_patch(&Settings::default(), &json!(null), &data_dir),
+            "settings_invalid",
+            None,
         );
         // 白名单键但类型不合法（output_formats 传字符串）
-        let err = apply_settings_patch(
-            &Settings::default(),
-            &json!({"output_formats": "txt"}),
-            &data_dir,
-        )
-        .unwrap_err();
-        assert!(err.starts_with("设置字段格式不正确"), "got {err}");
+        let err = assert_code(
+            apply_settings_patch(
+                &Settings::default(),
+                &json!({"output_formats": "txt"}),
+                &data_dir,
+            ),
+            "settings_invalid",
+            None,
+        );
+        assert!(err.message.starts_with("设置字段格式不正确"), "got {err}");
         cleanup(&data_dir);
     }
 
     #[test]
     fn patch_rejects_unknown_theme_color() {
         let data_dir = temp_data_dir("palette");
-        assert_eq!(
+        let err = assert_code(
             apply_settings_patch(
                 &Settings::default(),
                 &json!({"theme_color": "neon"}),
                 &data_dir
-            )
-            .unwrap_err(),
-            "主题色板无效"
+            ),
+            "palette_invalid",
+            Some("theme_color"),
         );
+        assert_eq!(err.message, "主题色板无效");
         cleanup(&data_dir);
     }
 
@@ -537,21 +648,33 @@ mod tests {
     #[test]
     fn patch_rejects_bad_thumb_tiers() {
         let data_dir = temp_data_dir("tiers");
-        let cases: [(&str, &str); 3] = [
-            ("thumb_quality_grid", "列表缩略图档位无效"),
-            ("thumb_quality_detail", "详情页缩略图档位无效"),
-            ("thumb_quality_fullscreen", "全屏缩略图档位无效"),
+        let cases: [(&str, &str, &str); 3] = [
+            (
+                "thumb_quality_grid",
+                "thumb_quality_grid",
+                "列表缩略图档位无效",
+            ),
+            (
+                "thumb_quality_detail",
+                "thumb_quality_detail",
+                "详情页缩略图档位无效",
+            ),
+            (
+                "thumb_quality_fullscreen",
+                "thumb_quality_fullscreen",
+                "全屏缩略图档位无效",
+            ),
         ];
-        for (key, message) in cases {
+        for (key, field, message) in cases {
             for bad in [json!("huge"), json!(3)] {
                 let mut patch = serde_json::Map::new();
                 patch.insert(key.to_string(), bad.clone());
-                assert_eq!(
-                    apply_settings_patch(&Settings::default(), &Value::Object(patch), &data_dir)
-                        .unwrap_err(),
-                    message,
-                    "key={key} bad={bad}"
+                let err = assert_code(
+                    apply_settings_patch(&Settings::default(), &Value::Object(patch), &data_dir),
+                    "thumb_tier_invalid",
+                    Some(field),
                 );
+                assert_eq!(err.message, message, "key={key} bad={bad}");
             }
         }
         // 各键合法值接受
@@ -573,13 +696,14 @@ mod tests {
     #[test]
     fn patch_rejects_non_bool_show_r18() {
         let data_dir = temp_data_dir("r18bool");
+        let message = "R-18 展示开关必须是布尔值";
         for bad in [json!("true"), json!(1), json!(null)] {
-            assert_eq!(
-                apply_settings_patch(&Settings::default(), &json!({"show_r18": bad}), &data_dir)
-                    .unwrap_err(),
-                "R-18 展示开关必须是布尔值",
-                "bad={bad}"
+            let err = assert_code(
+                apply_settings_patch(&Settings::default(), &json!({"show_r18": bad}), &data_dir),
+                "show_r18_invalid",
+                Some("show_r18"),
             );
+            assert_eq!(err.message, message, "bad={bad}");
         }
         assert!(
             apply_settings_patch(&Settings::default(), &json!({"show_r18": true}), &data_dir)
@@ -622,7 +746,7 @@ mod tests {
     fn patch_rejects_bad_novel_font_scale() {
         let data_dir = temp_data_dir("novelfont-bad");
         let message = "小说字号缩放必须是 0.75~2.0 之间的数字";
-        // 越界 / 非数字 / bool / null 全部拒绝，文案精确匹配
+        // 越界 / 非数字 / bool / null 全部拒绝
         for bad in [
             json!(0.5),
             json!(2.5),
@@ -630,16 +754,16 @@ mod tests {
             json!(true),
             json!(null),
         ] {
-            assert_eq!(
+            let err = assert_code(
                 apply_settings_patch(
                     &Settings::default(),
                     &json!({ "novel_font_scale": bad }),
                     &data_dir
-                )
-                .unwrap_err(),
-                message,
-                "bad={bad}"
+                ),
+                "novel_font_scale_invalid",
+                Some("novel_font_scale"),
             );
+            assert_eq!(err.message, message, "bad={bad}");
         }
         cleanup(&data_dir);
     }
@@ -678,7 +802,7 @@ mod tests {
     fn patch_rejects_bad_detail_image_scale() {
         let data_dir = temp_data_dir("detailimg-bad");
         let message = "详情页图片缩放必须是 0.5~1.0 之间的数字";
-        // 越界 / 非数字 / bool / null 全部拒绝，文案精确匹配
+        // 越界 / 非数字 / bool / null 全部拒绝
         for bad in [
             json!(0.4),
             json!(1.5),
@@ -686,16 +810,16 @@ mod tests {
             json!(true),
             json!(null),
         ] {
-            assert_eq!(
+            let err = assert_code(
                 apply_settings_patch(
                     &Settings::default(),
                     &json!({ "detail_image_scale": bad }),
                     &data_dir
-                )
-                .unwrap_err(),
-                message,
-                "bad={bad}"
+                ),
+                "detail_image_scale_invalid",
+                Some("detail_image_scale"),
             );
+            assert_eq!(err.message, message, "bad={bad}");
         }
         cleanup(&data_dir);
     }
@@ -730,18 +854,18 @@ mod tests {
     fn patch_rejects_bad_novel_bg_color() {
         let data_dir = temp_data_dir("novelbg-bad");
         let message = "阅读背景色无效";
-        // 白名单外的值 / 非字符串 / bool / null 全部拒绝，文案精确匹配
+        // 白名单外的值 / 非字符串 / bool / null 全部拒绝
         for bad in [json!("hotpink"), json!(1), json!(true), json!(null)] {
-            assert_eq!(
+            let err = assert_code(
                 apply_settings_patch(
                     &Settings::default(),
                     &json!({ "novel_bg_color": bad }),
                     &data_dir
-                )
-                .unwrap_err(),
-                message,
-                "bad={bad}"
+                ),
+                "novel_bg_color_invalid",
+                Some("novel_bg_color"),
             );
+            assert_eq!(err.message, message, "bad={bad}");
         }
         cleanup(&data_dir);
     }
@@ -777,7 +901,7 @@ mod tests {
             "{user}_{title}_{pid}_p{page1}"
         );
         assert_eq!(untouched.novel_filename_template, "{nid}_{title}");
-        // 非法模板按键对应的用途校验拒绝（文案来自 validate_template）；
+        // 非法模板按键对应的用途校验拒绝（明细语义在 message，code 到字段粒度）；
         // apply 返回 Err 时 settings_save 在落盘前中止，磁盘保持旧值。
         let cases: [(&str, Value, &str); 6] = [
             (
@@ -810,9 +934,15 @@ mod tests {
         for (key, bad, message_part) in cases {
             let mut patch = serde_json::Map::new();
             patch.insert(key.to_string(), bad);
-            let err = apply_settings_patch(&Settings::default(), &Value::Object(patch), &data_dir)
-                .unwrap_err();
-            assert!(err.contains(message_part), "key={key} err={err}");
+            let err = assert_code(
+                apply_settings_patch(&Settings::default(), &Value::Object(patch), &data_dir),
+                "filename_template_invalid",
+                Some(key),
+            );
+            assert!(
+                err.message.contains(message_part),
+                "key={key} err={err}"
+            );
         }
         cleanup(&data_dir);
     }
@@ -864,7 +994,7 @@ mod tests {
             );
         }
         // 各协议的应用自有字段不允许出现在高级 JSON 中。
-        assert_eq!(
+        let err = assert_code(
             apply_settings_patch(
                 &Settings::default(),
                 &json!({
@@ -872,8 +1002,12 @@ mod tests {
                     "translation_extra": { "system": "越权" }
                 }),
                 &data_dir
-            )
-            .unwrap_err(),
+            ),
+            "translation_settings_invalid",
+            None,
+        );
+        assert_eq!(
+            err.message,
             "高级 JSON 不能覆盖模型、消息、系统提示、输出格式、流式、工具或凭据字段"
         );
         cleanup(&data_dir);
@@ -899,15 +1033,16 @@ mod tests {
         .unwrap();
         assert_eq!(updated.saucenao_api_key, "");
         // 非字符串拒绝
-        assert_eq!(
+        let err = assert_code(
             apply_settings_patch(
                 &Settings::default(),
                 &json!({"saucenao_api_key": 42}),
                 &data_dir
-            )
-            .unwrap_err(),
-            "SauceNAO API Key 必须是字符串"
+            ),
+            "saucenao_key_invalid",
+            Some("saucenao_api_key"),
         );
+        assert_eq!(err.message, "SauceNAO API Key 必须是字符串");
         // 未出现在 patch 里保持原值
         let updated =
             apply_settings_patch(&updated, &json!({"language": "en-US"}), &data_dir).unwrap();
@@ -954,7 +1089,7 @@ mod tests {
             .is_err()
         );
         // 交叉约束：输出上限不能超过上下文窗口。
-        assert_eq!(
+        let err = assert_code(
             apply_settings_patch(
                 &Settings::default(),
                 &json!({
@@ -962,10 +1097,11 @@ mod tests {
                     "translation_agent_context_window": 32768
                 }),
                 &data_dir
-            )
-            .unwrap_err(),
-            "单请求输出上限不能超过未知模型上下文窗口"
+            ),
+            "agent_settings_invalid",
+            None,
         );
+        assert_eq!(err.message, "单请求输出上限不能超过未知模型上下文窗口");
         cleanup(&data_dir);
     }
 }
