@@ -14,9 +14,9 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   自带类型不受 tab 影响；未命中按关键词搜索。
  * - 端点映射：kind=illust|manga → artworks 检索（type=illust|manga）；
  *   kind=novel → novels 检索（不传 type）。
- * - 结果 WorkGrid + 「约 N 件」total；页码分页（AppPagination）：显示页统一 20 条，
- *   接口每页条数按端点区分（实测见 docs/PIXIV-API.md §搜索）——artworks 60 条
- *   （恰为 3 个显示页），novels 30 条（显示页跨接口页时取相邻两页拼接后切片）；
+ * - 结果 WorkGrid + 「约 N 件」total；页码分页（AppPagination）：每页条数按端点
+ *   对齐（实测见 docs/PIXIV-API.md §搜索）——插画/漫画 artworks 60 条切 3 个显示页
+ *   （20/页），小说 novels 30 条即 1 个显示页（30/页，一页恰一次请求）；
  *   接口页缓存在内存供跨页复用。
  * - 本页排序：维度（点赞/收藏/浏览）下拉 + 升降方向切换（SortDirectionToggle），
  *   仅对当前显示页本地排序；
@@ -105,12 +105,13 @@ function sigOf(p: SearchParams): string {
   return [p.word, p.kind, p.order, p.mode, p.sMode].join("\u0000");
 }
 
-// ===== 结果列表（页码分页：显示页统一 20 条，接口页条数按端点映射）=====
+// ===== 结果列表（页码分页：接口每页条数按端点对齐，前端切显示页）=====
 
-/** 显示页条数（AppPagination 每页容量）。 */
-const PAGE_SIZE = 20;
-/** 接口每页条数（按端点，实测见 docs/PIXIV-API.md §搜索）：artworks 60、novels 30。 */
-const API_PAGE_SIZE = computed(() => (kind.value === "novel" ? 30 : 60));
+/** 显示页条数（AppPagination 每页容量）：artworks 接口页 60 条切 3 页（20/页）；
+ * novels 接口页 30 条整页显示（30/页，一接口页 = 一显示页，一页恰一次请求）。 */
+const PAGE_SIZE = computed(() => (kind.value === "novel" ? 30 : 20));
+/** 一个接口页切成几个显示页。 */
+const SEGMENTS_PER_API_PAGE = computed(() => (kind.value === "novel" ? 1 : 3));
 /** 接口页缓存上限（超出淘汰最旧；被淘汰页再访问时重新请求）。 */
 const MAX_API_PAGES = 30;
 
@@ -126,55 +127,48 @@ const apiPages = new Map<number, BrowseWorkItem[]>();
 /** 请求序号守卫：快速翻页 / 切条件时丢弃过期响应。 */
 let seq = 0;
 
-/** 显示页数：total÷20 与 lastPage 折算显示页容量 取小（lastPage 是 pixiv 端硬上限）。 */
+/** 显示页数：total÷显示页条数 与 lastPage×切分数 取小（lastPage 是 pixiv 端硬上限）。 */
 const pageCount = computed<number | null>(() => {
-  const byTotal = total.value != null ? Math.ceil(total.value / PAGE_SIZE) : null;
-  const byLast =
-    lastPage.value != null
-      ? Math.ceil((lastPage.value * API_PAGE_SIZE.value) / PAGE_SIZE)
-      : null;
+  const byTotal = total.value != null ? Math.ceil(total.value / PAGE_SIZE.value) : null;
+  const byLast = lastPage.value != null ? lastPage.value * SEGMENTS_PER_API_PAGE.value : null;
   if (byTotal == null) return byLast;
   if (byLast == null) return byTotal;
   return Math.min(byTotal, byLast);
 });
 
-/**
- * 加载当前显示页：按流式偏移换算所需接口页（显示页 20 条对 novels 的 30 条接口页
- * 可能跨页，缺失的接口页串行补拉），拼接后按偏移切片。
- */
+/** 加载当前显示页：命中接口页缓存直接切片，否则请求该接口页并缓存。 */
 async function load(): Promise<void> {
   const keyword = word.value.trim();
   if (!keyword) return;
   const token = ++seq;
   loading.value = true;
   error.value = "";
-  const apiSize = API_PAGE_SIZE.value;
-  const start = (page.value - 1) * PAGE_SIZE;
-  const firstApi = Math.floor(start / apiSize) + 1;
-  const lastApi = Math.floor((start + PAGE_SIZE - 1) / apiSize) + 1;
+  const apiPage = Math.ceil(page.value / SEGMENTS_PER_API_PAGE.value);
+  const offset = ((page.value - 1) % SEGMENTS_PER_API_PAGE.value) * PAGE_SIZE.value;
+  const cached = apiPages.get(apiPage);
+  if (cached) {
+    items.value = cached.slice(offset, offset + PAGE_SIZE.value);
+    loading.value = false;
+    afterLoad();
+    return;
+  }
   try {
-    for (let p = firstApi; p <= lastApi; p++) {
-      if (apiPages.has(p)) continue;
-      const data = await browseSearch(kind.value, keyword, {
-        order: order.value,
-        mode: mode.value,
-        s_mode: sMode.value,
-        // novel 走 novels 端点不带 type；illust/manga 走 artworks 端点并带 type
-        type: kind.value === "novel" ? undefined : kind.value,
-        page: p,
-      });
-      if (token !== seq) return;
-      apiPages.set(p, data.items);
-      if (apiPages.size > MAX_API_PAGES) {
-        apiPages.delete(apiPages.keys().next().value!);
-      }
-      total.value = data.total ?? null;
-      lastPage.value = data.last_page ?? null;
+    const data = await browseSearch(kind.value, keyword, {
+      order: order.value,
+      mode: mode.value,
+      s_mode: sMode.value,
+      // novel 走 novels 端点不带 type；illust/manga 走 artworks 端点并带 type
+      type: kind.value === "novel" ? undefined : kind.value,
+      page: apiPage,
+    });
+    if (token !== seq) return;
+    apiPages.set(apiPage, data.items);
+    if (apiPages.size > MAX_API_PAGES) {
+      apiPages.delete(apiPages.keys().next().value!);
     }
-    const first = apiPages.get(firstApi)!;
-    const pool = lastApi > firstApi ? first.concat(apiPages.get(lastApi)!) : first;
-    const from = start - (firstApi - 1) * apiSize;
-    items.value = pool.slice(from, from + PAGE_SIZE);
+    total.value = data.total ?? null;
+    lastPage.value = data.last_page ?? null;
+    items.value = data.items.slice(offset, offset + PAGE_SIZE.value);
   } catch (err) {
     if (token !== seq) return;
     items.value = [];
@@ -569,13 +563,14 @@ const typeTabs = computed(() => [
         :items="sortedItems"
         :loading="loading"
         :error="error"
+        :page-size="PAGE_SIZE"
         paginated
         @retry="load()"
         @select="goWork"
       />
     </div>
 
-    <!-- 页码分页（显示页统一 20 条；接口页 60/30 条按端点映射，跨接口页由前端拼接） -->
+    <!-- 页码分页（插画/漫画 20 条/页 = 接口页 60 条切 3 页；小说 30 条/页 = 接口页整页） -->
     <AppPagination
       v-if="pageCount !== null && pageCount > 1"
       class="pager"
@@ -645,7 +640,8 @@ const typeTabs = computed(() => [
   min-width: 0;
 }
 
-/* 分页网格的查询容器：WorkGrid.paginated 按内容宽度切换 2/4/5/10 列（20 条的因数） */
+/* 分页网格的查询容器：WorkGrid.paginated 按内容宽度切换列数档位（每页条数的因数：
+   插画/漫画 20 条 → 2/4/5/10 列，小说 30 条 → 2/3/5/6/10 列） */
 .grid-host {
   container-type: inline-size;
 }
