@@ -217,6 +217,18 @@ onBeforeUnmount(() => {
   gap: var(--space-md) var(--space-lg);
 }
 
+@media (min-width: 1440px) {
+  .work-grid:not(.paginated) {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  }
+}
+
+@media (min-width: 1920px) {
+  .work-grid:not(.paginated) {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  }
+}
+
 /*
  * 页码分页模式：列数只取每页条数的因数，保证任何响应宽度下每行都排满、末行不残缺。
  * 默认 20 条/页 → 2 / 4 / 5 / 10 列；30 条/页（小说搜索）→ 2 / 3 / 5 / 6 / 10 列

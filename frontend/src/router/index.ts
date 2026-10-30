@@ -72,8 +72,7 @@ const router = createRouter({
     ...browseChannelRoutes,
     {
       path: "/browse/discover",
-      name: "browse-discover",
-      component: () => import("../views/browse/BrowseDiscoverView.vue"),
+      redirect: "/browse/home",
     },
     {
       path: "/browse/feed",
