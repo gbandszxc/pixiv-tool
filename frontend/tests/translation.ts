@@ -318,6 +318,25 @@ async function run() {
   missingIssues = false;
   await tab("状态");
 
+  // ===== 状态页的待确认引导 =====
+  // 关闭面板后任务进入待确认：重开浮层应停在状态页并给出一步到确认位置的入口。
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); await settle();
+  emitJob({ state: "awaiting_confirmation", phase: "prepare_constraints", message: "awaiting confirmation", counts: { pages: 2, chunks: 3, translated: 1, reviewed: 0, needs_repair: 0, terms: 4 } });
+  await settle();
+  await openPanel();
+  assert(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim() === "状态", "待确认重开浮层停在状态页");
+  const guide = popover()!.querySelector<HTMLElement>(".confirm-guide");
+  assert(guide?.textContent?.includes("术语与风格待确认"), "状态页显示待确认引导");
+  await click("前往确认");
+  assert(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim() === "术语与风格", "引导按钮切到术语与风格");
+  const confirmButton = popover()!.querySelector<HTMLElement>(".confirm-button");
+  assert(confirmButton, "术语页存在确认按钮");
+  assert(document.activeElement === confirmButton, "引导后焦点落在确认按钮");
+  const body = popover()!.querySelector<HTMLElement>(".panel-body")!;
+  const bodyRect = body.getBoundingClientRect();
+  const confirmRect = confirmButton!.getBoundingClientRect();
+  assert(confirmRect.top >= bodyRect.top - 1 && confirmRect.bottom <= bodyRect.bottom + 1, "引导后确认按钮滚入可视区");
+
   // ===== 术语与风格 =====
   await tab("术语与风格");
   const termInput = popover()!.querySelector<HTMLInputElement>(".term-input");

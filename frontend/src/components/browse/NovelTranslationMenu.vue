@@ -4,6 +4,7 @@
  *
  * 头部：整篇作品 · N 页 · M 块 + 状态点/状态摘要；四个 tab：
  * - 状态：阶段、计数、进度、当前页/块、实时摘要、已用与用量（TranslationProgressBanner）；
+ *   等待确认时另给引导卡，一键切到术语与风格页并滚到确认按钮；
  * - 术语与风格：等待确认时编辑并「确认并继续」，否则只读展示冻结版本；
  * - 预览：块列表 + 选中块原文/译文对照（未译块明确标示）；
  * - 问题：审查问题汇总，未解决块置顶。
@@ -819,11 +820,44 @@ const sortedIssues = computed<TranslationIssueRow[]>(() => {
 
 // ===== Tab 与生命周期 =====
 
-function activateTab(next: TabKey): void {
+function activateTab(next: TabKey): Promise<void> | void {
   tab.value = next;
-  if (next === "terms") void loadConstraints();
-  else if (next === "preview") void prefetchChunks();
+  if (next === "terms") return loadConstraints();
+  if (next === "preview") void prefetchChunks();
   else if (next === "issues") void loadIssues();
+}
+
+const panelBody = ref<HTMLElement | null>(null);
+const confirmButton = ref<HTMLElement | null>(null);
+const confirmGuidePending = ref(false);
+
+/**
+ * 状态页的待确认引导：切到术语与风格并滚到确认位置。
+ * 先取约束再切页：加载期间引导按钮保持可见，焦点不会落进即将隐藏的子树；
+ * 切换后焦点随内容进入术语页（优先落在确认按钮）。
+ */
+async function goToTermsConfirm(): Promise<void> {
+  if (confirmGuidePending.value) return;
+  confirmGuidePending.value = true;
+  const jobId = job.value?.job_id;
+  try {
+    await loadConstraints();
+    // 加载期间换了 Job：不要替新任务切换页签或移动焦点。
+    if (job.value?.job_id !== jobId) return;
+    tab.value = "terms";
+    await nextTick();
+    const target = confirmButton.value;
+    if (target) {
+      target.scrollIntoView({ block: "end" });
+      target.focus({ preventScroll: true });
+      return;
+    }
+    // 约束命令缺失等降级场景没有确认按钮：至少滚到内容底部，焦点回到当前页签。
+    if (panelBody.value) panelBody.value.scrollTop = panelBody.value.scrollHeight;
+    (tablist.value?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]'))?.focus();
+  } finally {
+    confirmGuidePending.value = false;
+  }
 }
 
 function onTabKeydown(event: KeyboardEvent): void {
@@ -1085,7 +1119,7 @@ onBeforeUnmount(() => {
         >{{ item.label }}</button>
       </div>
 
-      <div class="panel-body">
+      <div ref="panelBody" class="panel-body">
         <!-- 状态 -->
         <section
           v-show="tab === 'state'"
@@ -1095,6 +1129,27 @@ onBeforeUnmount(() => {
           :aria-labelledby="`translation-tab-state`"
         >
           <p class="panel-state-line">{{ stateLabel }}<template v-if="phaseLabel"> · {{ phaseLabel }}</template></p>
+          <!-- 待确认引导：后台任务停在术语确认时，从状态页一步到术语页底部的确认按钮 -->
+          <div v-if="awaiting" class="confirm-guide" role="note">
+            <div class="confirm-guide-head">
+              <!-- Lucide clipboard-check：https://lucide.dev/icons/clipboard-check -->
+              <svg class="confirm-guide-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect width="8" height="4" x="8" y="2" rx="1" ry="1" />
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+                <path d="m9 14 2 2 4-4" />
+              </svg>
+              <span class="confirm-guide-title">{{ t('translation.job.confirmGuideTitle') }}</span>
+            </div>
+            <p class="confirm-guide-hint">{{ t('translation.job.confirmGuideHint') }}</p>
+            <md-filled-button
+              class="confirm-guide-action"
+              :disabled="confirmGuidePending"
+              :aria-busy="confirmGuidePending"
+              @click="goToTermsConfirm"
+            >
+              {{ t('translation.job.confirmGuideAction') }}
+            </md-filled-button>
+          </div>
           <TranslationProgressBanner v-if="job" :job="job" />
           <p v-else class="panel-empty">{{ t('translation.job.notStarted') }}</p>
           <p v-if="partialNotice" class="panel-notice">{{ partialNotice }}</p>
@@ -1329,6 +1384,7 @@ onBeforeUnmount(() => {
             </div>
             <md-filled-button
               v-if="termsEditable"
+              ref="confirmButton"
               class="confirm-button"
               :disabled="Boolean(pending)"
               :aria-busy="pending === 'confirm'"
@@ -1728,6 +1784,26 @@ onBeforeUnmount(() => {
 }
 .panel-error { margin: 0; color: var(--md-sys-color-error); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .panel-error-code { margin: 0; color: var(--ink-subtle); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+
+/* 待确认引导：中性卡片 + 唯一主按钮，与错误告警和底部救援区区分。 */
+.confirm-guide {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  padding: var(--space-sm);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 60%, transparent);
+}
+.confirm-guide-head { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+.confirm-guide-icon { flex: none; width: 16px; height: 16px; color: var(--md-sys-color-primary); }
+.confirm-guide-title { color: var(--ink); font-size: 12px; font-weight: 600; }
+.confirm-guide-hint { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.confirm-guide-action {
+  --md-filled-button-container-height: 32px;
+  height: 32px;
+  margin-top: 2px;
+}
 .panel-subblock { display: flex; flex-direction: column; gap: var(--space-xxs); }
 .panel-subtitle { margin: 0; color: var(--ink); font-size: 12px; font-weight: 600; }
 .panel-list { margin: 0; padding-inline-start: var(--space-lg); color: var(--ink-muted); font-size: 12px; line-height: 1.5; }
