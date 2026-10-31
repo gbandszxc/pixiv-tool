@@ -56,3 +56,21 @@
   - `cover_path: Option<String>`：从插画 `saved_paths` JSON 数组中提取的首个图片有效路径；
   - `preview_text: Option<String>`：从小说 `txt_path` 或 `md_path` 本地文件直接读取前 1KB 整理出的前 180 字符前几行纯文本。
 - 字段采用 `#[serde(skip_serializing_if = "Option::is_none")]`，完全向下兼容既有调用方。
+
+### 6. 本地文件丢失/移走状态探测与专属「图片已移除」空态
+
+- **问题**：用户下载作品后可能手动移动文件至其他存储介质，导致原路径文件失效。此前前端使用原生 `<img :src="localDownloadSrc">` 在 404 时会呈现浏览器原生破损裂图小图标并将 alt 标题文本挤压至左上角，与左上角复选框错位重叠。
+- **方案**：
+  - 后端在 `Db::list_history` 解析 `HistoryRow` 时，使用 `std::path::Path::new(&p).exists()` 实时探测文件是否存在；若曾有保存记录但当前文件已不存在，置 `file_removed = true` 且 `cover_path = None`，前端首屏初载零闪烁识别；
+  - 前端 `HistoryView.vue` 在 `<img>` 上挂载 `@error="handleImgError(row.id)"`，作为运行时兜底；
+  - 当 `row.file_removed || failedImageIds.has(row.id)` 时，渲染专属 `.card-removed-cover` 空态：内嵌 40px 圆形浅色虚线边框图标盒、Lucide 风格 `image-off` 线性图标、12px 次级文字「图片已被移除」与 10.5px 提示「文件已移动或删除」；
+  - 底部标题、作者与多 P 角标继续保留，提供清晰的元数据可读性。
+
+### 7. 文件夹打开动作始终回退至用户配置的下载目录
+
+- **问题**：当本地文件被移走或删除后，点击「打开所在文件夹」因目标文件及旧父目录不存在而触发报错（`路径不存在`）；且如果用户在设置中修改了 `output_dir`，旧记录不会自动感知新输出目录。
+- **方案**：
+  - `open_illustration_folder` 与 `open_novel_file` 在定位时：
+    1. 优先尝试定位 `saved_paths` / `txt_path` / `md_path` 指向的实际存在文件；
+    2. 若未命中，尝试在当前设置配置的输出目录（`output_dir/pic` 或 `output_dir/novel`）下寻找同名文件进行定位；
+    3. 若文件确实已被移走或不存在：**始终打开用户当前在设置里配置的下载目录**（若未改即默认输出目录 `~/Downloads/pixiv-tool`，进入对应的 `pic` 或 `novel` 子目录，不存在则自动创建并打开），杜绝报错弹窗，平滑引导用户进入当前活跃下载目录。

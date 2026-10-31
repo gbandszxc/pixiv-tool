@@ -238,6 +238,8 @@ export default {
     pagesCount: "{count}P",
     openFile: "ファイルを開く",
     noPreview: "プレビュー本文はありません",
+    imageRemoved: "画像が移動または削除されました",
+    imageRemovedHint: "ファイルが見つかりません",
   },
   browseHistory: {
     title: "閲覧履歴",
@@ -638,6 +640,10 @@ export default {
     language: "言語",
     theme: "テーマ",
     palette: "カラーパレット",
+    // システム通知（ADR 0046）：用語と文体の確認待ちを通知
+    notifications: "通知",
+    systemNotifications: "システム通知",
+    notificationsHint: "小説翻訳の用語と文体の抽出が完了し、確認待ちになったときにシステム通知を送ります。オフにすると通知しません。",
     languages: { "zh-CN": "中国語（簡体字）", "en-US": "English", "ja-JP": "日本語" },
     themes: { light: "ライト", dark: "ダーク", auto: "システムに合わせる" },
     palettes: { pixiv: "pixiv ブルー", indigo: "インディゴ", jade: "ジェード", violet: "バイオレット", amber: "アンバー" },
@@ -670,6 +676,7 @@ export default {
       translation_models_invalid: "モデルリストは配列である必要があります",
       agent_int_invalid: "翻訳実行パラメータが有効範囲外です",
       agent_bool_invalid: "翻訳実行パラメータは真偽値である必要があります",
+      settings_bool_invalid: "システム通知の切り替えは真偽値である必要があります",
       agent_settings_invalid: "翻訳実行パラメータの組み合わせが競合しています",
       show_r18_invalid: "R-18 表示設定は真偽値である必要があります",
       saucenao_key_invalid: "SauceNAO API Key は文字列である必要があります",

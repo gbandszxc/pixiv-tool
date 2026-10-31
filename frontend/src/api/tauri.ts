@@ -223,6 +223,8 @@ export interface Settings {
   translation_agent_replay_unknown?: boolean;
   /** 启动前确认术语与风格（默认 false） */
   translation_confirm_before_start?: boolean;
+  /** 系统通知（默认 true）：等待确认术语与风格时提醒 */
+  notifications_enabled?: boolean;
   /** 只回传凭据是否存在，永不回传 API Key。 */
   translation_key_configured: boolean;
   translation_key_error: string;
@@ -239,7 +241,8 @@ export interface HistoryItem {
    captured_at: string;
   cover_path?: string | null;
   preview_text?: string | null;
- }
+  file_removed?: boolean;
+}
 
 /**
  * 本地已下载插画缩略图协议 URL（pixiv-download 协议）。

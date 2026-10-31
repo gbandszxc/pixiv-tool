@@ -254,6 +254,8 @@ export default {
     pagesCount: "{count}P",
     openFile: "打开文件",
     noPreview: "暂无预览正文",
+    imageRemoved: "图片已被移除",
+    imageRemovedHint: "文件已移动或删除",
   },
   browseHistory: {
     title: "浏览历史",
@@ -656,6 +658,10 @@ export default {
     language: "语言",
     theme: "主题",
     palette: "配色",
+    // 系统通知（ADR 0046）：等待确认术语与风格时提醒
+    notifications: "通知",
+    systemNotifications: "系统通知",
+    notificationsHint: "小说翻译的术语与风格抽取完成、等待确认时发送系统通知；关闭后不再提醒。",
     languages: {
       "zh-CN": "简体中文",
       "en-US": "English",
@@ -702,6 +708,7 @@ export default {
       translation_models_invalid: "模型列表必须是数组",
       agent_int_invalid: "翻译运行参数超出合法区间",
       agent_bool_invalid: "翻译运行参数必须是布尔值",
+      settings_bool_invalid: "系统通知开关必须是布尔值",
       agent_settings_invalid: "翻译运行参数组合冲突",
       show_r18_invalid: "R-18 展示开关必须是布尔值",
       saucenao_key_invalid: "SauceNAO API Key 必须是字符串",

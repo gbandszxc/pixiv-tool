@@ -16,8 +16,10 @@ use std::path::Path;
 use serde_json::{Value, json};
 use tauri::State;
 
+use crate::core::crawler::anchor_output_dir;
 use crate::core::illust_crawler::UGOIRA_TYPE;
-use crate::platform::reveal_in_file_manager;
+use crate::platform::{open_dir_in_file_manager, reveal_in_file_manager};
+use crate::settings::Settings;
 use crate::state::AppState;
 
 /// 删除单条小说记录（可选删文件）。
@@ -159,23 +161,56 @@ pub fn open_novel_file_impl(state: &AppState, novel_id: i64) -> Result<Value, St
     let Some(novel) = state.db.get_novel(novel_id) else {
         return Ok(json!({ "error": "小说不存在" }));
     };
-    // txt 优先 md 兜底；空值或文件已不存在 → 200 + error（对齐旧端点）
-    let Some(path) = novel
-        .txt_path
-        .as_deref()
-        .filter(|p| !p.is_empty())
-        .or_else(|| novel.md_path.as_deref().filter(|p| !p.is_empty()))
-    else {
-        return Ok(json!({ "error": "文件不存在" }));
-    };
-    if !Path::new(path).exists() {
-        return Ok(json!({ "error": "文件不存在" }));
+
+    let settings = Settings::load_or_init(&state.paths.config_dir);
+    let base_output_dir = anchor_output_dir(&settings.output_dir, &state.paths.data_dir);
+    let novel_dir = base_output_dir.join("novel");
+
+    let candidate_paths = [
+        novel.txt_path.as_deref(),
+        novel.md_path.as_deref(),
+    ];
+
+    // 1. 优先尝试定位已有文件
+    for path_opt in candidate_paths {
+        if let Some(path) = path_opt.filter(|p| !p.is_empty() && Path::new(p).exists()) {
+            if reveal_in_file_manager(Path::new(path)).is_ok() {
+                return Ok(json!({ "status": "success" }));
+            }
+        }
     }
-    match reveal_in_file_manager(Path::new(path)) {
+
+    // 2. 检查当前 novel 目录下是否存在同名文件
+    for path_opt in candidate_paths {
+        if let Some(path) = path_opt.filter(|p| !p.is_empty()) {
+            if let Some(file_name) = Path::new(path).file_name() {
+                let candidate = novel_dir.join(file_name);
+                if candidate.exists() && reveal_in_file_manager(&candidate).is_ok() {
+                    return Ok(json!({ "status": "success" }));
+                }
+            }
+        }
+    }
+
+    // 3. 文件不存在（被移动走或删除）：始终打开用户配置的下载目录
+    let target_dir = if novel_dir.exists() {
+        novel_dir
+    } else {
+        let _ = std::fs::create_dir_all(&novel_dir);
+        if novel_dir.exists() {
+            novel_dir
+        } else {
+            let _ = std::fs::create_dir_all(&base_output_dir);
+            base_output_dir
+        }
+    };
+
+    match open_dir_in_file_manager(&target_dir) {
         Ok(()) => Ok(json!({ "status": "success" })),
         Err(msg) => Ok(json!({ "error": msg })),
     }
 }
+
 
 pub fn illust_saved_pages_impl(state: &AppState, artwork_id: i64) -> Result<Value, String> {
     let Some(illustration) = state.db.get_illustration(artwork_id) else {
@@ -192,13 +227,50 @@ pub fn open_illustration_folder_impl(state: &AppState, artwork_id: i64) -> Resul
     let Some(illustration) = state.db.get_illustration(artwork_id) else {
         return Ok(json!({ "error": "插画记录不存在" }));
     };
+
+    let settings = Settings::load_or_init(&state.paths.config_dir);
+    let base_output_dir = anchor_output_dir(&settings.output_dir, &state.paths.data_dir);
+    let illust_dir = base_output_dir.join("pic");
+
     // 坏 JSON / 空数组都视为没有已保存文件
     let saved_paths: Vec<String> =
         serde_json::from_str(&illustration.saved_paths).unwrap_or_default();
-    let Some(first) = saved_paths.first().filter(|p| !p.is_empty()) else {
-        return Ok(json!({ "error": "没有已保存的文件" }));
+
+    // 1. 优先尝试在 saved_paths 中定位实际存在的文件
+    for p in &saved_paths {
+        if !p.is_empty() && Path::new(p).exists() {
+            if reveal_in_file_manager(Path::new(p)).is_ok() {
+                return Ok(json!({ "status": "success" }));
+            }
+        }
+    }
+
+    // 2. 检查当前设置的输出目录 pic 下是否存在同名文件
+    for p in &saved_paths {
+        if !p.is_empty() {
+            if let Some(file_name) = Path::new(p).file_name() {
+                let candidate = illust_dir.join(file_name);
+                if candidate.exists() && reveal_in_file_manager(&candidate).is_ok() {
+                    return Ok(json!({ "status": "success" }));
+                }
+            }
+        }
+    }
+
+    // 3. 文件不存在（已被用户手动移动走或删除）：始终打开用户配置的下载目录
+    let target_dir = if illust_dir.exists() {
+        illust_dir
+    } else {
+        let _ = std::fs::create_dir_all(&illust_dir);
+        if illust_dir.exists() {
+            illust_dir
+        } else {
+            let _ = std::fs::create_dir_all(&base_output_dir);
+            base_output_dir
+        }
     };
-    match reveal_in_file_manager(Path::new(first)) {
+
+    match open_dir_in_file_manager(&target_dir) {
         Ok(()) => Ok(json!({ "status": "success" })),
         Err(msg) => Ok(json!({ "error": msg })),
     }
@@ -312,15 +384,15 @@ mod tests {
             })
             .unwrap();
         let body = open_novel_file_impl(&state, 10).unwrap();
-        assert_eq!(body["error"], json!("文件不存在"));
+        assert_eq!(body["status"], json!("success"));
 
-        // txt_path 指向不存在的文件（txt 优先于 md）
+        // txt_path 指向不存在的文件（用户移走）→ 同样成功打开配置目录
         state
             .db
             .update_novel_paths(10, Some("/nonexistent/path/x.txt"), None)
             .unwrap();
         let body = open_novel_file_impl(&state, 10).unwrap();
-        assert_eq!(body["error"], json!("文件不存在"));
+        assert_eq!(body["status"], json!("success"));
         cleanup(&dir);
     }
 
@@ -383,9 +455,9 @@ mod tests {
             })
             .unwrap();
         let body = open_illustration_folder_impl(&state, 7).unwrap();
-        assert_eq!(body["error"], json!("没有已保存的文件"));
+        assert_eq!(body["status"], json!("success"));
 
-        // 指向不存在路径 → reveal 错误文案透传
+        // 指向不存在路径（文件被移走）→ 回退打开配置的下载目录
         state
             .db
             .insert_illustration(&IllustrationInsert {
@@ -397,11 +469,7 @@ mod tests {
             })
             .unwrap();
         let body = open_illustration_folder_impl(&state, 8).unwrap();
-        assert!(
-            body["error"]
-                .as_str()
-                .is_some_and(|m| m.starts_with("路径不存在"))
-        );
+        assert_eq!(body["status"], json!("success"));
         cleanup(&dir);
     }
 }

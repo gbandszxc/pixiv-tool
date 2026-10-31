@@ -253,6 +253,8 @@ export default {
     pagesCount: "{count}P",
     openFile: "Open File",
     noPreview: "No preview text available",
+    imageRemoved: "Image removed",
+    imageRemovedHint: "File moved or deleted",
   },
   browseHistory: {
     title: "Browsing History",
@@ -655,6 +657,10 @@ export default {
     language: "Language",
     theme: "Theme",
     palette: "Color palette",
+    // System notifications (ADR 0046): prompt when terminology and style await confirmation
+    notifications: "Notifications",
+    systemNotifications: "System notifications",
+    notificationsHint: "Sends a system notification when novel translation terminology and style are ready for confirmation. Turn off to stop the reminders.",
     languages: {
       "zh-CN": "Simplified Chinese",
       "en-US": "English",
@@ -701,6 +707,7 @@ export default {
       translation_models_invalid: "Model list must be an array",
       agent_int_invalid: "Translation runtime parameter is out of range",
       agent_bool_invalid: "Translation runtime parameter must be a boolean",
+      settings_bool_invalid: "System notification switch must be a boolean",
       agent_settings_invalid: "Translation runtime parameters conflict",
       show_r18_invalid: "R-18 visibility toggle must be a boolean",
       saucenao_key_invalid: "SauceNAO API Key must be a string",

@@ -1,12 +1,50 @@
 //! 跨平台系统集成小工具（与旧 Python `platform.py` 行为一致）。
 
 use std::path::Path;
+#[cfg(test)]
+pub static LAST_OPENED_PATH: std::sync::Mutex<Option<std::path::PathBuf>> =
+    std::sync::Mutex::new(None);
 
-/// 在系统文件管理器中定位文件；文件不存在时打开其所在目录；父目录也没有 → Err。
+/// 在系统文件管理器中直接打开目录（进入目录而非选中）。
+pub fn open_dir_in_file_manager(dir: &Path) -> Result<(), String> {
+    if !dir.exists() {
+        return Err(format!("路径不存在: {}", dir.display()));
+    }
+
+    #[cfg(test)]
+    {
+        if let Ok(mut lock) = LAST_OPENED_PATH.lock() {
+            *lock = Some(dir.to_path_buf());
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(test))]
+    {
+        #[cfg(target_os = "windows")]
+        let spawn_result = std::process::Command::new("explorer")
+            .arg(dir)
+            .spawn();
+        #[cfg(target_os = "macos")]
+        let spawn_result = std::process::Command::new("open")
+            .arg(dir)
+            .spawn();
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let spawn_result = std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn();
+
+        spawn_result
+            .map(|_| ())
+            .map_err(|err| format!("打开文件管理器失败: {err}"))
+    }
+}
+
+/// 在系统文件管理器中定位文件；目标为目录时直接打开；文件不存在时退化为打开所在目录；父目录也没有 → Err。
 ///
-/// - Windows: `explorer /select, <path>`（打开所在目录并选中文件）
-/// - macOS:   `open -R <path>`（在 Finder 中显示文件）
-/// - Linux:   `xdg-open <父目录或目录>`（无"选中文件"语义，直接打开所在目录）
+/// - Windows: 文件走 `explorer /select, <path>`；目录走 `explorer <dir>`
+/// - macOS:   文件走 `open -R <path>`；目录走 `open <dir>`
+/// - Linux:   `xdg-open <目录>`
 ///
 /// std::process::Command::spawn（不等待退出）。
 pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
@@ -19,30 +57,39 @@ pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
         return Err(format!("路径不存在: {}", target.display()));
     }
 
-    #[cfg(target_os = "windows")]
-    let spawn_result = std::process::Command::new("explorer")
-        .arg("/select,")
-        .arg(target)
-        .spawn();
-    #[cfg(target_os = "macos")]
-    let spawn_result = std::process::Command::new("open")
-        .arg("-R")
-        .arg(target)
-        .spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let spawn_result = {
-        // xdg-open 只能打开目录；目标是文件时打开其父目录
-        let dir = if target.is_file() {
-            target.parent().unwrap_or(target)
-        } else {
-            target
-        };
-        std::process::Command::new("xdg-open").arg(dir).spawn()
-    };
+    if target.is_dir() {
+        return open_dir_in_file_manager(target);
+    }
 
-    spawn_result
-        .map(|_| ())
-        .map_err(|err| format!("打开文件管理器失败: {err}"))
+    #[cfg(test)]
+    {
+        if let Ok(mut lock) = LAST_OPENED_PATH.lock() {
+            *lock = Some(target.to_path_buf());
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(test))]
+    {
+        #[cfg(target_os = "windows")]
+        let spawn_result = std::process::Command::new("explorer")
+            .arg(format!("/select,{}", target.display()))
+            .spawn();
+        #[cfg(target_os = "macos")]
+        let spawn_result = std::process::Command::new("open")
+            .arg("-R")
+            .arg(target)
+            .spawn();
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let spawn_result = {
+            let dir = target.parent().unwrap_or(target);
+            std::process::Command::new("xdg-open").arg(dir).spawn()
+        };
+
+        spawn_result
+            .map(|_| ())
+            .map_err(|err| format!("打开文件管理器失败: {err}"))
+    }
 }
 
 #[cfg(test)]
@@ -57,5 +104,23 @@ mod tests {
             .join("missing-child");
         let err = reveal_in_file_manager(&missing).unwrap_err();
         assert!(err.starts_with("路径不存在:"), "got {err}");
+        let err_dir = open_dir_in_file_manager(&missing).unwrap_err();
+        assert!(err_dir.starts_with("路径不存在:"), "got {err_dir}");
+    }
+
+    #[test]
+    fn existing_path_records_last_opened() {
+        let dir = std::env::temp_dir().join(format!("pixiv-tool-plat-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("test.txt");
+        std::fs::write(&file, "hello").unwrap();
+
+        reveal_in_file_manager(&file).unwrap();
+        assert_eq!(LAST_OPENED_PATH.lock().unwrap().clone(), Some(file.clone()));
+
+        open_dir_in_file_manager(&dir).unwrap();
+        assert_eq!(LAST_OPENED_PATH.lock().unwrap().clone(), Some(dir.clone()));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

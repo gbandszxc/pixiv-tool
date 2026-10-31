@@ -166,6 +166,7 @@ pub struct IllustrationRow {
     pub cover_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preview_text: Option<String>,
+    pub file_removed: bool,
  }
 
 /// browse_history 表插入参数（INSERT OR REPLACE；visited_at 由调用方给 now_iso()）。
@@ -1255,18 +1256,23 @@ fn read_novel_preview(path_str: &str) -> Option<String> {
 
     let mut cover_path = None;
     let mut preview_text = None;
+    let mut file_removed = false;
 
     if category == "illustration" {
         if let Some(sp) = saved_paths {
             let paths: Vec<String> = serde_json::from_str(&sp).unwrap_or_default();
-            for p in paths {
-                let ext = std::path::Path::new(&p)
+            for p in &paths {
+                let ext = std::path::Path::new(p)
                     .extension()
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
                     .to_ascii_lowercase();
                 if matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif") {
-                    cover_path = Some(p);
+                    if std::path::Path::new(p).exists() {
+                        cover_path = Some(p.clone());
+                    } else {
+                        file_removed = true;
+                    }
                     break;
                 }
             }
@@ -1274,10 +1280,13 @@ fn read_novel_preview(path_str: &str) -> Option<String> {
     } else if category == "novel" {
         let path_to_read = txt_path.as_deref().or(md_path.as_deref());
         if let Some(p) = path_to_read {
-            preview_text = read_novel_preview(p);
+            if std::path::Path::new(p).exists() {
+                preview_text = read_novel_preview(p);
+            } else {
+                file_removed = true;
+            }
         }
     }
-
      Ok(HistoryRow {
          id: row.get("id")?,
         category,
@@ -1289,6 +1298,7 @@ fn read_novel_preview(path_str: &str) -> Option<String> {
          captured_at: row.get("captured_at")?,
         cover_path,
         preview_text,
+        file_removed,
      })
  }
 

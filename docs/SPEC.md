@@ -366,7 +366,11 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
 - **状态机**：`queued → running → completed`，运行中可进入 `awaiting_confirmation` /
   `pausing → paused` / `needs_attention` / `cancelling → cancelled` / `interrupted`；
   `deleted` 仅作删除标记。等待确认、暂停、需要处理与中断都可在检查后恢复；应用重启
-  只把未结束 Job 改为 `interrupted`，不自动发起付费请求。
+  只把未结束 Job 改为 `interrupted`，不自动发起付费请求。`awaiting_confirmation` 是
+  持久状态：重启后从 manifest 与产物重建上下文，`novel_translation_confirm` 仍可
+  确认并继续（ADR 0046）。术语与风格抽取完成、首次进入等待确认时，若
+  `notifications_enabled` 开启则发送一条系统通知（标题与正文跟随界面语言，含小说
+  标题；重启后的等待不重复通知）。
 - **并发**：模型请求受三级闸门控制——全局并发（默认 4，1~16）、单小说子任务并发
   （默认 4，1~16）、同时活跃小说数（默认 2，1~8）；实际并发取全局与单小说的较小值。
   等待子任务、执行工具与暂停期间不持有模型请求许可，压缩摘要请求同样经过全局闸门；
@@ -487,7 +491,9 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   阻塞问题且额度用尽 → `rework_exhausted`，不再误报 `incomplete_global_review`。
 - **暂停 / 取消 / 确认**：暂停停止派发并停在最近检查点；取消立即传播取消信号并保留
   已提交产物；两者都不清预算与重试记录。`translation_confirm_before_start` 开启时在
-  冻结约束后进入 `awaiting_confirmation`，浮层可修改术语与风格后「确认并继续」。
+  冻结约束后进入 `awaiting_confirmation`，浮层可修改术语与风格后「确认并继续」；
+  确认命令在进程内没有句柄时（应用重启后）先从磁盘重建任务上下文，等待确认不会
+  因关闭软件而丢失。进入等待确认时按 `notifications_enabled` 发送系统通知（ADR 0046）。
 - **子 Agent 与工具**：默认一层，主 Agent 可派发翻译 / 审查子 Agent，二者不再派生。
   工具按角色白名单注册（主 Agent 15 个：加载资源、准备原文、读取块摘要 / 内容、提交
   扫描、冻结约束、派发翻译 / 审查、局部修订草稿（`revise_draft`）、读取审查摘要、
@@ -801,7 +807,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "translation_agent_context_chars": 600,
   "translation_call_budget": 0,
   "translation_agent_replay_unknown": false,
-  "translation_confirm_before_start": false
+  "translation_confirm_before_start": false,
+  "notifications_enabled": true
 }
 ```
 
@@ -908,7 +915,12 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   上下文窗口；越界或冲突拒绝保存并定位到二级分类字段。非法值在加载期回落到默认。
   `translation_timeout_seconds`（见上条）同样归二级「模型能力与上下文」分类，但不属于
   本表 22 个 Agent 运行参数键。
-- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 49 个键，
+- `notifications_enabled`：系统通知开关，默认 `true`（ADR 0046）。设置弹窗「通用」
+  分组新增「通知管理」小节，可手动关闭。当前只在术语与风格抽取完成、任务进入
+  `awaiting_confirmation` 时发送一条系统通知；文案跟随界面语言 `language`，正文带
+  小说标题（读取失败时回落 `小说 #<novel_id>`）。Windows 上只有安装版以应用身份
+  显示，开发运行显示 PowerShell 名称与图标；发送失败只记日志，不影响任务状态。
+- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 50 个键，
   含兼容保留的 `backend_port`；`saucenao_api_key` 为用户凭据，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
 - `settings_save` 校验 / 保存失败返回结构化错误载荷 `{ code, field, message }`
   （ADR 0044）：`code` 是稳定错误码（前端 i18n 键 `settings.errors.<code>` 的依据）、
@@ -931,6 +943,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   | `filename_template_invalid` | `illust_filename_template` / `novel_filename_template` / `novel_series_filename_template` |
   | `translation_models_invalid` | `translation_models` |
   | `agent_int_invalid` / `agent_bool_invalid` | 对应运行参数键 |
+  | `settings_bool_invalid` | `notifications_enabled` |
   | `agent_settings_invalid` | `null`（交叉约束冲突） |
   | `show_r18_invalid` | `show_r18` |
   | `saucenao_key_invalid` | `saucenao_api_key` |
@@ -1014,7 +1027,7 @@ token 的写路径自愈覆盖全部 POST 写方法（Auth/Client 失败或 200+
 | 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab；工具行首部预留可选 `lead` 插槽，供 `/browse/me` 的动作组与刷新同行；「主页」复用本页组件，见上） | ✅ |
 | 以图识图 | `/saucenao`（SauceNAO 反搜：本地文件/拖拽/URL，pixiv 结果跳作品详情；需在设置中配置 API Key） | ✅ |
 
-**下载页**：页签壳 ToolsView（/tools），默认 /tools/tasks，页签为任务 / 下载历史，右侧新建下载打开面板。任务卡片采用两行紧凑布局（自适应收窄进度条与红色删除图标同行动作区并排对齐）；下载历史支持「列表 / 宫格」双模式切换（ADR 0045，本地已下载图片走 pixiv-download 协议回显首图，小说呈现专属立体书本封面并摘录前几行试读），偏好经 localStorage 持久化。旧表单路径重定向到任务页并带 downloadForm/sourceType/sourceId，面板消费后清理这三个 query 键，其余 query/hash 保留。
+**下载页**：页签壳 ToolsView（/tools），默认 /tools/tasks，页签为任务 / 下载历史，右侧新建下载打开面板。任务卡片采用两行紧凑布局（自适应收窄进度条与红色删除图标同行动作区并排对齐）；下载历史支持「列表 / 宫格」双模式切换（ADR 0045，本地已下载图片走 pixiv-download 协议回显首图，小说呈现专属立体书本封面并摘录前几行试读；本地文件被用户移走或删除时通过专属低饱和「图片已被移除」卡片空态呈现并由 img @error 兜底消除原生破图；卡片打开文件夹动作始终回退定位用户在设置中配置的下载目录），偏好经 localStorage 持久化。旧表单路径重定向到任务页并带 downloadForm/sourceType/sourceId，面板消费后清理这三个 query 键，其余 query/hash 保留。
 
 **侧边栏**：发现 / 关注 / 我的 / 下载四个核心项，二级入口在各页面内逐步展开；所属分组高亮，详情继承实际来路，直达归发现。展开宽 256px、折叠宽 72px，头部为 logo / 标题 / 收起按钮，窗口高度不足时导航自身滚动。侧栏底部为**头像 chip**
 （头像 + 账号名 + 展开箭头；未登录显示「账号」占位），点击在 chip 上方弹出**账号
@@ -1107,7 +1120,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 
 所有纵向数据滚动区共用 PgUp/PgDn 输入规则（§6.1.1），优先鼠标区域、回退键盘焦点，保留控件原生按键与模态隔离；全屏胶卷与图片区分别滚屏 / 切作品页。样式及交互规则与 DESIGN.md / .impeccable/design.json 保持一致。
 
-设置「通用」新增启动页 md-outlined-select（发现 / 关注 / 我的 / 下载，默认发现），沿用 40px 控件密度和整表保存 / 取消语义，附下次启动生效提示；样式与交互细则同步见 DESIGN.md / .impeccable/design.json。
+设置「通用」新增启动页 md-outlined-select（发现 / 关注 / 我的 / 下载，默认发现），沿用 40px 控件密度和整表保存 / 取消语义，附下次启动生效提示；样式与交互细则同步见 DESIGN.md / .impeccable/design.json。「通用」另设「通知管理」小节（`settings-fieldset` + `md-checkbox`），承载系统通知开关 `notifications_enabled`（默认开启，ADR 0046）；复用既有表单控件与整表保存语义，不新增 token。
 
 - 选项：浅色 / 深色 / 跟随系统（设置弹窗下拉，持久化到 `settings.json` 的 `theme`）
 - 实现：`frontend/src/styles/main.css` 定义 M3 颜色角色（`--md-sys-color-*`）与
@@ -1442,7 +1455,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
 | `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds,refused_chunks,skipped_chunks}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms,skipped}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；`refused_chunks` 是被模型按内容政策拒绝的块 ID、`skipped_chunks` 是用户显式跳过的块 ID（均升序，serde 默认兼容旧载荷，ADR 0043）；任务不存在或清单损坏返回可读错误 |
 | `novel_translation_result(novelId)` | 阅读器投影：优先已完成且状态为 `complete` 的 v2 Job，否则回退 v1 旧缓存并标记 `partial`；无结果返回 null。返回 `{novel_id,job_id,target_language,pages:{页码:[{line,text}]},status:"complete"|"partial"|"needs_attention",unresolved}` |
-| `novel_translation_confirm(jobId, terms, style)` | 确认术语与风格（等待确认时由浮层提交）。terms 为 `[{source_term,locked_translation,term_type?,aliases?,notes?}]`；确认后约束版本 +1、清除冲突与未解决项并继续。任务不存在 / 已删除返回错误 |
+| `novel_translation_confirm(jobId, terms, style)` | 确认术语与风格（等待确认时由浮层提交）。terms 为 `[{source_term,locked_translation,term_type?,aliases?,notes?}]`；确认后约束版本 +1、清除冲突与未解决项并继续。进程内无句柄时（应用重启后）先从磁盘重建任务上下文再确认；任务不存在 / 已结束返回错误 |
 | `novel_translation_pause(jobId)` | 停止派发并停在最近检查点（`queued`/`running` → `pausing` → `paused`）；等待确认时要求先确认或取消；其它状态拒绝 |
 | `novel_translation_resume(jobId)` | 从检查点恢复（`paused`/`needs_attention`/`interrupted`/`queued`）；先校验缓存世代、资源版本与清单，不一致时拒绝静默续跑；内存中无句柄时从磁盘重建；不清空被拒块记忆（`content_refused`，ADR 0043） |
 | `novel_translation_grant_budget(jobId, amount)` | 手动追加模型调用预算：amount 1~10000，只增不减；返回追加后 `{used,limit,remaining,manual_extra}`。终态与等待确认的任务拒绝；重启后无句柄直接改 manifest，resume 时还原（ADR 0042） |
@@ -1469,7 +1482,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_history_clear()` | 清空浏览访问历史（返回 `{status, deleted}`） |
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
-| `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位 |
+| `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位（若文件存在则高亮选中；若文件已移走或删除则回退打开用户在设置中配置的下载目录，进入 pic / novel 子目录，未改即默认输出目录，杜绝报错） |
 | `illust_saved_pages(artworkId)` | 已保存页查询：返回 `{pages:[0,2], ugoira:false}`（0 起页码升序）；无记录 → `{"pages":[],"ugoira":false}`，ugoira 有记录 → `{"pages":[0],"ugoira":true}`；下载侧栏按页选择器据此标记「已下载」 |
 | `browse_home_feed` | 首页推荐流（street POST + csrf token，进程内 30min 缓存） |
 | `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
