@@ -8,8 +8,7 @@ export default {
     later: "Install later", installNow: "Quit and install update", confirmInstall: "Quit and install anyway", continueUsing: "Download in background", downloadReady: "Update downloaded. Check for updates in the account menu to install it.",
     previewDone: "Preview finished: the install flow was not actually executed.",
     activeTasks: "There are unfinished downloads or translations, or task status is not yet synced. Quitting will interrupt current execution. Wait for completion or confirm that you want to quit and install anyway.",
-    install: { windows: "After the app quits, follow the installer instructions to replace the current version.", macos: "After the DMG opens, drag Pixiv Tool into Applications and replace the old version. The app quits automatically; installation still requires dragging it manually.", linux: "AppImage: replace the old file and grant execute permission. deb/rpm: use your system package installer." },
-    restart: "Restart the app after installation.",
+    install: { windows: "After the app quits, follow the installer instructions to replace the current version, then relaunch the app.", macos: "After the DMG opens, drag Pixiv Tool into Applications and replace the old version. The app quits automatically; installation still requires dragging it manually. Relaunch the app afterwards.", linux: "AppImage: replace the old file and grant execute permission. deb/rpm: use your system package installer. Relaunch the app afterwards." },
   },
   workspace: {
   "discover": "Discover",

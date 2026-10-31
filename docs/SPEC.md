@@ -1591,7 +1591,7 @@ App 级单例，离开小说页或关闭浮层不断开；缓存清理成功后�
 ### 7.2 应用内更新
 
 启动 3s 后静默检查一次，仅新版弹确认；手动检查沿用账号菜单。用户确认后进入
-`UpdateDialog`：available → downloading → ready；下载失败进入 error（重新下载 / 打开发布页），取消进入 cancelled（可重新下载）。下载中可关闭弹窗继续后台下载（Esc 同效），取消只由显式按钮触发；后台完成/失败通过通知提示，重新检查更新回到原状态。同一会话同一版本的已下载包保留，稍后安装无需重下。ready 提供“退出并安装更新 / 稍后安装 / 打开下载目录 / 重新下载”；存在活跃下载、未终结翻译 Job 或下载状态同步失败时，先在原弹窗进入 confirm，说明中断影响并确认一次，再进入 opening（ADR 0040）。DEV 构建（`import.meta.env.DEV`）在账号菜单额外提供「预览更新弹窗」入口：用演示数据与 1.8s 模拟进度完整走 available → downloading → ready → confirm → opening，不调用检查 / 下载 / 安装命令，仅用于样式与交互验收；生产构建不渲染该入口。
+`UpdateDialog`：available → downloading → ready；下载失败进入 error（重新下载 / 打开发布页），取消进入 cancelled（可重新下载）。下载中可关闭弹窗继续后台下载（Esc 同效），取消只由显式按钮触发；后台完成/失败通过通知提示，重新检查更新回到原状态。同一会话同一版本的已下载包保留，稍后安装无需重下。ready 以「状态说明 + 平台提示 + 路径块」分层展示，主操作 filled“退出并安装更新”为唯一强调动作，“稍后安装”为 on-surface-variant text，打开下载目录为路径块右侧 28px 文件夹图标按钮；动作行只留两枚按钮（8px 间距、右对齐），不再提供“重新下载”；存在活跃下载、未终结翻译 Job 或下载状态同步失败时，先在原弹窗进入 confirm，说明中断影响并确认一次，再进入 opening（ADR 0040）。DEV 构建（`import.meta.env.DEV`）在账号菜单额外提供「预览更新弹窗」入口：用演示数据与 1.8s 模拟进度完整走 available → downloading → ready → confirm → opening，不调用检查 / 下载 / 安装命令，仅用于样式与交互验收；生产构建不渲染该入口。
 更新不复用携带 Pixiv Cookie 的客户端，不引入本地 HTTP 服务。资产清单双源获取：首选 GitHub REST
 `/repos/gbandszxc/pixiv-tool/releases/tags/{tag}`（结构化、带精确大小与摘要），优先 v 前缀再裸 tag，
 仅接受精确版本稳定 Release；API 被匿名限额或网络失败时回退发布页 `expanded_assets/<tag>` 片段

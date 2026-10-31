@@ -2,33 +2,41 @@
   <dialog ref="dialog" class="m3-dialog update-dialog" tabindex="-1" aria-labelledby="update-title" @cancel.prevent="requestClose">
     <h2 id="update-title" aria-live="polite">{{ t(`update.titles.${phase}`) }}</h2>
     <p v-if="phase === 'available'">{{ t('auth.updateAvailableText', { latest: info.latest_version, current: info.current_version }) }}</p>
+
     <template v-if="phase === 'downloading'">
-      <p>{{ t('update.version', { version: info.latest_version }) }}</p>
-      <p class="file-name">{{ progress.file_name || t('update.preparing') }}</p>
+      <p class="update-version">{{ t('update.version', { version: info.latest_version }) }}</p>
+      <p class="update-file">{{ progress.file_name || t('update.preparing') }}</p>
       <md-linear-progress :value="fraction" :indeterminate="progress.total === 0" :aria-label="t('update.progress')" />
       <div class="download-stats" aria-live="off">
         <span>{{ formatBytes(progress.downloaded) }} / {{ progress.total ? formatBytes(progress.total) : '--' }}</span>
         <span>{{ Math.floor(fraction * 100) }}% · {{ formatBytes(progress.bytes_per_second) }}/s</span>
       </div>
     </template>
+
     <p v-if="error" class="m3-alert error" role="alert">{{ error }}</p>
-    <p v-if="phase === 'cancelled'" role="status">{{ t('update.cancelled') }}</p>
+    <p v-if="phase === 'cancelled'" class="update-note" role="status">{{ t('update.cancelled') }}</p>
+
     <template v-if="result && (phase === 'ready' || phase === 'confirm' || phase === 'opening')">
       <p role="status">{{ t('update.ready') }}</p>
-      <p>{{ t(`update.install.${info.platform === 'macos' ? 'macos' : info.platform === 'linux' ? 'linux' : 'windows'}`) }}</p>
-      <p>{{ t('update.restart') }}</p>
-      <p v-if="phase === 'confirm'" class="m3-alert error" role="alert">{{ t('update.activeTasks') }}</p>
-      <p class="file-name">{{ result.path }}</p>
+      <p class="update-note">{{ t(`update.install.${platformKey}`) }}</p>
+      <p v-if="phase === 'confirm'" class="m3-alert error update-warning" role="alert">{{ t('update.activeTasks') }}</p>
+      <div class="update-path-row">
+        <p class="update-path">{{ result.path }}</p>
+        <button class="update-folder" type="button" :aria-label="t('update.openDirectory')" :title="t('update.openDirectory')" @click="openDirectory">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>
+        </button>
+      </div>
       <md-linear-progress v-if="phase === 'opening'" indeterminate :aria-label="t('update.titles.opening')" />
     </template>
-    <div class="m3-row dialog-actions">
-      <md-text-button v-if="!busy" @click="requestClose">{{ t(result ? 'update.later' : 'common.cancel') }}</md-text-button>
+
+    <div class="m3-row dialog-actions update-actions">
       <md-text-button v-if="phase === 'downloading'" :disabled="cancelling" @click="requestClose">{{ t('update.continueUsing') }}</md-text-button>
       <md-text-button v-if="phase === 'downloading'" :disabled="cancelling" @click="cancel">{{ t(cancelling ? 'update.cancelling' : 'update.cancelDownload') }}</md-text-button>
-      <md-outlined-button v-if="phase === 'error'" @click="openRelease">{{ t('update.openRelease') }}</md-outlined-button>
+
+      <md-text-button v-if="!busy" class="update-aux" @click="requestClose">{{ t(result ? 'update.later' : 'common.cancel') }}</md-text-button>
+      <md-text-button v-if="phase === 'error'" class="update-aux" @click="openRelease">{{ t('update.openRelease') }}</md-text-button>
+
       <md-filled-button v-if="phase === 'available' || phase === 'error' || phase === 'cancelled'" @click="download">{{ t(phase === 'available' ? 'update.download' : 'update.retry') }}</md-filled-button>
-      <md-outlined-button v-if="result && !busy" @click="openDirectory">{{ t('update.openDirectory') }}</md-outlined-button>
-      <md-text-button v-if="result && !busy" @click="download">{{ t('update.retry') }}</md-text-button>
       <md-filled-button v-if="phase === 'ready' || phase === 'confirm'" @click="install">{{ t(phase === 'confirm' ? 'update.confirmInstall' : 'update.installNow') }}</md-filled-button>
     </div>
   </dialog>
@@ -61,12 +69,13 @@ const preview = ref(false);
 let previewTimer: number | undefined;
 const busy = computed(() => phase.value === "downloading" || phase.value === "opening");
 const fraction = computed(() => progress.value.total ? Math.min(1, progress.value.downloaded / progress.value.total) : 0);
+const platformKey = computed(() => info.value.platform === "macos" ? "macos" : info.value.platform === "linux" ? "linux" : "windows");
 watch(phase, async () => {
   await nextTick();
   if (!dialog.value?.open) return;
-  // 状态切换会移除原焦点按钮，保持键盘焦点在模态内。
-  const action = dialog.value.querySelector<HTMLElement>('md-filled-button, md-outlined-button, md-text-button');
-  (action ?? dialog.value).focus();
+  // 状态切换后焦点留在模态容器：不抢按钮焦点，鼠标操作不会出现 focus-visible 描边；
+  // 键盘用户按一次 Tab 即进入动作行。
+  dialog.value.focus();
 });
 function formatBytes(bytes: number) {
   if (bytes < 1000) return `${Math.round(bytes)} B`;
@@ -96,6 +105,9 @@ function open(value: UpdateCheckInfo, options?: { preview?: boolean }) {
     phase.value = "ready";
   }
   dialog.value?.showModal();
+  // showModal 默认聚焦首个可聚焦后代（按钮），会带出 focus-visible 描边；
+  // 统一把初始焦点收到容器，Tab 再进入动作行。
+  dialog.value?.focus();
 }
 defineExpose({ open });
 function requestClose() {
@@ -199,8 +211,30 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 结构：标题 → 状态说明（muted）→ 平台提示（muted）→ 路径块 → 动作行。
+ * 主操作是唯一 filled；其余为 text 且走 on-surface-variant，避免按钮抢焦点。
+ * 动作行保持单行（480px 内三枚文字按钮可容纳），窄窗才换行。 */
 .update-dialog { width: min(480px, 90vw); box-sizing: border-box; max-height: 88vh; overflow-y: auto; }
-.file-name { overflow-wrap: anywhere; color: var(--ink-muted); margin-block: var(--space-lg); }
-.download-stats { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-sm); margin-top: var(--space-sm); font-variant-numeric: tabular-nums; }
+/* 焦点停在对话框容器（非可操作控件）时不画描边；Tab 进入动作行后由按钮自身显示焦点。 */
+.update-dialog:focus,
+.update-dialog:focus-visible { outline: none; }
+.update-version { margin: var(--space-md) 0 0; }
+.update-file { margin: var(--space-xxs) 0 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.update-dialog md-linear-progress { margin-top: var(--space-md); }
+.download-stats { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-sm); margin-top: var(--space-sm); color: var(--ink-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.update-note { margin: var(--space-md) 0 0; color: var(--ink-muted); font-size: 13px; line-height: 1.6; }
+.update-note-tight { margin-top: var(--space-xxs); }
+.update-warning { margin-top: var(--space-md); }
+.update-path-row { display: flex; align-items: center; gap: var(--space-sm); margin-top: var(--space-lg); padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-md); background: var(--md-sys-color-surface-container-highest); border-radius: var(--radius-control); }
+.update-path { flex: 1; min-width: 0; margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.update-folder { display: grid; place-items: center; flex: none; width: 28px; height: 28px; padding: 0; color: var(--ink-muted); background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+.update-folder svg { width: 16px; height: 16px; }
+.update-folder:hover { color: var(--ink); background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
+.update-folder:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
+.update-actions { flex-wrap: nowrap; justify-content: flex-end; gap: var(--space-sm); }
+.update-aux { --md-text-button-label-text-color: var(--md-sys-color-on-surface-variant); }
 .error { overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  .update-actions { flex-wrap: wrap; }
+}
 </style>

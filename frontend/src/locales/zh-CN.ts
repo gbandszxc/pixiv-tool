@@ -8,8 +8,7 @@ export default {
     later: "稍后安装", installNow: "退出并安装更新", confirmInstall: "仍然退出并安装", continueUsing: "后台下载", downloadReady: "更新已下载，可从账号菜单检查更新并安装。",
     previewDone: "预览结束：安装流程未实际执行。",
     activeTasks: "存在未完成的下载或翻译任务，或任务状态尚未同步。退出将中断当前执行；请等待任务完成，或确认仍然退出并安装。",
-    install: { windows: "退出后，请按安装程序提示完成覆盖安装。", macos: "打开 DMG 后，将 Pixiv Tool 拖入应用程序文件夹并替换旧版本。应用会自动退出，仍需手动拖拽安装。", linux: "AppImage：替换旧文件并授予执行权限；deb/rpm：使用系统软件安装器安装。" },
-    restart: "安装完成后重新启动应用。",
+    install: { windows: "退出后，请按安装程序提示完成覆盖安装；安装完成后重新启动应用。", macos: "打开 DMG 后，将 Pixiv Tool 拖入应用程序文件夹并替换旧版本。应用会自动退出，仍需手动拖拽安装；完成后请重新启动应用。", linux: "AppImage：替换旧文件并授予执行权限；deb/rpm：使用系统软件安装器安装。安装完成后重新启动应用。" },
   },
   workspace: {
   "discover": "发现",
