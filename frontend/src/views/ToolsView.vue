@@ -33,9 +33,9 @@ function onTabChange(value: string) { if (value !== route.path) void router.push
 </script>
 
 <style scoped>
-.tools-header { margin-bottom: var(--space-md); flex-wrap: wrap; }
+.tools-header { margin-bottom: var(--space-sm); flex-wrap: wrap; }
 .tools-header .page-title { flex: 1; }
-.tools-navigation { margin-bottom: var(--space-md); }
+.tools-navigation { margin-bottom: 0; }
 .tools-tabs { width: max-content; max-width: 100%; }
 .tools-view > .tools-body { margin-top: 0; }
 </style>

@@ -209,16 +209,17 @@ textarea {
 
 /* 次级吸顶条（工具壳的子页面：任务分类行 / 下载历史工具行）吸附在工具壳页头下方。
  * 偏移量取页头实测高度 --app-head-h（由 App.vue 观察吸顶页头写入）。
- * 内边距与外间距统一，底部与实际内容区间留出标准的 16px 呼吸间距。 */
+ * 内边距与外间距紧凑收敛，消除与父级页签间的断层多余留白，与关注页保持一致的紧凑节奏。 */
 .app-page-head.is-sub {
   top: var(--app-head-h, 0px);
   z-index: 4;
-  padding-block: var(--space-xs) var(--space-sm);
-  margin-bottom: var(--space-lg);
+  padding-block: var(--space-xs);
+  margin-bottom: var(--space-sm);
 }
 
-/* 非次级吸顶页头之后的内容区首项，统一保持 16px 上外边距呼吸留白 */
-.page-view > .app-page-head:not(.is-sub) + *:not(.app-page-head) {
+/* 非次级吸顶页头之后的内容区首项，统一保持 16px 上外边距呼吸留白；
+ * 排除 .tools-body，避免工具壳子路由容器误加多余上外边距。 */
+.page-view > .app-page-head:not(.is-sub) + *:not(.app-page-head):not(.tools-body) {
   margin-top: var(--space-lg);
 }
 
