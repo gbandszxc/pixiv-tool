@@ -43,7 +43,13 @@ import { pixivUserUrl } from "../../utils/pixivUrl";
 import { useInfiniteList } from "../../composables/useInfiniteList";
 import { useAuthStore } from "../../stores/auth";
 
-const props = defineProps<{ id: number }>();
+const props = withDefaults(
+  defineProps<{
+    id: number;
+    isMe?: boolean;
+  }>(),
+  { isMe: false }
+);
 
 const { t } = useI18n();
 const router = useRouter();
@@ -308,11 +314,16 @@ onDeactivated(() => window.removeEventListener("resize", onWindowResize));
 onBeforeUnmount(() => {
   window.removeEventListener("resize", onWindowResize);
 });
+
+defineExpose({
+  refresh,
+  loading: computed(() => profileLoading.value || followBusy.value || lists[activeTab.value].loading.value),
+});
 </script>
 
 <template>
   <div class="page-view author-view">
-    <div class="app-page-head">
+    <div v-if="!isMe" class="app-page-head">
       <div class="browse-list-header">
         <!-- 主页（/browse/me）经 #lead 把写操作入口并入本行左端；普通作者页无插槽内容，DOM 与布局零变化 -->
         <slot name="lead" />
@@ -320,9 +331,9 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <!-- ===== 头部信息卡（surface-container 区块，无阴影）===== -->
-    <section class="author-card">
+    <section class="author-card" :class="{ 'is-me': isMe }">
       <div class="author-heading">
-        <PageBackButton class="author-back" />
+        <PageBackButton v-if="!isMe" class="author-back" />
         <div class="author-profile">
           <!-- 加载骨架：纯色块，无动画 -->
           <div v-if="profileLoading && !profile" class="card-skeleton" aria-hidden="true">
@@ -368,6 +379,7 @@ onBeforeUnmount(() => {
                 </p>
               </div>
               <div class="author-actions">
+                <slot name="me-actions" />
                 <component
                   :is="profile.is_followed ? 'md-outlined-button' : 'md-filled-button'"
                   v-if="String(profile.id) !== authStore.userId"
@@ -410,19 +422,18 @@ onBeforeUnmount(() => {
     <!-- ===== 作品区：四类 tab + 排序 + 返填（目标随当前 tab）===== -->
     <div ref="worksBar" class="works-bar">
       <SectionTabs class="works-tabs" :tabs="tabs" :value="activeTab" @change="activeTab = $event as AuthorTab" />
-      <!-- 排序：仅三类作品 tab 有意义（收藏 tab 为 offset 游标，与排序无关）。
-           外层不设 role=group —— SortDirectionToggle 根节点自带 role=group + aria-label，
-           再嵌一层同名分组会让读屏播报两层。 -->
-      <div v-if="activeTab !== 'bookmark'" class="works-order">
-        <span class="order-label" aria-hidden="true">{{ t("browse.author.orderLabel") }}</span>
-        <SortDirectionToggle :value="order" @change="applyOrder" />
-        <span class="order-state" aria-live="polite">
-          {{ t(order === "desc" ? "browse.author.orderNewest" : "browse.author.orderOldest") }}
-        </span>
+      <div class="works-tools">
+        <div v-if="activeTab !== 'bookmark'" class="works-order">
+          <span class="order-label" aria-hidden="true">{{ t("browse.author.orderLabel") }}</span>
+          <SortDirectionToggle :value="order" @change="applyOrder" />
+          <span class="order-state" aria-live="polite">
+            {{ t(order === "desc" ? "browse.author.orderNewest" : "browse.author.orderOldest") }}
+          </span>
+        </div>
+        <md-outlined-button @click="fillActiveTab()">
+          {{ activeTab === "novel" ? t("browse.hooks.fillNovelForm") : t("browse.hooks.fillIllustForm") }}
+        </md-outlined-button>
       </div>
-      <md-outlined-button @click="fillActiveTab()">
-        {{ activeTab === "novel" ? t("browse.hooks.fillNovelForm") : t("browse.hooks.fillIllustForm") }}
-      </md-outlined-button>
     </div>
 
     <div v-for="pane in panes" v-show="activeTab === pane.kind" :key="pane.kind" class="works-pane">
@@ -437,8 +448,13 @@ onBeforeUnmount(() => {
         @retry="lists[pane.kind].retry()"
         @select="openWork"
       />
-      <!-- 空态按类型给文案 -->
+      <!-- 空态按类型给文案与图标 -->
       <div v-else class="works-empty">
+        <div class="empty-icon-box" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z" />
+          </svg>
+        </div>
         <p class="state-text">{{ t(EMPTY_KEY[pane.kind]) }}</p>
       </div>
 
@@ -468,10 +484,16 @@ onBeforeUnmount(() => {
   padding: var(--space-xl);
   border-radius: 16px;
   background: var(--md-sys-color-surface-container);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 15%, transparent);
+}
+
+.author-card.is-me {
+  border-color: color-mix(in srgb, var(--md-sys-color-primary) 22%, transparent);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 3.5%, var(--md-sys-color-surface-container));
 }
 
 .author-heading { display: flex; align-items: flex-start; gap: var(--space-sm); }
-.author-back { margin-top: var(--space-lg); }
+.author-back { margin-top: var(--space-md); }
 .author-profile { flex: 1; min-width: 0; }
 
 .card-top {
@@ -482,10 +504,12 @@ onBeforeUnmount(() => {
 
 .avatar {
   flex-shrink: 0;
-  width: 72px;
-  height: 72px;
+  width: 80px;
+  height: 80px;
   border-radius: 999px;
   overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border: 2px solid var(--surface);
   /* 主色弱色底占位（与 WorkCard 封面占位同源派生） */
   background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface));
 }
@@ -520,9 +544,9 @@ onBeforeUnmount(() => {
 .author-name {
   margin: 0;
   color: var(--ink);
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 700;
-  line-height: 1.4;
+  line-height: 1.3;
   overflow-wrap: anywhere;
 }
 
@@ -567,8 +591,9 @@ onBeforeUnmount(() => {
 /* ===== 简介块 ===== */
 .bio-block {
   margin-top: var(--space-md);
+  padding-top: var(--space-sm);
+  border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 12%, transparent);
 }
-
 .bio-text {
   margin: 0;
   color: var(--ink-muted);
@@ -646,13 +671,23 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap; /* 窄窗时排序组整体落行 */
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-md);
   margin-top: var(--space-sm);
 }
 
 .works-tabs {
-  flex: 1;
-  min-width: 0;
+  width: max-content;
+  max-width: 100%;
+  flex: none;
+}
+
+.works-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+  margin-left: auto;
 }
 
 .works-order {
@@ -680,12 +715,29 @@ onBeforeUnmount(() => {
 
 .works-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: var(--space-xl) var(--space-lg);
+  gap: var(--space-sm);
+  padding: calc(var(--space-xl) * 2) var(--space-lg);
   text-align: center;
 }
 
+.empty-icon-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--md-sys-color-surface-container);
+  color: var(--ink-subtle);
+}
+
+.empty-icon-box svg {
+  width: 28px;
+  height: 28px;
+}
 .append-error {
   display: flex;
   align-items: center;
