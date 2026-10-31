@@ -56,6 +56,9 @@ const progress = ref(emptyProgress());
 const result = ref<UpdateDownloadResult>();
 const error = ref("");
 const cancelling = ref(false);
+/** 开发预览（仅账号菜单的 DEV 入口传入）：不调用任何真实下载 / 安装命令。 */
+const preview = ref(false);
+let previewTimer: number | undefined;
 const busy = computed(() => phase.value === "downloading" || phase.value === "opening");
 const fraction = computed(() => progress.value.total ? Math.min(1, progress.value.downloaded / progress.value.total) : 0);
 watch(phase, async () => {
@@ -72,9 +75,22 @@ function formatBytes(bytes: number) {
   while (value >= 1000 && index < units.length - 1) { value /= 1000; index++; }
   return `${value.toFixed(1)} ${units[index]}`;
 }
-function open(value: UpdateCheckInfo) {
+function clearPreviewTimer() {
+  window.clearInterval(previewTimer);
+  window.clearTimeout(previewTimer);
+  previewTimer = undefined;
+}
+function open(value: UpdateCheckInfo, options?: { preview?: boolean }) {
   if (dialog.value?.open) return;
-  if (!busy.value && info.value.latest_version !== value.latest_version) {
+  preview.value = options?.preview === true;
+  if (preview.value) {
+    clearPreviewTimer();
+    info.value = { ...value };
+    phase.value = "available";
+    result.value = undefined;
+    error.value = "";
+    progress.value = emptyProgress();
+  } else if (!busy.value && info.value.latest_version !== value.latest_version) {
     info.value = { ...value }; phase.value = "available"; result.value = undefined; error.value = "";
   } else if (!busy.value && phase.value === "confirm") {
     phase.value = "ready";
@@ -83,16 +99,49 @@ function open(value: UpdateCheckInfo) {
 }
 defineExpose({ open });
 function requestClose() {
-  if (phase.value !== "opening") dialog.value?.close();
+  if (phase.value !== "opening") { clearPreviewTimer(); dialog.value?.close(); }
 }
 async function cancel() {
+  if (preview.value) {
+    clearPreviewTimer();
+    phase.value = "cancelled";
+    progress.value = emptyProgress();
+    return;
+  }
   if (cancelling.value) return;
   cancelling.value = true;
   try { await cancelAppUpdate(); }
   catch (value) { cancelling.value = false; notify(errorMessage(value)); }
 }
+/** 预览下载：固定 1.8s 走完，展示进度条与统计行；不写盘、不请求网络。 */
+function previewDownload() {
+  phase.value = "downloading"; cancelling.value = false; error.value = ""; result.value = undefined;
+  const total = 23_540_000;
+  const fileExt = info.value.platform === "macos" ? "dmg" : info.value.platform === "linux" ? "AppImage" : "exe";
+  const fileName = `Pixiv Tool_${info.value.latest_version}_x64.${fileExt}`;
+  progress.value = { phase: "downloading", file_name: fileName, downloaded: 0, total, bytes_per_second: 0 };
+  const started = performance.now();
+  clearPreviewTimer();
+  previewTimer = window.setInterval(() => {
+    const ratio = Math.min(1, (performance.now() - started) / 1_800);
+    progress.value = {
+      phase: "downloading",
+      file_name: fileName,
+      downloaded: Math.round(total * ratio),
+      total,
+      bytes_per_second: Math.round(total / 1.8),
+    };
+    if (ratio < 1) return;
+    clearPreviewTimer();
+    const directory = info.value.platform === "windows" ? "C:\\Users\\demo\\Downloads" : "/Users/demo/Downloads";
+    const separator = info.value.platform === "windows" ? "\\" : "/";
+    result.value = { path: `${directory}${separator}${fileName}`, package_type: info.value.package_type ?? "" };
+    phase.value = "ready";
+  }, 120);
+}
 async function download() {
   if (busy.value) return;
+  if (preview.value) { previewDownload(); return; }
   phase.value = "downloading"; cancelling.value = false; error.value = ""; result.value = undefined; progress.value = emptyProgress();
   let acceptingProgress = true;
   try {
@@ -111,6 +160,18 @@ async function download() {
 async function install() {
   if (busy.value || !result.value) return;
   const confirmed = phase.value === "confirm";
+  if (preview.value) {
+    // 预览完整走一遍「检测到活跃任务 → 确认 → 正在安装」的交互，不执行真实交接。
+    if (!confirmed) { phase.value = "confirm"; return; }
+    phase.value = "opening";
+    previewTimer = window.setTimeout(() => {
+      previewTimer = undefined;
+      dialog.value?.close();
+      phase.value = "ready";
+      notify(t('update.previewDone'));
+    }, 1_200);
+    return;
+  }
   phase.value = "opening"; error.value = "";
   if (!confirmed) {
     let activeTranslation = translations.activeJobs.length > 0;
@@ -127,8 +188,14 @@ async function install() {
   catch (value) { error.value = errorMessage(value); phase.value = "ready"; }
 }
 async function openRelease() { try { await openUrl(info.value.release_url); } catch (value) { notify(errorMessage(value)); } }
-async function openDirectory() { try { await openUpdateDirectory(); } catch (value) { notify(errorMessage(value)); } }
-onBeforeUnmount(() => { if (phase.value === "downloading") void cancelAppUpdate().catch(() => {}); });
+async function openDirectory() {
+  if (preview.value) return;
+  try { await openUpdateDirectory(); } catch (value) { notify(errorMessage(value)); }
+}
+onBeforeUnmount(() => {
+  clearPreviewTimer();
+  if (phase.value === "downloading" && !preview.value) void cancelAppUpdate().catch(() => {});
+});
 </script>
 
 <style scoped>

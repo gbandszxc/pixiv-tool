@@ -39,6 +39,11 @@
           <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg>
           <span class="menu-label">{{ t('auth.checkUpdate') }}</span>
         </button>
+        <!-- 开发预览：仅 Vite dev 构建渲染，用演示数据打开更新弹窗（不发起真实检查 / 下载）。 -->
+        <button v-if="devPreview" role="menuitem" class="menu-item" @click="previewUpdate()">
+          <svg class="menu-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></svg>
+          <span class="menu-label">{{ t('auth.previewUpdate') }}</span>
+        </button>
         <hr class="menu-divider" />
         <div class="menu-meta" role="none">
           <span class="menu-version">{{ t('auth.versionLabel', { version: appVersion }) }}</span>
@@ -123,6 +128,22 @@ async function openGitHub() { close(); try { await openUrl(GITHUB_HOME); } catch
 
 /** 有新版本时记录信息并弹确认弹窗（手动检查与启动静默检查共用）。 */
 function showUpdateDialog(info: UpdateCheckInfo) { close(); updateDialog.value?.open(info); }
+/** 开发预览入口：仅 dev 构建可见，演示数据覆盖 available / downloading / ready / confirm / opening。 */
+const devPreview = import.meta.env.DEV;
+function previewUpdate() {
+  close();
+  const ua = navigator.userAgent;
+  const platform = /Macintosh|Mac OS/.test(ua) ? "macos" : /Linux/.test(ua) ? "linux" : "windows";
+  const packageType = platform === "macos" ? "dmg" : platform === "linux" ? "appimage" : "nsis";
+  updateDialog.value?.open({
+    has_update: true,
+    current_version: appVersion.value,
+    latest_version: "1.4.0",
+    release_url: GITHUB_HOME,
+    platform,
+    package_type: packageType,
+  }, { preview: true });
+}
 /** 手动检查更新：期间菜单项 disabled 防重复点击；结果分支弹窗或提示。 */
 async function checkUpdate() {
   if (updateChecking.value) return;
