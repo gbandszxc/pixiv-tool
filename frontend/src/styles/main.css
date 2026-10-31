@@ -198,18 +198,28 @@ textarea {
 .app-page-head::after {
   inset-block-end: 0;
   height: 1px;
-  background: color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
+  background: color-mix(in srgb, var(--md-sys-color-outline) 20%, transparent);
+}
+
+/* 当页面存在次级吸顶工具条（如下载页的分类与批量操作行）时，外层页头底边不画线，
+ * 避免与次级吸顶条形成重叠冗余双线；由次级吸顶条底缘承担全局唯一的下边界线。 */
+.app-content:has(.app-page-head.is-sub) .app-page-head:not(.is-sub)::after {
+  display: none;
 }
 
 /* 次级吸顶条（工具壳的子页面：任务分类行 / 下载历史工具行）吸附在工具壳页头下方。
- * 偏移量取页头实测高度 --app-head-h（由 App.vue 观察吸顶页头写入），不写死——
- * 页头在窄窗换行、或导航项文案随语言变长时高度都会变。间距由本条承担，
- * 子页面的工具行自身不再带下距。 */
+ * 偏移量取页头实测高度 --app-head-h（由 App.vue 观察吸顶页头写入）。
+ * 内边距与外间距统一，底部与实际内容区间留出标准的 16px 呼吸间距。 */
 .app-page-head.is-sub {
   top: var(--app-head-h, 0px);
   z-index: 4;
-  padding-block: var(--space-sm);
-  margin-bottom: var(--space-sm);
+  padding-block: var(--space-xs) var(--space-sm);
+  margin-bottom: var(--space-lg);
+}
+
+/* 非次级吸顶页头之后的内容区首项，统一保持 16px 上外边距呼吸留白 */
+.page-view > .app-page-head:not(.is-sub) + *:not(.app-page-head) {
+  margin-top: var(--space-lg);
 }
 
 /* 页内 scrollIntoView 的目标不得钻到吸顶页头下方：滚动容器按页头高度预留定位余量。
@@ -224,7 +234,7 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm) var(--space-md);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 .browse-list-header .page-title { margin: 0; }
 
@@ -254,7 +264,7 @@ textarea {
 }
 
 .history-toolbar {
-  margin-bottom: var(--space-lg);
+  margin-bottom: 0;
 }
 
 .history-search {
@@ -274,7 +284,7 @@ textarea {
 }
 
 .tasks-toolbar {
-  margin-bottom: var(--space-md);
+  margin-bottom: 0;
 }
 
 .task-progress-meta {

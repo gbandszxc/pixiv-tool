@@ -274,13 +274,17 @@ function goWork(item: BrowseWorkItem): void {
 </template>
 
 <style scoped>
+.browse-list-header {
+  margin-bottom: var(--space-md);
+}
+
 /* ===== 控制行 ===== */
 .bm-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-md) var(--space-xl);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 .bm-kind-tabs {

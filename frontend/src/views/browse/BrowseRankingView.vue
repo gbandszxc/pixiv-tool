@@ -280,7 +280,7 @@ function openWork(item: BrowseWorkItem): void {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-sm) var(--space-md);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 /* 类型 tabs 按内容定宽（DESIGN.md：页内筛选禁止均分整页宽度；与发现页 section-tabs

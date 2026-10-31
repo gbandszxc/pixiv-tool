@@ -53,7 +53,7 @@ const options = computed(() => [
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-sm);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 /* 胶囊：自绘，选中态 secondary-container（与发现页 chips 同一 recipe） */

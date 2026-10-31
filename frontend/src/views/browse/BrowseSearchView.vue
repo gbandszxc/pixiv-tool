@@ -643,11 +643,16 @@ const typeTabs = computed(() => [
 </template>
 
 <style scoped>
+.browse-list-header {
+  margin-bottom: var(--space-md);
+}
+
 .tool-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-md);
+  margin-bottom: var(--space-md);
 }
 
 .search-field {
@@ -666,7 +671,8 @@ const typeTabs = computed(() => [
   flex-wrap: nowrap;
   align-items: center;
   gap: var(--space-md);
-  margin-top: var(--space-lg);
+  margin-top: 0;
+  margin-bottom: var(--space-md);
   min-width: 0;
 }
 
@@ -712,7 +718,7 @@ const typeTabs = computed(() => [
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-xs) var(--space-md);
-  margin-top: var(--space-md);
+  margin-top: var(--space-lg);
 }
 
 .total-line {

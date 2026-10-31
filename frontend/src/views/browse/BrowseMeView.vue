@@ -63,6 +63,10 @@ function openExternal(url: string): void {
 </template>
 
 <style scoped>
+.browse-list-header {
+  margin-bottom: var(--space-md);
+}
+
 /* 动作组作为工具行内的单个 flex item 整组换行；下距由 .browse-list-header 的既有 margin-bottom 承担 */
 .me-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
 .me-state { display: flex; flex-direction: column; align-items: center; gap: var(--space-md); padding: var(--space-xl) 0; }

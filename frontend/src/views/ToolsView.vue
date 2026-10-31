@@ -33,8 +33,9 @@ function onTabChange(value: string) { if (value !== route.path) void router.push
 </script>
 
 <style scoped>
-.tools-header { margin-bottom: var(--space-md); flex-wrap:wrap; }
-.tools-header .page-title { flex:1; }
-.tools-navigation { border-bottom:1px solid color-mix(in srgb,var(--md-sys-color-outline) 30%,transparent); margin-bottom:var(--space-xl); padding-bottom:var(--space-sm); }
-.tools-tabs { width:max-content; max-width:100%; }
+.tools-header { margin-bottom: var(--space-md); flex-wrap: wrap; }
+.tools-header .page-title { flex: 1; }
+.tools-navigation { margin-bottom: var(--space-md); }
+.tools-tabs { width: max-content; max-width: 100%; }
+.tools-view > .tools-body { margin-top: 0; }
 </style>

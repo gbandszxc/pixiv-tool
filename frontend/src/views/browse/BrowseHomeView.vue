@@ -262,7 +262,7 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm) var(--space-md);
-  margin-bottom: var(--space-sm);
+  margin-bottom: var(--space-md);
 }
 
 .browse-list-header .page-title {
@@ -274,7 +274,7 @@ onMounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-sm);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 .chip {

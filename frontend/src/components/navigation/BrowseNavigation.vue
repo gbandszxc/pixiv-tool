@@ -39,7 +39,7 @@ const show = computed(() => group.value && group.value !== "downloads" && route.
 </template>
 
 <style scoped>
-.browse-navigation { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-sm) var(--space-lg); margin:0 0 var(--space-xl); }
+.browse-navigation { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-sm) var(--space-lg); margin:0 0 var(--space-md); }
 .channel-links { display:flex; flex-wrap:wrap; gap:var(--space-sm); }
 a { padding:var(--space-sm) var(--space-md); border-radius:24px; color:var(--ink-muted); text-decoration:none; }
 a:hover { background:color-mix(in srgb,var(--md-sys-color-primary) 8%,transparent); }

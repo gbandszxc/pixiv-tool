@@ -190,12 +190,16 @@ function openSeries(item: BrowseWatchlistItem): void {
 </template>
 
 <style scoped>
+.browse-list-header {
+  margin-bottom: var(--space-md);
+}
+
 .control-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-md);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 .control-label {

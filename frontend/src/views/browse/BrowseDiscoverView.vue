@@ -174,7 +174,7 @@ function goWork(item: BrowseWorkItem): void {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-sm);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 .chip {

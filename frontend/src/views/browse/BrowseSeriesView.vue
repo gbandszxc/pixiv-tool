@@ -352,6 +352,7 @@ function openInPixiv(): void {
 .series-head {
   display: flex;
   gap: var(--space-lg);
+  margin-top: var(--space-lg);
   margin-bottom: var(--space-xl);
 }
 
@@ -369,12 +370,12 @@ function openInPixiv(): void {
   min-width: 0;
 }
 
-/* 标题行在吸顶页头内，自身不再吃间距；下距由 .series-head 承担。
+/* 标题行在吸顶页头内，底部留出统一的 space-md 间距。
  * 标题单行省略（DESIGN.md：标题单行省略、640px 下换行）：flex: 1 占满返回键与刷新键
  * 之间的中段，min-width: 0 + 省略三件套让长标题收缩截断，不把刷新键挤出吸顶行
  * （flex 子项默认 min-width: auto 会被长标题撑破，全局的 overflow-wrap: anywhere
  * 多行折行口径对本行不适用） */
-.series-heading { margin-bottom: 0; }
+.series-heading { margin-bottom: var(--space-md); }
 .series-heading .page-title {
   flex: 1;
   min-width: 0;
@@ -441,8 +442,7 @@ function openInPixiv(): void {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-md);
-  margin-top: var(--space-sm);
-  padding-bottom: var(--space-sm);
+  margin-bottom: var(--space-md);
 }
 
 .toolbar-label {

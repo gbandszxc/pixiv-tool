@@ -243,6 +243,10 @@ onActivated(load);
 </template>
 
 <style scoped>
+.browse-list-header {
+  margin-bottom: var(--space-md);
+}
+
 .header-actions {
   display: flex;
   flex-wrap: wrap;
@@ -261,7 +265,7 @@ onActivated(load);
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-sm);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
 }
 
 .chip {

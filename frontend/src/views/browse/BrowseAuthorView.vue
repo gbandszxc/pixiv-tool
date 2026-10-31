@@ -458,8 +458,13 @@ onBeforeUnmount(() => {
   gap: var(--space-lg);
 }
 
+.browse-list-header {
+  margin-bottom: var(--space-md);
+}
+
 /* ===== 头部信息卡：surface-container 区块，16px 圆角，无阴影（DESIGN.md Overlay-Only Shadow Rule）===== */
 .author-card {
+  margin-top: 0;
   padding: var(--space-xl);
   border-radius: 16px;
   background: var(--md-sys-color-surface-container);

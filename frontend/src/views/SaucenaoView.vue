@@ -370,7 +370,7 @@ function onThumbError(index: number): void {
 </template>
 
 <style scoped>
-.saucenao-heading { margin-bottom: var(--space-lg); }
+.saucenao-heading { margin-bottom: var(--space-md); }
 /* ===== 输入卡片 ===== */
 
 .input-card {
