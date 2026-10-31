@@ -373,7 +373,7 @@ onUnmounted(() => {
 .history-toolbar { justify-content: space-between; flex-wrap: wrap; }
 .history-filters { display: flex; align-items: center; gap: var(--space-md); flex-wrap: wrap; flex: 1; min-width: 0; }
 .history-actions { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; flex-shrink: 0; }
-.m3-radio-group { display: flex; gap: var(--space-sm); flex-wrap: wrap; }
+.m3-radio-group { display: flex; gap: var(--space-md); flex-wrap: wrap; }
 .history-search { width: 200px; }
 .search-leading-icon { width: 18px; height: 18px; margin-left: 4px; color: var(--ink-muted); fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .view-switch-group { display: inline-flex; padding: 2px; background: var(--md-sys-color-surface-container); border-radius: 8px; border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 20%, transparent); }
