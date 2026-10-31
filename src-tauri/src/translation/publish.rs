@@ -21,7 +21,7 @@ use crate::translation::artifacts::{
 };
 use crate::translation::chunking::Chunk;
 use crate::translation::source::{SegmentKind, SourceDoc, parse_segment_id};
-use crate::translation::validation::validate_draft_with_language;
+use crate::translation::validation::validate_draft_with_policy;
 
 /// 已审查且可提前投影的页集合。
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +95,18 @@ pub fn publish_status_with_language(
     global_review: Option<&GlobalReview>,
     target_language: Option<&str>,
 ) -> PublishStatus {
+    publish_status_with_policy(chunks, drafts, reviews, global_review, target_language, &[])
+}
+
+/// 发布状态判定，并豁免旧约束中锁定为假名的术语。
+pub fn publish_status_with_policy(
+    chunks: &[Chunk],
+    drafts: &[Draft],
+    reviews: &[Review],
+    global_review: Option<&GlobalReview>,
+    target_language: Option<&str>,
+    exempt_terms: &[String],
+) -> PublishStatus {
     if chunks.is_empty() {
         return PublishStatus::NeedsAttention;
     }
@@ -118,7 +130,7 @@ pub fn publish_status_with_language(
         if draft.needs_repair {
             return PublishStatus::NeedsAttention;
         }
-        if validate_draft_with_language(chunk, draft, target_language).is_err() {
+        if validate_draft_with_policy(chunk, draft, target_language, exempt_terms).is_err() {
             return PublishStatus::NeedsAttention;
         }
         let Some(review) = review_by_chunk.get(chunk.id.as_str()) else {
@@ -172,6 +184,17 @@ pub fn reviewed_pages_with_language(
     reviews: &[Review],
     target_language: Option<&str>,
 ) -> ReviewedPages {
+    reviewed_pages_with_policy(chunks, drafts, reviews, target_language, &[])
+}
+
+/// 早发布投影，并豁免旧约束中锁定为假名的术语。
+pub fn reviewed_pages_with_policy(
+    chunks: &[Chunk],
+    drafts: &[Draft],
+    reviews: &[Review],
+    target_language: Option<&str>,
+    exempt_terms: &[String],
+) -> ReviewedPages {
     let draft_by_chunk: BTreeMap<&str, &Draft> = drafts
         .iter()
         .map(|draft| (draft.chunk_id.as_str(), draft))
@@ -205,7 +228,7 @@ pub fn reviewed_pages_with_language(
             if !draft.reviewed || draft.needs_repair {
                 return false;
             }
-            if validate_draft_with_language(chunk, draft, target_language).is_err() {
+            if validate_draft_with_policy(chunk, draft, target_language, exempt_terms).is_err() {
                 return false;
             }
             let Some(review) = review_by_chunk.get(*chunk_id) else {

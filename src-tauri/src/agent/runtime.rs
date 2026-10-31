@@ -24,7 +24,11 @@ use rig_agent::agent::{
 };
 use rig_agent::completion::PromptError;
 use rig_core::{
-    DynModel, completion::Usage, message::Message, operation::Completion, tool::DynamicTool,
+    DynModel,
+    completion::Usage,
+    message::Message,
+    operation::Completion,
+    tool::{DynamicTool, ToolResult},
 };
 
 use crate::agent::{
@@ -798,18 +802,38 @@ impl AgentHook for RuntimeHooks {
                 .tool_result()
                 .map(|result| result.is_error())
                 .unwrap_or(true);
-            debug_job(
-                &self.state.scope,
-                self.state.role.as_str(),
-                self.state.phase,
-                None,
-                "tool_end",
-                &[
-                    ("turn", &event.turn.to_string()),
-                    ("tool", name),
-                    ("status", if failed { "error" } else { "ok" }),
-                ],
-            );
+            if failed {
+                let code = event
+                    .tool_result()
+                    .and_then(tool_error_code)
+                    .unwrap_or_else(|| "unknown".to_string());
+                debug_job(
+                    &self.state.scope,
+                    self.state.role.as_str(),
+                    self.state.phase,
+                    None,
+                    "tool_end",
+                    &[
+                        ("turn", &event.turn.to_string()),
+                        ("tool", name),
+                        ("status", "error"),
+                        ("code", code.as_str()),
+                    ],
+                );
+            } else {
+                debug_job(
+                    &self.state.scope,
+                    self.state.role.as_str(),
+                    self.state.phase,
+                    None,
+                    "tool_end",
+                    &[
+                        ("turn", &event.turn.to_string()),
+                        ("tool", name),
+                        ("status", "ok"),
+                    ],
+                );
+            }
         }
         OutcomeAction::proceed()
     }
@@ -1250,12 +1274,49 @@ fn classify_provider_error(error: &rig_core::error::ProviderError) -> RunError {
     }
 }
 
+/// 从工具错误结果里提取结构化错误码（只取 `error.code`，不含正文），
+/// 供 `tool_end` 诊断日志使用；解析不到时返回 `None`。
+fn tool_error_code(result: &ToolResult) -> Option<String> {
+    let text = result.output().as_text()?;
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    value
+        .get("error")
+        .and_then(|error| error.get("code"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
 /// 运行状态里的当前工作（供调用方组装进度事件）。
 pub fn current_work(role: Role, page: Option<u32>, chunk_id: Option<String>) -> CurrentWork {
     CurrentWork {
         page,
         chunk_id,
         role,
+    }
+}
+
+#[cfg(test)]
+mod tool_error_code_tests {
+    use super::tool_error_code;
+    use rig_core::tool::{ToolExecutionError, ToolOutput, ToolResult};
+
+    #[test]
+    fn reads_structured_error_code_without_content() {
+        let result = ToolResult::failed(ToolExecutionError::invalid_args(
+            r#"{"error":{"code":"draft_invalid","message":"x"}}"#,
+        ));
+        assert_eq!(tool_error_code(&result).as_deref(), Some("draft_invalid"));
+    }
+
+    #[test]
+    fn success_and_unstructured_errors_have_no_code() {
+        assert!(tool_error_code(&ToolResult::success(ToolOutput::text("{}"))).is_none());
+        assert!(
+            tool_error_code(&ToolResult::failed(ToolExecutionError::invalid_args(
+                "plain text"
+            )))
+            .is_none()
+        );
     }
 }
 

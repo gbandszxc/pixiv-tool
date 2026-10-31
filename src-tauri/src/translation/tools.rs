@@ -45,10 +45,12 @@ use crate::{
             TranslatedSegment, TranslationResult,
         },
         chunking::chunk_source_with_warnings,
-        publish::{publish_status_with_language, render_markdown},
+        publish::{publish_status_with_policy, render_markdown},
         service::{JobContext, read_input},
         source::{SegmentKind, SourceSegment, parse_segment_id, parse_source},
-        validation::{merge_pages, validate_draft_with_language, validate_merge_with_language},
+        validation::{
+            merge_pages, validate_draft_with_policy, validate_merge_with_policy,
+        },
     },
 };
 
@@ -326,6 +328,25 @@ fn write_scan(ctx: &JobContext, note: &ScanNote) -> Result<(), String> {
 
 fn read_constraints(ctx: &JobContext) -> Result<Option<Constraints>, String> {
     ctx.with_artifacts(|artifacts| artifacts.read_constraints())
+}
+
+/// 旧任务兼容：冻结约束中锁定为假名的术语不判为未处理残留。
+///
+/// 新约束在扫描 / 冻结阶段已禁止假名锁定（见 `audit_constraint_policy`），
+/// 这里只为已经冻结的旧任务保留可用路径。
+pub(crate) fn kana_exempt_terms(ctx: &JobContext) -> Vec<String> {
+    read_constraints(ctx)
+        .ok()
+        .flatten()
+        .map(|constraints| {
+            constraints
+                .terms
+                .into_iter()
+                .map(|term| term.locked_translation)
+                .filter(|locked| locked.chars().any(crate::translation::validation::is_kana))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn write_constraints(ctx: &JobContext, constraints: &Constraints) -> Result<(), String> {
@@ -941,7 +962,8 @@ fn submit_scan_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
     DynamicTool::new(
         tool_name("submit_scan"),
         "提交单块扫描结果（术语、风格、说明与置信度）；同块重复提交为幂等替换。\
-         扫描结果必须通过本工具写入，写在普通回复里不算完成。",
+         扫描结果必须通过本工具写入，写在普通回复里不算完成。\
+         日译任务的锁定译名不得为假名原文；风格不得要求保留拟声词/假名。",
         json!({
             "type": "object",
             "properties": {
@@ -1075,6 +1097,21 @@ fn submit_scan_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                         notes: term.notes.trim().to_string(),
                     });
                 }
+                let policy_conflicts = crate::translation::validation::audit_constraint_policy(
+                    &prepared,
+                    &style,
+                    &ctx.target_language,
+                );
+                if !policy_conflicts.is_empty() {
+                    return Err(tool_error_with(
+                        "constraint_policy_conflict",
+                        "扫描结果违反语言策略，未写入：拟声词必须翻译，锁定译名不得使用假名原文",
+                        json!({
+                            "conflicts": serde_json::to_value(&policy_conflicts)
+                                .unwrap_or_default(),
+                        }),
+                    ));
+                }
                 let note = ScanNote {
                     chunk_id: chunk.id.clone(),
                     terms: prepared,
@@ -1186,6 +1223,20 @@ fn freeze_constraints_impl(
         }
         None => style,
     };
+    let policy_conflicts = crate::translation::validation::audit_constraint_policy(
+        &terms,
+        &style,
+        &ctx.target_language,
+    );
+    if !policy_conflicts.is_empty() {
+        return Err(tool_error_with(
+            "constraint_policy_conflict",
+            "冻结约束违反语言策略：锁定译名不得使用假名原文，风格不得要求保留拟声词/假名；请修正扫描后重新冻结",
+            json!({
+                "conflicts": serde_json::to_value(&policy_conflicts).unwrap_or_default(),
+            }),
+        ));
+    }
     let version = previous
         .as_ref()
         .map(|previous| previous.version)
@@ -1500,6 +1551,7 @@ fn plan_dispatch(
         .map(|manifest| manifest.skipped_chunks)
         .unwrap_or_default();
     let rework_cap = rework_limit(ctx);
+    let exempt = kana_exempt_terms(ctx);
     let rework_set: BTreeSet<String> = if kind == DispatchKind::Translate {
         rework_targets(ctx, versions, &ids)?.into_iter().collect()
     } else {
@@ -1543,7 +1595,13 @@ fn plan_dispatch(
         let review = read_review(ctx, &id).map_err(|error| tool_error("storage", &error))?;
         let draft_valid = draft.as_ref().is_some_and(|draft| {
             stamped(ctx, "draft", &id, versions.translate)
-                && validate_draft_with_language(&chunk, draft, Some(&ctx.target_language)).is_ok()
+                && validate_draft_with_policy(
+                    &chunk,
+                    draft,
+                    Some(&ctx.target_language),
+                    &exempt,
+                )
+                .is_ok()
         });
         let review_valid = review.as_ref().is_some_and(|review| {
             stamped(ctx, "review", &id, versions.review)
@@ -1619,6 +1677,7 @@ pub(crate) fn chunk_gate(ctx: &JobContext, chunk_id: &str, versions: &PhaseVersi
     let chunk = read_chunk(ctx, chunk_id).ok().flatten();
     let draft = read_draft(ctx, chunk_id).ok().flatten();
     let review = read_review(ctx, chunk_id).ok().flatten();
+    let exempt = kana_exempt_terms(ctx);
     gate_from(
         chunk.as_ref(),
         draft.as_ref(),
@@ -1630,6 +1689,7 @@ pub(crate) fn chunk_gate(ctx: &JobContext, chunk_id: &str, versions: &PhaseVersi
             .as_ref()
             .is_some_and(|_| stamped(ctx, "review", chunk_id, versions.review)),
         Some(&ctx.target_language),
+        &exempt,
     )
 }
 
@@ -1641,13 +1701,14 @@ fn gate_from(
     review: Option<&Review>,
     review_stamped: bool,
     target_language: Option<&str>,
+    exempt_terms: &[String],
 ) -> ChunkGate {
     let Some(draft) = draft else {
         return ChunkGate::default();
     };
     let draft_valid = draft_stamped
         && chunk.is_some_and(|chunk| {
-            validate_draft_with_language(chunk, draft, target_language).is_ok()
+            validate_draft_with_policy(chunk, draft, target_language, exempt_terms).is_ok()
         });
     let review_pass = review.is_some_and(|review| {
         review_stamped
@@ -2118,7 +2179,14 @@ async fn run_translator(
         }
         return Err(RunError::Internal("翻译子任务没有提交草稿".into()));
     };
-    if validate_draft_with_language(&chunk, &saved, Some(&ctx.target_language)).is_err() {
+    if validate_draft_with_policy(
+        &chunk,
+        &saved,
+        Some(&ctx.target_language),
+        &kana_exempt_terms(ctx),
+    )
+    .is_err()
+    {
         return Err(RunError::Internal(
             "翻译子任务提交的草稿未通过结构校验".into(),
         ));
@@ -2617,13 +2685,21 @@ fn compute_merge(ctx: &JobContext) -> Result<MergeOutcome, String> {
     let global = read_global_review(ctx)?
         .filter(|_| stamped(ctx, "global_review", "global", versions.global_review));
     let pages = merge_pages(&active_chunks, &drafts);
-    let report = validate_merge_with_language(&active_chunks, &drafts, &pages, Some(&ctx.target_language));
-    let status = publish_status_with_language(
+    let exempt = kana_exempt_terms(ctx);
+    let report = validate_merge_with_policy(
+        &active_chunks,
+        &drafts,
+        &pages,
+        Some(&ctx.target_language),
+        &exempt,
+    );
+    let status = publish_status_with_policy(
         &active_chunks,
         &drafts,
         &reviews,
         global.as_ref(),
         Some(&ctx.target_language),
+        &exempt,
     );
     // 被跳过块的行回退原文：直通草稿只进产物页行，不进校验与状态判定。
     let pages = if skipped.is_empty() {
@@ -3063,7 +3139,8 @@ fn submit_translation_tool(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> 
     let bound = chunk_id.to_string();
     DynamicTool::new(
         tool_name("submit_translation"),
-        "提交本块译文；每个输入片段恰好一次且顺序一致。",
+        "提交本块译文；每个输入片段恰好一次且顺序一致。\
+         拟声词必须译成目标语言，片假名专名用目标语言或英语，颜文字原样保留。",
         json!({
             "type": "object",
             "properties": {
@@ -3118,7 +3195,12 @@ fn submit_translation_tool(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> 
                 };
                 // 先校验再写：结构错误不产生任何副作用。
                 if let Err(issues) =
-                    validate_draft_with_language(&chunk, &draft, Some(&ctx.target_language))
+                    validate_draft_with_policy(
+                        &chunk,
+                        &draft,
+                        Some(&ctx.target_language),
+                        &kana_exempt_terms(&ctx),
+                    )
                 {
                     let summary: Vec<Value> = issues
                         .iter()
@@ -3390,7 +3472,12 @@ fn revise_draft_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
                 let draft = apply_draft_patches(&existing, &patches)?;
                 // 先校验再写：补丁把结构弄坏时不产生任何副作用。
                 if let Err(issues) =
-                    validate_draft_with_language(&chunk, &draft, Some(&ctx.target_language))
+                    validate_draft_with_policy(
+                        &chunk,
+                        &draft,
+                        Some(&ctx.target_language),
+                        &kana_exempt_terms(&ctx),
+                    )
                 {
                     let summary: Vec<Value> = issues
                         .iter()
@@ -4010,6 +4097,7 @@ mod tests {
             Some(&review),
             true,
             Some("zh-CN"),
+            &[],
         );
         assert_eq!(
             gate,
@@ -4029,6 +4117,7 @@ mod tests {
             Some(&fix),
             true,
             Some("zh-CN"),
+            &[],
         );
         assert!(gate.draft_valid && gate.needs_rework && !gate.review_pass);
 
@@ -4041,6 +4130,7 @@ mod tests {
             Some(&review),
             true,
             Some("zh-CN"),
+            &[],
         );
         assert!(gate.draft_valid && gate.needs_rework);
 
@@ -4052,6 +4142,7 @@ mod tests {
             Some(&fix),
             false,
             Some("zh-CN"),
+            &[],
         );
         assert!(!gate.draft_valid && !gate.review_pass && !gate.needs_rework);
 
@@ -4065,6 +4156,7 @@ mod tests {
             Some(&fix),
             true,
             Some("zh-CN"),
+            &[],
         );
         assert!(gate.draft_valid && !gate.needs_rework && !gate.review_pass);
     }

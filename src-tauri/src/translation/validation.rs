@@ -8,9 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use regex::Regex;
+use serde::Serialize;
 
 use crate::translation::artifacts::{
-    Draft, Issue, MergeReport, Severity, TranslatedLine, TranslatedSegment,
+    AgentTerm, Draft, Issue, MergeReport, Severity, TranslatedLine, TranslatedSegment,
 };
 use crate::translation::chunking::Chunk;
 use crate::translation::source::{SegmentKind, SourceSegment, parse_segment_id};
@@ -18,8 +19,10 @@ use crate::translation::source::{SegmentKind, SourceSegment, parse_segment_id};
 /// 单片段译文长度上限。
 pub const MAX_SEGMENT_CHARS: usize = 100_000;
 
-/// 日译中时允许的假名占比（百分比，保守阈值）。
-const KANA_RATIO_LIMIT_PERCENT: usize = 15;
+/// 颜文字里允许出现的假名标点：不判为未翻译残留。
+const KAOMOJI_KANA: &[char] = &['・', '･', 'ﾉ', 'ﾟ', 'ﾞ'];
+/// 单次校验最多逐片段报告的假名残留条数，超出部分合并为一条汇总。
+const KANA_RESIDUE_ISSUE_LIMIT: usize = 24;
 /// 中译外时允许保留的汉字占比（百分比）。
 const HAN_RATIO_LIMIT_PERCENT: usize = 30;
 
@@ -29,10 +32,24 @@ pub fn validate_draft(chunk: &Chunk, draft: &Draft) -> Result<(), Vec<Issue>> {
 }
 
 /// 校验单块草稿，并显式指定目标语言（如 `zh-CN` / `en`）。
+///
+/// 日译目标的假名残留按「拟声词必须翻译、片假名专名必须转为目标语言或英语、
+/// 颜文字原样保留」判定；旧任务中已冻结的假名锁定术语由调用方通过
+/// [`validate_draft_with_policy`] 传入豁免，避免历史约束被判为残留。
 pub fn validate_draft_with_language(
     chunk: &Chunk,
     draft: &Draft,
     target_language: Option<&str>,
+) -> Result<(), Vec<Issue>> {
+    validate_draft_with_policy(chunk, draft, target_language, &[])
+}
+
+/// 与 [`validate_draft_with_language`] 相同，但豁免旧约束中锁定为假名的术语。
+pub fn validate_draft_with_policy(
+    chunk: &Chunk,
+    draft: &Draft,
+    target_language: Option<&str>,
+    exempt_terms: &[String],
 ) -> Result<(), Vec<Issue>> {
     let mut issues = Vec::new();
 
@@ -132,7 +149,7 @@ pub fn validate_draft_with_language(
         check_segment(source, translated, &mut issues);
     }
 
-    check_language_purity(chunk, draft, target_language, &mut issues);
+    check_language_purity(chunk, draft, target_language, exempt_terms, &mut issues);
 
     // 确定性：同一组输入产生相同顺序的问题。
     issues.sort_by(|left, right| {
@@ -247,17 +264,14 @@ fn check_language_purity(
     chunk: &Chunk,
     draft: &Draft,
     target_language: Option<&str>,
+    exempt_terms: &[String],
     issues: &mut Vec<Issue>,
 ) {
     let mut source_text = String::new();
     let mut translated_text = String::new();
-    let mut anchor = String::new();
     for source in &chunk.segments {
         if source.kind == SegmentKind::Markup {
             continue;
-        }
-        if anchor.is_empty() {
-            anchor = source.id.clone();
         }
         source_text.push_str(&source.text);
         if let Some(translated) = draft
@@ -276,39 +290,76 @@ fn check_language_purity(
     }
 
     let source_kana = kana_count(&source_text);
-    let source_han = han_count(&source_text);
-    let dest_kana = kana_count(&translated_text);
     let dest_han = han_count(&translated_text);
-    let dest_latin = latin_count(&translated_text);
-
     let source_is_japanese = source_kana * 100 >= source_ns * 5;
-    let explicit_zh = target_language.is_some_and(|language| language.starts_with("zh"));
-    let explicit_non_zh = target_language.is_some_and(|language| !language.starts_with("zh"));
-    let target_is_zh = explicit_zh || (!explicit_non_zh && dest_han * 100 >= dest_ns * 30);
+    let explicit_target = target_language.is_some();
+    let explicit_ja = target_language.is_some_and(|language| language.starts_with("ja"));
+    let explicit_non_ja = explicit_target && !explicit_ja;
+    let target_is_zh = target_language.is_some_and(|language| language.starts_with("zh"))
+        || (target_language.is_none() && dest_han * 100 >= dest_ns * 30);
 
-    if source_is_japanese && !explicit_non_zh && target_is_zh {
-        // 15% 是保守阈值；短专名 / 拟声残留通常低于该比例，不误报整块。
-        if dest_kana * 100 > dest_ns * KANA_RATIO_LIMIT_PERCENT {
+    // 日译目标（中文或其他非日语）：假名零容忍。拟声词必须翻译，片假名
+    // 专名必须转为目标语言或英语；颜文字标点与旧约束的锁定术语豁免。
+    if source_is_japanese && (explicit_non_ja || (!explicit_target && target_is_zh)) {
+        let mut reported = 0usize;
+        for source in &chunk.segments {
+            if source.kind == SegmentKind::Markup {
+                continue;
+            }
+            let Some(translated) = draft
+                .segments
+                .iter()
+                .find(|translated| translated.id == source.id)
+            else {
+                continue;
+            };
+            let cleaned = strip_kana_exempt(&translated.text, exempt_terms);
+            if cleaned
+                .chars()
+                .any(|ch| is_kana(ch) && !KAOMOJI_KANA.contains(&ch))
+            {
+                reported += 1;
+                if reported <= KANA_RESIDUE_ISSUE_LIMIT {
+                    issues.push(issue(
+                        &source.id,
+                        "japanese_residue",
+                        Severity::Major,
+                        "译文残留未处理假名：拟声词必须翻译，片假名专名必须转为目标语言或英语；颜文字与锁定术语除外",
+                    ));
+                }
+            }
+        }
+        if reported > KANA_RESIDUE_ISSUE_LIMIT {
+            let anchor = chunk
+                .segments
+                .first()
+                .map(|segment| segment.id.as_str())
+                .unwrap_or("chunk");
             issues.push(issue(
-                &anchor,
-                "target_language_purity",
+                anchor,
+                "japanese_residue",
                 Severity::Major,
                 &format!(
-                    "日译中假名残留比例偏高：{}%，上限 {}%",
-                    dest_kana * 100 / dest_ns,
-                    KANA_RATIO_LIMIT_PERCENT
+                    "另有 {} 个片段残留未处理假名",
+                    reported - KANA_RESIDUE_ISSUE_LIMIT
                 ),
             ));
         }
     }
 
-    let source_is_chinese = source_han * 100 >= source_ns * 30 && source_kana * 100 < source_ns * 5;
+    let source_is_chinese = han_count(&source_text) * 100 >= source_ns * 30
+        && source_kana * 100 < source_ns * 5;
     let explicit_en = target_language.is_some_and(|language| language.starts_with("en"));
-    let target_is_en =
-        explicit_en || (target_language.is_none() && dest_latin * 100 >= dest_ns * 50);
+    let target_is_en = explicit_en
+        || (target_language.is_none()
+            && latin_count(&translated_text) * 100 >= dest_ns * 50);
     if source_is_chinese && target_is_en && dest_han * 100 > dest_ns * HAN_RATIO_LIMIT_PERCENT {
         issues.push(issue(
-            &anchor,
+            chunk
+                .segments
+                .first()
+                .map(|segment| segment.id.as_str())
+                .unwrap_or("chunk"),
             "target_language_purity",
             Severity::Major,
             &format!(
@@ -318,6 +369,94 @@ fn check_language_purity(
             ),
         ));
     }
+}
+
+/// 去掉不参与假名残留判定的内容：旧锁定术语、ruby 标记、URL 与 inline code。
+fn strip_kana_exempt(text: &str, exempt_terms: &[String]) -> String {
+    let mut out = text.to_string();
+    for term in exempt_terms {
+        if term.is_empty() || !term.chars().any(is_kana) {
+            continue;
+        }
+        out = out.replace(term.as_str(), " ");
+    }
+    for regex in [ruby_block_re(), url_re(), inline_code_re()] {
+        out = regex.replace_all(&out, " ").into_owned();
+    }
+    out
+}
+
+fn ruby_block_re() -> &'static Regex {
+    static RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"\[rb:[^\]]*\]").expect("ruby 正则合法"));
+    &RE
+}
+
+fn inline_code_re() -> &'static Regex {
+    static RE: std::sync::LazyLock<Regex> =
+        std::sync::LazyLock::new(|| Regex::new(r"`[^`\n]*`").expect("inline code 正则合法"));
+    &RE
+}
+
+/// 约束与语言策略冲突：日译目标时锁定译名仍为假名，或风格要求保留拟声词/假名。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConstraintPolicyConflict {
+    pub field: String,
+    pub source_term: Option<String>,
+    pub chunk_id: Option<String>,
+    pub message: String,
+}
+
+/// 风格里同时出现“保留”与“拟声/拟态/假名”时视为冲突；允许“颜文字原样保留”。
+/// “不保留日文假名读音”这类否定表述先剔除，避免把规范注释策略误判成冲突。
+fn style_policy_conflict(style: &str) -> bool {
+    static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(
+            r"(?:保留|保留原文|保留日文)[^，。；,;\n]{0,16}(?:拟声|拟态|假名)|(?:拟声|拟态|假名)[^，。；,;\n]{0,16}(?:保留|保留原文)",
+        )
+        .expect("风格策略正则合法")
+    });
+    static NEGATED: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r"不保留[^，。；,;\n]{0,16}").expect("否定策略正则合法")
+    });
+    let cleaned = NEGATED.replace_all(style, " ");
+    RE.is_match(&cleaned)
+}
+
+/// 校验冻结约束是否符合语言策略（拟声词必须翻译、专名用目标语言或英语、
+/// 颜文字原样保留）。目标语言为日语时不做检查。
+pub fn audit_constraint_policy(
+    terms: &[AgentTerm],
+    style: &str,
+    target_language: &str,
+) -> Vec<ConstraintPolicyConflict> {
+    let mut conflicts = Vec::new();
+    if target_language.starts_with("ja") {
+        return conflicts;
+    }
+    for term in terms {
+        if term
+            .locked_translation
+            .chars()
+            .any(|ch| is_kana(ch) && !KAOMOJI_KANA.contains(&ch))
+        {
+            conflicts.push(ConstraintPolicyConflict {
+                field: "term".into(),
+                source_term: Some(term.source_term.clone()),
+                chunk_id: None,
+                message: "锁定译名不得使用假名原文：优先目标语言译名，没有合适译名时使用官方英文名或通行罗马字".into(),
+            });
+        }
+    }
+    if style_policy_conflict(style) {
+        conflicts.push(ConstraintPolicyConflict {
+            field: "style".into(),
+            source_term: None,
+            chunk_id: None,
+            message: "风格不得要求保留拟声词或假名：拟声词必须翻译；颜文字可以原样保留".into(),
+        });
+    }
+    conflicts
 }
 
 /// 合并校验：所有块都有通过结构校验的 draft、无重复片段、页行顺序单调、
@@ -336,6 +475,17 @@ pub fn validate_merge_with_language(
     drafts: &[Draft],
     pages: &BTreeMap<u32, Vec<TranslatedLine>>,
     target_language: Option<&str>,
+) -> MergeReport {
+    validate_merge_with_policy(chunks, drafts, pages, target_language, &[])
+}
+
+/// 合并校验，并豁免旧约束中锁定为假名的术语。
+pub fn validate_merge_with_policy(
+    chunks: &[Chunk],
+    drafts: &[Draft],
+    pages: &BTreeMap<u32, Vec<TranslatedLine>>,
+    target_language: Option<&str>,
+    exempt_terms: &[String],
 ) -> MergeReport {
     let mut missing_ids: BTreeSet<String> = BTreeSet::new();
     let mut duplicate_ids: BTreeSet<String> = BTreeSet::new();
@@ -377,7 +527,9 @@ pub fn validate_merge_with_language(
                 }
             }
             Some(draft) => {
-                if let Err(issues) = validate_draft_with_language(chunk, draft, target_language) {
+                if let Err(issues) =
+                    validate_draft_with_policy(chunk, draft, target_language, exempt_terms)
+                {
                     coverage_ok = false;
                     for issue in issues {
                         match issue.kind.as_str() {
@@ -550,7 +702,8 @@ fn latin_count(text: &str) -> usize {
     text.chars().filter(char::is_ascii_alphabetic).count()
 }
 
-fn is_kana(ch: char) -> bool {
+/// 判断字符是否属于平假名 / 片假名（含长音符、半角片假名与片假名标点）。
+pub fn is_kana(ch: char) -> bool {
     matches!(ch as u32,
         0x3040..=0x309F   // 平假名
         | 0x30A0..=0x30FF // 片假名（含 ー）
@@ -818,11 +971,91 @@ mod tests {
         assert!(
             issues
                 .iter()
-                .any(|issue| issue.kind == "target_language_purity")
+                .any(|issue| issue.kind == "japanese_residue")
         );
 
         let natural = draft(vec![("p001-l000-s0", "这是测试")]);
         assert!(validate_draft_with_language(&chunk, &natural, Some("zh-CN")).is_ok());
+    }
+
+    #[test]
+    fn onomatopoeia_and_katakana_names_must_be_translated() {
+        let chunk = chunk(vec![
+            segment("p001-l000-s0", "どぴゅどぴゅ。", SegmentKind::Text),
+            segment("p001-l001-s0", "バニーメイド装", SegmentKind::Text),
+        ]);
+
+        let raw = draft(vec![
+            ("p001-l000-s0", "どぴゅどぴゅ。"),
+            ("p001-l001-s0", "バニーメイド装"),
+        ]);
+        let issues = validate_draft_with_language(&chunk, &raw, Some("zh-CN")).unwrap_err();
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|issue| issue.kind == "japanese_residue")
+                .count(),
+            2
+        );
+
+        // 专名允许英语 / 罗马字；拟声词必须转成目标语言。
+        let translated = draft(vec![
+            ("p001-l000-s0", "噗噗。"),
+            ("p001-l001-s0", "Bunny Maid 装"),
+        ]);
+        assert!(validate_draft_with_language(&chunk, &translated, Some("zh-CN")).is_ok());
+    }
+
+    #[test]
+    fn kaomoji_and_legacy_locked_terms_are_exempt() {
+        let chunk = chunk(vec![segment(
+            "p001-l000-s0",
+            "(´・ω・`) 手コキする",
+            SegmentKind::Text,
+        )]);
+
+        // 颜文字标点整体保留，不算残留。
+        let kaomoji = draft(vec![("p001-l000-s0", "(´・ω・`) ♡")]);
+        assert!(validate_draft_with_language(&chunk, &kaomoji, Some("zh-CN")).is_ok());
+
+        let residue = draft(vec![("p001-l000-s0", "(´・ω・`) まいどあり ♡")]);
+        assert!(validate_draft_with_language(&chunk, &residue, Some("zh-CN")).is_err());
+
+        // 旧任务：冻结为假名的术语经 policy 豁免，其余假名仍拒绝。
+        let legacy = draft(vec![("p001-l000-s0", "(´・ω・`) 手コキ")]);
+        assert!(
+            validate_draft_with_policy(
+                &chunk,
+                &legacy,
+                Some("zh-CN"),
+                &["手コキ".to_string()],
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn constraint_policy_rejects_kana_locks_and_keep_onomatopoeia_style() {
+        let terms = vec![AgentTerm {
+            source_term: "バニーメイド".into(),
+            locked_translation: "バニーメイド".into(),
+            term_type: "term".into(),
+            aliases: Vec::new(),
+            notes: String::new(),
+        }];
+        let conflicts = audit_constraint_policy(&terms, "保留颜文字与拟声词", "zh-CN");
+        assert_eq!(conflicts.len(), 2);
+
+        let ok_terms = vec![AgentTerm {
+            source_term: "バニーメイド".into(),
+            locked_translation: "Bunny Maid".into(),
+            term_type: "term".into(),
+            aliases: Vec::new(),
+            notes: String::new(),
+        }];
+        assert!(audit_constraint_policy(&ok_terms, "颜文字原样保留", "zh-CN").is_empty());
+        // 目标语言为日语时不检查。
+        assert!(audit_constraint_policy(&terms, "保留拟声词", "ja-JP").is_empty());
     }
 
     #[test]

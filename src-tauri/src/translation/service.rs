@@ -51,10 +51,10 @@ use crate::{
             TranslationResult,
         },
         chunking::ChunkConfig,
-        publish::{publish_status_with_language, render_markdown},
+        publish::{publish_status_with_policy, render_markdown},
         source::{parse_segment_id, parse_source},
         tools,
-        validation::{merge_pages, validate_merge_with_language},
+        validation::{merge_pages, validate_merge_with_policy},
     },
     translation_legacy as legacy,
 };
@@ -3175,17 +3175,24 @@ impl TranslationService {
             // 非 Complete 使本判据返回 false——与「先逐块校验再合并」的旧
             // 路径逐位等价，收尾时的全文扫描从三遍降到两遍。
             let pages = merge_pages(&chunks, &drafts);
-            let report =
-                validate_merge_with_language(&chunks, &drafts, &pages, Some(&ctx.target_language));
+            let exempt = tools::kana_exempt_terms(ctx);
+            let report = validate_merge_with_policy(
+                &chunks,
+                &drafts,
+                &pages,
+                Some(&ctx.target_language),
+                &exempt,
+            );
             if !merge_report_ok(&report) {
                 return false;
             }
-            if publish_status_with_language(
+            if publish_status_with_policy(
                 &chunks,
                 &drafts,
                 &reviews,
                 Some(&global),
                 Some(&ctx.target_language),
+                &exempt,
             ) != PublishStatus::Complete
             {
                 return false;

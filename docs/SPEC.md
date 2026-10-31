@@ -427,6 +427,16 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   结构错误有限纠正；质检问题优先 `revise_draft` 定点修订，必要时只返工受影响块；
   子 Agent 按内容政策显式拒绝（`content_refused`，从失败摘要解析）原样重试 1 次后
   快速失败，不整批 fatal、不再自动重试（ADR 0043）。
+- **语言策略与假名校验**：日译目标（目标语言不是日语）统一三条：①拟声词必须译成
+  目标语言，不保留假名原文；②专有名词优先目标语言译名，没有合适译名时允许官方英文名
+  或通行罗马字，不保留片假名原文；③颜文字（`♡`、`♥`、`♪`、`w`、`◆`、括号符号
+  组合等）原样保留。扫描 / 翻译 / 审查提示词与写入校验共用该口径。提交校验对假名逐
+  片段零容忍（`japanese_residue`，`major`），豁免颜文字标点 `・/･/ﾉ/ﾟ/ﾞ`、ruby
+  标记、URL、inline code 与旧任务已冻结的假名锁定术语（`validate_draft_with_policy`
+  的 `exempt_terms`）；新约束在 `submit_scan` / `freeze_constraints` 阶段以
+  `constraint_policy_conflict` 拒绝假名锁定与“保留拟声词 / 假名”风格，颜文字保留
+  声明不冲突。审查不再把英文 / 罗马字 / 目标语言的锁定术语判为残留，也不因颜文字
+  原样保留记问题（ADR 0047）。
 - **注释策略与标记不变量**：ruby 标记（`[rb:原文>读音]`）的数量与结构由提交校验强制
   保持；「注释策略」维度只允许约束读音内容的处理方式。扫描提交与冻结约束时机器归一化
   （`normalize_annotation_policy`）：识别「只取本体 / 不注音 / 删除标记」类冲突表述并
@@ -1736,7 +1746,7 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 - **维护**：设置维护组显示日志总大小、目录复制和确认后清理；清理截断当前及遗留轮转普通 .log 文件，后续日志继续追加。最近 200 行每 2 秒轮询，大小每 10 秒统计，仅维护页可见时执行，读取上限 64KiB。缓存显示译文/图片分类与总大小、目录复制、确认后清理；翻译运行时禁止清理译文，清理后阅读器同步去除旧回显。不删除下载作品、数据库或凭据（ADR 0027）。
 - **翻译诊断**：HTTP 错误正文读取上限 64KiB，仅记录 code/type/message/param/request_id；流内错误保留同样的原始错误诊断，截断/提前结束/超时/连接失败记录成因。Key、Cookie 等凭据与 URL 脱敏，字符串限 4096 字并压平控制字符。非 JSON 错误正文只记格式与大小，模型 JSON 解析错误只记类别/行列/字节数；不记录请求、小说原文、生成正文或完整响应，界面仍显示概括错误（ADR 0027）。
 - **Agent 日志固定键**：`novel=<id> job=<job_id> agent=<main|translator|reviewer> phase=<prepare_source|prepare_constraints|translate|review|repair|global_review|publish> chunk=<c0001|-> event=<事件> k=v…`（`agent/events.rs::log_line`）。`novel` / `job` / `agent` / `phase` 恒有，`chunk` 无分块时为 `-`；字段值经安全清洗、限长，只放计数、耗时、原因码与状态。标题不作主键，默认不记录小说标题或内容。
-- **级别与密度**：INFO 记录排队 / 启动 / 终态、阶段起止与统计、子任务批次、确认 / 暂停 / 恢复 / 取消、缓存清理与每次压缩起止；执行中按小说至多每 5 秒聚合一次进展摘要，只在计数变化时输出；WARN 记录重试、截断、缩块、返工、预算临近 / 耗尽、结果未知与压缩失败（带原因码与下一动作）；终态统计含各块返工轮次、返工预算 `used` / `limit`、受影响块 ID 与 `verdict` / 严重度分布（ADR 0038）；ERROR 记录不可恢复的运行 / 存储失败（失败步骤、错误码、安全诊断）；DEBUG 仅在详细诊断开启时输出单个工具 / 请求 / 子任务的起止、耗时与长度，不输出正文或工具原始参数。
+- **级别与密度**：INFO 记录排队 / 启动 / 终态、阶段起止与统计、子任务批次、确认 / 暂停 / 恢复 / 取消、缓存清理与每次压缩起止；执行中按小说至多每 5 秒聚合一次进展摘要，只在计数变化时输出；WARN 记录重试、截断、缩块、返工、预算临近 / 耗尽、结果未知与压缩失败（带原因码与下一动作）；终态统计含各块返工轮次、返工预算 `used` / `limit`、受影响块 ID 与 `verdict` / 严重度分布（ADR 0038）；ERROR 记录不可恢复的运行 / 存储失败（失败步骤、错误码、安全诊断）；DEBUG 仅在详细诊断开启时输出单个工具 / 请求 / 子任务的起止、耗时与长度，不输出正文或工具原始参数。工具失败的 `tool_end` 额外记录结构化 `code`（从工具结果的 `error.code` 提取，ADR 0047），便于按错误码统计校验拒绝。
 - **诊断开关**：设置二级「诊断」页的详细诊断只对本次应用运行生效，不写 `settings.json`，重启复位为关闭；开启时只把 `agent` target 的日志门限放到 DEBUG，不放大依赖库噪声。`RUST_LOG` 显式注入时尊重开发者设置、不覆盖门限。
 - **禁止记录**：原文、译文、提示词、压缩摘要正文、API Key、Cookie、完整请求头或工具原始参数；压缩记录只含估算计数、耗时、保留范围与结果。
 
@@ -1830,6 +1840,10 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0041 | ruby 注释策略与标记不变量解耦（归一化 + 修订收敛闸） | [adr/0041-ruby-annotation-policy-decoupling.md](adr/0041-ruby-annotation-policy-decoupling.md) |
 | 0042 | 翻译调用预算手动追加（`novel_translation_grant_budget`） | [adr/0042-translation-budget-manual-grant.md](adr/0042-translation-budget-manual-grant.md) |
 | 0043 | 子任务内容拒绝快速失败与被拒块跳过（`novel_translation_skip_chunks`） | [adr/0043-content-refusal-fast-fail-and-skip.md](adr/0043-content-refusal-fast-fail-and-skip.md) |
+| 0044 | 设置保存错误改结构化载荷（`{code, field, message}`） | [adr/0044-structured-command-error-payload.md](adr/0044-structured-command-error-payload.md) |
+| 0045 | 下载历史宫格模式与本地已下载图片协议 | [adr/0045-download-grid-view-and-local-image-protocol.md](adr/0045-download-grid-view-and-local-image-protocol.md) |
+| 0046 | 翻译等待确认跨重启可确认与系统通知 | [adr/0046-translation-confirmation-persistence-and-notifications.md](adr/0046-translation-confirmation-persistence-and-notifications.md) |
+| 0047 | 日译语言策略收束与校验口径统一 | [adr/0047-language-policy-convergence.md](adr/0047-language-policy-convergence.md) |
 
 | 0040 | 更新下载与安装分离，系统交接成功后退出 | [adr/0040-update-install-and-exit.md](adr/0040-update-install-and-exit.md) |
 
