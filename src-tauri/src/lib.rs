@@ -2,7 +2,8 @@
 //!
 //! 本文件是**装配层**，一次写全，后续 phase 只填充桩模块内容、不改本文件：
 //! - 插件：tauri-plugin-log（文件 + dev stdout）、tauri-plugin-dialog（退出确认/目录选择）、
-//!   tauri-plugin-opener（浏览页「在浏览器中打开」走系统默认浏览器）
+//!   tauri-plugin-opener（浏览页「在浏览器中打开」走系统默认浏览器）、
+//!   tauri-plugin-notification（翻译等待确认时的系统通知，ADR 0046）
 //! - setup：AppPaths（dev/release 分平台）→ Settings 加载 → Db 打开 → AppState
 //! - 全部命令注册（见 invoke_handler，与 commands/ 一一对应）
 //! - 主窗口关闭确认（读 settings.language 决定中英文文案）
@@ -55,6 +56,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // 浏览页「在浏览器中打开」：opener 插件以系统默认程序打开 http(s) 外链。
         .plugin(tauri_plugin_opener::init())
+        // 系统通知：翻译等待术语与风格确认时由后端直接发送（ADR 0046）。
+        // 前端不调用插件命令，因此 capability 无需授权；开关由 notifications_enabled 控制。
+        .plugin(tauri_plugin_notification::init())
         // 头像回显协议：从 data/cache 读取后端代下的头像文件。
         // i.pximg.net 防盗链导致 webview 直连 403，故走本地自定义协议。
         .register_uri_scheme_protocol("pixiv-avatar", |ctx, request| {

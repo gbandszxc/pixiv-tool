@@ -80,6 +80,8 @@ function ensureSettings(): Settings {
       // 单请求超时（秒）：默认 10 分钟，合法区间 30~3600
       translation_timeout_seconds: 600,
       translation_extra: {},
+      // 系统通知开关（默认开启）
+      notifications_enabled: true,
       translation_key_configured: false,
       translation_key_error: "",
     };

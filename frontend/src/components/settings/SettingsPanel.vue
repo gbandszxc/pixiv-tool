@@ -9,6 +9,10 @@
         <label for="language">{{ t("settings.language") }}</label>
         <md-outlined-select id="language" :value="form.language" @change="changeLang(($event.target as HTMLSelectElement).value)"><md-select-option v-for="option in langOptions" :key="option.value" :value="option.value">{{ option.label }}</md-select-option></md-outlined-select>
       </div>
+      <fieldset class="m3-field settings-fieldset">
+        <legend><span class="field-label">{{ t("settings.notifications") }}<HelpTooltip :label="t('settings.notifications')" :text="t('settings.notificationsHint')" /></span></legend>
+        <div class="m3-row"><label class="m3-choice"><md-checkbox id="notifications-enabled" :checked="form.notifications_enabled !== false" @change="form.notifications_enabled = ($event.target as HTMLInputElement).checked" />{{ t("settings.systemNotifications") }}</label></div>
+      </fieldset>
     </template>
 
     <template v-else-if="section === 'appearance'">

@@ -29,6 +29,12 @@ tauri = { version = "2.11", features = ["unstable"] }
 tauri-plugin-opener = "2.5"
 tauri-plugin-dialog = "2.7"
 tauri-plugin-log = "2.9"
+# 系统通知（ADR 0046）：翻译等待术语与风格确认时提醒用户。
+# 锁 2.4.0：2.5.0 起要求 tauri ^2.12，会把 tauri 从 2.11 升到 2.12 并连带
+# 升级 webview2-com（0.38.2 → 0.39.1），与 menu_bar 里固定的 WebView2 类型冲突。
+# 升级此项时必须与 tauri / webview2-com / windows 三项一起验证 Windows 菜单栏。
+# Windows 上只有安装版才以应用身份显示；开发运行显示 PowerShell 名称与图标。
+tauri-plugin-notification = "=2.4.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rusqlite = { version = "0.40", features = ["bundled"] }

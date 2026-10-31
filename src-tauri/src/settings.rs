@@ -130,6 +130,8 @@ pub struct Settings {
     pub translation_agent_replay_unknown: bool,
     /// 启动前确认术语与风格；默认关闭，浮层可对本次任务覆盖。
     pub translation_confirm_before_start: bool,
+    /// 系统通知开关；默认开启。当前用于「等待确认术语与风格」提醒（ADR 0046）。
+    pub notifications_enabled: bool,
 }
 
 impl Default for Settings {
@@ -184,6 +186,7 @@ impl Default for Settings {
             translation_call_budget: 0,
             translation_agent_replay_unknown: false,
             translation_confirm_before_start: false,
+            notifications_enabled: true,
         }
     }
 }

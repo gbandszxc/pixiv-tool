@@ -54,9 +54,21 @@ pub struct JobEvent {
     pub error_code: Option<String>,
 }
 
+/// 系统通知内容（宿主负责翻译成 OS 通知；离线实现直接丢弃）。
+///
+/// 只承载用户可见的短文案：不得包含原文、译文、提示词或凭据。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemNotification {
+    pub title: String,
+    pub body: String,
+}
+
 /// 事件出口。实现必须是非阻塞的。
 pub trait EventSink: Send + Sync {
     fn emit(&self, event: JobEvent);
+
+    /// 发送系统通知。默认丢弃，便于测试与离线宿主不关心通知实现。
+    fn notify(&self, _notification: SystemNotification) {}
 }
 
 /// Tauri 事件出口：发射 `translation://job`，payload 与快照结构一致。
@@ -83,12 +95,32 @@ impl EventSink for TauriEventSink {
             );
         }
     }
+
+    fn notify(&self, notification: SystemNotification) {
+        use tauri_plugin_notification::NotificationExt;
+        // Windows 开发运行会以 PowerShell 身份显示，安装版才是应用身份（ADR 0046）。
+        // 发送失败不改变任务状态：通知只是提醒，界面与底栏仍是真相源。
+        if let Err(err) = self
+            .app
+            .notification()
+            .builder()
+            .title(notification.title)
+            .body(notification.body)
+            .show()
+        {
+            log::warn!(
+                "event=notification_failed error={}",
+                safe_text(&err.to_string(), 120)
+            );
+        }
+    }
 }
 
 /// 测试 / 离线验证用的记录出口。
 #[derive(Default)]
 pub struct RecordingSink {
     events: Mutex<Vec<JobEvent>>,
+    notifications: Mutex<Vec<SystemNotification>>,
 }
 
 impl RecordingSink {
@@ -100,6 +132,14 @@ impl RecordingSink {
         self.events
             .lock()
             .map(|events| events.clone())
+            .unwrap_or_default()
+    }
+
+    /// 已发送的系统通知（按发送顺序）。
+    pub fn notifications(&self) -> Vec<SystemNotification> {
+        self.notifications
+            .lock()
+            .map(|notifications| notifications.clone())
             .unwrap_or_default()
     }
 
@@ -129,6 +169,12 @@ impl EventSink for RecordingSink {
     fn emit(&self, event: JobEvent) {
         if let Ok(mut events) = self.events.lock() {
             events.push(event);
+        }
+    }
+
+    fn notify(&self, notification: SystemNotification) {
+        if let Ok(mut notifications) = self.notifications.lock() {
+            notifications.push(notification);
         }
     }
 }
@@ -352,6 +398,11 @@ impl JobEmitter {
 
     pub fn seq(&self) -> u64 {
         self.state.lock().map(|state| state.seq).unwrap_or(0)
+    }
+
+    /// 发送系统通知：不参与事件节流，也不占用 `seq`。
+    pub fn notify(&self, notification: SystemNotification) {
+        self.sink.notify(notification);
     }
 
     /// 最近一次下发的预览（快照 / 刷新回填用）。

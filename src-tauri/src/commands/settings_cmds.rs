@@ -25,7 +25,7 @@ use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 49] = [
+const WRITABLE_KEYS: [&str; 50] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
@@ -55,6 +55,7 @@ const WRITABLE_KEYS: [&str; 49] = [
     "translation_call_budget",
     "translation_agent_replay_unknown",
     "translation_confirm_before_start",
+    "notifications_enabled",
     "startup_page",
     "output_dir",
     "output_formats",
@@ -212,6 +213,16 @@ pub fn apply_settings_patch(
                 format!("设置项 {key} 必须是布尔值"),
             ));
         }
+    }
+    if patch_obj
+        .get("notifications_enabled")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err(SettingsError::new(
+            "settings_bool_invalid",
+            Some("notifications_enabled"),
+            "设置项 notifications_enabled 必须是布尔值",
+        ));
     }
     if let Some(value) = patch_obj.get("theme_color") {
         let color = value.as_str().ok_or_else(|| {
@@ -1088,6 +1099,25 @@ mod tests {
             )
             .is_err()
         );
+        // 通知开关（ADR 0046）：默认开启，白名单内可关闭，非布尔值拒绝。
+        assert!(Settings::default().notifications_enabled);
+        let updated = apply_settings_patch(
+            &Settings::default(),
+            &json!({ "notifications_enabled": false }),
+            &data_dir,
+        )
+        .unwrap();
+        assert!(!updated.notifications_enabled);
+        let err = assert_code(
+            apply_settings_patch(
+                &Settings::default(),
+                &json!({ "notifications_enabled": "no" }),
+                &data_dir,
+            ),
+            "settings_bool_invalid",
+            Some("notifications_enabled"),
+        );
+        assert_eq!(err.message, "设置项 notifications_enabled 必须是布尔值");
         // 交叉约束：输出上限不能超过上下文窗口。
         let err = assert_code(
             apply_settings_patch(

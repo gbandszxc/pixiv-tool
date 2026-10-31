@@ -108,6 +108,19 @@ CI 使用 `dtolnay/rust-toolchain@1.99.1`。Rig 0.45 不额外要求 TLS 工具�
 前置条件仍由 wreq 的 cmake + LLVM/libclang 决定。首次构建约 5–15 分钟
 （BoringSSL 现场编译 + bindgen），增量秒级。
 
+### 系统通知（ADR 0046）
+
+`tauri-plugin-notification` 锁 `=2.4.0`：2.5.0 起要求 `tauri ^2.12`，会把
+tauri 升到 2.12 并连带把 `webview2-com` 从 0.38.2 升到 0.39.1，与
+`src-tauri/src/menu_bar.rs` 固定的 `webview2-com = "=0.38.2"` / `windows = "0.61"`
+类型冲突（编译报 `Param` / `Interface` 不满足）。升级该插件时必须同时验证
+`tauri` / `webview2-com` / `windows` 三者并回归 Windows 菜单栏。
+
+插件在 Windows 上依赖安装包注册的 AppUserModelID：**安装版**以应用名称与图标
+显示通知；**开发运行**（未安装）显示 PowerShell 名称与图标，属平台行为。
+通知由 Rust 后端直接发送，前端不调用插件命令，`capabilities/default.json`
+无需追加 `notification:*` 权限。
+
 ### Windows 工具链标准（本机实测，2026-10-01）
 
 默认的 `x86_64-pc-windows-gnu` 工具链在 cdylib 链接时超 mingw ld 65535 导出上限

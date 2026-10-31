@@ -1326,9 +1326,90 @@ async fn confirmation_mode_waits_for_confirm_then_continues() {
 }
 
 // ---------------------------------------------------------------------------
+// 4b. 重启后的等待确认
+// ---------------------------------------------------------------------------
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn awaiting_confirmation_survives_process_restart() {
+    let fixture = fixture("confirm-restart");
+    let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
+    let mut settings = settings_for(&server);
+    settings.translation_confirm_before_start = true;
+    let sink = Arc::new(RecordingSink::new());
+    let first = service(&fixture.paths, settings.clone(), sink.clone());
+
+    let started = first.start(novel(), false).await.expect("启动");
+    let waiting = wait_for(
+        &first,
+        &started.job_id,
+        &[
+            JobState::AwaitingConfirmation,
+            JobState::Completed,
+            JobState::NeedsAttention,
+        ],
+    )
+    .await;
+    assert_eq!(
+        waiting.state,
+        JobState::AwaitingConfirmation,
+        "应停在等待确认：{}",
+        waiting.message
+    );
+    assert_eq!(server.translator_requests(), 0, "确认前不得开始翻译");
+
+    // 进入等待确认时发一条系统通知（默认开启，ADR 0046）。
+    assert!(
+        wait_until(|| sink.notifications().len() == 1, 5_000).await,
+        "等待确认应发送一次系统通知"
+    );
+    let notification = &sink.notifications()[0];
+    assert!(
+        notification.title.contains("术语"),
+        "标题说明待确认：{}",
+        notification.title
+    );
+    assert!(
+        notification.body.contains("测试小说"),
+        "正文带小说标题：{}",
+        notification.body
+    );
+
+    // 模拟关闭软件：内存注册表随旧进程消失，任务只剩磁盘状态。
+    drop(first);
+    let restarted = service(&fixture.paths, settings, Arc::new(RecordingSink::new()));
+    let visible = restarted
+        .constraints(&started.job_id)
+        .await
+        .expect("重启后仍能看到约束");
+    assert!(visible.awaiting_confirmation, "磁盘状态仍是等待确认");
+
+    restarted
+        .confirm(
+            &started.job_id,
+            ConstraintEdit {
+                terms: Vec::new(),
+                style: "第一人称，口语".into(),
+            },
+        )
+        .await
+        .expect("重启后仍可确认");
+
+    let done = wait_for(
+        &restarted,
+        &started.job_id,
+        &[JobState::Completed, JobState::NeedsAttention],
+    )
+    .await;
+    assert_eq!(
+        done.state,
+        JobState::Completed,
+        "确认后应完成：{}",
+        done.message
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 5. 取消
 // ---------------------------------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancel_stops_immediately_and_keeps_checkpoint() {
     let fixture = fixture("cancel");

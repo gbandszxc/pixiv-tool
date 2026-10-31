@@ -222,6 +222,8 @@ export function normalizeTranslationAgentSettings(settings: Settings): Settings 
   }
   if (typeof next.translation_agent_replay_unknown !== "boolean") next.translation_agent_replay_unknown = false;
   if (typeof next.translation_confirm_before_start !== "boolean") next.translation_confirm_before_start = false;
+  // 旧响应 / 浏览器 mock 可能没有通知开关：与后端默认保持一致（开启）。
+  if (typeof next.notifications_enabled !== "boolean") next.notifications_enabled = true;
   if (!Array.isArray(next.translation_models)) next.translation_models = [];
   return next;
 }
@@ -306,6 +308,8 @@ export const useSettingsStore = defineStore("settings", () => {
     translation_call_budget: 0,
     translation_agent_replay_unknown: false,
     translation_confirm_before_start: false,
+    // 系统通知（默认开启，ADR 0046）
+    notifications_enabled: true,
     translation_key_configured: false,
     translation_key_error: "",
   });

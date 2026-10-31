@@ -33,7 +33,7 @@ use crate::{
         AttemptBudget, BudgetConfig, BudgetTracker, CacheGeneration, CancelToken, EventSink,
         JobCounts, JobEvent, JobId, JobScope, JobState, Phase, Preview, Role, RunError, RunLimits,
         RunRequest, SafeError, Scheduler, TokenUsage, backoff,
-        events::{JobEmitter, log_job, work_event},
+        events::{JobEmitter, SystemNotification, log_job, work_event},
         model::providers::{
             ApiFormat, ProviderConfig, request_defaults, resolve_api_format, session_header_for,
             session_id,
@@ -1743,10 +1743,15 @@ impl TranslationService {
     // ------------------------------------------------------------------
 
     /// 确认术语与风格：写回约束（版本 +1），用户值优先，随后从检查点继续。
+    ///
+    /// 进程内没有 JobHandle 时（应用重启后）从 manifest + 产物重建上下文，
+    /// 与 `resume` / `skip_chunks` 同口径：等待确认是持久状态，用户关掉软件
+    /// 再打开仍能确认并继续。
     pub async fn confirm(&self, job_id: &str, edits: ConstraintEdit) -> Result<(), String> {
-        let handle = self
-            .handle(job_id)
-            .ok_or_else(|| format!("翻译任务不存在：{job_id}"))?;
+        let handle = match self.handle(job_id) {
+            Some(handle) => handle,
+            None => self.rehydrate(job_id).await?,
+        };
         let manifest = handle
             .ctx
             .store
@@ -2556,6 +2561,29 @@ impl TranslationService {
         self.evict_terminal_job(handle);
     }
 
+    /// 术语与风格抽取完成、进入等待确认时的系统通知（ADR 0046）。
+    ///
+    /// 只在真正进入 `awaiting_confirmation` 的这一轮发送：重启后的等待由界面与
+    /// 底栏提示，不重复打扰。开关实时读取全局设置，关闭时连小说标题都不读。
+    async fn notify_awaiting_confirmation(&self, ctx: &JobContext) {
+        let settings = self.settings_snapshot();
+        if !settings.notifications_enabled {
+            return;
+        }
+        // `input.json` 含整篇原文（可达 8MB），标题解析放阻塞线程，不占 async worker。
+        let store = ctx.store.clone();
+        let novel_id = ctx.scope.novel_id;
+        let novel_title = tokio::task::spawn_blocking(move || {
+            read_input(&store, novel_id).map(|input| input.title)
+        })
+        .await
+        .ok()
+        .flatten();
+        let (title, body) =
+            awaiting_notification_texts(&settings.language, novel_title.as_deref(), novel_id);
+        ctx.emitter.notify(SystemNotification { title, body });
+    }
+
     async fn drive(&self, handle: &Arc<JobHandle>) -> Result<(), String> {
         let ctx = &handle.ctx;
         if ctx.control.cancelled() {
@@ -2664,6 +2692,7 @@ impl TranslationService {
                     "awaiting_confirmation",
                     None,
                 );
+                self.notify_awaiting_confirmation(ctx).await;
                 return Ok(());
             }
             if ctx.control.pause_requested() {
@@ -3492,6 +3521,39 @@ pub fn read_input(store: &JobStore, novel_id: i64) -> Option<legacy::NovelInput>
     })
 }
 
+/// 术语与风格待确认的系统通知文案（跟随界面语言）。
+///
+/// 标题只进通知正文，不写日志；超长标题截断到 80 字符，避免通知被系统省略。
+fn awaiting_notification_texts(
+    language: &str,
+    novel_title: Option<&str>,
+    novel_id: i64,
+) -> (String, String) {
+    let fallback = match language {
+        "en-US" => format!("novel #{novel_id}"),
+        "ja-JP" => format!("小説 #{novel_id}"),
+        _ => format!("小说 #{novel_id}"),
+    };
+    let raw = novel_title.filter(|title| !title.trim().is_empty()).unwrap_or(&fallback);
+    let title: String = raw.chars().take(80).collect();
+    match language {
+        "en-US" => (
+            "Terminology and style need confirmation".into(),
+            format!(
+                "The terminology and style for \"{title}\" are ready. Confirm them in the app to continue translating."
+            ),
+        ),
+        "ja-JP" => (
+            "用語と文体の確認待ち".into(),
+            format!("「{title}」の用語と文体を抽出しました。アプリで確認すると翻訳が続きます。"),
+        ),
+        _ => (
+            "术语与风格待确认".into(),
+            format!("《{title}》的术语与风格已抽取，请在应用中确认后继续翻译。"),
+        ),
+    }
+}
+
 /// 目标语言 code → 提示词语言名（恢复时从 manifest 还原）。
 fn language_name(code: &str) -> String {
     legacy::TARGET_LANGUAGES
@@ -4071,6 +4133,26 @@ mod tests {
         assert_eq!(notes.len(), 1);
         assert!(notes[0].contains("translate"));
         assert!(notes[0].contains("译文方向整体错误"));
+    }
+
+    #[test]
+    fn awaiting_notification_texts_follow_language_and_fall_back_to_novel_id() {
+        let (title, body) = awaiting_notification_texts("zh-CN", Some("测试小说"), 5150);
+        assert_eq!(title, "术语与风格待确认");
+        assert!(body.contains("《测试小说》"), "中文正文带书名：{body}");
+
+        let (title, body) = awaiting_notification_texts("en-US", Some("Test Novel"), 5150);
+        assert_eq!(title, "Terminology and style need confirmation");
+        assert!(body.contains("\"Test Novel\""), "英文正文带书名：{body}");
+
+        let (title, body) = awaiting_notification_texts("ja-JP", Some("  "), 5150);
+        assert_eq!(title, "用語と文体の確認待ち");
+        assert!(body.contains("小説 #5150"), "空标题回落编号：{body}");
+
+        // 超长标题截断，避免通知正文过长。
+        let long = "長".repeat(200);
+        let (_, body) = awaiting_notification_texts("zh-CN", Some(&long), 1);
+        assert_eq!(body.matches('長').count(), 80, "标题截断到 80 字符");
     }
 
     #[test]
