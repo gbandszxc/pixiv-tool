@@ -944,7 +944,7 @@ export default {
       scopeR18: "R-18",
     },
     watchlist: {
-      tabLabel: "Type",
+      tabLabel: "Work type",
       tabManga: "Manga",
       tabNovel: "Novels",
       seriesLabel: "Series",

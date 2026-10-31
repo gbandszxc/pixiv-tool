@@ -944,7 +944,7 @@ export default {
       scopeR18: "R-18",
     },
     watchlist: {
-      tabLabel: "类型",
+      tabLabel: "作品类型",
       tabManga: "漫画",
       tabNovel: "小说",
       seriesLabel: "系列作品",

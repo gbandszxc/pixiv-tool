@@ -198,12 +198,14 @@ function openSeries(item: BrowseWatchlistItem): void {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-sm);
   margin-bottom: var(--space-md);
 }
 
+.control-row :deep(.section-tabs) { width: max-content; }
+
 .control-label {
-  min-width: 56px;
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-muted);
