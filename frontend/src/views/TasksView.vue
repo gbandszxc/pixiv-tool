@@ -10,9 +10,11 @@
             <label v-for="option in categories" :key="option.value" class="m3-choice"><md-radio name="task-category" :value="option.value" :checked='categoryFilter === option.value' @change='changeCategory(option.value)' />{{ option.label }}</label>
           </div>
           <div class="task-management">
-          <label class="m3-choice"><md-checkbox :checked="allSelected" :indeterminate="someSelected" :disabled='!filteredTasks.length' @change='toggleAll(($event.target as HTMLInputElement).checked)' />{{ t("tasks.selectAllDeletable") }}</label>
-          <md-outlined-button :disabled='!selectedTaskIds.length || batchDeleting' @click='openConfirm("batch")'>{{ batchDeleting ? "…" : t("tasks.batchDelete", { count: selectedTaskIds.length }) }}</md-outlined-button>
-          <md-text-button :disabled='!completedTaskCount || loading || clearingCompleted' :aria-busy='clearingCompleted' @click='openConfirm("clear")'>{{ clearingCompleted ? t("tasks.clearingCompleted") : t("tasks.clearCompleted") }}</md-text-button>
+            <label class="tasks-select-all" :title='t("tasks.selectAllDeletable")'>
+              <md-checkbox :checked="allSelected" :indeterminate="someSelected" :disabled='!filteredTasks.length' :aria-label='t("tasks.selectAllDeletable")' @change='toggleAll(($event.target as HTMLInputElement).checked)' />
+            </label>
+            <md-outlined-button :disabled='!selectedTaskIds.length || batchDeleting' @click='openConfirm("batch")'>{{ batchDeleting ? "…" : t("tasks.batchDelete", { count: selectedTaskIds.length }) }}</md-outlined-button>
+            <md-text-button :disabled='!completedTaskCount || loading || clearingCompleted' :aria-busy='clearingCompleted' @click='openConfirm("clear")'>{{ clearingCompleted ? t("tasks.clearingCompleted") : t("tasks.clearCompleted") }}</md-text-button>
           </div>
         </div>
       </div>
@@ -114,8 +116,10 @@ onUnmounted(() => { disposed = true; });
 </script>
 
 <style scoped>
-.task-management { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-md); margin-left:auto; }
-.tasks-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:var(--space-lg) var(--space-xl); }
+.task-management { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-sm); margin-left:auto; }
+.tasks-select-all { display:inline-flex; align-items:center; justify-content:center; width:40px; height:40px; border-radius:var(--radius-control); cursor:pointer; transition:background-color .15s ease; }
+.tasks-select-all:hover { background:color-mix(in srgb, var(--md-sys-color-on-surface) 8%, transparent); }
+.tasks-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:var(--space-md) var(--space-xl); }
 .tasks-toolbar .m3-radio-group { gap:var(--space-md); }
 @media (max-width:640px) { .task-management { margin-left:0; } }
 .task-heading,.pagination{display:flex;align-items:center;gap:var(--space-md)}.m3-radio-group{flex-wrap:wrap;display:flex;gap:var(--space-sm)}.task-list{overflow:hidden;border-radius:16px;background:var(--md-sys-color-surface-container)}.task-item{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:var(--space-xl);row-gap:var(--space-sm);padding:var(--space-md) var(--space-lg);border-bottom:1px solid color-mix(in srgb,var(--md-sys-color-outline) 20%,transparent);align-items:center}.task-item:last-child{border-bottom:0}.task-select{display:flex;align-items:center;padding-right:var(--space-xs)}.task-content{display:flex;flex-direction:column;gap:var(--space-sm);min-width:0}.task-heading{justify-content:space-between}.task-title-group{display:flex;align-items:center;min-width:0;flex-wrap:wrap;gap:var(--space-xs)}.task-source{margin-left:var(--space-xs);font-weight:500;color:var(--md-sys-color-on-surface)}.m3-label,.m3-status{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;background:var(--md-sys-color-primary-container);color:var(--md-sys-color-on-primary-container)}.m3-status{background:color-mix(in srgb,var(--md-sys-color-outline) 18%,transparent);color:var(--ink-muted)}.status-done{background:var(--state-success-container);color:var(--state-success-ink)}.status-failed{background:var(--md-sys-color-error-container);color:var(--md-sys-color-on-error-container)}.status-paused{background:var(--state-warning-container);color:var(--state-warning-ink)}.task-progress-row{display:flex;align-items:center;justify-content:space-between;gap:var(--space-md);flex-wrap:wrap}.task-progress-track{display:flex;align-items:center;gap:var(--space-lg);flex:1;min-width:260px}.task-progress-bar{flex:1;max-width:620px}.task-progress-meta{font-size:12px;color:var(--ink-muted);white-space:nowrap}.task-actions{display:flex;align-items:center;gap:var(--space-xs);margin-left:auto}.task-delete-btn{--md-icon-button-icon-color:var(--md-sys-color-error);color:var(--md-sys-color-error)}.task-delete-btn svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:2}.pagination{margin-top:var(--space-md)}.m3-empty,.m3-loading{padding:var(--space-xl);color:var(--ink-muted);text-align:center}@media (max-width:640px){.task-heading{align-items:flex-start;flex-direction:column}.task-source{display:block;margin:var(--space-xs) 0 0}.task-progress-track{min-width:100%}.task-progress-bar{max-width:100%}.task-actions{margin-left:0;width:100%;justify-content:flex-end}}
