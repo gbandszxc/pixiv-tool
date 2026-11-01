@@ -3,7 +3,8 @@
  * 浮层「状态」tab 的进度区（整篇 Job 版）。
  *
  * 数据全部来自 store 的 Job 快照：阶段、计数、当前页/块、实时预览、已用与用量。
- * 进度条在块数未知（prepare_source）时保持 indeterminate；终态按计数收敛。
+ * 进度条在块数未知（prepare_source）时保持 indeterminate；终态按计数收敛；
+ * 等待确认时正文尚未开始，0% 的空轨道不渲染。
  * 本区整体不进 aria-live——状态摘要由浮层头部唯一播报，避免逐帧刷屏。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -41,6 +42,9 @@ const progress = computed(() => {
 
 /** 块数未知且任务仍活跃时用不定进度条（准备原文阶段）。 */
 const indeterminate = computed(() => isActiveJobState(props.job.state) && props.job.counts.chunks <= 0);
+
+/** 等待确认时正文尚未开始：0% 的可定进度轨道没有信息量，隐藏避免留下一条空白色带。 */
+const showBar = computed(() => props.job.state !== "awaiting_confirmation");
 
 /** 当前工作位置：有页码才渲染（准备阶段可能只有块或为空）。 */
 const currentText = computed(() => {
@@ -129,6 +133,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="translation-progress">
     <md-linear-progress
+      v-if="showBar"
       class="progress-bar"
       :value="indeterminate ? 0 : progress"
       :indeterminate="indeterminate"

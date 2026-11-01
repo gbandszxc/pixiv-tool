@@ -327,6 +327,7 @@ async function run() {
   assert(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim() === "状态", "待确认重开浮层停在状态页");
   const guide = popover()!.querySelector<HTMLElement>(".confirm-guide");
   assert(guide?.textContent?.includes("术语与风格待确认"), "状态页显示待确认引导");
+  assert(!popover()!.querySelector("md-linear-progress"), "等待确认不渲染 0% 空进度条");
   await click("前往确认");
   assert(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim() === "术语与风格", "引导按钮切到术语与风格");
   const confirmButton = popover()!.querySelector<HTMLElement>(".confirm-button");
@@ -354,6 +355,7 @@ async function run() {
   assert(lastConfirmed?.terms[0].locked_translation === "艾丽丝" && lastConfirmed?.style.includes("短句优先"), "用户修改优先提交");
   assert(popover()!.textContent?.includes("已冻结 · 版本 1"), "确认后转为冻结只读展示");
   assert(!popover()!.querySelector(".term-input"), "冻结后术语不可编辑");
+  assert(popover()!.querySelector("md-linear-progress"), "确认后恢复进度条");
 
   // ===== 预览 =====
   await tab("预览");
