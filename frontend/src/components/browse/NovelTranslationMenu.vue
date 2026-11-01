@@ -825,6 +825,8 @@ const sortedIssues = computed<TranslationIssueRow[]>(() => {
 
 function activateTab(next: TabKey): Promise<void> | void {
   tab.value = next;
+  // 固定高度下四个页签共用同一滚动容器：切换时回到顶部，不继承上一页的滚动位置。
+  if (panelBody.value) panelBody.value.scrollTop = 0;
   if (next === "terms") return loadConstraints();
   if (next === "preview") void prefetchChunks();
   else if (next === "issues") void loadIssues();
@@ -1576,10 +1578,11 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  /* 384px = 24 × space-lg（与底栏任务菜单同写法）；高度自适应内容，max-height 封顶后由内容区内滚 */
+  /* 384px = 24 × space-lg（与底栏任务菜单同写法）；固定高度避免切换页签时窗体跳动，
+     四页签共用中间滚动层，内容超出时在面板内滚动。 */
   width: min(calc(var(--space-lg) * 24), calc(100vw - var(--space-lg) * 2));
   max-width: calc(100vw - var(--space-lg) * 2);
-  max-height: min(70vh, 560px);
+  height: min(70vh, 500px);
   border-radius: var(--radius-control);
   background: var(--md-sys-color-surface-container);
   color: var(--ink);

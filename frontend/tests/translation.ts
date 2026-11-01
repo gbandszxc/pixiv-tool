@@ -254,10 +254,12 @@ async function run() {
   assert(status().includes("尚未翻译"), "未译状态可读");
   // tab 键盘：右方向键切换并把焦点移到新 tab。
   const firstTab = host.querySelector<HTMLElement>(".panel-tab")!;
+  const initialPanelHeight = popover()!.getBoundingClientRect().height;
   firstTab.focus();
   firstTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); await settle();
   assert(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim() === "术语与风格", "方向键切换 tab");
   assert((document.activeElement as HTMLElement | null)?.textContent?.trim() === "术语与风格", "切换后焦点落到新 tab");
+  assert(Math.abs(popover()!.getBoundingClientRect().height - initialPanelHeight) < 1, "切换页签不改变浮窗高度");
   await tab("状态");
   window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); await settle();
   assert(!popover(), "Esc 关闭面板且不取消任务");
