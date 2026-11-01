@@ -119,6 +119,7 @@ async function patchSelectEllipsis(retries = 8): Promise<void> {
         white-space: nowrap !important;
         overflow: hidden !important;
         display: inline-flex !important;
+        resize: none !important;
       }
       .field, .select {
         min-width: 0 !important;
@@ -165,11 +166,13 @@ async function patchSelectEllipsis(retries = 8): Promise<void> {
             min-width: 0 !important;
             max-width: 100% !important;
             overflow: hidden !important;
+            resize: none !important;
           }
-          .container {
+          .container, .field, .container-overflow {
             min-width: 0 !important;
             max-width: 100% !important;
             overflow: hidden !important;
+            resize: none !important;
           }
           .middle, .content {
             min-width: 0 !important;
@@ -1430,7 +1433,7 @@ onBeforeUnmount(() => {
                   </span>
                   <span v-if="selectedPreview.needs_repair" class="chunk-badge warn">{{ t('translation.job.needsRepair') }}</span>
                 </div>
-                <p v-if="!selectedPreview.translated.length" class="panel-notice">{{ t('translation.job.untranslatedChunk') }}</p>
+                <p v-if="!selectedPreview.translated.length" class="panel-notice is-info">{{ t('translation.job.untranslatedChunk') }}</p>
                 <p v-if="selectedPreview.context_prev" class="context-line">{{ t('translation.job.contextPrev') }} {{ selectedPreview.context_prev }}</p>
                 <div class="segment-list">
                   <div v-for="segment in selectedPreview.segments" :key="segment.id" class="segment-row">
@@ -1560,6 +1563,8 @@ onBeforeUnmount(() => {
 .translation-indicator.is-busy { background: var(--md-sys-color-primary); }
 .translation-indicator.is-done { background: var(--state-success-ink); }
 .translation-indicator.is-error { background: var(--md-sys-color-error); }
+.translation-popover .translation-indicator.is-busy { background: var(--panel-accent); }
+.translation-popover .translation-indicator.is-error { background: var(--panel-danger); }
 .translation-trigger-wrap > .translation-indicator { position: absolute; top: 3px; right: 3px; box-shadow: 0 0 0 2px var(--md-sys-color-surface); }
 
 .translation-backdrop { position: fixed; inset: 0; z-index: 890; }
@@ -1580,8 +1585,23 @@ onBeforeUnmount(() => {
   color: var(--ink);
   box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
   outline: none;
+  /* 纸色阅读背景只重映射 surface / ink 系；浮窗的强调色与模块底色统一从纸面感知色派生，
+     避免固定的 secondary-container / surface-container-highest 在彩色纸上形成突兀色块。 */
+  --panel-accent: var(--translation-ink, var(--md-sys-color-primary));
+  --panel-surface: var(--surface);
+  --panel-chip: color-mix(in srgb, var(--ink) 6%, var(--surface));
+  --panel-select-bg: color-mix(in srgb, var(--panel-accent) 18%, var(--panel-surface));
+  --panel-select-ink: var(--ink);
+  /* 纸面恒为浅色；深色主题的 error 是浅粉，直接落在纸上会失去对比度。
+     与墨色混成纸面可读的危险色，同时保留 error 的色相语义。 */
+  --panel-danger: color-mix(in srgb, var(--md-sys-color-error) 25%, var(--ink));
 }
-.translation-popover:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; }
+.translation-popover:focus-visible { outline: 2px solid var(--panel-accent); outline-offset: 2px; }
+/* 主按钮跟随纸面感知强调色：阅读纸色下不再让固定 primary 蓝跳出画面，标签取纸面底色。 */
+.translation-popover md-filled-button {
+  --md-filled-button-container-color: var(--panel-accent);
+  --md-filled-button-label-text-color: var(--surface);
+}
 
 .panel-head {
   flex: none;
@@ -1608,7 +1628,7 @@ onBeforeUnmount(() => {
 .translation-status-row { display: flex; align-items: flex-start; gap: var(--space-xs); }
 .translation-status-row .translation-indicator { margin-top: 5px; }
 .translation-status { color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.translation-status.is-error { color: var(--md-sys-color-error); }
+.translation-status.is-error { color: var(--panel-danger); }
 
 /* 模型快速切换栏 */
 .panel-model-bar {
@@ -1619,8 +1639,8 @@ onBeforeUnmount(() => {
   gap: var(--space-sm);
   padding: 6px var(--space-sm);
   margin: 0 var(--space-md) var(--space-xs);
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 50%, transparent);
-  border-radius: 8px;
+  background: var(--panel-surface);
+  border-radius: var(--radius-control);
   min-width: 0;
   max-width: calc(100% - var(--space-md) * 2);
   box-sizing: border-box;
@@ -1636,7 +1656,7 @@ onBeforeUnmount(() => {
   flex: none;
   white-space: nowrap;
 }
-.panel-model-icon { width: 15px; height: 15px; color: var(--md-sys-color-primary); flex: none; }
+.panel-model-icon { width: 15px; height: 15px; color: var(--panel-accent); flex: none; }
 .panel-model-control {
   flex: 1 1 0;
   min-width: 0;
@@ -1656,6 +1676,10 @@ onBeforeUnmount(() => {
   --md-outlined-field-top-space: 4px;
   --md-outlined-field-bottom-space: 4px;
   --md-outlined-select-text-field-input-text-size: 12px;
+  --md-outlined-field-focus-outline-color: var(--panel-accent);
+  --md-outlined-field-focus-label-text-color: var(--panel-accent);
+  --md-outlined-select-text-field-focus-outline-color: var(--panel-accent);
+  --md-outlined-select-text-field-focus-label-text-color: var(--panel-accent);
 }
 .panel-model-select md-select-option {
   white-space: normal;
@@ -1700,11 +1724,11 @@ onBeforeUnmount(() => {
   transition: color 140ms ease, background 140ms ease;
 }
 .panel-model-copy-btn:hover:not(:disabled) {
-  color: var(--md-sys-color-primary);
-  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  color: var(--panel-accent);
+  background: color-mix(in srgb, var(--panel-accent) 8%, transparent);
 }
 .panel-model-copy-btn:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
+  outline: 2px solid var(--panel-accent);
   outline-offset: 1px;
 }
 .panel-model-copy-btn:disabled {
@@ -1716,20 +1740,27 @@ onBeforeUnmount(() => {
   height: 16px;
 }
 
-/* tab 条：等分宽度、36px 高；选中 secondary-container 填充，hover 8% primary 状态层 */
+/* tab 条：与底部模式组同款的胶囊分段控件；选中态用纸面感知的强调色淡染，
+   不再用整块 secondary-container，也不留贴边的直角与下划线。 */
 .panel-tabs {
   flex: none;
   display: flex;
-  gap: 0;
-  padding: 0 var(--space-sm);
-  border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
+  gap: 2px;
+  margin: 0 var(--space-md) var(--space-xs);
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--panel-surface);
 }
 .panel-tab {
   flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 0;
-  min-height: 36px;
-  padding: var(--space-xs) var(--space-xxs);
+  height: 30px;
+  padding: 0 var(--space-xxs);
   border: 0;
+  border-radius: 999px;
   background: transparent;
   color: var(--ink-muted);
   font: inherit;
@@ -1739,13 +1770,13 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: color 150ms ease;
+  transition: color 150ms ease, background-color 150ms ease;
 }
-.panel-tab:hover:not(.selected) { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
-.panel-tab:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
+.panel-tab:hover:not(.selected) { background: color-mix(in srgb, var(--panel-accent) 8%, transparent); color: var(--ink); }
+.panel-tab:focus-visible { outline: 2px solid var(--panel-accent); outline-offset: -2px; }
 .panel-tab.selected {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
+  background: var(--panel-select-bg);
+  color: var(--panel-select-ink);
   font-weight: 600;
 }
 
@@ -1774,15 +1805,20 @@ onBeforeUnmount(() => {
 .panel-notice {
   margin: 0;
   padding: 8px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--md-sys-color-error) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--md-sys-color-error) 20%, transparent);
-  color: var(--md-sys-color-error);
+  color: var(--panel-danger);
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-.panel-error { margin: 0; color: var(--md-sys-color-error); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.panel-notice.is-info {
+  background: var(--panel-surface);
+  border-color: color-mix(in srgb, var(--md-sys-color-outline) 22%, transparent);
+  color: var(--ink);
+}
+.panel-error { margin: 0; color: var(--panel-danger); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .panel-error-code { margin: 0; color: var(--ink-subtle); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 
 /* 待确认引导：中性卡片 + 唯一主按钮，与错误告警和底部救援区区分。 */
@@ -1793,10 +1829,10 @@ onBeforeUnmount(() => {
   gap: var(--space-xs);
   padding: var(--space-sm);
   border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 60%, transparent);
+  background: var(--panel-surface);
 }
 .confirm-guide-head { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
-.confirm-guide-icon { flex: none; width: 16px; height: 16px; color: var(--md-sys-color-primary); }
+.confirm-guide-icon { flex: none; width: 16px; height: 16px; color: var(--panel-accent); }
 .confirm-guide-title { color: var(--ink); font-size: 12px; font-weight: 600; }
 .confirm-guide-hint { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .confirm-guide-action {
@@ -1814,7 +1850,7 @@ onBeforeUnmount(() => {
 .term-row { display: flex; flex-direction: column; gap: var(--space-xxs); padding: var(--space-sm); border-radius: var(--radius-control); background: var(--surface); }
 .term-head { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
 .term-source { flex: 1; min-width: 0; overflow: hidden; color: var(--ink); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.term-type { flex: none; padding: 0 var(--space-xs); border-radius: 999px; background: var(--md-sys-color-surface-container); color: var(--ink-muted); font-size: 11px; line-height: 1.6; }
+.term-type { flex: none; padding: 0 var(--space-xs); border-radius: 999px; background: var(--panel-chip); color: var(--ink); font-size: 11px; line-height: 1.6; }
 .term-field { display: flex; flex-direction: column; gap: 2px; }
 .term-label { color: var(--ink-muted); font-size: 11px; line-height: 1.4; }
 .term-input, .style-input {
@@ -1829,7 +1865,7 @@ onBeforeUnmount(() => {
   font: inherit;
   font-size: 13px;
 }
-.term-input:focus-visible, .style-input:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 2px; border-color: transparent; }
+.term-input:focus-visible, .style-input:focus-visible { outline: 2px solid var(--panel-accent); outline-offset: 2px; border-color: transparent; }
 .style-input { resize: vertical; line-height: 1.5; font-size: 12px; }
 .term-value { color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
 .term-notes { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
@@ -1842,7 +1878,7 @@ onBeforeUnmount(() => {
   gap: var(--space-xs);
   padding: var(--space-sm);
   border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-low) 80%, transparent);
+  background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 22%, transparent);
   transition: border-color 150ms ease;
 }
@@ -1867,13 +1903,13 @@ onBeforeUnmount(() => {
 .style-title-icon {
   width: 14px;
   height: 14px;
-  color: var(--md-sys-color-primary);
+  color: var(--panel-accent);
   flex: none;
 }
 .style-mode-switcher {
   display: inline-flex;
   align-items: center;
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 60%, transparent);
+  background: var(--panel-chip);
   border-radius: 999px;
   padding: 2px;
   gap: 1px;
@@ -1891,12 +1927,12 @@ onBeforeUnmount(() => {
   transition: all 140ms ease;
 }
 .style-mode-btn.active {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
+  background: var(--panel-select-bg);
+  color: var(--panel-select-ink);
   font-weight: 600;
 }
 .style-mode-btn:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
+  outline: 2px solid var(--panel-accent);
   outline-offset: 1px;
 }
 .style-readonly-badge {
@@ -1904,7 +1940,7 @@ onBeforeUnmount(() => {
   color: var(--ink-subtle);
   padding: 1px 6px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 50%, transparent);
+  background: var(--panel-chip);
 }
 .style-form-body {
   display: flex;
@@ -1934,7 +1970,7 @@ onBeforeUnmount(() => {
   padding: 0 8px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
-  background: var(--surface);
+  background: var(--panel-chip);
   color: var(--ink-muted);
   font-family: inherit;
   font-size: 11px;
@@ -1944,18 +1980,18 @@ onBeforeUnmount(() => {
   user-select: none;
 }
 .style-chip:hover:not(.selected) {
-  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  background: color-mix(in srgb, var(--panel-accent) 8%, transparent);
   color: var(--ink);
-  border-color: color-mix(in srgb, var(--md-sys-color-primary) 35%, transparent);
+  border-color: color-mix(in srgb, var(--panel-accent) 35%, transparent);
 }
 .style-chip.selected {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
+  background: var(--panel-select-bg);
+  color: var(--panel-select-ink);
   border-color: transparent;
   font-weight: 600;
 }
 .style-chip:focus-visible {
-  outline: 2px solid var(--md-sys-color-primary);
+  outline: 2px solid var(--panel-accent);
   outline-offset: 1px;
 }
 .chip-check-icon {
@@ -1968,7 +2004,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  background: color-mix(in srgb, var(--md-sys-color-error-container) 12%, transparent);
+  background: color-mix(in srgb, var(--md-sys-color-error) 8%, var(--surface));
   padding: 6px 8px;
   border-radius: var(--radius-control);
   border: 1px solid color-mix(in srgb, var(--md-sys-color-error) 18%, transparent);
@@ -1991,10 +2027,10 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 .forbidden-label {
-  color: var(--md-sys-color-error);
+  color: var(--panel-danger);
 }
 .forbidden-checkbox {
-  accent-color: var(--md-sys-color-error);
+  accent-color: var(--panel-danger);
   width: 13px;
   height: 13px;
   cursor: pointer;
@@ -2035,13 +2071,13 @@ onBeforeUnmount(() => {
   align-items: center;
   padding: 1px 8px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 70%, transparent);
+  background: var(--panel-chip);
   color: var(--ink);
   font-size: 11px;
 }
 .readonly-chip.forbidden-chip {
-  background: color-mix(in srgb, var(--md-sys-color-error-container) 35%, transparent);
-  color: var(--md-sys-color-error);
+  background: color-mix(in srgb, var(--md-sys-color-error) 12%, var(--surface));
+  color: var(--panel-danger);
   font-weight: 500;
 }
 .readonly-custom-text {
@@ -2069,22 +2105,22 @@ onBeforeUnmount(() => {
   font-size: 11px;
   cursor: pointer;
 }
-.chunk-item:hover { background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent); }
-.chunk-item:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: -2px; }
-.chunk-item.selected { background: var(--md-sys-color-secondary-container); color: var(--md-sys-color-on-secondary-container); }
+.chunk-item:hover { background: color-mix(in srgb, var(--panel-accent) 8%, transparent); }
+.chunk-item:focus-visible { outline: 2px solid var(--panel-accent); outline-offset: -2px; }
+.chunk-item.selected { background: var(--panel-select-bg); color: var(--panel-select-ink); }
 .chunk-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-subtle); }
 .chunk-dot.is-translated { background: var(--state-success-ink); }
-.chunk-dot.is-repair { background: var(--md-sys-color-error); }
+.chunk-dot.is-repair { background: var(--panel-danger); }
 .chunk-state { color: inherit; font-size: 11px; opacity: 0.8; }
 .chunk-detail { display: flex; flex-direction: column; gap: var(--space-xs); min-width: 0; }
 .chunk-badges { display: flex; flex-wrap: wrap; gap: var(--space-xxs); }
 .chunk-badge { padding: 0 var(--space-xs); border-radius: 999px; background: var(--surface); color: var(--ink-muted); font-size: 11px; line-height: 1.8; }
 .chunk-badge.ok { color: var(--state-success-ink); }
-.chunk-badge.warn { color: var(--md-sys-color-error); }
+.chunk-badge.warn { color: var(--panel-danger); }
 .segment-list { display: flex; flex-direction: column; gap: var(--space-sm); }
 .segment-row { display: flex; flex-direction: column; gap: 2px; padding-bottom: var(--space-xs); border-bottom: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent); }
 .segment-original { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.segment-translated { margin: 0; color: var(--md-sys-color-primary); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.segment-translated { margin: 0; color: var(--panel-accent); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .segment-untranslated { margin: 0; color: var(--ink-subtle); font-size: 12px; line-height: 1.6; }
 .context-line { margin: 0; color: var(--ink-subtle); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 
@@ -2092,8 +2128,8 @@ onBeforeUnmount(() => {
 .issue-list { display: flex; flex-direction: column; gap: var(--space-xs); margin: 0; padding: 0; list-style: none; }
 .issue-row { display: flex; flex-direction: column; gap: 2px; padding: var(--space-sm); border-radius: var(--radius-control); background: var(--surface); }
 .issue-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
-.issue-severity { padding: 0 var(--space-xs); border-radius: 999px; background: var(--md-sys-color-surface-container); color: var(--ink-muted); font-size: 11px; line-height: 1.8; }
-.issue-severity.is-critical, .issue-severity.is-major { color: var(--md-sys-color-error); }
+.issue-severity { padding: 0 var(--space-xs); border-radius: 999px; background: var(--panel-chip); color: var(--ink); font-size: 11px; line-height: 1.8; }
+.issue-severity.is-critical, .issue-severity.is-major { background: color-mix(in srgb, var(--md-sys-color-error) 10%, var(--surface)); color: var(--panel-danger); }
 .issue-chunk, .issue-segment { color: var(--ink-muted); font-size: 11px; }
 .issue-detail { margin: 0; color: var(--ink); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 
@@ -2109,7 +2145,7 @@ onBeforeUnmount(() => {
 .translation-modes {
   display: flex;
   align-items: center;
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 60%, transparent);
+  background: var(--panel-surface);
   border-radius: 999px;
   padding: 3px;
   gap: 2px;
@@ -2136,10 +2172,10 @@ onBeforeUnmount(() => {
   color: var(--ink);
   background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
 }
-.translation-mode:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
+.translation-mode:focus-visible { outline: 2px solid var(--panel-accent); outline-offset: 1px; }
 .translation-mode.selected {
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
+  background: var(--panel-select-bg);
+  color: var(--panel-select-ink);
   font-weight: 600;
 }
 .action-row {
@@ -2157,7 +2193,7 @@ onBeforeUnmount(() => {
 .action-row md-text-button {
   height: 34px;
 }
-.cancel-button { --md-text-button-label-text-color: var(--md-sys-color-error); margin-inline-start: auto; }
+.cancel-button { --md-text-button-label-text-color: var(--panel-danger); margin-inline-start: auto; }
 
 /* 待处理区（预算耗尽 / 内容拒绝）：中性底色、面向行动，不渲染成错误告警。 */
 .panel-rescue {
@@ -2166,7 +2202,7 @@ onBeforeUnmount(() => {
   gap: var(--space-xs);
   padding: var(--space-sm);
   border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--md-sys-color-surface-container-highest) 60%, transparent);
+  background: var(--panel-surface);
 }
 .rescue-line { margin: 0; color: var(--ink); font-size: 12px; font-weight: 500; overflow-wrap: anywhere; }
 .rescue-note { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
@@ -2190,11 +2226,11 @@ onBeforeUnmount(() => {
   color: var(--ink);
   background: color-mix(in srgb, var(--md-sys-color-on-surface) 6%, transparent);
 }
-.budget-tier:focus-visible { outline: 2px solid var(--md-sys-color-primary); outline-offset: 1px; }
+.budget-tier:focus-visible { outline: 2px solid var(--panel-accent); outline-offset: 1px; }
 .budget-tier.selected {
   border-color: transparent;
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
+  background: var(--panel-select-bg);
+  color: var(--panel-select-ink);
 }
 .rescue-button { align-self: flex-start; }
 
