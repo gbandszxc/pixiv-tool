@@ -152,10 +152,11 @@ pixiv-tool/
 │     ├─ translation/           # 整篇翻译 Job：service / source / chunking / artifacts / tools / validation / publish / legacy
 │     ├─ translation_legacy.rs  # v1 单页两轮实现：只读兼容旧译文，命令入口已移除
 │     ├─ translation_diagnostics.rs / translation_summary.rs
+│     ├─ sync/                  # WebDAV 同步：mod（范围白名单 / SyncError）/ archive（载荷与历史合并）/ crypto（PTSYNC01 加解密）/ webdav（MKCOL/PUT/GET）/ keys（同步凭据）/ service（编排）
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 与 translation/ 共 84 个 #[tauri::command]（translation 20 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 9 / app 1 / update 5）
+│     ├─ commands/              # 与 translation/ 共 87 个 #[tauri::command]（translation 20 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
 │     ├─ cookies.rs             # keyring CookieStore
@@ -169,13 +170,14 @@ pixiv-tool/
 │  ├─ src/
 │  │  ├─ views/                 # ToolsView（下载页签壳）/ TasksView / HistoryView / SaucenaoView（以图识图）
 │  │  │  └─ browse/             # BrowseHome/Channel/Discover/Feed/Search/Ranking/Bookmark/History/Me + Work/Series/Author/Novel
-│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/（核心导航 / PageBackButton）download/（共用下载表单 / 状态栏 / PageDownloadPicker）settings/（SettingsPanel / SettingsDialog / TranslationAdvancedPanel / TranslationAgentFields / sections.ts）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / CopyWorkId / NovelContent / NovelTranslationMenu / TranslationProgressBanner / SectionTabs / RelatedGrid）
+│  │  ├─ components/            # common/（AppPagination 公共分页）auth/（LoginDialog / AccountMenu）navigation/（核心导航 / PageBackButton）download/（共用下载表单 / 状态栏 / PageDownloadPicker）settings/（SettingsPanel / SettingsDialog / AdvancedPanel / SyncPanel / TranslationAdvancedPanel / TranslationAgentFields / sections.ts）browse/（WorkCard / WorkGrid / BookmarkButton / ImageViewer / CopyWorkId / NovelContent / NovelTranslationMenu / TranslationProgressBanner / SectionTabs / RelatedGrid）
 │  │  ├─ material.ts            # @material/web 组件按需 import
 │  │  ├─ stores/                # Pinia（auth/tasks/settings/history/translation，全走 invoke）
 │  │  ├─ api/tauri.ts           # invoke 封装 + 错误归一化 + 契约类型
 │  │  ├─ api/translation.ts     # 翻译 Job 契约类型 + invoke / 事件订阅
 │  │  ├─ api/browse.ts          # 浏览契约类型 + 非 Tauri 环境的确定性 mock 层
 │  │  ├─ api/saucenao.ts        # SauceNAO 契约类型 + invoke 封装 + 非 Tauri 环境的确定性 mock 层
+│  │  ├─ api/sync.ts            # 设置·高级→同步契约类型（3 命令 / SyncConfig 草稿覆盖 / 结构化错误）
 │  │  ├─ api/devMock.ts         # auth/settings 的浏览器视觉验收 mock（仅 !isTauri() 生效）
 │  │  ├─ utils/thumb.ts         # 缩略图 URL 档位改写（§6.4）
 │  │  ├─ composables/useThumbTier.ts # 设置档位 → 合法 ThumbTier 的响应式读取
@@ -820,7 +822,11 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "translation_call_budget": 0,
   "translation_agent_replay_unknown": false,
   "translation_confirm_before_start": false,
-  "notifications_enabled": true
+  "notifications_enabled": true,
+  "webdav_url": "",
+  "webdav_username": "",
+  "sync_scope_history": true,
+  "sync_scope_auth": true
 }
 ```
 
@@ -932,8 +938,28 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   `awaiting_confirmation` 时发送一条系统通知；文案跟随界面语言 `language`，正文带
   小说标题（读取失败时回落 `小说 #<novel_id>`）。Windows 上只有安装版以应用身份
   显示，开发运行显示 PowerShell 名称与图标；发送失败只记日志，不影响任务状态。
-- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 50 个键，
-  含兼容保留的 `backend_port`；`saucenao_api_key` 为用户凭据，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案（凭据库不可用不影响其他设置），不返回 Key 原文。
+- `webdav_url` / `webdav_username`：WebDAV 同步目录地址与用户名（默认均为空串 =
+  未配置 / 匿名，ADR 0048）。`settings_save` 只按白名单落盘、不做 URL 校验；同步
+  动作解析地址时要求 `http` / `https`、有 host，拒绝 query、fragment 与 URL 内嵌
+  凭据（否则 `sync_url_invalid`），并 trim、去掉尾部 `/`。远端文件固定为
+  `<目录>/pixiv-tool-sync.bin`。用户名非空时必须有 WebDAV 密码，否则动作报
+  `sync_config_incomplete`。
+- `sync_scope_history` / `sync_scope_auth`：同步范围开关（浏览访问历史 / 多账号
+  登录态），默认均 `true`；设置弹窗「高级 → 同步」默认全选，两项都关时动作按钮
+  禁用。命令参数 `scopes` 只接受 `history` / `auth`，空集或未知值 →
+  `sync_no_scope`。
+- 同步凭据**不进** `settings.json`：WebDAV 密码与同步口令（加密口令）分别在系统
+  凭据库 service `pixiv-tool.sync` 的 `webdav-password` /
+  `sync-passphrase` 条目，落点与写回顺序见 §5.3、ADR 0048。同步口令长度 8~256
+  字符（trim 后），空串 = 未配置。
+- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 54 个键，
+  含兼容保留的 `backend_port`；`saucenao_api_key` 为用户凭据，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案，以及 `webdav_password_configured` / `sync_passphrase_configured` 两个布尔（凭据库不可用按未配置降级，不返回任何原文）。
+- `settings_save(settings, webdav_password?, sync_passphrase?)`：后两个可选参数是
+  同步凭据的独立写入通道，语义与 `translation_api_key` 一致——省略 = 保持既有
+  条目，空串 = 删除条目。同步口令先 trim 再按 8~256 字符校验（非法 →
+  `sync_passphrase_invalid`，`field=sync_passphrase`）；WebDAV 密码不 trim。凭据
+  写入失败返回 `sync_credential_save_failed`（`field` 为对应参数名），配置回滚，
+  内存设置不更新。
 - `settings_save` 校验 / 保存失败返回结构化错误载荷 `{ code, field, message }`
   （ADR 0044）：`code` 是稳定错误码（前端 i18n 键 `settings.errors.<code>` 的依据）、
   `field` 是触发键名（前端字段停靠依据，整体性错误为 `null`）、`message` 是中文
@@ -960,7 +986,15 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   | `show_r18_invalid` | `show_r18` |
   | `saucenao_key_invalid` | `saucenao_api_key` |
   | `translation_key_invalid` / `credential_save_failed` | `translation_api_key`（回滚失败为 `null`） |
+  | `sync_passphrase_invalid` | `sync_passphrase` |
+  | `sync_credential_save_failed` | `sync_passphrase` / `webdav_password`（回滚失败为 `null`） |
   | `translation_settings_invalid` / `settings_invalid` / `save_failed` / `internal` | `null` |
+
+  同步命令（§7 `sync_test_connection` / `sync_upload` / `sync_download`）另有独立的
+  `SyncError {code, field, message}`，码表见 §7；其中
+  `sync_passphrase_invalid` / `sync_passphrase_missing` 的 `field` 同为
+  `sync_passphrase`，`sync_config_incomplete` 的 `field` 为 `webdav_url` 或
+  `webdav_password`，`sync_network_error` 的 `field` 为 `webdav_url`。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
 
@@ -1009,6 +1043,24 @@ token 的写路径自愈覆盖全部 POST 写方法（Auth/Client 失败或 200+
 任务时附带可选 `warning`（任务沿用创建时账号凭据快照执行，重试才读当前
 账号），由前端提示。
 
+**同步写回（WebDAV 恢复，ADR 0048）**：`sync_download` 的账户合并必须走
+`AppState` 实例（`state.accounts` / `state.cookies`），不得另建 `CookieStore` 或
+`AccountManager`——否则内存镜像、keyring 条目与 `default` 指针会分叉。
+
+1. 逐条 `state.accounts.store_cookies(user_id, cookies)` 写 `u-<id>` 条目，再
+   `state.accounts.upsert(info)` 更新索引；同 `user_id` 覆盖，包外本地账号不删。
+2. `default` 镜像与 active 指针的顺序：先完成全部账号条目写入，再按 active 规则
+   显式 `set_active_pointer`（本地已有 active 保持不变；本地无 active 且云端
+   active 在导入集合内才写 `default` 并切换；云端 active == 本地 active 时用包内
+   Cookie 刷新 `default`）。`upsert` 会移动 active，写完必须还原本地选择。
+3. 任何账户写入或 `default` 刷新后调用
+   `pixiv::browse_api::invalidate_session_caches()`，清空自 uid 与主站 csrf
+   缓存；浏览历史导入只写 `browse_history` 表，不触碰账号状态。
+4. 前端在 `auth_changed` 为真时刷新登录态（auth store / 账号列表），在
+   `history_imported > 0` 时广播 `pixiv-tool:history-restored`，浏览历史页回到
+   第 1 页重拉；刷新失败不覆盖同步成功回执。恢复前必须二次确认。凭据只在
+   `settings_save` 或动作的 `config` 草稿上行，不写入任何返回体。
+
 ---
 
 ## 6. 前端
@@ -1055,7 +1107,7 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 （超出部分在右栏内部滚动，头部与底部保存栏不动）；主区为 176px 分组栏 + 表单区两列，
 两栏各自滚动；底部为常驻「取消 / 保存」栏，保存整表一次写入）。表单为 SettingsPanel，按左栏选中的分组渲染
 （分组顺序见 `components/settings/sections.ts`：通用 / 外观 / 下载 / 浏览与图片 /
-小说翻译 / 维护），含主题、配色与语言的实时预览；Esc / 点 backdrop / 标题栏 ✕ 关闭前先做脏检查，
+小说翻译 / 高级 / 维护），含主题、配色与语言的实时预览；Esc / 点 backdrop / 标题栏 ✕ 关闭前先做脏检查，
 有未保存改动则弹确认弹窗（继续编辑 / 放弃修改），放弃即回滚到已保存值并提示，
 无改动直接关闭。设置项继续增多时在 `sections.ts` 与 SettingsPanel 内新增分组。
 「小说翻译」组内分一级常用页与二级「高级设置」页（`TranslationAdvancedPanel.vue`）：
@@ -1066,6 +1118,15 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 底部保存，页面切换不保存、不丢草稿。保存失败时自动切到对应二级分类并滚动聚焦出错
 字段；各分类与二级页提供「恢复本组推荐值 / 恢复全部推荐值」（恢复全部就地二次确认，
 不叠新模态）。详细诊断开关只影响本次运行，不写 settings.json。
+「高级」组为分类入口页（`AdvancedPanel.vue`），当前只有「同步」一项，点击在同一
+内容区切到二级页（`SyncPanel.vue`，不叠模态），顶部「返回高级」回入口。同步页分两组：
+连接（WebDAV 地址 / 用户名 / 密码 / 同步口令，已存凭据在标签行以中性描边胶囊回显
+「已保存」、可清除且待清除时切 error 文案）与同步范围（浏览历史 / 登录状态两个
+checkbox，默认全选）。动作行为「测试连接 / 上传 / 从云端恢复」：直接使用当前草稿值
+（`config` 覆盖）不要求先保存，进行中禁用全部按钮并显示进行中文案，回执为会话级
+（切页保留、关闭设置复位）。「从云端恢复」先弹原生 dialog 二次确认，文案写明合并
+与覆盖范围；恢复后若登录态变更则刷新账号 / auth 状态，若导入了历史则广播
+`pixiv-tool:history-restored`，浏览历史页回第 1 页重拉。
 应用外壳恒为视口高，右侧内容区是主要滚动容器，长内容不再拉长侧栏；下载面板独立滚动，底部状态栏独立占位。内容列（`.page-view`）在窗口宽高比 ≤16:9 时铺满内容区、不设宽度上限（列表/网格列数随
 宽度自适应补满），只有更宽的超宽窗口才按「视口高 × 16/9」封顶并居中
 （视觉规格见 `DESIGN.md` §Layout）。
@@ -1453,6 +1514,8 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 `translation/service.rs`（状态、索引、事件与缓存拥有者）；v1 只读命令
 `novel_translation_get` / `translation_models` / `translation_test` 由 `translation/mod.rs`
 再导出。`novel_translate_page` 已从注册表移除，旧 Channel 协议不再可用。
+同步命令实现于 `commands/sync_cmds.rs`，业务真相源在 `sync/service.rs`（配置解析、
+导出 / 导入、加解密、网络编排）；错误统一 `SyncError {code, field, message}`。
 
 | 命令 | 说明 |
 |---|---|
@@ -1467,7 +1530,10 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings)` | 配置读写（白名单 49 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板；API Key 独立写入，仅返回 configured 状态，见 §5.2）。`settings_save` 失败返回结构化载荷 `{code, field, message}`（ADR 0044，错误码表见 §5.2） |
+| `settings_get` / `settings_save(settings, webdavPassword?, syncPassphrase?)` | 配置读写（白名单 54 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板 / 4 个 WebDAV 同步键；API Key 与同步凭据独立写入，`settings_get` 仅返回 `{is-saved}` 布尔，见 §5.2）。`settings_save` 失败返回结构化载荷 `{code, field, message}`（ADR 0044，错误码表见 §5.2） |
+| `sync_test_connection(config?)` | 测试 WebDAV 连通性：只校验地址并 `MKCOL` 目录，不读写同步包、不要求同步口令。`config` 为可选草稿覆盖 `{webdavUrl, webdavUsername, webdavPassword, syncPassphrase}`（省略 = 已保存值 + 凭据库）。返回 `{status:"ok", http_status}`（MKCOL 实际状态码，目录已存在也算通）。错误为 `SyncError` |
+| `sync_upload(scopes, config?)` | 按所选范围导出 → `PTSYNC01` 加密 → `MKCOL` + `PUT` 固定文件 `pixiv-tool-sync.bin`。`scopes` 白名单 `history` / `auth`（去重，空集或未知值 `sync_no_scope`）。返回 `{exported_at, bytes, history_count, account_count}`（导出侧只含已登记且 Cookie 有 PHPSESSID 的账号） |
+| `sync_download(scopes, config?)` | `GET` → 解密 → 解析 → 按所选范围合并：历史 `ON CONFLICT(kind, work_id)` 仅 `visited_at` 更晚才更新；账号同名覆盖、不删本地额外账号，本地 active 优先、无 active 才回落云端 active；写后失效会话缓存。返回 `{exported_at, history_imported, accounts_imported, active_changed, auth_changed}`。安全上限：响应体 8 MiB、单请求 30s、重定向不跟随、网络错误直连重试一次 |
 | `novel_translation_start(novel, force)` | 启动或加入整篇翻译 Job；novel=`{novel_id,title,tags,description,content}`（content ≤ 8MB，非法 id / 空内容拒绝）。启动前校验设置、URL、模型与 Key，任何失败不创建 Job；原文已是目标语言且 `force=false` 时返回 `already_target_language:true` 与未落库的空快照。同一作品、原文版本、目标语言重复启动加入既有 Job，`force=true` 新建。返回 `{job: TranslationJobSnapshot, already_target_language}`，命令立即返回、后台 tokio 继续执行。目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言（ADR 0018） |
 | `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
 | `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds,refused_chunks,skipped_chunks}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms,skipped}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；`refused_chunks` 是被模型按内容政策拒绝的块 ID、`skipped_chunks` 是用户显式跳过的块 ID（均升序，serde 默认兼容旧载荷，ADR 0043）；任务不存在或清单损坏返回可读错误 |
@@ -1530,6 +1596,24 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `install_app_update` | 打开后端记录的已完成更新包；文件不存在或系统打开失败时返回错误并保持应用运行；安装前重新核对普通文件、下载时实际大小与 SHA256；系统接受打开请求后以 exit(0) 退出，跳过普通退出确认，不接受前端文件路径 |
 | `cancel_app_update` | 取消当前更新下载（含元数据请求），清理临时目录；无在途下载时幂等 |
 | `open_update_directory` | 打开最近一次已完成更新包目录，仅后端保留的路径，不接受前端任意文件路径 |
+
+**同步命令错误码**（`SyncError`，形状对齐 ADR 0044；前端 i18n 键 `sync.errors.<code>`）：
+
+| code | field | 触发 |
+|---|---|---|
+| `sync_config_incomplete` | `webdav_url` / `webdav_password` | 地址缺失，或用户名非空但密码缺失 |
+| `sync_url_invalid` | `null` | 非 http/https、缺 host、带 query/fragment 或 URL 内嵌凭据 |
+| `sync_auth_failed` | `null` | WebDAV 返回 401/403 |
+| `sync_not_found` | `null` | `GET` 返回 404（云端还没有同步文件） |
+| `sync_http_error` | `null` | 其它非成功状态码 |
+| `sync_network_error` | `webdav_url` | 连接 / DNS / 超时失败（含直连重试后） |
+| `sync_oversize` | `null` | 下载体超过 8 MiB |
+| `sync_payload_invalid` | `null` | 明文 JSON 结构错误或载荷版本不识别 |
+| `sync_decrypt_failed` | `sync_passphrase` | 魔数 / 截断 / 参数异常 / GCM 认证失败 |
+| `sync_no_scope` | `null` | `scopes` 为空或含白名单外值 |
+| `sync_passphrase_invalid` | `sync_passphrase` | 口令 trim 后长度不在 8~256 字符 |
+| `sync_passphrase_missing` | `sync_passphrase` | 未配置同步口令且未随 `config` 提供 |
+| `sync_internal` | `null` | 序列化 / 数据库 / 凭据库等内部失败（文案不含凭据或原文） |
 
 **应用菜单栏**：Windows 上默认隐藏（`SetMenu(hwnd, NULL)`），按 Alt 唤起并
 进入菜单循环、退出循环（选中 / Esc / 窗口失活）后自动收回。实现见
@@ -1762,6 +1846,7 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 | 项 | 策略 |
 |---|---|
 | Cookie 存储 | 系统凭据存储（Windows Credential Manager / macOS Keychain / Linux Secret Service） |
+| WebDAV 同步 | 同步包为 `PTSYNC01` 密文（PBKDF2-HMAC-SHA256 600k + AES-256-GCM，AAD 绑定包头），WebDAV 密码与同步口令只进系统凭据库 service `pixiv-tool.sync`，不进 settings.json / 数据库 / 日志；错误与日志不含 URL 凭据、Cookie、密码或口令原文；手动触发，无后台同步 |
 | 网络监听 | **无**——不再有本地 HTTP 服务，IPC 仅限本 webview |
 | 错误上报 | **不集成**（隐私优先） |
 | 鉴权 | 不需要（无网络面） |
@@ -1795,6 +1880,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | R12 | Rig 无条件开启 `serde_json/preserve_order`，JSON Map 迭代序变为插入序 | 中 | 依赖 Map 顺序的位置必须显式排序；作者作品对象形响应已修复，新代码不得依赖默认迭代序 |
 | R13 | 翻译运行参数（并发、分块、预算、压缩）尚未用真实长篇校准 | 中 | 计划值只作起点；真实付费模型下校准分块、预算与默认并发，费用与请求不进入离线测试；校准结果同批回写设置说明与本文 |
 | R14 | 整篇 Job 的模型调用量显著高于单页两轮 | 中 | 累计调用预算（默认 `64 + 32 × 初始分块数`）、三级并发闸门与暂停 / 取消共同控制成本；界面不承诺固定费用 |
+| R15 | WebDAV 同步的第三方兼容性与凭据可用性（MKCOL 行为差异、自签证书、非标准端口；同步口令丢失即无法解密；wreq 客户端尚未对真实服务端全量实测） | 中 | 固定文件 + 标准 MKCOL/PUT/GET，MKCOL 已存在 / 不支持均继续；地址白名单 http/https、30s 超时、8 MiB 上限、网络错误直连重试一次；口令丢失无后门，文案提示重新上传即可重建快照；上线前用 Nextcloud / 坚果云等真实服务端补测 |
 
 ---
 
@@ -1849,6 +1935,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0045 | 下载历史宫格模式与本地已下载图片协议 | [adr/0045-download-grid-view-and-local-image-protocol.md](adr/0045-download-grid-view-and-local-image-protocol.md) |
 | 0046 | 翻译等待确认跨重启可确认与系统通知 | [adr/0046-translation-confirmation-persistence-and-notifications.md](adr/0046-translation-confirmation-persistence-and-notifications.md) |
 | 0047 | 日译语言策略收束与校验口径统一 | [adr/0047-language-policy-convergence.md](adr/0047-language-policy-convergence.md) |
+| 0048 | WebDAV 同步浏览历史与登录态（外部目录契约 + 应用层加密 + 手动双向合并） | [adr/0048-webdav-sync-history-and-auth.md](adr/0048-webdav-sync-history-and-auth.md) |
 
 | 0040 | 更新下载与安装分离，系统交接成功后退出 | [adr/0040-update-install-and-exit.md](adr/0040-update-install-and-exit.md) |
 
