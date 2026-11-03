@@ -310,6 +310,13 @@ export const useSettingsStore = defineStore("settings", () => {
     translation_confirm_before_start: false,
     // 系统通知（默认开启，ADR 0046）
     notifications_enabled: true,
+    // 高级 → 同步：默认两项范围全选；凭据只回传是否存在
+    webdav_url: "",
+    webdav_username: "",
+    webdav_password_configured: false,
+    sync_passphrase_configured: false,
+    sync_scope_history: true,
+    sync_scope_auth: true,
     translation_key_configured: false,
     translation_key_error: "",
   });
@@ -323,21 +330,41 @@ export const useSettingsStore = defineStore("settings", () => {
     settings.value = await invoke<Settings>("settings_get");
   }
 
-  async function saveSettings(newSettings: Partial<Settings> & { translation_api_key?: string }) {
-    const { translation_api_key: apiKey, ...publicSettings } = newSettings;
+  /**
+   * 保存设置（整表写入）。凭据走独立参数：省略 = 保持已存值，空串 = 删除。
+   * 只读的「凭据是否存在」回执字段不回传，保存后按本次输入重算。
+   */
+  async function saveSettings(
+    newSettings: Partial<Settings> & { translation_api_key?: string },
+    credentials: { webdavPassword?: string; syncPassphrase?: string } = {},
+  ) {
+    const { translation_api_key: apiKey, ...rest } = newSettings;
+    const publicSettings: Partial<Settings> = { ...rest };
+    delete publicSettings.webdav_password_configured;
+    delete publicSettings.sync_passphrase_configured;
+    const { webdavPassword, syncPassphrase } = credentials;
     if (!isTauri()) {
       if (apiKey !== undefined) publicSettings.translation_key_configured = Boolean(apiKey.trim());
+      if (webdavPassword !== undefined) publicSettings.webdav_password_configured = Boolean(webdavPassword.trim());
+      if (syncPassphrase !== undefined) publicSettings.sync_passphrase_configured = Boolean(syncPassphrase.trim());
       mockSettingsSave(publicSettings);
       Object.assign(settings.value, publicSettings);
       return;
     }
-    // 校验失败时后端 reject string，由视图层用 errorMessage() 展示。
-    await invoke("settings_save", { settings: newSettings });
+    // 校验失败时后端 reject 结构化载荷，由视图层用 errorPayload() 取形展示。
+    await invoke("settings_save", {
+      // translation_api_key 走 settings JSON 内的补丁键（后端据此写系统凭据存储）
+      settings: { ...publicSettings, ...(apiKey !== undefined ? { translation_api_key: apiKey } : {}) },
+      ...(webdavPassword !== undefined ? { webdavPassword } : {}),
+      ...(syncPassphrase !== undefined ? { syncPassphrase } : {}),
+    });
     Object.assign(settings.value, publicSettings);
     if (apiKey !== undefined) {
       settings.value.translation_key_configured = Boolean(apiKey.trim());
       settings.value.translation_key_error = "";
     }
+    if (webdavPassword !== undefined) settings.value.webdav_password_configured = Boolean(webdavPassword.trim());
+    if (syncPassphrase !== undefined) settings.value.sync_passphrase_configured = Boolean(syncPassphrase.trim());
   }
 
   async function clearLogs() {

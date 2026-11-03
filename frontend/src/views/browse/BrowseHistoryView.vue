@@ -12,7 +12,7 @@ import BrowseNavigation from "../../components/navigation/BrowseNavigation.vue";
  * - 进入自动刷新：KeepAlive 下 onActivated 每次激活都重新加载（筛选与页码保留）；
  * - 数据来自历史行（非 BrowseWorkItem），仅展示，不做单条删除 / 搜索。
  */
-import { computed, onActivated, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import PageBackButton from "../../components/navigation/PageBackButton.vue";
@@ -28,6 +28,7 @@ import {
   type BrowseWorkItem,
 } from "../../api/browse";
 import { notify } from "../../ui/notify";
+import { HISTORY_RESTORED_EVENT } from "../../api/sync";
 
 const { t } = useI18n();
 const router = useRouter();
@@ -145,6 +146,16 @@ function openWork(item: BrowseWorkItem): void {
 }
 
 onActivated(load);
+// 云端恢复导入历史后回到第 1 页重拉；页面在 KeepAlive 中未激活时只复位页码，待激活时由 onActivated 加载。
+const viewActive = ref(true);
+onDeactivated(() => { viewActive.value = false; });
+onActivated(() => { viewActive.value = true; });
+function onHistoryRestored(): void {
+  page.value = 1;
+  if (viewActive.value) void load();
+}
+onMounted(() => window.addEventListener(HISTORY_RESTORED_EVENT, onHistoryRestored));
+onBeforeUnmount(() => window.removeEventListener(HISTORY_RESTORED_EVENT, onHistoryRestored));
 </script>
 
 <template>

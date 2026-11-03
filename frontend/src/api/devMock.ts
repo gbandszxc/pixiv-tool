@@ -6,7 +6,13 @@
  * （头像为内联 SVG data URI）。覆盖命令：auth_status / auth_accounts_list /
  * auth_logout（内存标记，刷新页面复位）/ settings_get / settings_save（内存版）。
  */
-import type { AuthAccountsResponse, AuthStatusResponse, Settings } from "./tauri";
+import type {
+  AuthAccountsResponse,
+  AuthStatusResponse,
+  Settings,
+  StructuredError,
+} from "./tauri";
+import type { SyncConfig, SyncDownloadResult, SyncScope, SyncTestResult, SyncUploadResult } from "./sync";
 
 /** 样例账号（虚构）。 */
 const MOCK_USER_ID = "100001";
@@ -82,6 +88,13 @@ function ensureSettings(): Settings {
       translation_extra: {},
       // 系统通知开关（默认开启）
       notifications_enabled: true,
+      // 高级 → 同步：默认两项范围都勾选；样例账户已保存凭据，仅用于浏览器视觉验收
+      webdav_url: "https://dav.example.com/remote.php/dav/files/me/pixiv-tool/",
+      webdav_username: "pixiv",
+      webdav_password_configured: true,
+      sync_passphrase_configured: true,
+      sync_scope_history: true,
+      sync_scope_auth: true,
       translation_key_configured: false,
       translation_key_error: "",
     };
@@ -97,4 +110,71 @@ export function mockSettingsGet(): Settings {
 /** settings_save：只写内存（刷新页面即回到默认），字段校验不在 mock 内复刻。 */
 export function mockSettingsSave(next: Partial<Settings>): void {
   mockSettings = { ...ensureSettings(), ...next };
+}
+
+// ===== 高级 → 同步（仅浏览器验收）=====
+// 与真实命令同一套错误码，便于直接检查字段停靠与错误文案；成功结果是确定性样例。
+
+/** 抛结构化错误（形状与 Rust Err 一致，供 errorPayload 取形）。 */
+function syncError(code: string, field: string | null, message: string): never {
+  throw { code, field, message } satisfies StructuredError;
+}
+
+/** 按「草稿覆盖 → 已保存值」合并当前连接配置。 */
+function resolveSyncConfig(config?: SyncConfig) {
+  const saved = ensureSettings();
+  const url = (config?.webdavUrl ?? saved.webdav_url ?? "").trim();
+  const username = (config?.webdavUsername ?? saved.webdav_username ?? "").trim();
+  const hasPassword = config?.webdavPassword !== undefined
+    ? config.webdavPassword.trim().length > 0
+    : saved.webdav_password_configured === true;
+  const passphrase = config?.syncPassphrase !== undefined
+    ? config.syncPassphrase.trim()
+    : saved.sync_passphrase_configured ? "mock-passphrase" : "";
+  return { url, username, hasPassword, passphrase };
+}
+
+/** 连接必需项校验：错误码与字段名与后端一致。 */
+function assertSyncConfig(config?: SyncConfig) {
+  const { url, username, hasPassword, passphrase } = resolveSyncConfig(config);
+  if (!url) syncError("sync_config_incomplete", "webdav_url", "请填写 WebDAV 地址");
+  if (!/^https?:\/\//i.test(url)) syncError("sync_url_invalid", "webdav_url", "WebDAV 地址必须以 http:// 或 https:// 开头");
+  if (!username) syncError("sync_config_incomplete", "webdav_username", "请填写用户名");
+  if (!hasPassword) syncError("sync_config_incomplete", "webdav_password", "请填写密码");
+  return { url, username, passphrase };
+}
+
+export function mockSyncTestConnection(config?: SyncConfig): SyncTestResult {
+  assertSyncConfig(config);
+  return { status: "ok", http_status: 207 };
+}
+
+function assertScopes(scopes: SyncScope[]) {
+  if (scopes.length === 0) syncError("sync_no_scope", null, "至少选择一项同步范围");
+}
+
+export function mockSyncUpload(scopes: SyncScope[], config?: SyncConfig): SyncUploadResult {
+  assertScopes(scopes);
+  const { passphrase } = assertSyncConfig(config);
+  if (!passphrase) syncError("sync_passphrase_missing", "sync_passphrase", "请先填写同步密码");
+  if (passphrase.length < 8) syncError("sync_passphrase_invalid", "sync_passphrase", "同步密码长度必须是 8~256 个字符");
+  return {
+    exported_at: new Date().toISOString(),
+    bytes: 18432,
+    history_count: scopes.includes("history") ? 128 : 0,
+    account_count: scopes.includes("auth") ? 2 : 0,
+  };
+}
+
+export function mockSyncDownload(scopes: SyncScope[], config?: SyncConfig): SyncDownloadResult {
+  assertScopes(scopes);
+  const { passphrase } = assertSyncConfig(config);
+  if (!passphrase) syncError("sync_passphrase_missing", "sync_passphrase", "请先填写同步密码");
+  return {
+    exported_at: new Date().toISOString(),
+    history_imported: scopes.includes("history") ? 128 : 0,
+    accounts_imported: scopes.includes("auth") ? 2 : 0,
+    active_changed: false,
+    auth_changed: scopes.includes("auth"),
+  };
 }

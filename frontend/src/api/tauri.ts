@@ -225,6 +225,18 @@ export interface Settings {
   translation_confirm_before_start?: boolean;
   /** 系统通知（默认 true）：等待确认术语与风格时提醒 */
   notifications_enabled?: boolean;
+  // ===== 高级 → 同步（WebDAV 备份，settings_get 返回；凭据只回传是否存在）=====
+  /** WebDAV 目录地址（https:// 开头，末尾通常带 /） */
+  webdav_url?: string;
+  webdav_username?: string;
+  /** 只回传是否存在，永不回传 WebDAV 密码。 */
+  webdav_password_configured?: boolean;
+  /** 只回传是否存在，永不回传同步密码。 */
+  sync_passphrase_configured?: boolean;
+  /** 同步范围：浏览历史（默认 true） */
+  sync_scope_history?: boolean;
+  /** 同步范围：登录状态（默认 true） */
+  sync_scope_auth?: boolean;
   /** 只回传凭据是否存在，永不回传 API Key。 */
   translation_key_configured: boolean;
   translation_key_error: string;

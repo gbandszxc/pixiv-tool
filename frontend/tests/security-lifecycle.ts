@@ -119,7 +119,7 @@ async function run() {
   await settle();
   assert(input.value === "", "取消或关闭登录清除临时 Cookie");
   login.dispose();
-  const panel = mount(SettingsPanel, { section: "advanced" });
+  const panel = mount(SettingsPanel, { section: "images" });
   await settle();
   assert(panel.el.querySelector("#saucenao-api-key")?.getAttribute("type") === "password", "SauceNAO Key 遮罩显示");
   panel.dispose();

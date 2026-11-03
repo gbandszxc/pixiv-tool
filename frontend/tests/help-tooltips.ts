@@ -50,9 +50,18 @@ async function run() {
   await router.push("/");
   showSettings.value = true; await settle(); await settle();
   const settings = document.querySelector<HTMLDialogElement>(".settings-dialog")!;
-  for (const label of ["通用", "外观", "图片与内容", "小说翻译", "高级", "维护"]) {
+  for (const label of ["通用", "外观", "下载", "浏览与图片", "小说翻译", "高级", "维护"]) {
     [...settings.querySelectorAll<HTMLButtonElement>(".settings-nav-item")].find(button => button.textContent === label)!.click(); await settle();
-    await checkHelp(settings);
+    if (label === "高级") {
+      const entry = settings.querySelector<HTMLButtonElement>(".advanced-index-item");
+      assert(entry, "高级分组提供同步入口");
+      entry.click(); await settle();
+      assert(settings.querySelector(".sync-panel"), "高级分组进入同步二级页");
+      await checkHelp(settings);
+      settings.querySelector<HTMLElement>(".sync-back")!.click(); await settle();
+    } else {
+      await checkHelp(settings);
+    }
     assert(settings.open, "关闭 tooltip 不关闭设置对话框");
     assert(!settings.querySelector(".field-hint:not(.credential-error)") || label === "维护", "说明不再堆砌在字段下方");
   }
@@ -76,6 +85,6 @@ async function run() {
   document.querySelector<HTMLButtonElement>("#theme")!.onclick = () => document.documentElement.classList.toggle("dark");
   document.querySelector<HTMLButtonElement>("#language")!.onclick = () => { i18n.global.locale.value = i18n.global.locale.value === "zh-CN" ? "en-US" : "zh-CN"; };
   document.querySelector<HTMLElement>("#previews")!.hidden = false;
-  document.querySelector("#result")!.textContent = "PASS：六组设置、两种登录、搜索/以图识图，默认收起、悬停/聚焦/点击、可悬停阅读、Esc/外部关闭";
+  document.querySelector("#result")!.textContent = "PASS：七组设置、两种登录、搜索/以图识图，默认收起、悬停/聚焦/点击、可悬停阅读、Esc/外部关闭";
 }
 run().catch(error => { document.querySelector("#result")!.textContent = `FAIL: ${error.message}`; console.error(error); });

@@ -204,6 +204,25 @@
       />
     </template>
 
+    <template v-else-if="section === 'advanced'">
+      <AdvancedPanel v-if="advancedView === 'menu'" @open-sync="openSync" />
+      <SyncPanel
+        v-else
+        :values="form"
+        :status="syncStatus"
+        :webdav-password="webdavPassword"
+        :clear-webdav-password="clearWebdavPassword"
+        :sync-passphrase="syncPassphrase"
+        :clear-sync-passphrase="clearSyncPassphrase"
+        @back="backToAdvanced"
+        @update:webdav-password="webdavPassword = $event"
+        @update:clear-webdav-password="clearWebdavPassword = $event"
+        @update:sync-passphrase="syncPassphrase = $event"
+        @update:clear-sync-passphrase="clearSyncPassphrase = $event"
+        @update:status="syncStatus = $event"
+      />
+    </template>
+
     <template v-else>
       <span class="field-hint">{{ t("settings.maintenanceHint") }}</span>
       <MaintenancePanel v-if="active" />
@@ -236,6 +255,9 @@ import { useI18n } from "vue-i18n";
 import HelpTooltip from "../common/HelpTooltip.vue";
 import MaintenancePanel from "./MaintenancePanel.vue";
 import TranslationAdvancedPanel from "./TranslationAdvancedPanel.vue";
+import AdvancedPanel from "./AdvancedPanel.vue";
+import SyncPanel from "./SyncPanel.vue";
+import type { SyncStatus } from "../../api/sync";
 import { fetchTranslationModels, testTranslationService, API_FORMATS, TARGET_LANGUAGE_CODES, canonicalApiFormat, canonicalLanguage, getTranslationDiagnosticStatus, setTranslationDiagnostic, type TranslationProbe } from "../../api/translation";
 import {
   countModifiedTranslationAgent,
@@ -274,6 +296,15 @@ const testResult = ref("");
 const testFailed = ref(false);
 /** 一级 / 二级视图：同一内容区切换，不叠加新模态；草稿始终是 form。 */
 const translationView = ref<"basic" | "advanced">("basic");
+/** 「高级」分组的一级（子项索引）/ 二级（同步）视图。 */
+const advancedView = ref<"menu" | "sync">("menu");
+/** 同步动作的会话级回执（成功摘要 / 错误文案 + 时间），不写入设置。 */
+const syncStatus = ref<SyncStatus | null>(null);
+/** 同步凭据草稿：留空 = 保持已保存值，显式清除 = 保存时删除（同翻译 API Key 配方）。 */
+const webdavPassword = ref("");
+const clearWebdavPassword = ref(false);
+const syncPassphrase = ref("");
+const clearSyncPassphrase = ref(false);
 /**
  * 本次运行有效的详细诊断开关：不落 settings.json，不参与「已修改 N 项」与恢复推荐值。
  * 真值以后端会话状态为准（打开设置时读取），切换失败回滚并显示错误。
@@ -414,6 +445,23 @@ function openAdvanced() {
   void nextTick(() => document.getElementById("translation-advanced-page")?.scrollIntoView({ block: "start" }));
 }
 function backToBasic() { translationView.value = "basic"; }
+/** 进入同步二级页：切视图后把内容区滚到页顶（返回时同样处理）。 */
+function openSync() {
+  advancedView.value = "sync";
+  void nextTick(() => document.getElementById("sync-page")?.scrollIntoView({ block: "start" }));
+}
+function backToAdvanced() {
+  advancedView.value = "menu";
+  void nextTick(() => document.querySelector<HTMLElement>(".settings-dialog-body")?.scrollTo({ top: 0 }));
+}
+/** 清空同步凭据草稿并回到索引页：保存成功 / 取消回滚后调用。 */
+function resetSyncDraft() {
+  webdavPassword.value = "";
+  clearWebdavPassword.value = false;
+  syncPassphrase.value = "";
+  clearSyncPassphrase.value = false;
+  advancedView.value = "menu";
+}
 /** 二级写回整数参数：未填（空串）记为 NaN，保存时由校验拦截并在原位提示。 */
 function setAgentInt(key: TranslationAgentIntKey, value: number) {
   (form.value as unknown as Record<string, number>)[key] = value;
@@ -554,6 +602,8 @@ watch(() => props.section, (section) => {
     translationView.value = "basic";
     advancedLocate.value = null;
   }
+  // 离开「高级」时回到子项索引，避免下次进入直接落在同步页。
+  if (section !== "advanced") advancedView.value = "menu";
 });
 watch(() => [form.value.theme, form.value.theme_color], applyPreview);
 onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180;
@@ -564,13 +614,18 @@ onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settings
   if (!form.value.illust_filename_template) form.value.illust_filename_template = "{title}_{pid}_p{page}";
   if (!form.value.novel_filename_template) form.value.novel_filename_template = "{title}_{nid}";
   if (!form.value.novel_series_filename_template) form.value.novel_series_filename_template = "{order}_{title}";
-  resetTranslationDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
+  // 旧响应 / 旧 mock 缺同步键时按默认值补齐：范围默认全选，地址与用户名为空。
+  if (typeof form.value.sync_scope_history !== "boolean") form.value.sync_scope_history = true;
+  if (typeof form.value.sync_scope_auth !== "boolean") form.value.sync_scope_auth = true;
+  if (!form.value.webdav_url) form.value.webdav_url = "";
+  if (!form.value.webdav_username) form.value.webdav_username = "";
+  resetTranslationDraft(); resetSyncDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
   // 诊断是会话级状态，不属于设置草稿：每次打开设置都以后端为准回显。
   if (props.active) void loadDiagnosticStatus(); });
 /** 设置弹窗每次打开时重新读取诊断开关（可能有别处改过，或应用重启后已复位）。 */
 watch(() => props.active, (active) => { if (active) void loadDiagnosticStatus(); });
 /** 有未保存改动：弹窗据此决定关闭前是否提示。 */
-function hasUnsaved() { return Boolean(translationKey.value) || clearTranslationKey.value || Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
+function hasUnsaved() { return Boolean(translationKey.value) || clearTranslationKey.value || Boolean(webdavPassword.value) || clearWebdavPassword.value || Boolean(syncPassphrase.value) || clearSyncPassphrase.value || Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
 /** 回滚到上次保存值（取消 / 确认放弃修改）。主题预览随表单回到已保存值。 */
 function reset() {
   form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
@@ -579,7 +634,7 @@ function reset() {
   maxWaitError.value = "";
   cacheMaxError.value = "";
   translationJsonError.value = "";
-  resetTranslationDraft(); savedSnapshot.value = snapshot();
+  resetTranslationDraft(); resetSyncDraft(); syncStatus.value = null; savedSnapshot.value = snapshot();
   if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
 }
 defineExpose({ save, reset, hasUnsaved });
@@ -651,9 +706,13 @@ async function save(): Promise<boolean> {
   }
   try {
     await settingsStore.saveSettings({ ...form.value, translation_extra: extra,
-      ...(clearTranslationKey.value ? { translation_api_key: "" } : translationKey.value.trim() ? { translation_api_key: translationKey.value } : {}) });
+      ...(clearTranslationKey.value ? { translation_api_key: "" } : translationKey.value.trim() ? { translation_api_key: translationKey.value } : {}) }, {
+      // 同步凭据：省略 = 保持已保存值，空串 = 删除
+      ...(clearWebdavPassword.value ? { webdavPassword: "" } : webdavPassword.value.trim() ? { webdavPassword: webdavPassword.value } : {}),
+      ...(clearSyncPassphrase.value ? { syncPassphrase: "" } : syncPassphrase.value.trim() ? { syncPassphrase: syncPassphrase.value } : {}),
+    });
     form.value = normalizeTranslationAgentSettings({ ...settingsStore.settings });
-    resetTranslationDraft(); savedSnapshot.value = snapshot(); notify(t("settings.saved")); return true;
+    resetTranslationDraft(); resetSyncDraft(); savedSnapshot.value = snapshot(); notify(t("settings.saved")); return true;
   } catch (err) {
     // 结构化载荷（ADR 0044）：按 field 停靠字段、按 code 取三语文案（缺失键回落后端兜底文案）；
     // 未映射 field / 非结构化错误（旧字符串路径）维持 Snackbar 兜底。
