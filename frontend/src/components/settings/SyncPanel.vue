@@ -86,7 +86,7 @@
     </fieldset>
 
     <div class="sync-actions" :aria-busy="Boolean(busy)">
-      <md-outlined-button :disabled="!canAct" @click="runTest">{{ t(busy === "test" ? "sync.actions.testing" : "sync.actions.test") }}</md-outlined-button>
+      <md-outlined-button :disabled="Boolean(busy)" @click="runTest">{{ t(busy === "test" ? "sync.actions.testing" : "sync.actions.test") }}</md-outlined-button>
       <md-outlined-button :disabled="!canAct" @click="runUpload">{{ t(busy === "upload" ? "sync.actions.uploading" : "sync.actions.upload") }}</md-outlined-button>
       <md-outlined-button :disabled="!canAct" @click="askRestore">{{ t(busy === "download" ? "sync.actions.downloading" : "sync.actions.download") }}</md-outlined-button>
     </div>
@@ -271,7 +271,7 @@ function handleActionError(error: unknown): void {
 }
 
 async function runTest(): Promise<void> {
-  if (!canAct.value) return;
+  if (busy.value) return;
   busy.value = "test";
   fieldErrors.value = {};
   try {
