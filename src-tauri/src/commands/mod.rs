@@ -19,6 +19,7 @@ pub mod maintenance_cmds;
 pub mod misc_cmds;
 pub mod saucenao_cmds;
 pub mod settings_cmds;
+pub mod sync_cmds;
 pub mod task_cmds;
 pub mod translation_cmds;
 pub mod ugoira_cmds;

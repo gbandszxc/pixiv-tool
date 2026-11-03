@@ -66,6 +66,11 @@ rig-memory = { version = "=0.45.0", default-features = false }
 http = "1"
 futures = "0.3"
 sha2 = "0.10"
+# WebDAV 同步包加密（src/sync/crypto.rs）：AES-256-GCM + PBKDF2-HMAC-SHA256。
+# 不启用默认 features（不引入 getrandom/std 等用不到的舱面）；aes 0.8 / hmac 0.12
+# 已在依赖树中（与 wreq 共用同一版本，避免双版本编译）。
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
+pbkdf2 = { version = "0.12.2", default-features = false, features = ["hmac"] }
 wreq-util = "=3.0.0-rc.14"
 # CDP WebSocket（ws://127.0.0.1 本机调试端口，无需 TLS feature）
 tokio-tungstenite = "0.28"

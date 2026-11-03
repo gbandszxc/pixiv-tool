@@ -1005,6 +1005,74 @@ impl Db {
         Ok((rows, total))
     }
 
+    /// 导出全部浏览历史（同步上传用；不分页，按访问时间倒序）。
+    pub fn export_browse_history(&self) -> Result<Vec<BrowseHistoryRow>, String> {
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT work_id, kind, title, author_id, author_name, cover,
+                        page_count, x_restrict, visited_at
+                 FROM browse_history
+                 ORDER BY visited_at DESC, work_id DESC",
+            )?;
+            let rows = stmt
+                .query_map([], browse_history_from_row)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// 同步导入批量 upsert（`ON CONFLICT(kind, work_id)`）：
+    /// 仅当导入行的 `visited_at` **严格晚于**本地行时才覆盖，否则整行保留。
+    /// 返回实际插入 + 更新的行数（被跳过的不计）。每 500 行一个事务，
+    /// 避免长时间持有数据库锁。
+    pub fn import_browse_history(&self, rows: &[BrowseHistoryRow]) -> Result<usize, String> {
+        const CHUNK_ROWS: usize = 500;
+        let mut written = 0usize;
+        for chunk in rows.chunks(CHUNK_ROWS) {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|_| "数据库连接锁中毒".to_string())?;
+            let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+            {
+                let mut stmt = tx
+                    .prepare(
+                        "INSERT INTO browse_history
+                         (work_id, kind, title, author_id, author_name, cover,
+                          page_count, x_restrict, visited_at)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                         ON CONFLICT(kind, work_id) DO UPDATE SET
+                             title = excluded.title,
+                             author_id = excluded.author_id,
+                             author_name = excluded.author_name,
+                             cover = excluded.cover,
+                             page_count = excluded.page_count,
+                             x_restrict = excluded.x_restrict,
+                             visited_at = excluded.visited_at
+                         WHERE excluded.visited_at > browse_history.visited_at",
+                    )
+                    .map_err(|e| e.to_string())?;
+                for row in chunk {
+                    written += stmt
+                        .execute(params![
+                            row.work_id,
+                            row.kind,
+                            row.title,
+                            row.author_id,
+                            row.author_name,
+                            row.cover,
+                            row.page_count,
+                            row.x_restrict,
+                            row.visited_at,
+                        ])
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+        Ok(written)
+    }
+
     /// 清空浏览历史，返回删除条数。
     pub fn clear_browse_history(&self) -> Result<usize, String> {
         self.with_conn(|conn| {

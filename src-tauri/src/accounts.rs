@@ -87,7 +87,8 @@ pub(crate) struct AccountsIndex {
 
 /// keyring 条目名（`u-<user_id>`）。user_id 只允许字母数字与 `-_`，
 /// 防御异常数据把条目名带出 service 命名空间（pixiv id 实为纯数字）。
-fn entry_name(user_id: &str) -> Option<String> {
+/// 同步导入（`sync::archive`）复用同一规则校验云端 user_id。
+pub(crate) fn entry_name(user_id: &str) -> Option<String> {
     let id = user_id.trim();
     let valid = !id.is_empty()
         && id.len() <= 64
@@ -250,6 +251,16 @@ impl AccountManager {
             return Err(format!("账号未登记: {user_id}"));
         }
         idx.active = Some(user_id.to_string());
+        self.save_index(&idx)
+    }
+
+    /// 同步导入用：直接设置 active 指针（`None` = 清空），不校验列表。
+    ///
+    /// 导入期间逐条 `upsert` 会把 active 指向最后写入的账号；导入结束由
+    /// `sync::service` 按「本地既有 active 优先」的规则用本方法还原或迁移。
+    pub(crate) fn set_active_pointer(&self, user_id: Option<String>) -> Result<(), String> {
+        let mut idx = self.load_index();
+        idx.active = user_id.filter(|id| !id.is_empty());
         self.save_index(&idx)
     }
 

@@ -132,6 +132,15 @@ pub struct Settings {
     pub translation_confirm_before_start: bool,
     /// 系统通知开关；默认开启。当前用于「等待确认术语与风格」提醒（ADR 0046）。
     pub notifications_enabled: bool,
+    /// WebDAV 同步目录地址（非敏感；默认空串 = 未配置）。凭据在 keyring，
+    /// service `pixiv-tool.sync`，见 `src/sync/keys.rs`。
+    pub webdav_url: String,
+    /// WebDAV 用户名（非敏感；默认空串 = 匿名）。
+    pub webdav_username: String,
+    /// 同步范围：浏览访问历史（默认 true）。
+    pub sync_scope_history: bool,
+    /// 同步范围：多账户登录态（默认 true）。
+    pub sync_scope_auth: bool,
 }
 
 impl Default for Settings {
@@ -187,6 +196,10 @@ impl Default for Settings {
             translation_agent_replay_unknown: false,
             translation_confirm_before_start: false,
             notifications_enabled: true,
+            webdav_url: String::new(),
+            webdav_username: String::new(),
+            sync_scope_history: true,
+            sync_scope_auth: true,
         }
     }
 }

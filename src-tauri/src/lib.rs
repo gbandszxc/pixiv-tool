@@ -27,6 +27,7 @@ pub mod platform;
 pub mod saucenao;
 pub mod settings;
 pub mod state;
+pub mod sync;
 pub mod translation;
 pub mod ugoira;
 mod translation_legacy;
@@ -357,6 +358,10 @@ pub fn run() {
             commands::settings_cmds::settings_get,
             commands::settings_cmds::settings_save,
             commands::settings_cmds::clear_logs,
+            // WebDAV 同步（加密包：浏览历史 + 多账户登录态）
+            commands::sync_cmds::sync_test_connection,
+            commands::sync_cmds::sync_upload,
+            commands::sync_cmds::sync_download,
             commands::maintenance_cmds::maintenance_info,
             commands::maintenance_cmds::read_logs,
             commands::maintenance_cmds::clear_cache,

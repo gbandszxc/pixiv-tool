@@ -25,7 +25,7 @@ use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 50] = [
+const WRITABLE_KEYS: [&str; 54] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
@@ -76,6 +76,10 @@ const WRITABLE_KEYS: [&str; 50] = [
     "novel_filename_template",
     "novel_series_filename_template",
     "saucenao_api_key",
+    "webdav_url",
+    "webdav_username",
+    "sync_scope_history",
+    "sync_scope_auth",
 ];
 
 /// 读取当前配置。
@@ -92,15 +96,36 @@ pub async fn settings_get(state: State<'_, AppState>) -> Result<Value, String> {
             result["translation_key_error"] = json!(error);
         }
     }
+    // WebDAV / 同步口令：只回布尔（原文不出后端）。凭据库不可用时按未配置降级，
+    // 不影响其余设置读取。
+    for (field, account) in [
+        (
+            "webdav_configured",
+            crate::sync::keys::ACCOUNT_WEBDAV_PASSWORD,
+        ),
+        (
+            "sync_passphrase_configured",
+            crate::sync::keys::ACCOUNT_SYNC_PASSPHRASE,
+        ),
+    ] {
+        let configured = crate::sync::keys::read(account)
+            .map(|value| value.is_some_and(|value| !value.is_empty()))
+            .unwrap_or(false);
+        result[field] = json!(configured);
+    }
     Ok(result)
 }
 
 /// 更新配置并持久化。settings 是 partial JSON（只更新出现的键）。
+/// `webdav_password` / `sync_passphrase` 是独立的凭据写入参数（不进
+/// settings.json）：省略 = 保持，空串 = 删除，与 `translation_api_key` 一致。
 /// 校验 / 保存失败返回 `SettingsError`（ADR 0044），前端按 field 停靠、按 code 取 i18n 文案。
 #[tauri::command]
 pub async fn settings_save(
     state: State<'_, AppState>,
     settings: Value,
+    webdav_password: Option<String>,
+    sync_passphrase: Option<String>,
 ) -> Result<Value, SettingsError> {
     let mut guard = state
         .settings
@@ -131,6 +156,22 @@ pub async fn settings_save(
             Ok(key)
         })
         .transpose()?;
+    // 同步口令先 trim 再校验长度（8~256）：空串 = 删除凭据。
+    let passphrase_patch = sync_passphrase
+        .as_deref()
+        .map(str::trim)
+        .map(|value| {
+            if value.is_empty() {
+                return Ok(value);
+            }
+            crate::sync::keys::validate_passphrase(value)
+                .map(|()| value)
+                .map_err(|error| SettingsError::new(error.code, error.field, error.message))
+        })
+        .transpose()?;
+    // WebDAV 密码不做 trim（空格可能是密码的一部分）；空串 = 删除凭据。
+    let webdav_password_patch = webdav_password.as_deref();
+
     // 先落盘再更新内存：磁盘失败时内存保持旧值，避免两处状态漂移
     updated.save(&state.paths.config_dir).map_err(|err| {
         SettingsError::new("save_failed", None, format!("保存设置失败: {err}"))
@@ -152,6 +193,35 @@ pub async fn settings_save(
                 error,
             ));
         }
+    }
+    for (account, field, value) in [
+        (
+            crate::sync::keys::ACCOUNT_SYNC_PASSPHRASE,
+            "sync_passphrase",
+            passphrase_patch,
+        ),
+        (
+            crate::sync::keys::ACCOUNT_WEBDAV_PASSWORD,
+            "webdav_password",
+            webdav_password_patch,
+        ),
+    ] {
+        let Some(value) = value else { continue };
+        if crate::sync::keys::write(account, value).is_ok() {
+            continue;
+        }
+        previous.save(&state.paths.config_dir).map_err(|_| {
+            SettingsError::new(
+                "sync_credential_save_failed",
+                None,
+                "凭据保存失败且配置回滚失败，请重新保存设置",
+            )
+        })?;
+        return Err(SettingsError::new(
+            "sync_credential_save_failed",
+            Some(field),
+            "同步凭据保存失败，请检查系统凭据存储",
+        ));
     }
     *guard = updated;
     Ok(json!({ "status": "success" }))
@@ -223,6 +293,15 @@ pub fn apply_settings_patch(
             Some("notifications_enabled"),
             "设置项 notifications_enabled 必须是布尔值",
         ));
+    }
+    for key in ["sync_scope_history", "sync_scope_auth"] {
+        if patch_obj.get(key).is_some_and(|value| !value.is_boolean()) {
+            return Err(SettingsError::new(
+                "settings_bool_invalid",
+                Some(key),
+                format!("设置项 {key} 必须是布尔值"),
+            ));
+        }
     }
     if let Some(value) = patch_obj.get("theme_color") {
         let color = value.as_str().ok_or_else(|| {
