@@ -830,7 +830,6 @@ export default {
     },
     testOk: "Connected · HTTP {status}",
     testOkNoStatus: "Connected",
-    testGateHint: "Test the connection first: upload and restore unlock once it succeeds.",
     backupLabel: "Cloud backup",
     backupExists: "Backup found",
     backupNone: "No backup yet",

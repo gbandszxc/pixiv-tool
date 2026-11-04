@@ -92,9 +92,8 @@
       <md-outlined-button :disabled="!canAct" @click="askRestore">{{ t(busy === "download" ? "sync.actions.downloading" : "sync.actions.download") }}</md-outlined-button>
     </div>
 
-    <!-- 未测试连接：说明为什么上传 / 恢复被禁用（此时不重复显示空闲状态行）；测试成功后换成备份回显卡 -->
-    <p v-if="!connection" class="sync-note">{{ t("sync.testGateHint") }}</p>
-    <div v-else class="sync-backup" :class="{ 'is-empty': !connection.has }" role="status">
+    <!-- 未测试连接时上传 / 恢复禁用即可，不另设提示行；测试成功后显示备份回显卡 -->
+    <div v-if="connection" class="sync-backup" :class="{ 'is-empty': !connection.has }" role="status">
       <svg v-if="connection.has" class="sync-backup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 15-5.5 5.5L9 18" /><path d="M5.516 16.07A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 3.501 7.327" /></svg>
       <svg v-else class="sync-backup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></svg>
       <span class="sync-backup-text">
@@ -463,6 +462,9 @@ onBeforeUnmount(() => { clearInterval(ticker); });
 /* 暂无备份：图标与值都回到中性色，不渲染成「错误」 */
 .sync-backup.is-empty .sync-backup-icon,
 .sync-backup.is-empty .sync-backup-value { color: var(--ink-muted); }
+/* 确认弹窗定宽：原生 dialog 为 fit-content，CJK 长句会整句撑开；
+ * 覆盖 / 恢复两枚弹窗统一宽度，正文自然换行（配方对齐 .m3-dialog 的 min 宽度） */
+.sync-panel .m3-dialog { width: min(420px, 90vw); }
 /* 状态行：动作回执，长错误文本可换行不截断 */
 .sync-status { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .sync-status.is-error { color: var(--md-sys-color-error); }

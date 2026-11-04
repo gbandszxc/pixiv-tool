@@ -831,7 +831,6 @@ export default {
     },
     testOk: "连接正常 · HTTP {status}",
     testOkNoStatus: "连接正常",
-    testGateHint: "先「测试连接」：连接成功后才能上传到云端或从云端恢复。",
     backupLabel: "云端备份",
     backupExists: "已有备份",
     backupNone: "暂无备份",

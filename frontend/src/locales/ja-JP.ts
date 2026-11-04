@@ -793,7 +793,6 @@ export default {
     },
     testOk: "接続正常 · HTTP {status}",
     testOkNoStatus: "接続正常",
-    testGateHint: "先に「接続テスト」を実行してください。成功後にアップロード・復元ができます。",
     backupLabel: "クラウドバックアップ",
     backupExists: "バックアップあり",
     backupNone: "バックアップなし",
