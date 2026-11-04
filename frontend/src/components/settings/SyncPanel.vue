@@ -88,7 +88,7 @@
     <div class="sync-actions" :aria-busy="Boolean(busy)">
       <!-- 测试连接是主动作：连通并探测云端备份后，上传 / 恢复才可用（ADR 0049） -->
       <md-filled-button :disabled="Boolean(busy)" @click="runTest">{{ t(busy === "test" ? "sync.actions.testing" : "sync.actions.test") }}</md-filled-button>
-      <md-outlined-button :disabled="!canAct" @click="runUpload">{{ t(busy === "upload" ? "sync.actions.uploading" : "sync.actions.upload") }}</md-outlined-button>
+      <md-outlined-button :disabled="!canAct" @click="askUpload">{{ t(busy === "upload" ? "sync.actions.uploading" : "sync.actions.upload") }}</md-outlined-button>
       <md-outlined-button :disabled="!canAct" @click="askRestore">{{ t(busy === "download" ? "sync.actions.downloading" : "sync.actions.download") }}</md-outlined-button>
     </div>
 
@@ -114,6 +114,16 @@
         <md-filled-button @click="confirmRestore">{{ t("sync.restoreAccept") }}</md-filled-button>
       </div>
     </dialog>
+
+    <!-- 覆盖云端备份：已有备份时上传前二次确认，文案写明整体覆盖与不可找回 -->
+    <dialog ref="uploadDialog" class="m3-dialog" aria-labelledby="sync-upload-title">
+      <h2 id="sync-upload-title">{{ t("sync.uploadTitle") }}</h2>
+      <p>{{ uploadConfirmText }}</p>
+      <div class="m3-row dialog-actions">
+        <md-text-button @click="uploadDialog?.close()">{{ t("common.cancel") }}</md-text-button>
+        <md-filled-button @click="confirmUpload">{{ t("sync.uploadAccept") }}</md-filled-button>
+      </div>
+    </dialog>
   </div>
 </template>
 
@@ -126,6 +136,8 @@
  * 动作直接使用当前草稿值（config 覆盖），不要求先保存；动作期禁用全部按钮并显示进行中文案。
  * 上传 / 恢复在测试连接成功前禁用；测试成功后由父级持有云端备份回显（会话级），
  * 地址 / 用户名 / WebDAV 密码草稿一旦变化即失效，需重新测试（ADR 0049）。
+ * 云端已有备份时上传先弹原生 dialog 二次确认覆盖风险，暂无备份直接上传；
+ * 「从云端恢复」同样二次确认。
  * 恢复成功且导入了历史时广播 HISTORY_RESTORED_EVENT，浏览历史页据此回到第 1 页重拉。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -172,6 +184,7 @@ const authStore = useAuthStore();
 const busy = ref<"test" | "upload" | "download" | null>(null);
 const fieldErrors = ref<Record<string, string>>({});
 const restoreDialog = ref<HTMLDialogElement | null>(null);
+const uploadDialog = ref<HTMLDialogElement | null>(null);
 /** 相对时间每分钟刷新一次；不做秒级跳动，避免状态行自己吸引注意力。 */
 const now = ref(Date.now());
 let ticker: ReturnType<typeof setInterval> | undefined;
@@ -342,6 +355,20 @@ async function runUpload(): Promise<void> {
     busy.value = null;
   }
 }
+
+/** 上传入口：云端已有备份时先声明覆盖风险并二次确认，暂无备份直接上传（ADR 0049）。 */
+function askUpload(): void {
+  if (!canAct.value) return;
+  if (!props.connection?.has) { void runUpload(); return; }
+  if (!uploadDialog.value?.open) uploadDialog.value?.showModal();
+}
+function confirmUpload(): void {
+  uploadDialog.value?.close();
+  void runUpload();
+}
+const uploadConfirmText = computed(() => (backupTimeText.value
+  ? t("sync.uploadConfirmWithTime", { time: backupTimeText.value })
+  : t("sync.uploadConfirmNoTime")));
 
 async function askRestore(): Promise<void> {
   if (!canAct.value) return;
