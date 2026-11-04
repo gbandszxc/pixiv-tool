@@ -49,14 +49,29 @@ pub struct DownloadSummary {
     pub auth_changed: bool,
 }
 
-/// 测试连接：只解析地址与（可选）Basic Auth，不要求同步口令。
+/// 测试连接结果：MKCOL 状态码 + 云端备份探测。
+#[derive(Debug, Clone)]
+pub struct TestConnectionOutcome {
+    /// MKCOL 实际返回的 HTTP 状态码。
+    pub http_status: u16,
+    /// 云端同步文件的 `Last-Modified` 原文；无备份（404）→ `None`。
+    pub backup_time: Option<String>,
+}
+
+/// 测试连接：建目录（已存在也算通）后探测远端是否有同步包，不读不写包内容，
+/// 不要求同步口令。
 pub async fn test_connection(
     state: &AppState,
     over: &SyncConfigOverride,
-) -> Result<u16, SyncError> {
+) -> Result<TestConnectionOutcome, SyncError> {
     let settings = state.settings_snapshot();
     let endpoint = resolve_endpoint(&settings, over, keys::read)?;
-    webdav::test_connection(&endpoint).await
+    let http_status = webdav::test_connection(&endpoint).await?;
+    let backup_time = webdav::probe_backup(&endpoint).await?;
+    Ok(TestConnectionOutcome {
+        http_status,
+        backup_time,
+    })
 }
 
 /// 导出 + 加密 + 上传。
@@ -156,7 +171,8 @@ fn resolve_endpoint(
     webdav::WebDavEndpoint::new(&url, &username, password.as_deref().unwrap_or(""))
 }
 
-/// 解析同步口令：`over` 优先，其次 keyring；缺省 / 长度非法分别报错。
+/// 解析同步口令：`over` 优先，其次 keyring；trim 后为空（未配置或显式清除）=
+/// 使用内置默认口令派生密钥（ADR 0049）。不做长度限制。
 fn resolve_passphrase(
     over: &SyncConfigOverride,
     read_credential: impl Fn(&str) -> Result<Option<String>, String>,
@@ -164,13 +180,11 @@ fn resolve_passphrase(
     let value = match &over.sync_passphrase {
         Some(value) => Some(value.clone()),
         None => read_credential(keys::ACCOUNT_SYNC_PASSPHRASE).map_err(SyncError::internal)?,
-    }
-    .filter(|value| !value.trim().is_empty());
-    let Some(passphrase) = value else {
-        return Err(SyncError::passphrase_missing());
     };
-    let passphrase = passphrase.trim().to_string();
-    keys::validate_passphrase(&passphrase)?;
+    let passphrase = value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| keys::DEFAULT_PASSPHRASE.to_string());
     Ok(passphrase)
 }
 
@@ -344,6 +358,7 @@ mod tests {
 
     #[test]
     fn passphrase_resolution() {
+        // 草稿覆盖优先；不做长度限制（任意非空长度都可用）
         let over = SyncConfigOverride {
             sync_passphrase: Some("12345678".into()),
             ..Default::default()
@@ -352,29 +367,25 @@ mod tests {
             resolve_passphrase(&over, no_credentials).unwrap(),
             "12345678"
         );
+        let over = SyncConfigOverride {
+            sync_passphrase: Some("短".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_passphrase(&over, no_credentials).unwrap(), "短");
 
-        for (over, code) in [
-            (SyncConfigOverride::default(), "sync_passphrase_missing"),
-            (
-                SyncConfigOverride {
-                    sync_passphrase: Some("short".into()),
-                    ..Default::default()
-                },
-                "sync_passphrase_invalid",
-            ),
-            (
-                SyncConfigOverride {
-                    sync_passphrase: Some(String::new()),
-                    ..Default::default()
-                },
-                "sync_passphrase_missing",
-            ),
-        ] {
-            assert_eq!(
-                resolve_passphrase(&over, no_credentials).unwrap_err().code,
-                code
-            );
-        }
+        // 未设置 / 显式清除（None 或空串）→ 内置默认口令（ADR 0049）
+        assert_eq!(
+            resolve_passphrase(&SyncConfigOverride::default(), no_credentials).unwrap(),
+            keys::DEFAULT_PASSPHRASE
+        );
+        let over = SyncConfigOverride {
+            sync_passphrase: Some("   ".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_passphrase(&over, no_credentials).unwrap(),
+            keys::DEFAULT_PASSPHRASE
+        );
 
         // 未覆盖时读 keyring
         let read = |account: &str| {

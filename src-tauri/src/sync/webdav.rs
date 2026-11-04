@@ -1,4 +1,4 @@
-//! WebDAV 最小客户端：MKCOL 建目录 + PUT 上传 + GET 下载。
+//! WebDAV 最小客户端：MKCOL 建目录 + PUT 上传 + GET 下载 + HEAD 备份探测。
 //!
 //! 独立 wreq client，**不使用指纹伪装**（`.emulation()` 会注入 Chrome 头，
 //! 对第三方 WebDAV 服务没有意义）：
@@ -198,6 +198,85 @@ pub async fn test_connection(endpoint: &WebDavEndpoint) -> Result<u16, SyncError
     match first {
         Err(error) if error.code == "sync_network_error" => {
             mkcol_once(&build_client(true)?, endpoint).await
+        }
+        other => other,
+    }
+}
+
+/// 从响应头提取 `Last-Modified` 原文（HTTP 日期，ASCII；前端可用 `Date` 解析）。
+fn last_modified(response: &wreq::Response) -> Option<String> {
+    response
+        .headers()
+        .get(wreq::header::LAST_MODIFIED)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+/// HEAD 单次尝试：2xx → `Some(Last-Modified)`，404 → 无备份，其余按状态码定性。
+async fn head_once(
+    client: &wreq::Client,
+    endpoint: &WebDavEndpoint,
+) -> Result<Option<String>, SyncError> {
+    let method = Method::from_bytes(b"HEAD").expect("HEAD 是合法 HTTP 方法");
+    let response = endpoint
+        .authorize(client.request(method, &endpoint.file_url))
+        .send()
+        .await
+        .map_err(map_send_error)?;
+    let status = response.status().as_u16();
+    if (200..300).contains(&status) {
+        return Ok(last_modified(&response));
+    }
+    match status {
+        404 => Ok(None),
+        401 | 403 => Err(SyncError::auth_failed()),
+        other => Err(SyncError::http_status(other)),
+    }
+}
+
+/// GET 兜底（只取响应头，不读 body——丢弃响应即中断传输）：
+/// 极少数 WebDAV 服务不支持 HEAD（405 / 501）时用。
+async fn get_headers_once(
+    client: &wreq::Client,
+    endpoint: &WebDavEndpoint,
+) -> Result<Option<String>, SyncError> {
+    let response = endpoint
+        .authorize(client.get(&endpoint.file_url))
+        .send()
+        .await
+        .map_err(map_send_error)?;
+    let status = response.status().as_u16();
+    if (200..300).contains(&status) {
+        return Ok(last_modified(&response));
+    }
+    match status {
+        404 => Ok(None),
+        401 | 403 => Err(SyncError::auth_failed()),
+        other => Err(SyncError::http_status(other)),
+    }
+}
+
+/// 探测远端是否有同步包（单客户端尝试）：HEAD 优先，HTTP 层报错回退 GET 取头。
+async fn probe_with(
+    client: &wreq::Client,
+    endpoint: &WebDavEndpoint,
+) -> Result<Option<String>, SyncError> {
+    match head_once(client, endpoint).await {
+        Ok(found) => Ok(found),
+        Err(error) if error.code == "sync_http_error" => {
+            get_headers_once(client, endpoint).await
+        }
+        other => other,
+    }
+}
+
+/// 探测远端是否有同步包：2xx → `Some(Last-Modified)`，404 → `None`（无备份），
+/// 其余错误（认证 / 状态码 / 网络）原样上抛，由调用方决定展示口径。
+pub async fn probe_backup(endpoint: &WebDavEndpoint) -> Result<Option<String>, SyncError> {
+    let first = probe_with(&build_client(false)?, endpoint).await;
+    match first {
+        Err(error) if error.code == "sync_network_error" => {
+            probe_with(&build_client(true)?, endpoint).await
         }
         other => other,
     }
@@ -416,6 +495,87 @@ mod tests {
         let client = build_client(true).unwrap();
         let error = get_once(&client, &endpoint).await.unwrap_err();
         assert_eq!(error.code, "sync_oversize");
+        server.await.unwrap();
+    }
+
+    /// 备份探测：HEAD 200 带 Last-Modified → `Some`；404 → `None`；
+    /// HEAD 405（不支持）→ 回退 GET 取响应头。
+    #[tokio::test]
+    async fn probe_backup_states() {
+        let endpoint_base = |addr: std::net::SocketAddr| {
+            WebDavEndpoint::new(&format!("http://{addr}/dav"), "", "").unwrap()
+        };
+        let last_modified_line = "Last-Modified: Tue, 03 Nov 2026 10:00:00 GMT\r\n";
+
+        // ① HEAD 200 → Some(Last-Modified 原文)
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let (head, _) = read_request(&mut socket).await;
+            assert!(
+                head.starts_with("HEAD /dav/pixiv-tool-sync.bin HTTP/1.1\r\n"),
+                "{head}"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n{last_modified_line}Connection: close\r\n\r\n"
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+            let _ = socket.shutdown().await;
+        });
+        let endpoint = endpoint_base(addr);
+        let client = build_client(true).unwrap();
+        let found = probe_with(&client, &endpoint).await.unwrap();
+        assert_eq!(found.as_deref(), Some("Tue, 03 Nov 2026 10:00:00 GMT"));
+        server.await.unwrap();
+
+        // ② HEAD 404 → None（无备份）
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut socket).await;
+            socket
+                .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            socket.flush().await.unwrap();
+            let _ = socket.shutdown().await;
+        });
+        let endpoint = endpoint_base(addr);
+        assert_eq!(probe_with(&client, &endpoint).await.unwrap(), None);
+        server.await.unwrap();
+
+        // ③ HEAD 405 → 回退 GET（只取头，不读 body）
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _ = read_request(&mut socket).await;
+            socket
+                .write_all(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            socket.flush().await.unwrap();
+            let _ = socket.shutdown().await;
+
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let (head, _) = read_request(&mut socket).await;
+            assert!(
+                head.starts_with("GET /dav/pixiv-tool-sync.bin HTTP/1.1\r\n"),
+                "{head}"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n{last_modified_line}Connection: close\r\n\r\nhello"
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+            let _ = socket.shutdown().await;
+        });
+        let endpoint = endpoint_base(addr);
+        let found = probe_with(&client, &endpoint).await.unwrap();
+        assert_eq!(found.as_deref(), Some("Tue, 03 Nov 2026 10:00:00 GMT"));
         server.await.unwrap();
     }
 

@@ -5,9 +5,8 @@
 //! - `sync-passphrase`：同步口令（AES-256-GCM PBKDF2）
 //!
 //! 绝不落 settings.json / 数据库 / 日志；[`read`] / [`write`] 的错误文案也不带原文。
-//! 语义与翻译 API Key 一致：写入空串 = 删除条目。
-
-use super::SyncError;
+//! 语义与翻译 API Key 一致：写入空串 = 删除条目。同步口令不再做长度校验、允许
+//! 未配置（此时用 [`DEFAULT_PASSPHRASE`] 派生密钥，ADR 0049）。
 
 /// keyring service（与 cookies / 翻译凭据的 service 区分）。
 pub const SERVICE: &str = "pixiv-tool.sync";
@@ -16,10 +15,11 @@ pub const ACCOUNT_WEBDAV_PASSWORD: &str = "webdav-password";
 /// 同步口令条目名。
 pub const ACCOUNT_SYNC_PASSPHRASE: &str = "sync-passphrase";
 
-/// 同步口令长度下限（字符）。
-pub const PASSPHRASE_MIN_CHARS: usize = 8;
-/// 同步口令长度上限（字符）。
-pub const PASSPHRASE_MAX_CHARS: usize = 256;
+/// 内置默认同步口令：未设置自定义口令时用它派生加密密钥（ADR 0049）。
+///
+/// 保护强度是**混淆级**：可防止 WebDAV 托管方与偶然拿到文件的人直接看到明文，
+/// 但不对抗拥有应用二进制（可提取此常量）的人；需要更强保护应设置自定义口令。
+pub const DEFAULT_PASSPHRASE: &str = "pixiv-tool:default-sync-passphrase:v1";
 
 fn entry(account: &str) -> Result<keyring::Entry, String> {
     keyring::Entry::new(SERVICE, account).map_err(|_| "无法访问同步凭据存储".to_string())
@@ -49,35 +49,14 @@ pub fn write(account: &str, value: &str) -> Result<(), String> {
     }
 }
 
-/// 同步口令校验：长度（字符数）必须在 [`PASSPHRASE_MIN_CHARS`]..=[`PASSPHRASE_MAX_CHARS`]。
-/// 口令不做 trim（前后空格也是口令的一部分）。
-pub fn validate_passphrase(value: &str) -> Result<(), SyncError> {
-    let len = value.chars().count();
-    if (PASSPHRASE_MIN_CHARS..=PASSPHRASE_MAX_CHARS).contains(&len) {
-        Ok(())
-    } else {
-        Err(SyncError::passphrase_invalid())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn passphrase_length_bounds() {
-        assert!(validate_passphrase("12345678").is_ok());
-        assert!(validate_passphrase(&"x".repeat(PASSPHRASE_MAX_CHARS)).is_ok());
-        for value in ["", "1234567", &"x".repeat(PASSPHRASE_MAX_CHARS + 1)] {
-            let error = validate_passphrase(value).unwrap_err();
-            assert_eq!(error.code, "sync_passphrase_invalid");
-            assert_eq!(error.field, Some("sync_passphrase"));
-            // 不得回显口令原文（空串不参与包含判断）
-            if !value.is_empty() {
-                assert!(!error.message.contains(value));
-            }
-        }
-        // 字符数而非字节数（中文口令按字符计）
-        assert!(validate_passphrase("同步口令测试一二").is_ok());
+    fn default_passphrase_is_usable_key_input() {
+        // 内置默认口令非空且无控制字符，可安全进入 PBKDF2
+        assert!(!DEFAULT_PASSPHRASE.is_empty());
+        assert!(!DEFAULT_PASSPHRASE.chars().any(char::is_control));
     }
 }

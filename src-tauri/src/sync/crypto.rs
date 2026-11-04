@@ -93,16 +93,18 @@ fn encrypt_with_iterations(
 
 /// 加密载荷：每次调用生成新的随机 salt / nonce。
 pub fn encrypt(passphrase: &str, plaintext: &[u8]) -> Result<Vec<u8>, SyncError> {
+    // 调用方（service）保证口令非空：空 = 内置默认口令，在解析层替换（ADR 0049）。
     if passphrase.is_empty() {
-        return Err(SyncError::passphrase_missing());
+        return Err(SyncError::internal("加密收到空同步口令"));
     }
     encrypt_with_iterations(passphrase, plaintext, ITERATIONS)
 }
 
 /// 解密载荷。任何异常（魔数 / 参数 / 截断 / 认证失败）统一为 `sync_decrypt_failed`。
 pub fn decrypt(passphrase: &str, data: &[u8]) -> Result<Vec<u8>, SyncError> {
+    // 同 encrypt：空口令是调用方不变量破坏，非用户可修复错误。
     if passphrase.is_empty() {
-        return Err(SyncError::passphrase_missing());
+        return Err(SyncError::internal("解密收到空同步口令"));
     }
     // 头部 + 至少一个 tag 才算一个完整包；不足一律按解密失败处理（不回显长度）。
     if data.len() < HEADER_LEN + TAG_LEN {
@@ -241,13 +243,11 @@ mod tests {
 
     #[test]
     fn empty_passphrase_is_rejected() {
-        assert_eq!(
-            encrypt("", b"x").unwrap_err().code,
-            "sync_passphrase_missing"
-        );
+        // 空口令在 service 层已被替换为内置默认口令；到达这里即调用方不变量破坏
+        assert_eq!(encrypt("", b"x").unwrap_err().code, "sync_internal");
         assert_eq!(
             decrypt("", b"0123456789").unwrap_err().code,
-            "sync_passphrase_missing"
+            "sync_internal"
         );
     }
 }

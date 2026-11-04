@@ -22,6 +22,16 @@ export interface SyncConfig {
 export interface SyncTestResult {
   status: string;
   http_status?: number | null;
+  /** 云端是否已有同步包（404 = 无备份；探测失败整体走 Err）。 */
+  has_backup?: boolean;
+  /** 备份时间：远端 Last-Modified 原文（HTTP 日期，可用 `Date` 解析）。 */
+  backup_time?: string | null;
+}
+
+/** 测试连接成功后的云端备份回显（会话级；`time` 为可被 `Date` 解析的字符串）。 */
+export interface SyncBackupInfo {
+  has: boolean;
+  time: string | null;
 }
 
 /** sync_upload：bytes 为上传负载字节数。 */

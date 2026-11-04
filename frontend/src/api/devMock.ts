@@ -144,9 +144,20 @@ function assertSyncConfig(config?: SyncConfig) {
   return { url, username, passphrase };
 }
 
+/** 内存版云端备份状态：地址含 "empty" 时模拟空目录，上传后置为有备份。 */
+let mockCloudBackup: { has: boolean; time: string | null } = { has: true, time: "Mon, 02 Nov 2026 08:30:00 GMT" };
+
 export function mockSyncTestConnection(config?: SyncConfig): SyncTestResult {
-  assertSyncConfig(config);
-  return { status: "ok", http_status: 207 };
+  const { url } = assertSyncConfig(config);
+  mockCloudBackup = url.toLowerCase().includes("empty")
+    ? { has: false, time: null }
+    : { has: true, time: mockCloudBackup.time ?? "Mon, 02 Nov 2026 08:30:00 GMT" };
+  return {
+    status: "ok",
+    http_status: 207,
+    has_backup: mockCloudBackup.has,
+    backup_time: mockCloudBackup.time,
+  };
 }
 
 function assertScopes(scopes: SyncScope[]) {
@@ -155,9 +166,9 @@ function assertScopes(scopes: SyncScope[]) {
 
 export function mockSyncUpload(scopes: SyncScope[], config?: SyncConfig): SyncUploadResult {
   assertScopes(scopes);
-  const { passphrase } = assertSyncConfig(config);
-  if (!passphrase) syncError("sync_passphrase_missing", "sync_passphrase", "请先填写同步密码");
-  if (passphrase.length < 8) syncError("sync_passphrase_invalid", "sync_passphrase", "同步密码长度必须是 8~256 个字符");
+  assertSyncConfig(config);
+  // 同步密码可选：留空 = 内置默认密钥加密（ADR 0049）；上传即产生云端备份
+  mockCloudBackup = { has: true, time: new Date().toISOString() };
   return {
     exported_at: new Date().toISOString(),
     bytes: 18432,
@@ -168,10 +179,10 @@ export function mockSyncUpload(scopes: SyncScope[], config?: SyncConfig): SyncUp
 
 export function mockSyncDownload(scopes: SyncScope[], config?: SyncConfig): SyncDownloadResult {
   assertScopes(scopes);
-  const { passphrase } = assertSyncConfig(config);
-  if (!passphrase) syncError("sync_passphrase_missing", "sync_passphrase", "请先填写同步密码");
+  assertSyncConfig(config);
+  if (!mockCloudBackup.has) syncError("sync_not_found", null, "云端没有找到同步文件");
   return {
-    exported_at: new Date().toISOString(),
+    exported_at: mockCloudBackup.time ?? new Date().toISOString(),
     history_imported: scopes.includes("history") ? 128 : 0,
     accounts_imported: scopes.includes("auth") ? 2 : 0,
     active_changed: false,

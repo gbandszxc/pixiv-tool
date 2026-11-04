@@ -156,19 +156,8 @@ pub async fn settings_save(
             Ok(key)
         })
         .transpose()?;
-    // 同步口令先 trim 再校验长度（8~256）：空串 = 删除凭据。
-    let passphrase_patch = sync_passphrase
-        .as_deref()
-        .map(str::trim)
-        .map(|value| {
-            if value.is_empty() {
-                return Ok(value);
-            }
-            crate::sync::keys::validate_passphrase(value)
-                .map(|()| value)
-                .map_err(|error| SettingsError::new(error.code, error.field, error.message))
-        })
-        .transpose()?;
+    // 同步口令只 trim，不做长度校验（ADR 0049）：空串 = 删除凭据。
+    let passphrase_patch = sync_passphrase.as_deref().map(str::trim);
     // WebDAV 密码不做 trim（空格可能是密码的一部分）；空串 = 删除凭据。
     let webdav_password_patch = webdav_password.as_deref();
 

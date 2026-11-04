@@ -86,12 +86,24 @@
     </fieldset>
 
     <div class="sync-actions" :aria-busy="Boolean(busy)">
-      <md-outlined-button :disabled="Boolean(busy)" @click="runTest">{{ t(busy === "test" ? "sync.actions.testing" : "sync.actions.test") }}</md-outlined-button>
+      <!-- 测试连接是主动作：连通并探测云端备份后，上传 / 恢复才可用（ADR 0049） -->
+      <md-filled-button :disabled="Boolean(busy)" @click="runTest">{{ t(busy === "test" ? "sync.actions.testing" : "sync.actions.test") }}</md-filled-button>
       <md-outlined-button :disabled="!canAct" @click="runUpload">{{ t(busy === "upload" ? "sync.actions.uploading" : "sync.actions.upload") }}</md-outlined-button>
       <md-outlined-button :disabled="!canAct" @click="askRestore">{{ t(busy === "download" ? "sync.actions.downloading" : "sync.actions.download") }}</md-outlined-button>
     </div>
 
-    <p class="sync-status" :class="{ 'is-error': statusKind === 'error' }" :role="statusKind === 'error' ? 'alert' : 'status'">{{ statusText }}</p>
+    <!-- 未测试连接：说明为什么上传 / 恢复被禁用（此时不重复显示空闲状态行）；测试成功后换成备份回显卡 -->
+    <p v-if="!connection" class="sync-note">{{ t("sync.testGateHint") }}</p>
+    <div v-else class="sync-backup" :class="{ 'is-empty': !connection.has }" role="status">
+      <svg v-if="connection.has" class="sync-backup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 15-5.5 5.5L9 18" /><path d="M5.516 16.07A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 3.501 7.327" /></svg>
+      <svg v-else class="sync-backup-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z" /></svg>
+      <span class="sync-backup-text">
+        <span class="sync-backup-label">{{ t("sync.backupLabel") }}</span>
+        <span class="sync-backup-value">{{ connection.has ? t("sync.backupExists") : t("sync.backupNone") }}<template v-if="connection.has && backupTimeText"> · {{ backupTimeText }}</template><template v-else-if="!connection.has"> · {{ t("sync.backupNoneHint") }}</template></span>
+      </span>
+    </div>
+
+    <p v-if="status" class="sync-status" :class="{ 'is-error': statusKind === 'error' }" :role="statusKind === 'error' ? 'alert' : 'status'">{{ statusText }}</p>
 
     <!-- 从云端恢复：二次确认（原生 dialog + 既有 .m3-dialog 配方），文案写明合并与覆盖范围 -->
     <dialog ref="restoreDialog" class="m3-dialog" aria-labelledby="sync-restore-title">
@@ -112,9 +124,11 @@
  * 与一级共用同一份设置草稿（`values` 由 SettingsPanel 持有，这里直接改非敏感键），
  * 凭据草稿由父级持有并通过 v-model 事件回写，底部「保存」负责持久化。
  * 动作直接使用当前草稿值（config 覆盖），不要求先保存；动作期禁用全部按钮并显示进行中文案。
+ * 上传 / 恢复在测试连接成功前禁用；测试成功后由父级持有云端备份回显（会话级），
+ * 地址 / 用户名 / WebDAV 密码草稿一旦变化即失效，需重新测试（ADR 0049）。
  * 恢复成功且导入了历史时广播 HISTORY_RESTORED_EVENT，浏览历史页据此回到第 1 页重拉。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import HelpTooltip from "../common/HelpTooltip.vue";
 import { useAuthStore } from "../../stores/auth";
@@ -124,6 +138,7 @@ import {
   syncDownload,
   syncTestConnection,
   syncUpload,
+  type SyncBackupInfo,
   type SyncConfig,
   type SyncScope,
   type SyncStatus,
@@ -134,6 +149,8 @@ const props = defineProps<{
   values: Settings;
   /** 会话级动作回执；空 = 尚未同步。 */
   status: SyncStatus | null;
+  /** 测试连接成功后的云端备份回显；null = 本次会话尚未测试成功（上传 / 恢复禁用）。 */
+  connection: SyncBackupInfo | null;
   webdavPassword: string;
   clearWebdavPassword: boolean;
   syncPassphrase: string;
@@ -147,6 +164,7 @@ const emit = defineEmits<{
   (event: "update:syncPassphrase", value: string): void;
   (event: "update:clearSyncPassphrase", value: boolean): void;
   (event: "update:status", value: SyncStatus): void;
+  (event: "update:connection", value: SyncBackupInfo | null): void;
 }>();
 
 const { t, te, locale } = useI18n();
@@ -166,7 +184,7 @@ const scopes = computed<SyncScope[]>(() => [
   ...(scopeHistory.value ? ["history" as const] : []),
   ...(scopeAuth.value ? ["auth" as const] : []),
 ]);
-const canAct = computed(() => !busy.value && hasScope.value);
+const canAct = computed(() => !busy.value && hasScope.value && props.connection !== null);
 
 const scopeSummary = computed(() => {
   if (!hasScope.value) return t("sync.scopeNone");
@@ -175,8 +193,9 @@ const scopeSummary = computed(() => {
 });
 
 const statusKind = computed(() => props.status?.kind ?? "idle");
+/** 无回执时不占位：未测试时门控提示行已经说明状态，空闲文案反而多一层噪音。 */
 const statusText = computed(() => {
-  if (!props.status) return t("sync.status.idle");
+  if (!props.status) return "";
   return `${props.status.text} · ${relativeTime(props.status.at)}`;
 });
 
@@ -198,6 +217,22 @@ function formatBytes(bytes: number): string {
 function formatCount(value: number): string {
   return new Intl.NumberFormat(locale.value).format(value);
 }
+/** 备份时间（远端 Last-Modified / 上传完成时刻）按当前语言格式化；不可解析返回空串。 */
+function formatDateTime(value: string): string {
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return "";
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: "medium", timeStyle: "short" }).format(at);
+}
+const backupTimeText = computed(() => (props.connection?.time ? formatDateTime(props.connection.time) : ""));
+
+/** 连接草稿（地址 / 用户名 / WebDAV 密码）一旦变化，测试结果即失效：需重新测试。
+ * 同步口令不影响连通性，不在此列（改动后上传 / 恢复会按新口令走，错误就地呈现）。 */
+watch(
+  () => [props.values.webdav_url, props.values.webdav_username, props.webdavPassword, props.clearWebdavPassword],
+  () => {
+    if (props.connection) emit("update:connection", null);
+  },
+);
 
 function clearFieldError(field: string): void {
   if (!fieldErrors.value[field]) return;
@@ -276,6 +311,8 @@ async function runTest(): Promise<void> {
   fieldErrors.value = {};
   try {
     const result = await syncTestConnection(buildConfig());
+    // 测试成功即解锁上传 / 恢复，并回显云端备份状态（时间取远端 Last-Modified）
+    emit("update:connection", { has: result.has_backup === true, time: result.backup_time ?? null });
     setStatus("success", result.http_status != null
       ? t("sync.testOk", { status: result.http_status })
       : t("sync.testOkNoStatus"));
@@ -292,6 +329,8 @@ async function runUpload(): Promise<void> {
   fieldErrors.value = {};
   try {
     const result = await syncUpload(scopes.value, buildConfig());
+    // 上传成功 = 云端产生了新备份：回显卡同步刷新（时间取本机完成时刻）
+    emit("update:connection", { has: true, time: new Date().toISOString() });
     setStatus("success", t("sync.uploadDone", {
       size: formatBytes(result.bytes),
       history: formatCount(result.history_count),
@@ -380,8 +419,23 @@ onBeforeUnmount(() => { clearInterval(ticker); });
 .sync-scope-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-xl); }
 .sync-note { margin: var(--space-xs) 0 0; color: var(--ink-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .sync-note.is-error { color: var(--md-sys-color-error); }
-/* 动作行：可换行，不撑成整行宽胶囊；进行中/禁用由 Material 按钮自身呈现 */
+/* 动作行：可换行，不撑成整行宽胶囊；测试连接为 filled 主动作，上传 / 恢复 outlined 次要 */
 .sync-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm) var(--space-md); padding-top: var(--space-md); border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
+/* 云端备份回显卡：测试成功后替代禁用提示出现；surface-container-low 底 + 25% outline 描边 */
+.sync-backup {
+  display: flex; align-items: center; gap: var(--space-md); min-width: 0;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 25%, transparent);
+  border-radius: var(--radius-control);
+}
+.sync-backup-icon { flex: none; width: 18px; height: 18px; color: var(--md-sys-color-primary); }
+.sync-backup-text { display: grid; gap: 2px; min-width: 0; }
+.sync-backup-label { color: var(--ink-muted); font-size: 12px; font-weight: 600; }
+.sync-backup-value { color: var(--ink); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+/* 暂无备份：图标与值都回到中性色，不渲染成「错误」 */
+.sync-backup.is-empty .sync-backup-icon,
+.sync-backup.is-empty .sync-backup-value { color: var(--ink-muted); }
 /* 状态行：动作回执，长错误文本可换行不截断 */
 .sync-status { margin: 0; color: var(--ink-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .sync-status.is-error { color: var(--md-sys-color-error); }

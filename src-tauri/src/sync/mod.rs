@@ -16,7 +16,7 @@ pub mod keys;
 pub mod service;
 pub mod webdav;
 
-pub use service::{DownloadSummary, SyncConfigOverride, UploadSummary};
+pub use service::{DownloadSummary, SyncConfigOverride, TestConnectionOutcome, UploadSummary};
 
 use serde::Serialize;
 
@@ -154,24 +154,6 @@ impl SyncError {
     /// 范围参数为空或含未知值。
     pub fn no_scope() -> Self {
         Self::new("sync_no_scope", None, "请至少选择一个同步范围")
-    }
-
-    /// 同步口令长度不合法。
-    pub fn passphrase_invalid() -> Self {
-        Self::new(
-            "sync_passphrase_invalid",
-            Some("sync_passphrase"),
-            "同步口令长度必须是 8~256 个字符",
-        )
-    }
-
-    /// 尚未设置同步口令。
-    pub fn passphrase_missing() -> Self {
-        Self::new(
-            "sync_passphrase_missing",
-            Some("sync_passphrase"),
-            "请先设置同步口令",
-        )
     }
 
     /// 本地状态读写失败（数据库 / 账号索引 / 凭据库）。

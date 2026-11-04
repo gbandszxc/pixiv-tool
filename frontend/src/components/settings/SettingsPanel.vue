@@ -210,6 +210,7 @@
         v-else
         :values="form"
         :status="syncStatus"
+        :connection="syncConnection"
         :webdav-password="webdavPassword"
         :clear-webdav-password="clearWebdavPassword"
         :sync-passphrase="syncPassphrase"
@@ -220,6 +221,7 @@
         @update:sync-passphrase="syncPassphrase = $event"
         @update:clear-sync-passphrase="clearSyncPassphrase = $event"
         @update:status="syncStatus = $event"
+        @update:connection="syncConnection = $event"
       />
     </template>
 
@@ -257,7 +259,7 @@ import MaintenancePanel from "./MaintenancePanel.vue";
 import TranslationAdvancedPanel from "./TranslationAdvancedPanel.vue";
 import AdvancedPanel from "./AdvancedPanel.vue";
 import SyncPanel from "./SyncPanel.vue";
-import type { SyncStatus } from "../../api/sync";
+import type { SyncBackupInfo, SyncStatus } from "../../api/sync";
 import { fetchTranslationModels, testTranslationService, API_FORMATS, TARGET_LANGUAGE_CODES, canonicalApiFormat, canonicalLanguage, getTranslationDiagnosticStatus, setTranslationDiagnostic, type TranslationProbe } from "../../api/translation";
 import {
   countModifiedTranslationAgent,
@@ -300,6 +302,11 @@ const translationView = ref<"basic" | "advanced">("basic");
 const advancedView = ref<"menu" | "sync">("menu");
 /** 同步动作的会话级回执（成功摘要 / 错误文案 + 时间），不写入设置。 */
 const syncStatus = ref<SyncStatus | null>(null);
+/**
+ * 测试连接成功后的云端备份回显（ADR 0049）：null = 本次会话尚未测试成功，
+ * 上传 / 恢复保持禁用；连接草稿变化由 SyncPanel 置回 null。切页保留、关闭设置复位。
+ */
+const syncConnection = ref<SyncBackupInfo | null>(null);
 /** 同步凭据草稿：留空 = 保持已保存值，显式清除 = 保存时删除（同翻译 API Key 配方）。 */
 const webdavPassword = ref("");
 const clearWebdavPassword = ref(false);
@@ -460,6 +467,7 @@ function resetSyncDraft() {
   clearWebdavPassword.value = false;
   syncPassphrase.value = "";
   clearSyncPassphrase.value = false;
+  syncConnection.value = null;
   advancedView.value = "menu";
 }
 /** 二级写回整数参数：未填（空串）记为 NaN，保存时由校验拦截并在原位提示。 */
