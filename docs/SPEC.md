@@ -950,14 +950,15 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   `sync_no_scope`。
 - 同步凭据**不进** `settings.json`：WebDAV 密码与同步口令（加密口令）分别在系统
   凭据库 service `pixiv-tool.sync` 的 `webdav-password` /
-  `sync-passphrase` 条目，落点与写回顺序见 §5.3、ADR 0048。同步口令长度 8~256
-  字符（trim 后），空串 = 未配置。
+  `sync-passphrase` 条目，落点与写回顺序见 §5.3、ADR 0048。同步口令不设长度限制、
+  允许未配置（trim 后为空 = 未配置）：未配置时用内置默认口令派生加密密钥
+  （ADR 0049，保护强度为混淆级）。
 - 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 54 个键，
   含兼容保留的 `backend_port`；`saucenao_api_key` 为用户凭据，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案，以及 `webdav_password_configured` / `sync_passphrase_configured` 两个布尔（凭据库不可用按未配置降级，不返回任何原文）。
 - `settings_save(settings, webdav_password?, sync_passphrase?)`：后两个可选参数是
   同步凭据的独立写入通道，语义与 `translation_api_key` 一致——省略 = 保持既有
-  条目，空串 = 删除条目。同步口令先 trim 再按 8~256 字符校验（非法 →
-  `sync_passphrase_invalid`，`field=sync_passphrase`）；WebDAV 密码不 trim。凭据
+  条目，空串 = 删除条目。同步口令只 trim、不再校验长度（ADR 0049）；WebDAV
+  密码不 trim。凭据
   写入失败返回 `sync_credential_save_failed`（`field` 为对应参数名），配置回滚，
   内存设置不更新。
 - `settings_save` 校验 / 保存失败返回结构化错误载荷 `{ code, field, message }`
@@ -986,14 +987,12 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   | `show_r18_invalid` | `show_r18` |
   | `saucenao_key_invalid` | `saucenao_api_key` |
   | `translation_key_invalid` / `credential_save_failed` | `translation_api_key`（回滚失败为 `null`） |
-  | `sync_passphrase_invalid` | `sync_passphrase` |
   | `sync_credential_save_failed` | `sync_passphrase` / `webdav_password`（回滚失败为 `null`） |
   | `translation_settings_invalid` / `settings_invalid` / `save_failed` / `internal` | `null` |
 
   同步命令（§7 `sync_test_connection` / `sync_upload` / `sync_download`）另有独立的
-  `SyncError {code, field, message}`，码表见 §7；其中
-  `sync_passphrase_invalid` / `sync_passphrase_missing` 的 `field` 同为
-  `sync_passphrase`，`sync_config_incomplete` 的 `field` 为 `webdav_url` 或
+  `SyncError {code, field, message}`，码表见 §7；其中 `sync_decrypt_failed` 的
+  `field` 为 `sync_passphrase`，`sync_config_incomplete` 的 `field` 为 `webdav_url` 或
   `webdav_password`，`sync_network_error` 的 `field` 为 `webdav_url`。
 
 ### 5.3 Cookie 存储（`src-tauri/src/cookies.rs` / `src-tauri/src/accounts.rs`）
@@ -1122,9 +1121,12 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 内容区切到二级页（`SyncPanel.vue`，不叠模态），顶部「返回高级」回入口。同步页分两组：
 连接（WebDAV 地址 / 用户名 / 密码 / 同步口令，已存凭据在标签行以中性描边胶囊回显
 「已保存」、可清除且待清除时切 error 文案）与同步范围（浏览历史 / 登录状态两个
-checkbox，默认全选）。动作行为「测试连接 / 上传 / 从云端恢复」：直接使用当前草稿值
-（`config` 覆盖）不要求先保存，进行中禁用全部按钮并显示进行中文案，回执为会话级
-（切页保留、关闭设置复位）。「从云端恢复」先弹原生 dialog 二次确认，文案写明合并
+checkbox，默认全选）。动作行为「测试连接（filled 主动作）/ 上传 / 从云端恢复
+（outlined 次要）」：直接使用当前草稿值（`config` 覆盖）不要求先保存。上传 / 恢复
+在测试连接成功前禁用，未测试时按钮下显示提示行；测试成功后显示云端备份回显卡
+（是否有备份与备份时间；地址 / 用户名 / WebDAV 密码草稿变化即失效需重测，上传成功
+即刷新为最新备份；回显状态切页保留、关闭设置复位）。动作进行中禁用全部按钮并显示
+进行中文案，回执为会话级。「从云端恢复」先弹原生 dialog 二次确认，文案写明合并
 与覆盖范围；恢复后若登录态变更则刷新账号 / auth 状态，若导入了历史则广播
 `pixiv-tool:history-restored`，浏览历史页回第 1 页重拉。
 应用外壳恒为视口高，右侧内容区是主要滚动容器，长内容不再拉长侧栏；下载面板独立滚动，底部状态栏独立占位。内容列（`.page-view`）在窗口宽高比 ≤16:9 时铺满内容区、不设宽度上限（列表/网格列数随
@@ -1531,7 +1533,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
 | `settings_get` / `settings_save(settings, webdavPassword?, syncPassphrase?)` | 配置读写（白名单 54 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板 / 4 个 WebDAV 同步键；API Key 与同步凭据独立写入，`settings_get` 仅返回 `{is-saved}` 布尔，见 §5.2）。`settings_save` 失败返回结构化载荷 `{code, field, message}`（ADR 0044，错误码表见 §5.2） |
-| `sync_test_connection(config?)` | 测试 WebDAV 连通性：只校验地址并 `MKCOL` 目录，不读写同步包、不要求同步口令。`config` 为可选草稿覆盖 `{webdavUrl, webdavUsername, webdavPassword, syncPassphrase}`（省略 = 已保存值 + 凭据库）。返回 `{status:"ok", http_status}`（MKCOL 实际状态码，目录已存在也算通）。错误为 `SyncError` |
+| `sync_test_connection(config?)` | 测试 WebDAV 连通性并探测云端备份：校验地址、`MKCOL` 目录后 `HEAD` 同步包（不支持 HEAD 的 405/501 回退 `GET` 取响应头），不读写包内容、不要求同步口令。`config` 为可选草稿覆盖 `{webdavUrl, webdavUsername, webdavPassword, syncPassphrase}`（省略 = 已保存值 + 凭据库）。返回 `{status:"ok", http_status, has_backup, backup_time}`（MKCOL 实际状态码，目录已存在也算通；`has_backup` = 远端包存在，`backup_time` = 远端 `Last-Modified` 原文，404 无备份时两者为空/`false`）。错误为 `SyncError` |
 | `sync_upload(scopes, config?)` | 按所选范围导出 → `PTSYNC01` 加密 → `MKCOL` + `PUT` 固定文件 `pixiv-tool-sync.bin`。`scopes` 白名单 `history` / `auth`（去重，空集或未知值 `sync_no_scope`）。返回 `{exported_at, bytes, history_count, account_count}`（导出侧只含已登记且 Cookie 有 PHPSESSID 的账号） |
 | `sync_download(scopes, config?)` | `GET` → 解密 → 解析 → 按所选范围合并：历史 `ON CONFLICT(kind, work_id)` 仅 `visited_at` 更晚才更新；账号同名覆盖、不删本地额外账号，本地 active 优先、无 active 才回落云端 active；写后失效会话缓存。返回 `{exported_at, history_imported, accounts_imported, active_changed, auth_changed}`。安全上限：响应体 8 MiB、单请求 30s、重定向不跟随、网络错误直连重试一次 |
 | `novel_translation_start(novel, force)` | 启动或加入整篇翻译 Job；novel=`{novel_id,title,tags,description,content}`（content ≤ 8MB，非法 id / 空内容拒绝）。启动前校验设置、URL、模型与 Key，任何失败不创建 Job；原文已是目标语言且 `force=false` 时返回 `already_target_language:true` 与未落库的空快照。同一作品、原文版本、目标语言重复启动加入既有 Job，`force=true` 新建。返回 `{job: TranslationJobSnapshot, already_target_language}`，命令立即返回、后台 tokio 继续执行。目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言（ADR 0018） |
@@ -1611,8 +1613,6 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `sync_payload_invalid` | `null` | 明文 JSON 结构错误或载荷版本不识别 |
 | `sync_decrypt_failed` | `sync_passphrase` | 魔数 / 截断 / 参数异常 / GCM 认证失败 |
 | `sync_no_scope` | `null` | `scopes` 为空或含白名单外值 |
-| `sync_passphrase_invalid` | `sync_passphrase` | 口令 trim 后长度不在 8~256 字符 |
-| `sync_passphrase_missing` | `sync_passphrase` | 未配置同步口令且未随 `config` 提供 |
 | `sync_internal` | `null` | 序列化 / 数据库 / 凭据库等内部失败（文案不含凭据或原文） |
 
 **应用菜单栏**：Windows 上默认隐藏（`SetMenu(hwnd, NULL)`），按 Alt 唤起并
@@ -1846,7 +1846,7 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 | 项 | 策略 |
 |---|---|
 | Cookie 存储 | 系统凭据存储（Windows Credential Manager / macOS Keychain / Linux Secret Service） |
-| WebDAV 同步 | 同步包为 `PTSYNC01` 密文（PBKDF2-HMAC-SHA256 600k + AES-256-GCM，AAD 绑定包头），WebDAV 密码与同步口令只进系统凭据库 service `pixiv-tool.sync`，不进 settings.json / 数据库 / 日志；错误与日志不含 URL 凭据、Cookie、密码或口令原文；手动触发，无后台同步 |
+| WebDAV 同步 | 同步包为 `PTSYNC01` 密文（PBKDF2-HMAC-SHA256 600k + AES-256-GCM，AAD 绑定包头），WebDAV 密码与同步口令只进系统凭据库 service `pixiv-tool.sync`，不进 settings.json / 数据库 / 日志；同步口令可选，未设置时用内置默认口令派生密钥（混淆级保护，ADR 0049）；错误与日志不含 URL 凭据、Cookie、密码或口令原文；手动触发，无后台同步 |
 | 网络监听 | **无**——不再有本地 HTTP 服务，IPC 仅限本 webview |
 | 错误上报 | **不集成**（隐私优先） |
 | 鉴权 | 不需要（无网络面） |
@@ -1880,7 +1880,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | R12 | Rig 无条件开启 `serde_json/preserve_order`，JSON Map 迭代序变为插入序 | 中 | 依赖 Map 顺序的位置必须显式排序；作者作品对象形响应已修复，新代码不得依赖默认迭代序 |
 | R13 | 翻译运行参数（并发、分块、预算、压缩）尚未用真实长篇校准 | 中 | 计划值只作起点；真实付费模型下校准分块、预算与默认并发，费用与请求不进入离线测试；校准结果同批回写设置说明与本文 |
 | R14 | 整篇 Job 的模型调用量显著高于单页两轮 | 中 | 累计调用预算（默认 `64 + 32 × 初始分块数`）、三级并发闸门与暂停 / 取消共同控制成本；界面不承诺固定费用 |
-| R15 | WebDAV 同步的第三方兼容性与凭据可用性（MKCOL 行为差异、自签证书、非标准端口；同步口令丢失即无法解密；wreq 客户端尚未对真实服务端全量实测） | 中 | 固定文件 + 标准 MKCOL/PUT/GET，MKCOL 已存在 / 不支持均继续；地址白名单 http/https、30s 超时、8 MiB 上限、网络错误直连重试一次；口令丢失无后门，文案提示重新上传即可重建快照；上线前用 Nextcloud / 坚果云等真实服务端补测 |
+| R15 | WebDAV 同步的第三方兼容性与凭据可用性（MKCOL 行为差异、自签证书、非标准端口；同步口令丢失即无法解密；未设口令时同步包仅为混淆级保护；wreq 客户端尚未对真实服务端全量实测） | 中 | 固定文件 + 标准 MKCOL/PUT/GET，MKCOL 已存在 / 不支持均继续；地址白名单 http/https、30s 超时、8 MiB 上限、网络错误直连重试一次；口令丢失无后门，文案提示重新上传即可重建快照；默认口令的保护强度已在帮助文案与 ADR 0049 明示；上线前用 Nextcloud / 坚果云等真实服务端补测 |
 
 ---
 
