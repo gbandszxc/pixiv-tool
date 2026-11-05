@@ -1579,10 +1579,13 @@ onBeforeUnmount(() => {
   flex-direction: column;
   box-sizing: border-box;
   /* 384px = 24 × space-lg（与底栏任务菜单同写法）；固定高度避免切换页签时窗体跳动，
-     四页签共用中间滚动层，内容超出时在面板内滚动。 */
+     四页签共用中间滚动层，内容超出时在面板内滚动。高度不绑定视口（70vh 会随窗口
+     大小变化，与页签无关的尺寸变化容易被误读为页签跳变）；只有窗口矮于约 596px
+     时才由 max-height 兜底收缩。 */
   width: min(calc(var(--space-lg) * 24), calc(100vw - var(--space-lg) * 2));
   max-width: calc(100vw - var(--space-lg) * 2);
-  height: min(70vh, 500px);
+  height: 500px;
+  max-height: calc(100vh - 96px);
   border-radius: var(--radius-control);
   background: var(--md-sys-color-surface-container);
   color: var(--ink);
