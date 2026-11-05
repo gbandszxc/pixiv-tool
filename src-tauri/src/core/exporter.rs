@@ -106,6 +106,22 @@ pub fn make_filename_with_template(meta: &ExportMeta, ext: &str, template: &str)
     render_novel(&info, template).map(|stem| format!("{stem}.{ext}"))
 }
 
+/// 译文导出文件名：现行 / 模板词干不变，扩展名前插入 `_{suffix}` 语言后缀
+/// （如 `标题_12345_CN.txt`、`05_话_CN.md`）。模板渲染为空回落 [`make_filename`]。
+pub fn make_translation_filename(
+    meta: &ExportMeta,
+    ext: &str,
+    template: Option<&str>,
+    suffix: &str,
+) -> String {
+    let base = template
+        .and_then(|t| make_filename_with_template(meta, ext, t))
+        .unwrap_or_else(|| make_filename(meta, ext));
+    let separator = format!(".{ext}");
+    let stem = base.strip_suffix(&separator).unwrap_or(base.as_str());
+    format!("{stem}_{suffix}.{ext}")
+}
+
 /// 写单文件：目标目录不存在则创建，UTF-8 输出，返回生成路径。
 /// `template = Some` 且渲染成功用模板命名，否则回落 [`make_filename`]。
 fn write_export(
@@ -308,6 +324,32 @@ mod tests {
         assert_eq!(
             make_filename_with_template(&meta("小说", 1, None), "txt", "___"),
             None
+        );
+    }
+
+    #[test]
+    fn translation_filename_inserts_suffix_before_ext() {
+        // 单篇现行命名 + 后缀
+        assert_eq!(
+            make_translation_filename(&meta("小说", 1, None), "txt", None, "CN"),
+            "小说_12345_CN.txt"
+        );
+        // 系列序号命名 + 后缀
+        assert_eq!(
+            make_translation_filename(&meta("话", 10, Some(5)), "md", None, "CN"),
+            "05_话_CN.md"
+        );
+        // 模板命名 + 后缀；模板渲染为空回落现行命名再加后缀
+        let mut m = meta("标题", 1, None);
+        m.user_name = "作者".into();
+        m.user_id = 7;
+        assert_eq!(
+            make_translation_filename(&m, "txt", Some("{user}_{nid}"), "EN"),
+            "作者_12345_EN.txt"
+        );
+        assert_eq!(
+            make_translation_filename(&m, "txt", Some("___"), "EN"),
+            "标题_12345_EN.txt"
         );
     }
 

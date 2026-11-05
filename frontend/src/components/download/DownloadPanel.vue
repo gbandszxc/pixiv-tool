@@ -6,6 +6,7 @@ import { useDownloadPanelStore, type DownloadFormKind, type PageCache } from "..
 import { useTaskStore } from "../../stores/tasks";
 import { parsePixivUrl } from "../../utils/pixivUrl";
 import { browseWorkDetail, errorMessage, illustSavedPages } from "../../api/browse";
+import { exportNovelTranslation } from "../../api/translation";
 import { notify } from "../../ui/notify";
 import PageDownloadPicker from "./PageDownloadPicker.vue";
 import SectionTabs from "../browse/SectionTabs.vue";
@@ -20,6 +21,8 @@ function switchKind(value: string) { if (!panel.submitting) { panel.kind = value
 function editSource(value: string) { draft.value.sourceId = value; draft.value.edited = true; panel.error = ""; }
 function editType(value: string) { draft.value.sourceType = value; draft.value.edited = true; panel.error = ""; }
 function formatChange(value: string, checked: boolean) { draft.value.formats = checked ? [...draft.value.formats, value] : draft.value.formats.filter(format => format !== value); }
+/** 译文格式勾选（仅小说单篇表单渲染）；独立于原文 formats，提交时走本地导出命令 */
+function translationFormatChange(value: string, checked: boolean) { draft.value.translationFormats = checked ? [...draft.value.translationFormats, value] : draft.value.translationFormats.filter(format => format !== value); }
 watch(() => panel.visible, async (visible) => { if (visible) { await nextTick(); root.value?.querySelector<HTMLElement>("md-outlined-text-field")?.focus(); } });
 watch(() => panel.pendingTarget, async (target) => { await nextTick(); if (target) confirm.value?.showModal(); else confirm.value?.close(); });
 
@@ -137,21 +140,35 @@ async function submit() {
   const parsed = parsePixivUrl(form.sourceId);
   const supported = kind === "novel" ? ["novel-single", "novel-series", "user"] : ["illustration", "user"];
   const id = parsed && supported.includes(parsed.kind) ? parsed.id : form.sourceId.trim();
-  if (!id || (kind === "novel" && !form.formats.length)) { panel.error = t(`${prefix.value}.invalidInput`); return; }
+  // 译文格式只在小说单篇表单渲染；此处兜底过滤，防止切来源后残留勾选混入提交
+  const translationFormats = kind === "novel" && form.sourceType === "single" ? [...form.translationFormats] : [];
+  if (!id || (kind === "novel" && !form.formats.length && !translationFormats.length)) { panel.error = t(`${prefix.value}.invalidInput`); return; }
   // 选择器可见但一页未选：阻止 Enter 绕过按钮禁用态提交整件下载
   if (showPicker.value && pageSelectionCount.value === 0) { panel.error = t("browse.work.pageSelectRequired"); return; }
   // 插画单篇且当前作品确实展示着选择器：只下载选中页（升序由 store 保证）；否则整件下载
   const pages = showPicker.value ? panel.pageSelection.illustration : [];
   panel.submitting = true; panel.error = "";
+  let exportedDir = "";
+  let createdTaskId = "";
   try {
-    const result = await tasks.createTask(form.sourceType, id, kind === "novel" ? [...form.formats] : [], kind, pages.length ? [...pages] : undefined);
-    if (session !== panel.session) return;
-    if (result.error) { panel.error = result.error; return; }
+    // 译文勾选走本地导出（不联网、不建任务）；原文勾选照旧创建抓取任务
+    if (translationFormats.length) {
+      const files = await exportNovelTranslation(Number(id), translationFormats);
+      if (session !== panel.session) return;
+      exportedDir = files[0]?.replace(/[\\/][^\\/]+$/, "") ?? "";
+    }
+    if (kind === "illustration" || form.formats.length) {
+      const result = await tasks.createTask(form.sourceType, id, kind === "novel" ? [...form.formats] : [], kind, pages.length ? [...pages] : undefined);
+      if (session !== panel.session) return;
+      if (result.error) { panel.error = result.error; return; }
+      createdTaskId = result.task_id ?? "";
+    }
     form.sourceId = ""; form.edited = false;
     panel.setPageSelection("illustration", []);
     panel.close();
+    if (exportedDir) notify(t("crawl.translationExported", { dir: exportedDir }));
     if (pages.length) notify(t("browse.work.pageDownloadStarted", { count: pages.length }));
-    else notify(t(`${kind === "novel" ? "crawl" : "illust"}.taskCreated`, { id: result.task_id }));
+    else if (createdTaskId) notify(t(`${kind === "novel" ? "crawl" : "illust"}.taskCreated`, { id: createdTaskId }));
     await tasks.fetchTasks().catch(() => {});
   } catch (error) { if (session === panel.session) panel.error = errorMessage(error) || t(`${prefix.value}.createFailed`); }
   finally { panel.submitting = false; }
@@ -172,6 +189,8 @@ async function submit() {
           <div class="m3-row"><label v-for="source in sources" :key="source" class="m3-choice"><md-radio name="download-source" :disabled="panel.submitting" :checked="draft.sourceType === source" @change="editType(source)" />{{ t(`${prefix}.${source}`) }}</label></div>
           <md-outlined-text-field :disabled="panel.submitting" :label="t(`${prefix}.input`)" :placeholder="t(`${prefix}.inputPlaceholder.${draft.sourceType}`)" :value="draft.sourceId" @input="editSource(($event.target as HTMLInputElement).value)" @keydown.enter.prevent="submit" />
           <div v-if="panel.kind === 'novel'" class="m3-field"><label>{{ t('crawl.outputFormats') }}</label><div class="m3-row"><label v-for="format in ['txt', 'markdown']" :key="format" class="m3-choice"><md-checkbox :disabled="panel.submitting" :checked="draft.formats.includes(format)" @change="formatChange(format, ($event.target as HTMLInputElement).checked)" />{{ format === 'txt' ? 'TXT' : 'Markdown' }}</label></div></div>
+          <!-- 译文格式：仅小说单篇显示，走本地导出命令（需已完成整篇翻译），与抓取任务无关 -->
+          <div v-if="panel.kind === 'novel' && draft.sourceType === 'single'" class="m3-field"><label>{{ t('crawl.translationFormats') }}</label><div class="m3-row"><label v-for="format in ['txt', 'markdown']" :key="format" class="m3-choice"><md-checkbox :disabled="panel.submitting" :checked="draft.translationFormats.includes(format)" @change="translationFormatChange(format, ($event.target as HTMLInputElement).checked)" />{{ format === 'txt' ? 'TXT' : 'Markdown' }}</label></div></div>
         </fieldset>
         <p v-if="panel.error" class="m3-alert error" role="alert">{{ panel.error }}</p>
         <md-filled-button :disabled="panel.submitting || (showPicker && pageSelectionCount === 0)" @click="submit">{{ panel.submitting ? t('common.loading') : submitLabel }}</md-filled-button>

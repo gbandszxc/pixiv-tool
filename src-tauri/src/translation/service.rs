@@ -41,7 +41,8 @@ use crate::{
         runtime,
         storage::{JobStore, list_jobs},
     },
-    paths::AppPaths,
+    core::exporter::{ExportMeta, make_translation_filename},
+    paths::{AppPaths, anchor_output_dir},
     settings::Settings,
     translation::{
         artifacts::{
@@ -50,7 +51,7 @@ use crate::{
             TranslationResult,
         },
         chunking::ChunkConfig,
-        publish::{publish_status_with_policy, render_markdown},
+        publish::{publish_status_with_policy, render_markdown, render_txt, translation_filename_suffix},
         source::{parse_segment_id, parse_source},
         tools,
         validation::{merge_pages, validate_merge_with_policy},
@@ -1003,6 +1004,18 @@ struct JobRuntime {
     constraint_version: u64,
 }
 
+/// 译文导出命名输入（`export_translation`）：meta 与是否走文件名模板。
+///
+/// 命令层从本地库离线解析：`novels` 表完整行（`templated = true`，按 settings
+/// 模板命名）或 `browse_history` 标题（仅标题，现行命名）；`None` = 无本地信息，
+/// 空标题兜底（净化后文件名只剩 id）。
+#[derive(Clone, Debug)]
+pub struct TranslationExportNaming {
+    pub meta: ExportMeta,
+    /// meta 来自 `novels` 表完整行：模板命名可用（settings 快照按 series_order 选模板）。
+    pub templated: bool,
+}
+
 impl TranslationService {
     /// 生产构造：Keyring 凭据、无事件出口（宿主可用 [`Self::with_sink`] 注入）。
     pub fn new(
@@ -1577,6 +1590,43 @@ impl TranslationService {
         })
         .await
         .map_err(|error| format!("读取翻译结果失败：{error}"))?
+    }
+
+    /// 译文本地导出：把最新已完成 v2 Job 的译文渲染为 txt / md 写入输出目录
+    /// `novel/`（命名见 `make_translation_filename`，SPEC §4.4）。
+    ///
+    /// 与抓取任务无关：不联网、不受已下载去重影响；只接受 `manifest.state =
+    /// Completed` 且 `result.status = Complete` 的 Job（v1 旧缓存不支持导出）。
+    /// 返回写入文件的绝对路径（同名覆盖）。
+    pub async fn export_translation(
+        &self,
+        novel_id: i64,
+        formats: &[String],
+        naming: Option<TranslationExportNaming>,
+    ) -> Result<Vec<String>, String> {
+        // 格式归一化：只认 txt / markdown，大小写不敏感、顺序跟随输入、去重
+        let mut exts: Vec<&'static str> = Vec::new();
+        for format in formats {
+            let ext = match format.trim().to_ascii_lowercase().as_str() {
+                "txt" => "txt",
+                "markdown" | "md" => "md",
+                _ => continue,
+            };
+            if !exts.contains(&ext) {
+                exts.push(ext);
+            }
+        }
+        if exts.is_empty() {
+            return Err("未选择有效的导出格式".into());
+        }
+        // 目录枚举、MB 级产物读取与写文件全是磁盘阻塞操作，与 result() 同样挪到阻塞线程
+        let paths = self.inner.paths.clone();
+        let settings = self.settings_snapshot();
+        tokio::task::spawn_blocking(move || {
+            export_translation_blocking(&paths, &settings, novel_id, &exts, naming)
+        })
+        .await
+        .map_err(|error| format!("译文导出失败：{error}"))?
     }
 
     /// 浮层预览：原文 / 译文对照。
@@ -3863,6 +3913,105 @@ fn job_store(paths: &AppPaths, manifest: &crate::agent::Manifest) -> Option<Stor
     Some(StoreIo::new(Arc::new(store)))
 }
 
+// ----------------------------------------------------------------------
+// 译文本地导出
+// ----------------------------------------------------------------------
+
+/// 找最新可导出的已完成 Job：manifest `Completed` 且 result `Complete`，
+/// 并要求 `source/source.json` 在盘（缺失按损坏跳过）；无可导出返回 `None`。
+fn read_exportable_job(paths: &AppPaths, novel_id: i64) -> Option<(TranslationResult, SourceDoc)> {
+    for summary in list_jobs(paths, novel_id).ok()? {
+        if summary.corrupt || summary.pending_delete {
+            continue;
+        }
+        let Some(manifest) = read_manifest_at(&summary.path) else {
+            continue;
+        };
+        if manifest.state != JobState::Completed {
+            continue;
+        }
+        let Some(io) = job_store(paths, &manifest) else {
+            continue;
+        };
+        let artifacts = JobArtifacts::new(&io);
+        let Some(result) = artifacts.read_result().ok().flatten() else {
+            continue;
+        };
+        if result.status != PublishStatus::Complete {
+            continue;
+        }
+        let Ok(Some(source)) = artifacts.read_source() else {
+            continue;
+        };
+        return Some((result, source));
+    }
+    None
+}
+
+/// [`TranslationService::export_translation`] 的阻塞实现（调用方已在阻塞线程）。
+fn export_translation_blocking(
+    paths: &AppPaths,
+    settings: &Settings,
+    novel_id: i64,
+    exts: &[&str],
+    naming: Option<TranslationExportNaming>,
+) -> Result<Vec<String>, String> {
+    let Some((result, source)) = read_exportable_job(paths, novel_id) else {
+        return Err("该小说暂无已完成的译文，无法导出".into());
+    };
+    let suffix = translation_filename_suffix(&result.target_language);
+    let target_dir = anchor_output_dir(&settings.output_dir, &paths.data_dir).join("novel");
+    let mut written = Vec::with_capacity(exts.len());
+    for ext in exts {
+        let content = match *ext {
+            "md" => render_markdown(&source, &result.pages),
+            _ => render_txt(&source, &result.pages),
+        };
+        let filename = export_filename(novel_id, settings, naming.as_ref(), ext, &suffix);
+        let filepath = target_dir.join(&filename);
+        std::fs::create_dir_all(&target_dir)
+            .and_then(|_| std::fs::write(&filepath, content))
+            .map_err(|error| format!("写入译文文件失败：{error}"))?;
+        written.push(filepath.to_string_lossy().into_owned());
+    }
+    Ok(written)
+}
+
+/// 译文文件名：`novels` 表完整行 → 模板命名（series_order 非空用系列模板）；
+/// 仅标题 → 现行命名；无本地信息 → 空标题兜底（净化后只剩 id）。
+fn export_filename(
+    novel_id: i64,
+    settings: &Settings,
+    naming: Option<&TranslationExportNaming>,
+    ext: &str,
+    suffix: &str,
+) -> String {
+    let (meta, template) = match naming {
+        Some(naming) if naming.templated => {
+            let template = if naming.meta.series_order.is_some() {
+                &settings.novel_series_filename_template
+            } else {
+                &settings.novel_filename_template
+            };
+            (naming.meta.clone(), Some(template.as_str()))
+        }
+        Some(naming) => (naming.meta.clone(), None),
+        None => (
+            ExportMeta {
+                novel_id,
+                title: String::new(),
+                page_count: 1,
+                series_order: None,
+                user_name: String::new(),
+                user_id: 0,
+                series_id: None,
+            },
+            None,
+        ),
+    };
+    make_translation_filename(&meta, ext, template, suffix)
+}
+
 /// 读取任意 Job 的阅读器结果。
 pub fn read_job_result(
     paths: &AppPaths,
@@ -4061,6 +4210,155 @@ mod tests {
             jobs.insert(scope.job_id.clone(), handle.clone());
         }
         (service, handle, scope, dir)
+    }
+
+    /// 造一个磁盘上「已完成且 result 为 complete」的 v2 Job（译文导出的前置态）。
+    fn completed_job_fixture(
+        paths: &AppPaths,
+        novel_id: i64,
+        job_id: &str,
+    ) -> (JobScope, std::sync::Arc<JobStore>) {
+        let generation = CacheGeneration::new(0);
+        let scope = JobScope {
+            novel_id,
+            job_id: job_id.to_string(),
+            generation: generation.get(),
+        };
+        let store = std::sync::Arc::new(
+            JobStore::create_guarded(paths, &scope, generation).unwrap(),
+        );
+        store
+            .update_manifest(|manifest| manifest.state = JobState::Completed)
+            .unwrap();
+        let io = StoreIo::new(store.clone());
+        let artifacts = JobArtifacts::new(&io);
+        let source = parse_source(
+            "[chapter:序]\n[rb:導入>どうにゅう]しました\n[newpage]\n尾巴",
+            "zh-CN",
+        )
+        .unwrap();
+        artifacts.write_source(&source).unwrap();
+        let pages = BTreeMap::from([
+            (
+                1u32,
+                vec![
+                    TranslatedLine {
+                        line: 0,
+                        text: "[chapter:序章]".into(),
+                    },
+                    TranslatedLine {
+                        line: 1,
+                        text: "导入(どうにゅう)しました".into(),
+                    },
+                ],
+            ),
+            (
+                2u32,
+                vec![TranslatedLine {
+                    line: 0,
+                    text: "尾巴译文".into(),
+                }],
+            ),
+        ]);
+        artifacts
+            .write_result(&TranslationResult {
+                novel_id,
+                job_id: scope.job_id.clone(),
+                target_language: "zh-CN".into(),
+                pages,
+                status: PublishStatus::Complete,
+                unresolved: 0,
+            })
+            .unwrap();
+        (scope, store)
+    }
+
+    #[test]
+    fn export_translation_writes_txt_and_md_with_language_suffix() {
+        let (paths, dir) = fixture("export");
+        let mut settings = settings();
+        settings.output_dir = dir.join("out").to_string_lossy().into_owned();
+        completed_job_fixture(&paths, 42, "20260101000000-export");
+
+        // 无本地命名信息：空标题兜底 + `_CN` 后缀（目标语言 zh-CN）；
+        // blocking 函数接收的是归一化后的扩展名（txt / md）
+        let written =
+            export_translation_blocking(&paths, &settings, 42, &["txt", "md"], None).unwrap();
+        let novel_dir = dir.join("out").join("novel");
+        assert_eq!(written[0], novel_dir.join("_42_CN.txt").to_string_lossy());
+        assert_eq!(written[1], novel_dir.join("_42_CN.md").to_string_lossy());
+        let txt = std::fs::read_to_string(novel_dir.join("_42_CN.txt")).unwrap();
+        assert!(txt.contains("\n序章\n"), "章节标题独占一行（取译文标题）：{txt}");
+        assert!(txt.contains("导入(どうにゅう)しました"));
+        assert!(txt.contains("\n\n\n尾巴译文"), "页间空行分隔：{txt}");
+        assert!(!txt.contains("## "));
+        let md = std::fs::read_to_string(novel_dir.join("_42_CN.md")).unwrap();
+        assert!(md.contains("## 序章"));
+        assert!(md.contains("\n---\n"));
+
+        // novels 表完整行 → 模板命名（默认 {title}_{nid}）+ 后缀
+        let naming = TranslationExportNaming {
+            meta: ExportMeta {
+                novel_id: 42,
+                title: "标题".into(),
+                page_count: 1,
+                series_order: None,
+                user_name: String::new(),
+                user_id: 7,
+                series_id: None,
+            },
+            templated: true,
+        };
+        let written =
+            export_translation_blocking(&paths, &settings, 42, &["txt"], Some(naming)).unwrap();
+        assert_eq!(
+            written[0],
+            novel_dir.join("标题_42_CN.txt").to_string_lossy()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn export_translation_requires_completed_result() {
+        let (paths, dir) = fixture("export-gate");
+        let mut settings = settings();
+        settings.output_dir = dir.join("out").to_string_lossy().into_owned();
+
+        // 无任何 Job
+        let error =
+            export_translation_blocking(&paths, &settings, 7, &["txt"], None).unwrap_err();
+        assert!(error.contains("暂无已完成的译文"));
+
+        // result 为 partial 的 Job 不可导出
+        let (_, store) = completed_job_fixture(&paths, 7, "20260101000000-gate");
+        let io = StoreIo::new(store.clone());
+        let artifacts = JobArtifacts::new(&io);
+        let mut result = artifacts.read_result().unwrap().unwrap();
+        result.status = PublishStatus::Partial;
+        artifacts.write_result(&result).unwrap();
+        let error =
+            export_translation_blocking(&paths, &settings, 7, &["txt"], None).unwrap_err();
+        assert!(error.contains("暂无已完成的译文"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn export_translation_rejects_unknown_formats() {
+        // 格式归一化门在 async 入口：只认 txt / markdown，大小写不敏感
+        let (paths, dir) = fixture("export-format");
+        let service = TranslationService::for_tests_with_generation(
+            paths.clone(),
+            settings(),
+            Arc::new(NoopSink),
+            Some("k".into()),
+            CacheGeneration::new(0),
+        );
+        let error = service
+            .export_translation(7, &["epub".to_string(), "PDF".to_string()], None)
+            .await
+            .unwrap_err();
+        assert!(error.contains("未选择有效的导出格式"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

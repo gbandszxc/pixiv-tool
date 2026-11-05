@@ -169,6 +169,8 @@ export default {
       user: "输入用户 ID 或 URL",
     },
     outputFormats: "输出格式",
+    translationFormats: "译文格式（需已完成整篇翻译）",
+    translationExported: "译文已导出到 {dir}",
     taskCreated: "任务已创建：{id}",
     invalidInput: "请输入有效的 ID 或 URL",
     createFailed: "创建任务失败",

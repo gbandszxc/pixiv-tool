@@ -558,6 +558,13 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   读旧页缓存；`novel_translation_result` 只把 v2 中状态为 `complete` 的结果投影给阅读器，
   没有完整 v2 结果时回退 v1 旧缓存并标记 `partial`，绝不冒充已审查结果；v2 处于
   `partial` / `needs_attention` 时不发布阅读器投影。`novel_translate_page` 命令已移除。
+- **译文本地导出**（`novel_translation_export`，命令见 §7）：把最新已完成 v2 Job 的
+  `result.json` + `source/source.json` 渲染为 txt / md 写入输出目录 `novel/`（命名见
+  §4.4「译文导出命名」）。纯本地操作：不联网、不建抓取任务、不受已下载去重影响；
+  只接受 `manifest.state = Completed` 且 `result.status = Complete` 的 Job，v1 旧缓存
+  不支持导出（返回明确错误）；`source.json` 缺失按损坏跳过该 Job。渲染沿用发布投影
+  行级规则（`translation/publish.rs`：txt 与 markdown 仅章节标题 / 页分隔 / 图片占位
+  的写法不同，缺失译文的行回退原文）。
 
 | 参数（翻译运行） | 值 |
 |---|---|
@@ -687,8 +694,17 @@ settings.json 写入非法模板在加载期回落对应用途的默认并记日
 「下载」分组输出格式之后为三个文本框（supporting text 列占位符清单，非法时该
 字段 error 态红字并阻止整表保存）；无新增 IPC 命令（模板随 `settings_save` 写入）。
 
+**译文导出命名**（`novel_translation_export`，`make_translation_filename`）：
+现行 / 模板词干不变，扩展名前插入 `_<语言后缀>`（后缀取该译文
+`result.target_language`：`zh-CN` → `_CN`、`zh-TW` → `_TW`，其余取 `-` / `_`
+前主码大写如 `en` → `_EN`，空值回落 `_CN`）。模板可用性与抓取导出一致：
+novels 表有完整行（含作者 / 系列字段）按 `series_order` 选系列或单篇模板，
+模板渲染为空回落现行命名；仅 browse_history 有标题（未下载过）用现行命名
+（`{sanitize(title)}_{nid}` / 系列序号命名）；本地无任何信息时空标题兜底
+（`_{nid}_CN.txt`）。输出与抓取同目录（输出目录 `novel/` 子目录），同名覆盖。
+
 **目录布局**：小说统一平铺在输出目录 `novel/` 子目录（系列归属由文件名序号
-表达）；插画在 `pic/` 子目录，用户全集再套一层
+表达，译文导出文件同目录）；插画在 `pic/` 子目录，用户全集再套一层
 `pic/users/<sanitize(作者名)>_<userId>/`（拿不到作者名退回 `user_<userId>`）。
 多页原图 URL：登录态 `meta.pages[].image_urls.original` 优先，缺失时从 p0
 直链按 `_p0.{ext} → _p{N}.{ext}` 推导兜底。
@@ -1185,7 +1201,7 @@ checkbox，默认全选）。动作行为「测试连接（filled 主动作）/ 
 
 现行决策见 ADR 0015。侧栏四入口发现（/browse/home）、关注（/browse/feed）、我的（/browse/bookmark）、下载（/tools/tasks）；二级导航组织现有路由，作者 / 系列 / 详情继承实际来源分组，直达归发现。「我的」分区二级入口为收藏 / 浏览历史 / 主页（`/browse/me`，归 library 分组），三页面顶栏恒定保持一致的大标题与二级胶囊导航，消除菜单切换跳跃；主页复用作者页组件并启用 `isMe` 模式，隐藏内嵌冗余吸顶条与卡片内返回键，动作组（编辑资料、投稿、网页跳转）优雅收纳在个人卡片右上角，作品区 Tab 采用自然定宽（严禁均分宽度），无返回历史时兜底回收藏页。56px 圆形放大镜按钮（无文字，保留可访问名称与 tooltip）+ Ctrl+K / Command+K 跳搜索并聚焦；按钮显示时分页行右侧预留 72px 空间以避免遮挡，以图识图入口在搜索页；阅读器改用顶栏搜索，全屏看图隐藏全局搜索与状态栏。
 
-下载改为应用级非模态布局面板，宽工作区 ≥1120px 右栏 480px，否则底栏 min(45%,320px)，只放新建表单，小说/插画页签背景继承面板 surface-container。公共 fillDownloadForm(DownloadTarget) 不再导航，所有返填沿用 form/sourceType/sourceId 类型。关闭 / 跳页留草稿，账号变更清空；覆盖手动来源需确认、格式保留；失败留输入，成功更新任务并关闭面板、不跳页。旧 /、/illustration、/tools/novel、/tools/illustration 进入 /tools/tasks 并打开相应面板，保留其它 query/hash，消费 downloadForm/sourceType/sourceId；旧 /tasks、/history 继续兼容。
+下载改为应用级非模态布局面板，宽工作区 ≥1120px 右栏 480px，否则底栏 min(45%,320px)，只放新建表单，小说/插画页签背景继承面板 surface-container。公共 fillDownloadForm(DownloadTarget) 不再导航，所有返填沿用 form/sourceType/sourceId 类型。小说表单在输出格式之下另有「译文格式」勾选组（仅来源类型=单篇时渲染，默认不勾；需已完成整篇翻译），勾选走本地导出命令 `novel_translation_export`（见 §4.3 / §7），与抓取任务无关、默认不要求登录；提交时两组格式各自执行（原文勾选创建任务、译文勾选本地导出，都成功才关面板并分别提示；译文无已完成结果时面板错误区显示后端文案）。关闭 / 跳页留草稿，账号变更清空；覆盖手动来源需确认、格式保留；失败留输入，成功更新任务并关闭面板、不跳页。旧 /、/illustration、/tools/novel、/tools/illustration 进入 /tools/tasks 并打开相应面板，保留其它 query/hash，消费 downloadForm/sourceType/sourceId；旧 /tasks、/history 继续兼容。
 
 底部 32px 状态栏常驻且独立占位，空闲、新建入口、活跃任务数及代表任务进度回显；点击进度进入完整任务页。代表优先 running/pending/paused、同状态创建时间升序；done/total，未知总量不定进度，暂停无动画。应用级共享 task://progress、task://done 订阅与 2s 轮询兜底（有活跃任务或同步失败时）；同步失败保留快照并显示重试提示，任务页不重复订阅。
 
@@ -1471,6 +1487,8 @@ checkbox，默认全选）。动作行为「测试连接（filled 主动作）/ 
 - **打开原页 / 返填**：浏览页的「在浏览器中打开」走系统默认浏览器
   （官方 `tauri-plugin-opener`，capability `opener:default`）；
   频道页卡片与作品级页面另有「返填表单」→ 就地打开下载面板并预填来源，不改变当前 URL 或路由历史。
+  小说阅读页的下载入口（顶栏「返填表单」图标）即此路径；预填为单篇后可在面板勾选
+  「译文格式」直接本地导出已完成译文（§4.3、§6.1.1，文件命名见 §4.4「译文导出命名」）。
   公共外链入口只接受无 userinfo 的 HTTP/HTTPS URL，拒绝 file/javascript 等协议。
 
 ---
@@ -1560,6 +1578,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
 | `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds,refused_chunks,skipped_chunks}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms,skipped}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；`refused_chunks` 是被模型按内容政策拒绝的块 ID、`skipped_chunks` 是用户显式跳过的块 ID（均升序，serde 默认兼容旧载荷，ADR 0043）；任务不存在或清单损坏返回可读错误 |
 | `novel_translation_result(novelId)` | 阅读器投影：优先已完成且状态为 `complete` 的 v2 Job，否则回退 v1 旧缓存并标记 `partial`；无结果返回 null。返回 `{novel_id,job_id,target_language,pages:{页码:[{line,text}]},status:"complete"|"partial"|"needs_attention",unresolved}` |
+| `novel_translation_export(novelId, formats)` | 译文本地导出（§4.3）：把最新已完成 v2 Job（`Completed` + `complete`）的 `result.json` + `source/source.json` 渲染为 txt / md 写入输出目录 `novel/`，返回写入文件路径列表（同名覆盖）。`formats` 只认 `txt` / `markdown`（大小写不敏感、去重），全无效 → `"未选择有效的导出格式"`；无可导出 Job（含 v1 旧缓存、partial、运行中）→ `"该小说暂无已完成的译文，无法导出"`。命名见 §4.4「译文导出命名」；不联网、不建抓取任务 |
 | `novel_translation_confirm(jobId, terms, style)` | 确认术语与风格（等待确认时由浮层提交）。terms 为 `[{source_term,locked_translation,term_type?,aliases?,notes?}]`；确认后约束版本 +1、清除冲突与未解决项并继续。进程内无句柄时（应用重启后）先从磁盘重建任务上下文再确认；任务不存在 / 已结束返回错误 |
 | `novel_translation_pause(jobId)` | 停止派发并停在最近检查点（`queued`/`running` → `pausing` → `paused`）；等待确认时要求先确认或取消；其它状态拒绝 |
 | `novel_translation_resume(jobId)` | 从检查点恢复（`paused`/`needs_attention`/`interrupted`/`queued`）；先校验缓存世代、资源版本与清单，不一致时拒绝静默续跑；内存中无句柄时从磁盘重建；不清空被拒块记忆（`content_refused`，ADR 0043） |

@@ -65,6 +65,53 @@ pub async fn novel_translation_result(
     service.result(novel_id).await
 }
 
+/// 译文本地导出：最新已完成 v2 译文渲染为 txt / md 写入输出目录 `novel/`
+/// （不联网、不走抓取任务）。返回写入文件路径列表；语言后缀取译文
+/// target_language（`zh-CN` → `_CN`，命名规则见 SPEC §4.4）。
+#[tauri::command]
+pub async fn novel_translation_export(
+    state: State<'_, AppState>,
+    novel_id: i64,
+    formats: Vec<String>,
+) -> Result<Vec<String>, String> {
+    // 命名信息离线解析：novels 表完整行（可模板命名）→ browse_history 标题
+    // （现行命名）→ None（空标题兜底，净化后只剩 id）
+    let naming = state
+        .db
+        .get_novel(novel_id)
+        .map(|row| crate::translation::service::TranslationExportNaming {
+            meta: crate::core::exporter::ExportMeta {
+                novel_id: row.novel_id,
+                title: row.title,
+                page_count: row.page_count.unwrap_or(1),
+                series_order: row.series_order,
+                user_name: row.author_name.unwrap_or_default(),
+                user_id: row.author_id,
+                series_id: row.series_id,
+            },
+            templated: true,
+        })
+        .or_else(|| {
+            state
+                .db
+                .browse_history_title("novel", novel_id)
+                .map(|title| crate::translation::service::TranslationExportNaming {
+                    meta: crate::core::exporter::ExportMeta {
+                        novel_id,
+                        title,
+                        page_count: 1,
+                        series_order: None,
+                        user_name: String::new(),
+                        user_id: 0,
+                        series_id: None,
+                    },
+                    templated: false,
+                })
+        });
+    let service = state.translation_service.clone();
+    service.export_translation(novel_id, &formats, naming).await
+}
+
 /// 确认术语与风格（确认模式）。
 #[tauri::command]
 pub async fn novel_translation_confirm(

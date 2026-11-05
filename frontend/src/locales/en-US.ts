@@ -168,6 +168,8 @@ export default {
       user: "Enter user ID or URL",
     },
     outputFormats: "Output Formats",
+    translationFormats: "Translated Text (requires a completed novel translation)",
+    translationExported: "Translation exported to {dir}",
     taskCreated: "Task created: {id}",
     invalidInput: "Please enter a valid ID or URL",
     createFailed: "Failed to create task",

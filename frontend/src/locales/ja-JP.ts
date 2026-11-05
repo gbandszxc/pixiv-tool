@@ -168,6 +168,8 @@ export default {
       user: "ユーザーの ID または URL を入力",
     },
     outputFormats: "出力形式",
+    translationFormats: "訳文形式（全編翻訳の完了が必要）",
+    translationExported: "訳文を書き出しました：{dir}",
     taskCreated: "タスクを作成しました：{id}",
     invalidInput: "有効な ID または URL を入力してください",
     createFailed: "タスクの作成に失敗しました",

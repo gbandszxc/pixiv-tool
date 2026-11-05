@@ -16,7 +16,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 use tauri::State;
 
-use crate::core::crawler::anchor_output_dir;
+use crate::paths::anchor_output_dir;
 use crate::core::illust_crawler::UGOIRA_TYPE;
 use crate::platform::{open_dir_in_file_manager, reveal_in_file_manager};
 use crate::settings::Settings;

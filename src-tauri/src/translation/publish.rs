@@ -1,11 +1,14 @@
-//! 发布投影：Markdown 合并稿、发布状态与早发布页选择。
+//! 发布投影：合并稿渲染、发布状态与早发布页选择。
 //!
-//! Markdown 规则沿用 `core::exporter`：
+//! Markdown 合并稿规则沿用 `core::exporter`：
 //! - 整行 `[chapter:X]` → `## X`；
 //! - 页间（原 `[newpage]`）→ `---`；
 //! - `[jump:]` 整行删除；
 //! - 整行图片标记 → `<!-- 图片占位 -->`；
 //! - 行内 `[rb:A>B]` → `A(B)`。
+//!
+//! 纯文本渲染（`render_txt`，译文导出用）行级判定完全一致，仅输出串不同：
+//! 章节标题独占一行、页间空行、图片占位为 `（图片占位）`。
 //!
 //! 发布状态是确定性判断，不替代审查：只有每个块都有通过结构校验且版本匹配的
 //! 审查、整体复核 `passed=true` 时才为 [`PublishStatus::Complete`]。
@@ -32,12 +35,44 @@ pub struct ReviewedPages {
     pub pending: BTreeSet<u32>,
 }
 
-/// 渲染 Markdown 合并稿；缺失译文的行回退原文，保证合并稿可读。
-pub fn render_markdown(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine>>) -> String {
+/// 合并稿渲染风格：行级判定一致，仅章节标题 / 页分隔 / 图片占位的写法不同。
+#[derive(Clone, Copy)]
+enum RenderStyle {
+    /// `## 标题`、`---` 页分隔、`<!-- 图片占位 -->`。
+    Markdown,
+    /// 标题独占一行、空行页分隔、`（图片占位）`。
+    PlainText,
+}
+
+impl RenderStyle {
+    fn chapter(&self, title: &str) -> String {
+        match self {
+            Self::Markdown => format!("\n## {title}\n"),
+            Self::PlainText => format!("\n{title}\n"),
+        }
+    }
+
+    fn page_break(&self) -> &'static str {
+        match self {
+            Self::Markdown => "\n---\n",
+            Self::PlainText => "\n\n",
+        }
+    }
+
+    fn image_placeholder(&self) -> &'static str {
+        match self {
+            Self::Markdown => "<!-- 图片占位 -->\n",
+            Self::PlainText => "（图片占位）\n",
+        }
+    }
+}
+
+/// 渲染合并稿（Markdown / 纯文本共用行级逻辑）；缺失译文的行回退原文，保证可读。
+fn render_doc(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine>>, style: RenderStyle) -> String {
     let mut out: Vec<String> = Vec::new();
     for (index, page) in doc.pages.iter().enumerate() {
         if index > 0 {
-            out.push("\n---\n".to_string());
+            out.push(style.page_break().to_string());
         }
         let translated: BTreeMap<u32, &str> = pages
             .get(&page.page)
@@ -61,11 +96,11 @@ pub fn render_markdown(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine
                 let title = chapter_title(text)
                     .or_else(|| chapter_title(source))
                     .unwrap_or_default();
-                out.push(format!("\n## {title}\n"));
+                out.push(style.chapter(&title));
             } else if source.starts_with("[jump:") {
                 continue;
             } else if source.starts_with("[pixivimage:") || source.starts_with("[uploadedimage:") {
-                out.push("<!-- 图片占位 -->\n".to_string());
+                out.push(style.image_placeholder().to_string());
             } else if is_pure_markup(line) {
                 // 其它纯标记行（如 [jumpurl:...]）按原文保留，不当作正文翻译。
                 out.push(source.to_string());
@@ -75,6 +110,33 @@ pub fn render_markdown(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine
         }
     }
     out.join("\n")
+}
+
+/// 渲染 Markdown 合并稿；缺失译文的行回退原文，保证合并稿可读。
+pub fn render_markdown(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine>>) -> String {
+    render_doc(doc, pages, RenderStyle::Markdown)
+}
+
+/// 渲染纯文本合并稿（译文导出用）；行级判定与 [`render_markdown`] 一致。
+pub fn render_txt(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine>>) -> String {
+    render_doc(doc, pages, RenderStyle::PlainText)
+}
+
+/// 译文导出文件名的语言后缀：`zh-CN` → `CN`、`zh-TW` → `TW`，其余取 `-` /
+/// `_` 前主码大写（`en` → `EN`）；空值回落 `CN`（默认目标语言）。
+pub fn translation_filename_suffix(target_language: &str) -> String {
+    let trimmed = target_language.trim();
+    let mut parts = trimmed.split(['-', '_']);
+    let base = parts.next().unwrap_or("").to_ascii_lowercase();
+    match base.as_str() {
+        "zh" => {
+            let region = parts.next().unwrap_or("").to_ascii_uppercase();
+            if region == "TW" { "TW" } else { "CN" }
+        }
+        "" => "CN",
+        other => return other.to_ascii_uppercase(),
+    }
+    .to_string()
 }
 
 /// 发布状态判定（目标语言按原文 / 译文自动判断）。
@@ -356,6 +418,39 @@ mod tests {
         assert!(markdown.contains("## 第一话"));
         assert!(markdown.contains("漢字(かんじ)です"));
         assert!(markdown.contains("尾巴"));
+    }
+
+    #[test]
+    fn txt_follows_plain_rendering_rules() {
+        let txt = render_txt(&doc(), &translations());
+        // 章节标题独占一行，无 markdown 语法
+        assert!(txt.contains("\n第一章\n"));
+        assert!(!txt.contains("## "));
+        // rb 注音转换与图片纯文本占位
+        assert!(txt.contains("汉字(kanji)呀"));
+        assert!(txt.contains("（图片占位）"));
+        assert!(!txt.contains("[jump:1]"));
+        // 页间空行分隔（join 后占位行与下一页之间至少两个换行）
+        assert!(txt.contains("\n\n\n尾巴译文"));
+    }
+
+    #[test]
+    fn txt_falls_back_to_source_when_translation_missing() {
+        let txt = render_txt(&doc(), &BTreeMap::new());
+        assert!(txt.contains("\n第一话\n"));
+        assert!(txt.contains("漢字(かんじ)です"));
+        assert!(txt.contains("尾巴"));
+    }
+
+    #[test]
+    fn translation_suffix_follows_target_language() {
+        assert_eq!(translation_filename_suffix("zh-CN"), "CN");
+        assert_eq!(translation_filename_suffix("zh-TW"), "TW");
+        assert_eq!(translation_filename_suffix("en"), "EN");
+        assert_eq!(translation_filename_suffix("ja"), "JA");
+        assert_eq!(translation_filename_suffix("ru"), "RU");
+        assert_eq!(translation_filename_suffix(" zh-cn "), "CN");
+        assert_eq!(translation_filename_suffix(""), "CN", "空值回落默认目标语言");
     }
 
     fn chunk(id: &str, order: u32, segment: &str, text: &str) -> Chunk {

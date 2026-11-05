@@ -26,6 +26,7 @@ use crate::core::illust_crawler::{
 use crate::core::sources::{IllustSource, NovelSource};
 use crate::core::task_manager::TaskControls;
 use crate::db::{Db, IllustrationInsert, NovelInsert, now_iso};
+use crate::paths::anchor_output_dir;
 use crate::pixiv::api::{IllustData, NovelData, PixivApi};
 
 /// 爬虫 → 前端事件通道（由命令层用 AppHandle::emit 实现）。
@@ -118,15 +119,6 @@ pub(crate) fn terminal_status(cancelled: bool) -> &'static str {
 
 /// 相对 output_dir 锚定 data_dir（frozen/双击启动时 cwd 不可预期），
 /// 绝对路径原样。
-pub(crate) fn anchor_output_dir(output_dir: &str, data_dir: &Path) -> PathBuf {
-    let path = PathBuf::from(output_dir);
-    if path.is_absolute() {
-        path
-    } else {
-        data_dir.join(path)
-    }
-}
-
 // ----------------------------------------------------------------------
 // 事件 / 落库
 // ----------------------------------------------------------------------
@@ -960,19 +952,6 @@ mod tests {
             Duration::ZERO,
             max_wait
         ));
-    }
-
-    #[test]
-    fn anchor_output_dir_relative_and_absolute() {
-        let data_dir = PathBuf::from("/data");
-        assert_eq!(
-            anchor_output_dir("downloads", &data_dir),
-            PathBuf::from("/data/downloads")
-        );
-        assert_eq!(
-            anchor_output_dir("/abs/out", &data_dir),
-            PathBuf::from("/abs/out")
-        );
     }
 
     #[test]

@@ -4,7 +4,9 @@ import type { IllustPage } from "../api/browse";
 import type { DownloadTarget } from "../utils/pixivHooks";
 
 export type DownloadFormKind = DownloadTarget["form"];
-function emptyDraft() { return { sourceType: "single", sourceId: "", formats: ["txt", "markdown"], edited: false }; }
+function emptyDraft() {
+  return { sourceType: "single", sourceId: "", formats: ["txt", "markdown"], translationFormats: [] as string[], edited: false };
+}
 
 /** 单篇插画的分页缓存：同一作品命中缓存不重复请求详情。 */
 export interface PageCache {

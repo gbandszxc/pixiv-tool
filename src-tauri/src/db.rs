@@ -1005,6 +1005,20 @@ impl Db {
         Ok((rows, total))
     }
 
+    /// 单条浏览历史的标题（译文导出离线命名兜底用）；无记录返回 `None`。
+    pub fn browse_history_title(&self, kind: &str, work_id: i64) -> Option<String> {
+        self.with_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT title FROM browse_history WHERE kind = ?1 AND work_id = ?2",
+                    params![kind, work_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok())
+        })
+        .unwrap_or(None)
+    }
+
     /// 导出全部浏览历史（同步上传用；不分页，按访问时间倒序）。
     pub fn export_browse_history(&self) -> Result<Vec<BrowseHistoryRow>, String> {
         self.with_conn(|conn| {

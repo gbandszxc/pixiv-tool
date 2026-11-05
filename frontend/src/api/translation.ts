@@ -363,6 +363,15 @@ export async function getNovelTranslationResult(novelId: number): Promise<Transl
   return invoke("novel_translation_result", { novelId });
 }
 
+/** 译文本地导出（txt / markdown）；返回写入文件路径列表，无已完成译文时抛错。 */
+export async function exportNovelTranslation(novelId: number, formats: string[]): Promise<string[]> {
+  if (!isTauri()) {
+    if (!formats.length) throw new Error("未选择有效的导出格式");
+    return formats.map((ext) => `C:\\mock\\output\\novel\\mock_1_CN.${ext === "markdown" ? "md" : ext}`);
+  }
+  return invoke("novel_translation_export", { novelId, formats });
+}
+
 /** 确认术语与风格（确认模式）。 */
 export async function confirmTranslationJob(jobId: string, terms: ConstraintTermEdit[], style: string): Promise<void> {
   if (!isTauri()) {

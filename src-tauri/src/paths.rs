@@ -138,6 +138,17 @@ pub fn default_output_dir() -> PathBuf {
     home_dir().join("Downloads").join(APP_NAME)
 }
 
+/// 用户输出目录锚定：绝对路径原样，相对路径锚定 data_dir
+/// （SPEC §4.4；抓取任务与译文导出共用同一语义）。
+pub fn anchor_output_dir(output_dir: &str, data_dir: &Path) -> PathBuf {
+    let path = PathBuf::from(output_dir);
+    if path.is_absolute() {
+        path
+    } else {
+        data_dir.join(path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,6 +158,19 @@ mod tests {
         let dir = default_output_dir();
         let s = dir.to_string_lossy().replace('\\', "/");
         assert!(s.ends_with("Downloads/pixiv-tool"), "got {s}");
+    }
+
+    #[test]
+    fn anchor_output_dir_relative_and_absolute() {
+        let data_dir = PathBuf::from("/data");
+        assert_eq!(
+            anchor_output_dir("downloads", &data_dir),
+            PathBuf::from("/data/downloads")
+        );
+        assert_eq!(
+            anchor_output_dir("/abs/out", &data_dir),
+            PathBuf::from("/abs/out")
+        );
     }
 
     #[test]

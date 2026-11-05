@@ -296,6 +296,7 @@ pub fn run() {
             commands::translation_cmds::novel_translation_jobs,
             commands::translation_cmds::novel_translation_status,
             commands::translation_cmds::novel_translation_result,
+            commands::translation_cmds::novel_translation_export,
             commands::translation_cmds::novel_translation_confirm,
             commands::translation_cmds::novel_translation_pause,
             commands::translation_cmds::novel_translation_resume,
