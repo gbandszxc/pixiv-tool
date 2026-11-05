@@ -138,7 +138,7 @@ impl Phase {
     }
 }
 
-/// Agent 角色。子 Agent 默认一层：只有 Main 可以派发，Translator / Reviewer 不再派生。
+/// Agent 角色。子 Agent 默认一层：只有 Main 可以派发，Translator / Reviewer / Scanner 不再派生。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -147,6 +147,7 @@ pub enum Role {
     Main,
     Translator,
     Reviewer,
+    Scanner,
 }
 
 impl Role {
@@ -155,6 +156,7 @@ impl Role {
             Self::Main => "main",
             Self::Translator => "translator",
             Self::Reviewer => "reviewer",
+            Self::Scanner => "scanner",
         }
     }
 
@@ -164,6 +166,7 @@ impl Role {
             Self::Main => Phase::Translate,
             Self::Translator => Phase::Translate,
             Self::Reviewer => Phase::Review,
+            Self::Scanner => Phase::PrepareConstraints,
         }
     }
 }

@@ -18,24 +18,26 @@ use crate::settings::{
     TRANSLATION_AGENT_BOOL_KEYS, TRANSLATION_AGENT_INT_RULES, validate_detail_image_scale_value,
     validate_filename_template_value, validate_image_cache_max_value, validate_max_wait_value,
     validate_novel_bg_color_value, validate_novel_font_scale_value, validate_output_dir_value,
-    validate_thumb_tier, validate_translation_agent_int_value, validate_translation_agent_settings,
-    validate_translation_timeout_value,
+    validate_stream_idle_value, validate_thumb_tier, validate_translation_agent_int_value,
+    validate_translation_agent_settings, validate_translation_timeout_value,
 };
 use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 54] = [
+const WRITABLE_KEYS: [&str; 56] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
     "translation_models",
     "translation_target_language",
     "translation_timeout_seconds",
+    "translation_stream_idle_seconds",
     "translation_extra",
     "translation_agent_global_concurrency",
     "translation_agent_novel_concurrency",
     "translation_agent_active_novels",
+    "translation_agent_adaptive_concurrency",
     "translation_agent_retry_limit",
     "translation_agent_backoff_base_ms",
     "translation_agent_backoff_max_seconds",
@@ -247,6 +249,9 @@ pub fn apply_settings_patch(
     }
     if let Some(value) = patch_obj.get("translation_timeout_seconds") {
         validate_translation_timeout_value(value)?;
+    }
+    if let Some(value) = patch_obj.get("translation_stream_idle_seconds") {
+        validate_stream_idle_value(value)?;
     }
     if let Some(value) = patch_obj.get("translation_models") {
         if !value.is_array() {

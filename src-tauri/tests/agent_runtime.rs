@@ -466,6 +466,7 @@ fn compaction_summarizes_middle_history_and_keeps_tool_pairing() {
             global_concurrency: 1,
             novel_concurrency: 1,
             active_novels: 2,
+            adaptive_concurrency: false,
         }));
         // 每次工具返回约 1100 token，两个轮次后必然触发压缩。
         let request = request(
@@ -570,6 +571,7 @@ fn scheduler_and_novel_permit_are_reusable_by_the_host() {
             global_concurrency: 2,
             novel_concurrency: 2,
             active_novels: 1,
+            adaptive_concurrency: false,
         }));
         let novel = scheduler.enter_novel(1).await;
         let permit = scheduler.model_permit(1).await;

@@ -64,6 +64,8 @@ enum Script {
     Json(Value),
     /// 建立响应后持续写 keepalive；客户端断开时置位 `disconnected`。
     Hang,
+    /// 建立响应、写出一段 SSE 后彻底停住：驱动流间空闲看门狗（ADR 0050）。
+    Stall,
 }
 
 struct MockServer {
@@ -122,6 +124,26 @@ impl MockServer {
                                 return;
                             }
                         }
+                    }
+                    Script::Stall => {
+                        socket
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                                  Connection: close\r\n\r\n",
+                            )
+                            .await
+                            .unwrap();
+                        socket.write_all(b"data: {\"x\":1}\n\n").await.unwrap();
+                        socket.flush().await.unwrap();
+                        // 之后一个字节都不发：等对端断开（读返回 0 / 错误）。
+                        let mut buffer = [0u8; 64];
+                        loop {
+                            match socket.read(&mut buffer).await {
+                                Ok(0) | Err(_) => break,
+                                Ok(_) => {}
+                            }
+                        }
+                        seen_disconnect.store(true, Ordering::SeqCst);
                     }
                 }
             }
@@ -804,4 +826,45 @@ async fn dropping_stream_closes_connection_and_releases_gate() {
         .await
         .expect("取消后许可必须归还")
         .expect("gate 未关闭");
+}
+
+/// 服务端发一段后彻底停住：流间空闲看门狗（read_timeout）应在秒级报错，
+/// 而不是等满总超时（ADR 0050）。
+#[tokio::test]
+async fn stalled_stream_errors_after_idle_timeout() {
+    let server = MockServer::start(vec![Script::Stall]).await;
+    // 总超时 600 秒远大于看门狗 1 秒：错误必须由看门狗触发。
+    let config = ProviderConfig::new(
+        ApiFormat::ChatCompletions,
+        server.base("/v1"),
+        "mock-model",
+        "test-key",
+        json!({}),
+        600,
+    )
+    .unwrap()
+    .with_idle_timeout(1);
+    let transport = config.transport().unwrap();
+    assert_eq!(transport.stream_idle_timeout(), Duration::from_secs(1));
+
+    let request = http::Request::post("http://invalid.example/v1/chat/completions")
+        .header("content-type", "application/json")
+        .body(Bytes::from_static(b"{}"))
+        .unwrap();
+    let response = transport.send_streaming(request).await.expect("headers 已到");
+    let mut body = response.into_body();
+    let first = body.next().await.expect("首个 chunk 应可读");
+    assert!(first.is_ok(), "首个 chunk 正常：{first:?}");
+
+    let started = tokio::time::Instant::now();
+    let second = tokio::time::timeout(Duration::from_secs(10), body.next())
+        .await
+        .expect("空闲看门狗 10 秒内必须返回");
+    let elapsed = started.elapsed();
+    let second = second.expect("流已产出错误项");
+    assert!(second.is_err(), "停住的流应以传输错误收场：{second:?}");
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "看门狗应在秒级触发，实际 {elapsed:?}"
+    );
 }

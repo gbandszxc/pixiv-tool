@@ -466,6 +466,7 @@ export default {
       currentChunk: "現在：ブロック {chunk}",
       previewOwner: "{agent} {chunk}",
       agentTranslator: "翻訳",
+      agentScanner: "スキャン",
       agentReviewer: "審査",
       completed: "作品全体の訳文を保存しました",
       completedWithUsage: "作品全体の訳文を保存しました · 使用量 {tokens} tokens",

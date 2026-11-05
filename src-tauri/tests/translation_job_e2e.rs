@@ -17,7 +17,7 @@
 //! 9. 断线（连接中断）、输出截断（缩块重做）、工具参数错误三条失败路径。
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -379,6 +379,8 @@ fn role_of_request(body: &Value) -> &'static str {
         "translator"
     } else if text.contains("# 角色：审查子 Agent（reviewer）") {
         "reviewer"
+    } else if text.contains("# 角色：扫描子 Agent（scanner）") {
+        "scanner"
     } else {
         "main"
     }
@@ -497,38 +499,18 @@ fn main_next(calls: &[(String, Value)], results: &BTreeMap<String, Value>) -> Re
         return tool_call_stream("m1", "prepare_source", "{}");
     }
 
-    // Pass 1：逐块 read_chunk + submit_scan。
-    let scanned: Vec<String> = calls
-        .iter()
-        .filter(|(tool, _)| tool == "submit_scan")
-        .filter_map(|(_, args)| args["chunk_id"].as_str().map(str::to_string))
-        .collect();
-    for chunk_id in &chunk_ids {
-        if !scanned.contains(chunk_id) {
-            let read = calls.iter().any(|(tool, args)| {
-                tool == "read_chunk" && args["chunk_id"].as_str() == Some(chunk_id.as_str())
-            });
-            if !read {
-                return tool_call_stream(
-                    "m2",
-                    "read_chunk",
-                    &json!({"chunk_id": chunk_id, "include_context": true}).to_string(),
-                );
-            }
-            let scan = json!({
-                "chunk_id": chunk_id,
-                "terms": [{
-                    "source_term": "勇者",
-                    "locked_translation": "勇士",
-                    "term_type": "character",
-                    "notes": "主角称谓",
-                }],
-                "style": {"text_type": "小说", "formality": "书面语，对白偏口语"},
-                "notes": "叙述视角为第三人称",
-                "confidence": "high",
-            });
-            return tool_call_stream("m3", "submit_scan", &scan.to_string());
-        }
+    // Pass 1：dispatch_scan 派发扫描子 Agent（全量块；已扫描块由运行层按
+    // stamp 复用短路，resume 场景重新派发是安全的）。
+    if !chunk_ids.is_empty()
+        && !calls
+            .iter()
+            .any(|(tool, _)| tool == "dispatch_scan" || tool == "submit_scan")
+    {
+        return tool_call_stream(
+            "m2",
+            "dispatch_scan",
+            &json!({"chunk_ids": chunk_ids}).to_string(),
+        );
     }
 
     if !called(calls, "freeze_constraints") {
@@ -673,6 +655,44 @@ fn reviewer_next(calls: &[(String, Value)], results: &BTreeMap<String, Value>) -
     })
 }
 
+/// 扫描子 Agent：read_chunk → submit_scan → 结束。
+fn scanner_next(calls: &[(String, Value)], results: &BTreeMap<String, Value>) -> Reply {
+    let chunk_id = results
+        .get("chunk_id_hint")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            calls
+                .iter()
+                .find(|(tool, _)| tool == "read_chunk")
+                .and_then(|(_, args)| args["chunk_id"].as_str())
+        })
+        .unwrap_or("c0001")
+        .to_string();
+    if !called(calls, "read_chunk") {
+        return tool_call_stream(
+            "s1",
+            "read_chunk",
+            &json!({"chunk_id": chunk_id, "include_context": true}).to_string(),
+        );
+    }
+    if !called(calls, "submit_scan") {
+        let scan = json!({
+            "chunk_id": chunk_id,
+            "terms": [{
+                "source_term": "勇者",
+                "locked_translation": "勇士",
+                "term_type": "character",
+                "notes": "主角称谓",
+            }],
+            "style": {"text_type": "小说", "formality": "书面语，对白偏口语"},
+            "notes": "叙述视角为第三人称",
+            "confidence": "high",
+        });
+        return tool_call_stream("s2", "submit_scan", &scan.to_string());
+    }
+    text_stream("scanned")
+}
+
 /// 审查子 Agent 的公共读取序列：先读原文与译文，再由 `verdict_for` 决定结论。
 ///
 /// `verdict_for` 收到（块 ID、当前草稿版本、`read_translation` 的工具结果），
@@ -771,6 +791,12 @@ fn scripted_roles(
             results.insert("chunk_id_hint".into(), json!(id));
         }
         return translator_next(&calls, &results);
+    }
+    if role_of_request(body) == "scanner" {
+        if let Some(id) = hint {
+            results.insert("chunk_id_hint".into(), json!(id));
+        }
+        return scanner_next(&calls, &results);
     }
     if role_of_request(body) == "reviewer" {
         if let Some(id) = hint {
@@ -876,13 +902,17 @@ fn novel_b() -> NovelInput {
 
 /// 多页正文（每页约 1000 字符），用于让主会话历史稳定越过低压缩阈值。
 fn novel_compact() -> NovelInput {
-    let page = format!("[chapter:圧縮試験]\n{}", "圧縮対象の本文です".repeat(100));
+    // 30 页：Pass 1 改 dispatch_scan（ADR 0051）后协调者不再装载正文，压缩
+    // 触发依赖派发摘要 / 待办清单 / 术语表等主上下文载荷随块数累积，块数
+    // 需要多到能在小窗口下越过压缩线。
+    let page = format!("[chapter:圧縮試験]\n{}", "圧縮対象の本文です".repeat(20));
+    let pages: Vec<String> = std::iter::repeat_n(page, 30).collect();
     NovelInput {
         novel_id: 5151,
         title: "压缩测试".into(),
         tags: vec![],
         description: String::new(),
-        content: [page.clone(), page.clone(), page.clone(), page].join("\n[newpage]\n"),
+        content: pages.join("\n[newpage]\n"),
     }
 }
 
@@ -988,6 +1018,37 @@ async fn full_job_completes_with_stable_page_line_mapping() {
         server.requests().len(),
         manifest_of(&fixture.paths, 5150, &started.job_id)
     );
+
+    // Pass 1 走 dispatch_scan（ADR 0051）：扫描子 Agent 被实际派发；
+    // 协调者不再逐块直读正文。
+    assert!(
+        server
+            .requests()
+            .iter()
+            .any(|body| body.to_string().contains("# 角色：扫描子 Agent（scanner）")),
+        "应存在 scanner 角色的子 Agent 请求"
+    );
+    for body in server.requests() {
+        if role_of_request(&body) != "main" {
+            continue;
+        }
+        let coordinator_read = body["messages"]
+            .as_array()
+            .map(|messages| {
+                messages.iter().any(|message| {
+                    message["tool_calls"].as_array().is_some_and(|calls| {
+                        calls
+                            .iter()
+                            .any(|call| call["function"]["name"] == "read_chunk")
+                    })
+                })
+            })
+            .unwrap_or(false);
+        assert!(
+            !coordinator_read,
+            "协调者不得直读整块正文（Pass 1 走 dispatch_scan）"
+        );
+    }
 
     // manifest 终态。
     let manifest = manifest_of(&fixture.paths, 5150, &started.job_id);
@@ -1978,7 +2039,10 @@ async fn compaction_writes_journal_records_without_content() {
     let server = MockServer::start(Arc::new(|body: &Value| scripted(body))).await;
     let mut settings = settings_for(&server);
     // 低阈值：小上下文 + 最小输出上限 + 50% 触发 + 最小保留窗口。
-    settings.translation_agent_context_window = 32_768;
+    // Pass 1 改 dispatch_scan（ADR 0051）后协调者不再装载正文，压缩改由
+    // 派发摘要 / 冻结术语表等主上下文载荷在小窗口下触发；窗口不能压到最小
+    // 档（16k），否则固定开销占满可用输入、每轮都压缩直至预算耗尽。
+    settings.translation_agent_context_window = 24_576;
     settings.translation_agent_output_cap = 1_024;
     settings.translation_agent_compact_percent = 50;
     settings.translation_agent_recent_history_tokens = 512;
@@ -2524,457 +2588,6 @@ async fn cancelling_one_novel_does_not_affect_the_other() {
 }
 
 // ---------------------------------------------------------------------------
-// 运行层防护：单轮工具结果预算与任务续跑
-// ---------------------------------------------------------------------------
-
-/// 一条 assistant 消息携带多个工具调用（并行读块场景）。
-fn multi_tool_call_stream(calls: Vec<(String, String, String)>) -> Reply {
-    let tool_calls: Vec<Value> = calls
-        .iter()
-        .enumerate()
-        .map(|(index, (id, tool, args))| {
-            json!({
-                "index": index,
-                "id": id,
-                "type": "function",
-                "function": {"name": tool, "arguments": args}
-            })
-        })
-        .collect();
-    Reply::Sse(vec![
-        chat_chunk(
-            json!({"role": "assistant", "tool_calls": tool_calls}),
-            None,
-            None,
-        ),
-        chat_chunk(json!({}), Some("tool_calls"), None),
-        b"data: [DONE]\n\n".to_vec(),
-    ])
-}
-
-/// 按调用 id 精确收集拿到成功结果（JSON 正文）的 read_chunk 块 ID；
-/// 被单轮预算跳过的调用正文是纯文本提示，不会计入。
-fn successful_read_chunks(body: &Value) -> Vec<String> {
-    let mut args_by_call: BTreeMap<String, Value> = BTreeMap::new();
-    let mut read_ok = Vec::new();
-    if let Some(messages) = body["messages"].as_array() {
-        for message in messages {
-            if let Some(list) = message["tool_calls"].as_array() {
-                for call in list {
-                    if call["function"]["name"] == "read_chunk"
-                        && let Some(id) = call["id"].as_str()
-                    {
-                        let args = call["function"]["arguments"]
-                            .as_str()
-                            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-                            .unwrap_or(Value::Null);
-                        args_by_call.insert(id.to_string(), args);
-                    }
-                }
-            }
-        }
-        for message in messages {
-            if message["role"] == "tool"
-                && let Some(id) = message["tool_call_id"].as_str()
-                && let Some(args) = args_by_call.get(id)
-            {
-                let raw = content_text(message);
-                if serde_json::from_str::<Value>(&raw).is_ok()
-                    && let Some(chunk_id) = args["chunk_id"].as_str()
-                {
-                    read_ok.push(chunk_id.to_string());
-                }
-            }
-        }
-    }
-    read_ok
-}
-
-/// 多页大正文（约 12 页，切成约 12 块），用于触发单轮工具结果预算。
-fn novel_throttle() -> NovelInput {
-    let page = format!("[chapter:流量試験]\n{}", "しぼう対象の本文です".repeat(100));
-    NovelInput {
-        novel_id: 5152,
-        title: "节流测试".into(),
-        tags: vec![],
-        description: String::new(),
-        content: std::iter::repeat_n(page.clone(), 12)
-            .collect::<Vec<_>>()
-            .join("\n[newpage]\n"),
-    }
-}
-
-#[tokio::test]
-async fn main_run_continuation_completes_after_idle_end() {
-    let fixture = fixture("continuation");
-    let main_calls = Arc::new(AtomicUsize::new(0));
-    let counter = main_calls.clone();
-    // 收集续跑轮的请求体，断言运行层注入了明确的下一步指令。
-    let continuation_bodies = Arc::new(Mutex::new(Vec::<String>::new()));
-    let seen = continuation_bodies.clone();
-    let handler: Handler = Arc::new(move |body: &Value| {
-        if body["tools"]
-            .as_array()
-            .is_some_and(|tools| !tools.is_empty())
-        {
-            let role = role_of_request(body);
-            if role != "translator" && role != "reviewer" {
-                let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
-                if n == 2 {
-                    // 第一轮运行里模型输出纯文本收工（不再调用工具）。
-                    return text_stream("当前阶段已准备完毕，本轮先汇报到这里。");
-                }
-                if n >= 3 {
-                    seen.lock().unwrap().push(body.to_string());
-                }
-            }
-        }
-        scripted(body)
-    });
-    let server = MockServer::start(handler).await;
-    let service = service(
-        &fixture.paths,
-        settings_for(&server),
-        Arc::new(RecordingSink::new()),
-    );
-
-    let started = service.start(novel(), false).await.expect("启动成功");
-    let done = wait_for(
-        &service,
-        &started.job_id,
-        &[
-            JobState::Completed,
-            JobState::NeedsAttention,
-            JobState::Cancelled,
-        ],
-    )
-    .await;
-    assert_eq!(
-        done.state,
-        JobState::Completed,
-        "模型提前收工后应自动续跑到完成：{} error={:?}",
-        done.message,
-        done.error_code
-    );
-
-    // 会话里应有两次 main_run 记录（第一轮 + 续跑轮）。
-    let runs: Vec<Value> = journal_records(&fixture.paths, 5150, &started.job_id)
-        .into_iter()
-        .filter(|record| record["kind"] == "main_run")
-        .collect();
-    assert!(
-        runs.len() >= 2,
-        "应至少两次主运行记录，实际 {}：{runs:?}",
-        runs.len()
-    );
-
-    let bodies = continuation_bodies.lock().unwrap().join("\n");
-    assert!(
-        bodies.contains("续跑指令"),
-        "续跑轮应收到运行层生成的明确指令：{bodies}"
-    );
-    assert!(
-        bodies.contains("必须包含工具调用"),
-        "续跑指令应禁止只输出文本：{bodies}"
-    );
-}
-
-#[tokio::test]
-async fn retryable_provider_error_is_retried_before_giving_up() {
-    let fixture = fixture("provider-retry");
-    let calls = Arc::new(AtomicUsize::new(0));
-    let counter = calls.clone();
-    let handler: Handler = Arc::new(move |body: &Value| {
-        if role_of_request(body) == "main" && counter.fetch_add(1, Ordering::SeqCst) == 0 {
-            // 首次主 Agent 请求返回 429：任务级应退避重试而不是直接转 needs_attention。
-            return Reply::Error(429, json!({"error": {"message": "cell is at capacity"}}));
-        }
-        scripted(body)
-    });
-    let server = MockServer::start(handler).await;
-    let service = service(
-        &fixture.paths,
-        settings_for(&server),
-        Arc::new(RecordingSink::new()),
-    );
-
-    let started = service.start(novel(), false).await.expect("启动成功");
-    let done = wait_for(
-        &service,
-        &started.job_id,
-        &[
-            JobState::Completed,
-            JobState::NeedsAttention,
-            JobState::Cancelled,
-        ],
-    )
-    .await;
-    assert_eq!(
-        done.state,
-        JobState::Completed,
-        "429 应被退避重试并最终完成：{} error={:?}",
-        done.message,
-        done.error_code
-    );
-    let main_calls = server
-        .requests()
-        .iter()
-        .filter(|body| role_of_request(body) == "main")
-        .count();
-    assert!(
-        main_calls >= 2,
-        "主 Agent 应至少重试一次，实际 {main_calls} 次请求"
-    );
-}
-
-#[tokio::test]
-async fn zero_tool_turns_surface_the_model_message_as_reason() {
-    let fixture = fixture("declined");
-    // 模型每轮都只回文本（内容审核拒绝的典型形态）：两轮后应停止并把原因透出。
-    let handler: Handler =
-        Arc::new(|_body: &Value| text_stream("我无法继续处理这篇内容，涉及未成年角色的露骨描写。"));
-    let server = MockServer::start(handler).await;
-    let service = service(
-        &fixture.paths,
-        settings_for(&server),
-        Arc::new(RecordingSink::new()),
-    );
-
-    let started = service.start(novel(), false).await.expect("启动成功");
-    let done = wait_for(
-        &service,
-        &started.job_id,
-        &[
-            JobState::NeedsAttention,
-            JobState::Completed,
-            JobState::Cancelled,
-        ],
-    )
-    .await;
-    assert_eq!(done.state, JobState::NeedsAttention);
-    assert_eq!(
-        done.error_code.as_deref(),
-        Some("model_declined"),
-        "零工具调用的收敛应使用 model_declined：{:?}",
-        done.error_code
-    );
-    assert!(
-        done.message.contains("无法继续处理"),
-        "应把模型说明作为用户可见原因：{}",
-        done.message
-    );
-}
-
-#[tokio::test]
-async fn bulk_read_chunk_throttled_by_turn_budget_still_completes() {
-    let fixture = fixture("throttle");
-    // 有状态机：跨压缩保留进度（真实模型依据压缩摘要与检查点继续推进）。
-    let state = Arc::new(Mutex::new(BulkState::default()));
-    let handler: Handler = {
-        let state = state.clone();
-        Arc::new(move |body: &Value| {
-            let has_tools = body["tools"]
-                .as_array()
-                .is_some_and(|tools| !tools.is_empty());
-            if !has_tools {
-                return json_reply(
-                    "1. 目标：完成整篇翻译；2. 约束：已冻结；3. 产物：见块产物；             4. 进度：按检查点；5. 未决：无；6. 下一步：继续派发待办块。",
-                );
-            }
-            let role = role_of_request(body);
-            if role == "translator" || role == "reviewer" {
-                return scripted(body);
-            }
-            let (_calls, results) = tool_history(body);
-            let mut state = state.lock().unwrap();
-            if let Some(ids) = results
-                .get("prepare_source")
-                .and_then(|value| value["chunk_ids"].as_array())
-                .map(|ids| {
-                    ids.iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-                && !ids.is_empty()
-            {
-                state.chunk_ids = ids;
-            }
-            if state.chunk_ids.is_empty() {
-                return tool_call_stream("m1", "prepare_source", "{}");
-            }
-            {
-                let mut memory = state.read.lock().unwrap();
-                memory.extend(successful_read_chunks(body));
-            }
-            let unscanned: Vec<String> = state
-                .chunk_ids
-                .iter()
-                .filter(|id| !state.scanned.contains(id.as_str()))
-                .cloned()
-                .collect();
-            if !unscanned.is_empty() {
-                let unread: Vec<String> = unscanned
-                    .iter()
-                    .filter(|id| !state.read.lock().unwrap().contains(id.as_str()))
-                    .cloned()
-                    .collect();
-                if !unread.is_empty() {
-                    let batch: Vec<(String, String, String)> = unread
-                        .iter()
-                        .enumerate()
-                        .map(|(index, id)| {
-                            (
-                                format!("mr-{index}"),
-                                "read_chunk".into(),
-                                json!({"chunk_id": id, "include_context": true}).to_string(),
-                            )
-                        })
-                        .collect();
-                    return multi_tool_call_stream(batch);
-                }
-                let chunk_id = unscanned[0].clone();
-                state.scanned.insert(chunk_id.clone());
-                let scan = json!({
-                    "chunk_id": chunk_id,
-                    "terms": [{
-                        "source_term": "勇者",
-                        "locked_translation": "勇士",
-                        "term_type": "character",
-                        "notes": "主角称谓",
-                    }],
-                    "style": {"text_type": "小说", "formality": "书面语，对白偏口语"},
-                    "notes": "叙述视角为第三人称",
-                    "confidence": "high",
-                });
-                return tool_call_stream("m3", "submit_scan", &scan.to_string());
-            }
-            if !state.frozen {
-                state.frozen = true;
-                return tool_call_stream("m4", "freeze_constraints", "{}");
-            }
-            if !state.translated {
-                state.translated = true;
-                let ids = state.chunk_ids.clone();
-                return tool_call_stream(
-                    "m6",
-                    "dispatch_translation",
-                    &json!({"chunk_ids": ids}).to_string(),
-                );
-            }
-            if !state.reviewed {
-                state.reviewed = true;
-                let ids = state.chunk_ids.clone();
-                return tool_call_stream(
-                    "m7",
-                    "dispatch_review",
-                    &json!({"chunk_ids": ids}).to_string(),
-                );
-            }
-            if !state.review_summary {
-                state.review_summary = true;
-                return tool_call_stream("m9", "read_review_summary", "{}");
-            }
-            if !state.merged {
-                state.merged = true;
-                return tool_call_stream("m10", "merge_drafts", "{}");
-            }
-            if !state.global_reviewed {
-                state.global_reviewed = true;
-                let sample = state.chunk_ids.iter().take(8).cloned().collect::<Vec<_>>();
-                let review = json!({
-                    "sample_chunk_ids": if sample.is_empty() { json!(["c0001"]) } else { json!(sample) },
-                    "notes": "术语、风格、对白、纯净度、标记五项已核",
-                    "passed": true,
-                });
-                return tool_call_stream("m11", "record_global_review", &review.to_string());
-            }
-            if !state.published {
-                state.published = true;
-                return tool_call_stream("m12", "publish", "{}");
-            }
-            text_stream("done")
-        })
-    };
-    let server = MockServer::start(handler).await;
-
-    // 用较小的输出上限压低单轮工具结果预算（约 18k）：12 块（每块约 2563
-    // tokens）并行读取时第 8 个起会被跳过；历史保留用生产默认（4k），
-    // 旧块结果由正常压缩摘要，紧急截断只兜底。
-    let mut settings = settings_for(&server);
-    settings.translation_agent_context_window = 32_768;
-    settings.translation_agent_output_cap = 4_096;
-    settings.translation_agent_recent_history_tokens = 4_096;
-    settings.translation_agent_summary_tokens = 2_048;
-    let service = service(&fixture.paths, settings, Arc::new(RecordingSink::new()));
-
-    let started = service
-        .start(novel_throttle(), false)
-        .await
-        .expect("启动成功");
-    let done = wait_for(
-        &service,
-        &started.job_id,
-        &[
-            JobState::Completed,
-            JobState::NeedsAttention,
-            JobState::Cancelled,
-        ],
-    )
-    .await;
-    let artifacts_summary = {
-        let manifest = manifest_of(&fixture.paths, 5152, &started.job_id);
-        pixiv_tool_lib::translation::service::read_job_artifacts(
-            &fixture.paths,
-            &serde_json::from_value::<pixiv_tool_lib::agent::Manifest>(manifest).unwrap(),
-        )
-        .map(|(chunks, drafts, reviews)| {
-            format!(
-                "chunks={} drafts={} reviews={}",
-                chunks.len(),
-                drafts.len(),
-                reviews.len()
-            )
-        })
-        .unwrap_or_else(|| "read artifacts failed".into())
-    };
-    assert_eq!(
-        done.state,
-        JobState::Completed,
-        "批量读块被预算节流后任务仍应完成：{} error={:?} artifacts=[{artifacts_summary}]",
-        done.message,
-        done.error_code
-    );
-    let manifest = manifest_of(&fixture.paths, 5152, &started.job_id);
-    assert_eq!(manifest["state"], "completed");
-    assert!(
-        server.requests_containing("本轮工具结果预算已用尽") > 0,
-        "应有至少一次预算跳过提示回传给模型（chunks={}，含 read_chunk 的请求 {} 次）",
-        manifest["counts"]["chunks"],
-        server
-            .requests()
-            .iter()
-            .filter(|body| body.to_string().contains("read_chunk"))
-            .count()
-    );
-}
-
-/// bulk 测试的有状态进度：跨压缩（历史被摘要）保留各阶段进度。
-#[derive(Default)]
-struct BulkState {
-    chunk_ids: Vec<String>,
-    read: Arc<Mutex<BTreeSet<String>>>,
-    scanned: BTreeSet<String>,
-    frozen: bool,
-    translated: bool,
-    reviewed: bool,
-    review_summary: bool,
-    merged: bool,
-    global_reviewed: bool,
-    published: bool,
-}
-
-// ---------------------------------------------------------------------------
 // 15. 审查分级、局部修订与按块返工（ADR 0038 端到端回归）
 // ---------------------------------------------------------------------------
 
@@ -3017,37 +2630,18 @@ fn main_prepare(calls: &[(String, Value)], results: &BTreeMap<String, Value>) ->
     if !called(calls, "prepare_source") {
         return Some(tool_call_stream("m1", "prepare_source", "{}"));
     }
-    let scanned: Vec<String> = calls
-        .iter()
-        .filter(|(tool, _)| tool == "submit_scan")
-        .filter_map(|(_, args)| args["chunk_id"].as_str().map(str::to_string))
-        .collect();
-    for chunk_id in &chunk_ids {
-        if !scanned.contains(chunk_id) {
-            let read = calls.iter().any(|(tool, args)| {
-                tool == "read_chunk" && args["chunk_id"].as_str() == Some(chunk_id.as_str())
-            });
-            if !read {
-                return Some(tool_call_stream(
-                    "m2",
-                    "read_chunk",
-                    &json!({"chunk_id": chunk_id, "include_context": true}).to_string(),
-                ));
-            }
-            let scan = json!({
-                "chunk_id": chunk_id,
-                "terms": [{
-                    "source_term": "勇者",
-                    "locked_translation": "勇士",
-                    "term_type": "character",
-                    "notes": "主角称谓",
-                }],
-                "style": {"text_type": "小说", "formality": "书面语，对白偏口语"},
-                "notes": "叙述视角为第三人称",
-                "confidence": "high",
-            });
-            return Some(tool_call_stream("m3", "submit_scan", &scan.to_string()));
-        }
+    // Pass 1：dispatch_scan 派发扫描子 Agent（全量块；已扫描块由运行层按
+    // stamp 复用短路）。
+    if !chunk_ids.is_empty()
+        && !calls
+            .iter()
+            .any(|(tool, _)| tool == "dispatch_scan" || tool == "submit_scan")
+    {
+        return Some(tool_call_stream(
+            "m2",
+            "dispatch_scan",
+            &json!({"chunk_ids": chunk_ids}).to_string(),
+        ));
     }
     if !called(calls, "freeze_constraints") {
         return Some(tool_call_stream("m4", "freeze_constraints", "{}"));

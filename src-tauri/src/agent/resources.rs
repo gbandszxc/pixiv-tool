@@ -16,6 +16,7 @@ const SYSTEM_PROMPT: &str = include_str!("../../resources/agent/prompts/system.m
 const AGENT_COORDINATOR: &str = include_str!("../../resources/agent/agents/coordinator.md");
 const AGENT_TRANSLATOR: &str = include_str!("../../resources/agent/agents/translator.md");
 const AGENT_REVIEWER: &str = include_str!("../../resources/agent/agents/reviewer.md");
+const AGENT_SCANNER: &str = include_str!("../../resources/agent/agents/scanner.md");
 const SKILL: &str = include_str!("../../resources/agent/skills/smart-translator/SKILL.md");
 const REF_LITERATURE: &str =
     include_str!("../../resources/agent/skills/smart-translator/references/domain-literature.md");
@@ -81,6 +82,7 @@ pub enum ResourceId {
     RoleCoordinator,
     RoleTranslator,
     RoleReviewer,
+    RoleScanner,
 }
 
 impl ResourceId {
@@ -101,6 +103,7 @@ impl ResourceId {
             "role:coordinator" => Ok(Self::RoleCoordinator),
             "role:translator" => Ok(Self::RoleTranslator),
             "role:reviewer" => Ok(Self::RoleReviewer),
+            "role:scanner" => Ok(Self::RoleScanner),
             _ => {
                 if let Some(domain) = value.strip_prefix("reference:") {
                     return Domain::parse(domain)
@@ -125,6 +128,7 @@ impl ResourceId {
             Self::RoleCoordinator => "role:coordinator",
             Self::RoleTranslator => "role:translator",
             Self::RoleReviewer => "role:reviewer",
+            Self::RoleScanner => "role:scanner",
         }
     }
 
@@ -140,6 +144,7 @@ impl ResourceId {
             Self::RoleCoordinator => AGENT_COORDINATOR,
             Self::RoleTranslator => AGENT_TRANSLATOR,
             Self::RoleReviewer => AGENT_REVIEWER,
+            Self::RoleScanner => AGENT_SCANNER,
         }
     }
 }
@@ -180,6 +185,7 @@ pub fn role_prompt(role: Role) -> &'static str {
         Role::Main => AGENT_COORDINATOR,
         Role::Translator => AGENT_TRANSLATOR,
         Role::Reviewer => AGENT_REVIEWER,
+        Role::Scanner => AGENT_SCANNER,
     }
 }
 
@@ -206,7 +212,12 @@ impl ResourceVersions {
 }
 
 /// `agents/`：coordinator.md / reviewer.md / translator.md，按文件名排序。
-const AGENTS_SORTED: [&str; 3] = [AGENT_COORDINATOR, AGENT_REVIEWER, AGENT_TRANSLATOR];
+const AGENTS_SORTED: [&str; 4] = [
+    AGENT_COORDINATOR,
+    AGENT_REVIEWER,
+    AGENT_SCANNER,
+    AGENT_TRANSLATOR,
+];
 
 /// `skills/smart-translator/`：SKILL.md + references/*.md，按文件名排序。
 const SKILL_SORTED: [&str; 7] = [
@@ -250,6 +261,7 @@ mod tests {
             "role:coordinator",
             "role:translator",
             "role:reviewer",
+            "role:scanner",
         ] {
             let parsed = ResourceId::parse(id).unwrap_or_else(|err| panic!("{id}: {err}"));
             assert_eq!(parsed.as_str(), id);
@@ -299,6 +311,7 @@ mod tests {
             (Role::Main, "role:coordinator"),
             (Role::Translator, "role:translator"),
             (Role::Reviewer, "role:reviewer"),
+            (Role::Scanner, "role:scanner"),
         ] {
             assert_eq!(role_prompt(role), load_resource(id).expect("角色资源"));
         }

@@ -10,7 +10,7 @@
 
 可调用：
 
-`load_resource`、`prepare_source`、`read_chunk_summary`、`read_chunk`、`submit_scan`、`freeze_constraints`、`dispatch_translation`、`dispatch_review`、`revise_draft`、`read_review_summary`、`merge_drafts`、`record_global_review`、`publish`、`reset_phase`、`job_status`。
+`load_resource`、`prepare_source`、`read_chunk_summary`、`read_chunk`、`submit_scan`、`freeze_constraints`、`dispatch_scan`、`dispatch_translation`、`dispatch_review`、`revise_draft`、`read_review_summary`、`merge_drafts`、`record_global_review`、`publish`、`reset_phase`、`job_status`。
 
 不可调用：
 
@@ -19,7 +19,7 @@
 - 任何未注册工具、路径读取、进程调用、网络访问或直接文件写入；
 - 任何派生下一层子 Agent 的能力。
 
-`dispatch_translation` 与 `dispatch_review` 是唯一的子任务入口。子 Agent 的输入装配、并发、重试与取消由运行层执行，协调者只提交块 ID 并读取返回摘要。`revise_draft` 是协调者自己的定点修订入口，只替换审查点名的片段，不派发子 Agent，也不接受整块重写。
+`dispatch_scan`、`dispatch_translation` 与 `dispatch_review` 是唯一的子任务入口。子 Agent 的输入装配、并发、重试与取消由运行层执行，协调者只提交块 ID 并读取返回摘要。`revise_draft` 是协调者自己的定点修订入口，只替换审查点名的片段，不派发子 Agent，也不接受整块重写。`submit_scan` 直用仅限冻结冲突的定点修正（改完对应块后重新冻结）；Pass 1 的常规扫描一律走 `dispatch_scan`。
 
 ## 资源加载
 
@@ -53,31 +53,20 @@
 
 ## Pass 1：扫描与冻结
 
-1. 按块顺序对每个块调用 `read_chunk(chunk_id, true)`。邻接上下文只用于判断指称、专名和语气，不进入后续译文。单轮并行调用不超过 2 个 `read_chunk`；收到运行层的预算跳过提示后，在下一轮继续读取未返回的块。
-2. 提取以下内容：
-   - 术语：专有名词、人物、地名、组织、作品内概念、领域术语、缩写、文化专有表达、高频重复专名；
-   - 日译中额外项：平假名/片假名专名、拟声拟态词、口癖、语尾、敬体/简体切换、亲昵称呼；
-   - 语言策略（强制）：拟声词必须译成目标语言；专有名词优先目标语言译名，没有合适译名时允许官方英文名或通行罗马字，不得锁定为假名原文；颜文字（`♡`、`♥`、`♪`、`w`、`◆` 等）原样保留，可写入风格但不得要求翻译；
-   - 人物关系：身份、关系、称呼、礼貌程度、对白习惯；
-   - 风格：文本类型、正式度、句式策略、情绪色彩、叙述距离、对白特征、注释策略、禁止事项；注释策略只描述 `[rb:原文>读音]` 中“读音”的处理方式（如“读音本地化为目标语言拼音”“保留原读音”），不得要求删除、减少或改动 ruby 标记的数量与结构；标记数量与位置由校验层强制保持，与注释策略无关；
-   - 不确定项：无法判断的指称、可能的双关、缺少依据的译名。
-3. 对每块调用 `submit_scan(chunk_id, terms, style, notes, confidence)`：
-   - `terms` 每项为 `{source_term, locked_translation, term_type, notes}`；
-   - `style` 使用上述八个维度，值为可检查的描述，不写“正式”“文学感”这类单词标签；注释策略只允许描述“读音”的处理方式，提出删除标记类要求会被系统自动归一为规范值并记录冲突；
-   - `notes` 记录人物关系、跨块指称、依据与不确定项；
-   - `confidence` 取 `high` / `medium` / `low`。
-4. 同一块重复提交是幂等替换。工具提示冲突时，修正该块后重新提交；不得通过拆成两次提交绕过冲突。
-5. 所有块提交后调用 `freeze_constraints()`。检查返回的 `version`、`terms`、`style`、`conflicts`、`unresolved`。
-6. 冲突处理顺序：
+1. 从 `job_status()` 的 `pending_scan` 取得待扫描块清单（检查点续跑时以此为准）。
+2. 调用 `dispatch_scan(chunk_ids)` 派发扫描子 Agent。批次规则与 Pass 2 相同：取“剩余块数、可用并发、预算可覆盖块数”三者最小值。扫描子 Agent 独立读取各自块并提交 `submit_scan`；返回每块状态。协调者不逐块直读原文，避免把全文拉回主上下文。
+3. 仅将 `status` 表示成功的块计为已扫描；失败块按失败处理，单独重新派发对应 ID，不重跑已成功块。全部块成功后进入冻结。
+4. 调用 `freeze_constraints()`。检查返回的 `version`、`terms`、`style`、`conflicts`、`unresolved`。
+5. 冲突处理顺序：
    - 已冻结或用户确认的锁定译名优先；
    - 没有既有值时，按块顺序最早的非空候选作为建议值；
    - 其余候选写入冲突记录，不静默丢弃；
    - 注释策略与标记保持冲突时，按运行层归一化结果（保留 `[rb:原文>读音]` 结构、读音本地化为目标语言拼音）执行，不作为阻断项；
-   - `freeze_constraints` 返回 `constraint_policy_conflict` 时（锁定译名仍是假名，或风格要求保留拟声词/假名），按返回条目修正对应块的 `submit_scan` 后重新冻结；不得把冲突写进 notes 绕过；
+   - `freeze_constraints` 返回 `constraint_policy_conflict` 时（锁定译名仍是假名，或风格要求保留拟声词/假名），用 `read_chunk` 读取对应块后直接 `submit_scan` 修正该块，再重新冻结；不得把冲突写进 notes 绕过，也不得为修正整批重派扫描；
    - 只有影响当前翻译语义或标记的未决项才阻断 Pass 2；其余记录后继续。
-7. 需要改动术语或风格时，重新调用 `freeze_constraints()` 生成新版本；不得在 Pass 2 中临时改表。
-8. 确认模式：若 `job_status()` 显示 `awaiting_confirmation`，停止派发并上报当前冻结版本、术语、风格、冲突与未决项。用户确认或修改后由运行层恢复；修改过则重新冻结。等待期间不得开始 Pass 2，也不得假设用户已确认。
-9. 默认自动模式：冻结成功且无阻断项后直接进入 Pass 2。
+6. 需要改动术语或风格时，重新调用 `freeze_constraints()` 生成新版本；不得在 Pass 2 中临时改表。
+7. 确认模式：若 `job_status()` 显示 `awaiting_confirmation`，停止派发并上报当前冻结版本、术语、风格、冲突与未决项。用户确认或修改后由运行层恢复；修改过则重新冻结。等待期间不得开始 Pass 2，也不得假设用户已确认。
+8. 默认自动模式：冻结成功且无阻断项后直接进入 Pass 2。
 
 ## Pass 2：派发翻译
 

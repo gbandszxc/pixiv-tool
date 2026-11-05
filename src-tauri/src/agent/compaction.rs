@@ -22,7 +22,7 @@ use rig_core::{
 };
 
 use crate::agent::{
-    BudgetConfig, BudgetTracker, CancelToken, JobScope, Phase, Scheduler, TokenUsage,
+    BudgetConfig, BudgetTracker, CancelToken, FailureClass, JobScope, Phase, Scheduler, TokenUsage,
     budget::{available_input, estimate_tokens, truncate_to_tokens},
     events::{log_job, warn_job},
 };
@@ -387,8 +387,18 @@ pub async fn compact_now(
     };
 
     let response = match response {
-        Ok(response) => response,
+        Ok(response) => {
+            // 摘要请求成功：自适应调度容量按连续成功爬升（ADR 0050）。
+            if let Some(scheduler) = &config.scheduler {
+                scheduler.report_success();
+            }
+            response
+        }
         Err(error) => {
+            // 摘要请求失败：按结果未知收缩自适应容量（具体 HTTP 类别已丢失）。
+            if let Some(scheduler) = &config.scheduler {
+                scheduler.report_failure(FailureClass::UnknownOutcome);
+            }
             let message = safe_error(&error.to_string());
             warn_job(
                 &config.scope,

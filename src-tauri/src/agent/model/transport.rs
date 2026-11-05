@@ -48,9 +48,15 @@ pub struct WreqTransport {
     gate: Option<Arc<Semaphore>>,
     /// 单请求总超时（ADR 0023）；按请求经 `RequestBuilder::timeout` 下发。
     timeout: Duration,
+    /// 流间空闲看门狗（ADR 0050）：响应体两次读取之间的最大空闲时长；
+    /// 按请求经 `RequestBuilder::read_timeout` 下发，挂死流不再占满总超时。
+    idle_timeout: Duration,
     /// 脱敏密钥：错误文本中回显的 API key 原文替换为 `[REDACTED]`。
     redact_key: String,
 }
+
+/// 流间空闲看门狗默认值：流式生成两次增量之间超过 60 秒视为挂死。
+pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 impl WreqTransport {
     /// 用已配置好的 wreq client 与最终端点构造传输；`timeout` 为单请求总超时。
@@ -61,8 +67,15 @@ impl WreqTransport {
             static_headers: HeaderMap::new(),
             gate: None,
             timeout,
+            idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
             redact_key: String::new(),
         }
+    }
+
+    /// 注入流间空闲看门狗时长（ADR 0050）；覆盖默认 60 秒。
+    pub fn with_idle_timeout(mut self, idle: Duration) -> Self {
+        self.idle_timeout = idle;
+        self
     }
 
     /// 叠加一个静态请求头；同名时覆盖 Rig 生成的头。
@@ -94,6 +107,11 @@ impl WreqTransport {
         self.timeout
     }
 
+    /// 流间空闲看门狗时长（供测试断言配置已下发到传输层）。
+    pub fn stream_idle_timeout(&self) -> Duration {
+        self.idle_timeout
+    }
+
     /// 闸门实例（供上游诊断 / 测试断言接线正确；不要用它绕过 acquire）。
     pub fn gate(&self) -> Option<&Arc<Semaphore>> {
         self.gate.as_ref()
@@ -114,6 +132,7 @@ impl HttpClientExt for WreqTransport {
         let static_headers = self.static_headers.clone();
         let gate = self.gate.clone();
         let timeout = self.timeout;
+        let idle_timeout = self.idle_timeout;
         let redact_key = self.redact_key.clone();
         let (parts, body) = req.into_parts();
         let body: Bytes = body.into();
@@ -125,6 +144,7 @@ impl HttpClientExt for WreqTransport {
                 &client,
                 &endpoint,
                 timeout,
+                idle_timeout,
                 parts,
                 &static_headers,
                 body,
@@ -180,6 +200,7 @@ impl HttpClientExt for WreqTransport {
         let static_headers = self.static_headers.clone();
         let gate = self.gate.clone();
         let timeout = self.timeout;
+        let idle_timeout = self.idle_timeout;
         let redact_key = self.redact_key.clone();
         let (parts, body) = req.into_parts();
         let body: Bytes = body.into();
@@ -190,6 +211,7 @@ impl HttpClientExt for WreqTransport {
                 &client,
                 &endpoint,
                 timeout,
+                idle_timeout,
                 parts,
                 &static_headers,
                 body,
@@ -256,6 +278,7 @@ async fn send_once(
     client: &wreq::Client,
     endpoint: &tauri::Url,
     timeout: Duration,
+    idle_timeout: Duration,
     mut parts: http::request::Parts,
     static_headers: &HeaderMap,
     body: Bytes,
@@ -271,6 +294,9 @@ async fn send_once(
     *request.body_mut() = Some(wreq::Body::from(body));
     let request = wreq::RequestBuilder::from_parts(client.clone(), request)
         .timeout(timeout)
+        // 流间空闲看门狗（ADR 0050）：响应体两次读取之间超过 idle 即报错，
+        // 挂死流不必等满总超时；keepalive 字节计为活跃，健康连接不受影响。
+        .read_timeout(idle_timeout)
         .build()
         .map_err(|error| transport_error(error, redact_key))?;
     client
@@ -363,7 +389,14 @@ mod tests {
         let transport = WreqTransport::new(client, endpoint, Duration::from_secs(600))
             .with_redact_key("secret-key");
         assert_eq!(transport.request_timeout(), Duration::from_secs(600));
+        assert_eq!(
+            transport.stream_idle_timeout(),
+            DEFAULT_STREAM_IDLE_TIMEOUT,
+            "未注入时用默认 60 秒看门狗"
+        );
         assert_eq!(transport.redact_key, "secret-key");
         assert!(transport.gate.is_none());
+        let transport = transport.with_idle_timeout(Duration::from_secs(15));
+        assert_eq!(transport.stream_idle_timeout(), Duration::from_secs(15));
     }
 }

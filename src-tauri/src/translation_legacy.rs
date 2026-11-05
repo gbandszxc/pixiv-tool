@@ -1486,6 +1486,14 @@ pub(crate) fn translation_timeout_seconds(seconds: i64) -> u64 {
     ) as u64
 }
 
+/// 流间空闲看门狗（秒，ADR 0050）：兜底到合法区间，避免 0 秒让健康流立刻断开。
+pub(crate) fn stream_idle_seconds(idle: i64) -> u64 {
+    idle.clamp(
+        crate::settings::STREAM_IDLE_MIN_SECONDS,
+        crate::settings::STREAM_IDLE_MAX_SECONDS,
+    ) as u64
+}
+
 fn probe_client(
     probe: &TranslationProbe,
     timeout: u64,

@@ -67,6 +67,7 @@ pub const COORDINATOR_TOOL_CONTRACT: &str = "\
 - read_chunk(chunk_id, include_context) → {segments, context, terms, style}；
 - submit_scan(chunk_id, terms[], style, notes, confidence) → 已提交或冲突提示；
 - freeze_constraints() → {version, terms, style, conflicts, unresolved}；
+- dispatch_scan(chunk_ids[]) → 每块 {chunk_id, status, usage, issue_count}；
 - dispatch_translation(chunk_ids[]) → 每块 {chunk_id, status, usage, issue_count}；
 - dispatch_review(chunk_ids[]) → 每块 {chunk_id, status, usage, issue_count}；
 - revise_draft(chunk_id, patches:[{segment_id, text}]) → {chunk_id, version, patched, pending_review}；
@@ -100,6 +101,15 @@ pub const REVIEWER_TOOL_CONTRACT: &str = "\
 仅有 minor 建议时不要提交 needs_fix，工具会以 minor_only 拒绝。
 输出纪律：读完一块就立即调用 submit_review；不要在回复里写审查分析、逐句评语或问题清单正文。
 每条 detail 不超过 120 字、最多 5 条 issues；notes 不超过 200 字。超长输出会被网关截断并导致本块审查失败。";
+
+/// 扫描子 Agent 工具契约（随首条用户消息注入，不进系统提示词）。
+pub const SCANNER_TOOL_CONTRACT: &str = "\
+工具契约：
+- load_resource(resource_id)：仅 role:scanner、skill:smart-translator、reference:domain-*；
+- read_chunk(chunk_id, include_context) → {segments, context, terms, style}；
+- submit_scan(chunk_id, terms:[{source_term, locked_translation, term_type, aliases, notes}], style, notes, confidence) → 提交结果。
+必须先 read_chunk 再 submit_scan；只提交本块；术语锁定译名不得为假名原文，风格不得要求保留拟声词/假名；
+ruby 注释策略只描述「读音」的处理方式，不得要求改动标记数量与结构。";
 
 // ----------------------------------------------------------------------
 // 分块计划与阶段版本
@@ -550,6 +560,7 @@ pub fn coordinator_tools(ctx: &std::sync::Arc<JobContext>) -> Vec<DynamicTool> {
         read_chunk_tool(ctx),
         submit_scan_tool(ctx),
         freeze_constraints_tool(ctx),
+        dispatch_tool(ctx, DispatchKind::Scan),
         dispatch_tool(ctx, DispatchKind::Translate),
         dispatch_tool(ctx, DispatchKind::Review),
         revise_draft_tool(ctx),
@@ -568,6 +579,15 @@ pub fn translator_tools(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> Vec
         load_resource_tool(),
         read_chunk_tool(ctx),
         submit_translation_tool(ctx, chunk_id),
+    ]
+}
+
+/// 扫描子 Agent 工具集。
+pub fn scanner_tools(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> Vec<DynamicTool> {
+    vec![
+        load_resource_tool(),
+        read_chunk_tool(ctx),
+        submit_scan_tool_locked(ctx, chunk_id),
     ]
 }
 
@@ -992,146 +1012,192 @@ fn submit_scan_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
             let ctx = ctx.clone();
             Box::pin(async move {
                 let chunk_id = arg_str(&args, "chunk_id")?;
-                let chunk = read_chunk(&ctx, &chunk_id)
-                    .map_err(|error| tool_error("invalid_chunk", &error))?
-                    .ok_or_else(|| {
-                        tool_error_with(
-                            "unknown_chunk",
-                            "分块不存在",
-                            json!({"chunk_id": chunk_id}),
-                        )
-                    })?;
-                let terms_value = args
-                    .get("terms")
-                    .cloned()
-                    .ok_or_else(|| tool_error("invalid_args", "缺少参数 terms"))?;
-                let terms: Vec<ScanTermArg> =
-                    serde_json::from_value(terms_value).map_err(|error| {
-                        tool_error("invalid_args", &format!("terms 结构无效：{error}"))
-                    })?;
-                let style = match args.get("style") {
-                    Some(Value::String(text)) => {
-                        if text.trim().is_empty() {
-                            return Err(tool_error("invalid_args", "style 不能为空"));
-                        }
-                        text.trim().to_string()
-                    }
-                    Some(Value::Object(_)) => args["style"].to_string(),
-                    _ => return Err(tool_error("invalid_args", "缺少参数 style")),
-                };
-                if style.chars().count() > 4_000 {
-                    return Err(tool_error("invalid_args", "style 超过 4000 字符"));
-                }
-                // 注释策略与标记保持校验冲突时归一为规范值（冻结前不拦截，
-                // 避免扫描产物永远缺一角）；note 只含策略描述，不含原文。
-                let style = match
-                    crate::translation::validation::normalize_annotation_policy(&style)
-                {
-                    Some((normalized, note)) => {
-                        warn_job(
-                            &ctx.scope,
-                            "coordinator",
-                            Phase::PrepareConstraints,
-                            Some(&chunk_id),
-                            "annotation_policy_normalized",
-                            &[("note", &note)],
-                        );
-                        normalized
-                    }
-                    None => style,
-                };
-                let notes = args
-                    .get("notes")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let confidence = match args
-                    .get("confidence")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_ascii_lowercase()
-                    .as_str()
-                {
-                    "high" => Confidence::High,
-                    "medium" => Confidence::Medium,
-                    "low" => Confidence::Low,
-                    other => {
-                        return Err(tool_error(
-                            "invalid_args",
-                            &format!("confidence 必须是 high/medium/low，收到 {other}"),
-                        ));
-                    }
-                };
-                let mut prepared = Vec::with_capacity(terms.len());
-                for term in terms {
-                    let source = term.source_term.trim();
-                    if source.is_empty() {
-                        continue;
-                    }
-                    let locked = term.locked_translation.trim();
-                    if locked.is_empty() {
-                        return Err(tool_error_with(
-                            "empty_translation",
-                            "术语缺少锁定译名",
-                            json!({"source_term": source}),
-                        ));
-                    }
-                    if term.term_type.chars().count() > 64 || term.notes.chars().count() > 1_000 {
-                        return Err(tool_error("invalid_args", "术语字段超长"));
-                    }
-                    prepared.push(AgentTerm {
-                        source_term: source.to_string(),
-                        locked_translation: locked.to_string(),
-                        term_type: if term.term_type.trim().is_empty() {
-                            "other".into()
-                        } else {
-                            term.term_type.trim().to_string()
-                        },
-                        aliases: term
-                            .aliases
-                            .into_iter()
-                            .map(|alias| alias.trim().to_string())
-                            .filter(|alias| !alias.is_empty())
-                            .take(16)
-                            .collect(),
-                        notes: term.notes.trim().to_string(),
-                    });
-                }
-                let policy_conflicts = crate::translation::validation::audit_constraint_policy(
-                    &prepared,
-                    &style,
-                    &ctx.target_language,
-                );
-                if !policy_conflicts.is_empty() {
-                    return Err(tool_error_with(
-                        "constraint_policy_conflict",
-                        "扫描结果违反语言策略，未写入：拟声词必须翻译，锁定译名不得使用假名原文",
-                        json!({
-                            "conflicts": serde_json::to_value(&policy_conflicts)
-                                .unwrap_or_default(),
-                        }),
-                    ));
-                }
-                let note = ScanNote {
-                    chunk_id: chunk.id.clone(),
-                    terms: prepared,
-                    style,
-                    notes: notes.chars().take(4_000).collect(),
-                    confidence,
-                };
-                write_scan(&ctx, &note).map_err(|error| tool_error("storage", &error))?;
-                let versions = phase_versions(&ctx);
-                stamp(&ctx, "scan", &chunk_id, versions.prepare_constraints);
-                let _ = ctx.touch_checkpoint(Phase::PrepareConstraints);
-                let _ = ctx.refresh_counts();
-                tool_result(json!({
-                    "chunk_id": chunk_id,
-                    "terms": note.terms.len(),
-                    "committed": true,
-                }))
+                submit_scan_impl(&ctx, &chunk_id, args).await
             })
         },
     )
+}
+
+/// 扫描子 Agent 的提交入口：`chunk_id` 锁定为本次派发的块。
+fn submit_scan_tool_locked(ctx: &std::sync::Arc<JobContext>, chunk_id: &str) -> DynamicTool {
+    let ctx = ctx.clone();
+    let bound = chunk_id.to_string();
+    DynamicTool::new(
+        tool_name("submit_scan"),
+        "提交本块扫描结果（术语、风格、说明与置信度）；同块重复提交为幂等替换。\
+         扫描结果必须通过本工具写入，写在普通回复里不算完成。\
+         日译任务的锁定译名不得为假名原文；风格不得要求保留拟声词/假名。",
+        json!({
+            "type": "object",
+            "properties": {
+                "chunk_id": {"type": "string"},
+                "terms": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source_term": {"type": "string"},
+                            "locked_translation": {"type": "string"},
+                            "term_type": {"type": "string"},
+                            "aliases": {"type": "array", "items": {"type": "string"}},
+                            "notes": {"type": "string"}
+                        },
+                        "required": ["source_term", "locked_translation"]
+                    }
+                },
+                "style": {},
+                "notes": {"type": "string"},
+                "confidence": {"type": "string", "enum": ["high", "medium", "low"]}
+            },
+            "required": ["chunk_id", "terms", "style", "notes", "confidence"]
+        }),
+        move |args: Value| {
+            let ctx = ctx.clone();
+            let bound = bound.clone();
+            Box::pin(async move {
+                let chunk_id = arg_str(&args, "chunk_id")?;
+                if chunk_id != bound {
+                    return Err(tool_error_with(
+                        "out_of_scope",
+                        "只能提交本次派发的分块",
+                        json!({"expected": bound, "actual": chunk_id}),
+                    ));
+                }
+                submit_scan_impl(&ctx, &chunk_id, args).await
+            })
+        },
+    )
+}
+
+/// 扫描提交的共享实现：校验、策略审计、落盘、打版（coordinator 与 scanner 共用）。
+async fn submit_scan_impl(
+    ctx: &std::sync::Arc<JobContext>,
+    chunk_id: &str,
+    args: Value,
+) -> Result<ToolOutput, ToolExecutionError> {
+    let chunk = read_chunk(ctx, chunk_id)
+        .map_err(|error| tool_error("invalid_chunk", &error))?
+        .ok_or_else(|| tool_error_with("unknown_chunk", "分块不存在", json!({"chunk_id": chunk_id})))?;
+    let terms_value = args
+        .get("terms")
+        .cloned()
+        .ok_or_else(|| tool_error("invalid_args", "缺少参数 terms"))?;
+    let terms: Vec<ScanTermArg> = serde_json::from_value(terms_value)
+        .map_err(|error| tool_error("invalid_args", &format!("terms 结构无效：{error}")))?;
+    let style = match args.get("style") {
+        Some(Value::String(text)) => {
+            if text.trim().is_empty() {
+                return Err(tool_error("invalid_args", "style 不能为空"));
+            }
+            text.trim().to_string()
+        }
+        Some(Value::Object(_)) => args["style"].to_string(),
+        _ => return Err(tool_error("invalid_args", "缺少参数 style")),
+    };
+    if style.chars().count() > 4_000 {
+        return Err(tool_error("invalid_args", "style 超过 4000 字符"));
+    }
+    // 注释策略与标记保持校验冲突时归一为规范值（冻结前不拦截，
+    // 避免扫描产物永远缺一角）；note 只含策略描述，不含原文。
+    let style = match crate::translation::validation::normalize_annotation_policy(&style) {
+        Some((normalized, note)) => {
+            warn_job(
+                &ctx.scope,
+                "coordinator",
+                Phase::PrepareConstraints,
+                Some(chunk_id),
+                "annotation_policy_normalized",
+                &[("note", &note)],
+            );
+            normalized
+        }
+        None => style,
+    };
+    let notes = args
+        .get("notes")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let confidence = match args
+        .get("confidence")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "high" => Confidence::High,
+        "medium" => Confidence::Medium,
+        "low" => Confidence::Low,
+        other => {
+            return Err(tool_error(
+                "invalid_args",
+                &format!("confidence 必须是 high/medium/low，收到 {other}"),
+            ));
+        }
+    };
+    let mut prepared = Vec::with_capacity(terms.len());
+    for term in terms {
+        let source = term.source_term.trim();
+        if source.is_empty() {
+            continue;
+        }
+        let locked = term.locked_translation.trim();
+        if locked.is_empty() {
+            return Err(tool_error_with(
+                "empty_translation",
+                "术语缺少锁定译名",
+                json!({"source_term": source}),
+            ));
+        }
+        if term.term_type.chars().count() > 64 || term.notes.chars().count() > 1_000 {
+            return Err(tool_error("invalid_args", "术语字段超长"));
+        }
+        prepared.push(AgentTerm {
+            source_term: source.to_string(),
+            locked_translation: locked.to_string(),
+            term_type: if term.term_type.trim().is_empty() {
+                "other".into()
+            } else {
+                term.term_type.trim().to_string()
+            },
+            aliases: term
+                .aliases
+                .into_iter()
+                .map(|alias| alias.trim().to_string())
+                .filter(|alias| !alias.is_empty())
+                .take(16)
+                .collect(),
+            notes: term.notes.trim().to_string(),
+        });
+    }
+    let policy_conflicts =
+        crate::translation::validation::audit_constraint_policy(&prepared, &style, &ctx.target_language);
+    if !policy_conflicts.is_empty() {
+        return Err(tool_error_with(
+            "constraint_policy_conflict",
+            "扫描结果违反语言策略，未写入：拟声词必须翻译，锁定译名不得使用假名原文",
+            json!({
+                "conflicts": serde_json::to_value(&policy_conflicts).unwrap_or_default(),
+            }),
+        ));
+    }
+    let note = ScanNote {
+        chunk_id: chunk.id.clone(),
+        terms: prepared,
+        style,
+        notes: notes.chars().take(4_000).collect(),
+        confidence,
+    };
+    write_scan(ctx, &note).map_err(|error| tool_error("storage", &error))?;
+    let versions = phase_versions(ctx);
+    stamp(ctx, "scan", chunk_id, versions.prepare_constraints);
+    let _ = ctx.touch_checkpoint(Phase::PrepareConstraints);
+    let _ = ctx.refresh_counts();
+    tool_result(json!({
+        "chunk_id": chunk_id,
+        "terms": note.terms.len(),
+        "committed": true,
+    }))
 }
 
 fn freeze_constraints_tool(ctx: &std::sync::Arc<JobContext>) -> DynamicTool {
@@ -1278,6 +1344,7 @@ fn freeze_constraints_impl(
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum DispatchKind {
+    Scan,
     Translate,
     Review,
 }
@@ -1285,6 +1352,7 @@ enum DispatchKind {
 impl DispatchKind {
     fn role(self) -> Role {
         match self {
+            Self::Scan => Role::Scanner,
             Self::Translate => Role::Translator,
             Self::Review => Role::Reviewer,
         }
@@ -1292,6 +1360,7 @@ impl DispatchKind {
 
     fn phase(self) -> Phase {
         match self {
+            Self::Scan => Phase::PrepareConstraints,
             Self::Translate => Phase::Translate,
             Self::Review => Phase::Review,
         }
@@ -1299,6 +1368,7 @@ impl DispatchKind {
 
     fn tool_name(self) -> &'static str {
         match self {
+            Self::Scan => "dispatch_scan",
             Self::Translate => "dispatch_translation",
             Self::Review => "dispatch_review",
         }
@@ -1350,6 +1420,7 @@ fn dispatch_tool(ctx: &std::sync::Arc<JobContext>, kind: DispatchKind) -> Dynami
     DynamicTool::new(
         tool_name(kind.tool_name()),
         match kind {
+            DispatchKind::Scan => "派发扫描子 Agent 扫描指定块，返回每块状态、用量与问题数。",
             DispatchKind::Translate => "派发翻译子 Agent 处理指定块，返回每块状态、用量与问题数。",
             DispatchKind::Review => "派发独立审查子 Agent 审查指定块，返回每块结论摘要。",
         },
@@ -1408,6 +1479,17 @@ async fn dispatch_impl(
             }
         }
     }
+    if kind == DispatchKind::Scan
+        && let Some(constraints) = &constraints
+        && constraints.frozen
+    {
+        // 约束已冻结后再派发扫描只会覆盖冻结依据：重扫必须走 reset_phase
+        // （prepare_constraints 版本递增使旧 stamp 失效），而不是直接覆盖。
+        return Err(tool_error(
+            "constraints_already_frozen",
+            "术语与风格已冻结；需要重扫时先调用 reset_phase(prepare_constraints)",
+        ));
+    }
     let versions = phase_versions(ctx);
     let DispatchPlan {
         planned,
@@ -1417,12 +1499,12 @@ async fn dispatch_impl(
         rework_exhausted,
     } = plan_dispatch(ctx, kind, ids, &versions)?;
     if !planned.is_empty() {
-        let gate = ctx.dispatch_gate.clone();
+        // 子任务并发由调度器统一约束（novel 闸 + 全局自适应闸，ADR 0050）：
+        // 这里直接并发派发全部规划块，模型请求粒度在 model_permit 上排队。
         let futures: Vec<_> = planned
             .into_iter()
             .map(|id| {
                 let ctx = ctx.clone();
-                let gate = gate.clone();
                 async move {
                     // 结果未知且不自动重放的块：直接返回，避免续跑时反复重发同一请求。
                     if ctx.is_unknown_blocked(&id) {
@@ -1432,7 +1514,6 @@ async fn dispatch_impl(
                             "上次请求结果未知，未自动重放；手动恢复任务后可重试",
                         )]);
                     }
-                    let _permit = gate.acquire_owned().await;
                     dispatch_one(&ctx, kind, &id).await
                 }
             })
@@ -1652,6 +1733,20 @@ fn plan_dispatch(
                     plan.planned.push(id);
                 }
             }
+            DispatchKind::Scan => {
+                // 复用 freeze 的同款口径：scan 产物存在且带当前
+                // prepare_constraints 版本戳才算有效（reset_phase 递增版本即
+                // 全量失效，re-scan 由此接管）。
+                let scan_valid =
+                    read_scan(ctx, &id).map_err(|error| tool_error("storage", &error))?
+                        .is_some_and(|_| stamped(ctx, "scan", &id, versions.prepare_constraints));
+                if scan_valid {
+                    plan.outcomes
+                        .push(ChunkOutcome::ok(&id, TokenUsage::default(), 0, true));
+                } else {
+                    plan.planned.push(id);
+                }
+            }
         }
     }
     Ok(plan)
@@ -1787,6 +1882,7 @@ async fn dispatch_one_inner(
             .map(|chunk| chunk.chars)
             .unwrap_or(0);
         let result = match kind {
+            DispatchKind::Scan => run_scanner(ctx, chunk_id).await,
             DispatchKind::Translate => run_translator(ctx, chunk_id).await,
             DispatchKind::Review => run_reviewer(ctx, chunk_id).await,
         };
@@ -1794,6 +1890,7 @@ async fn dispatch_one_inner(
             Ok(usage) => {
                 ctx.append_session(&json!({
                     "kind": match kind {
+                        DispatchKind::Scan => "subtask_scan_done",
                         DispatchKind::Translate => "subtask_translate_done",
                         DispatchKind::Review => "subtask_review_done",
                     },
@@ -2366,6 +2463,83 @@ fn accumulate_usage(ctx: &std::sync::Arc<JobContext>, usage: TokenUsage) {
         manifest.attempts.model_calls = snapshot.used;
         manifest.attempts.manual_extra = snapshot.manual_extra;
     });
+}
+
+/// 扫描子 Agent：读一块、提取术语与风格基调、提交 scan（ADR 0051）。
+///
+/// Pass 1 的执行主体从协调者直扫改为按块派发（与 Pass 2 / 3 同构）；
+/// 协调者保留 `submit_scan` 直用仅限冻结冲突的定点修正。
+async fn run_scanner(
+    ctx: &std::sync::Arc<JobContext>,
+    chunk_id: &str,
+) -> Result<TokenUsage, RunError> {
+    let chunk = read_chunk(ctx, chunk_id)
+        .ok()
+        .flatten()
+        .ok_or_else(|| RunError::Internal("分块不存在".into()))?;
+    // 同 run_translator / run_reviewer：全文读不了的块直接交给 split_chunk 细分。
+    ensure_chunk_readable(ctx, &chunk)?;
+    // 同 run_translator：system 只保留基础翻译提示，角色规则与工具契约随首条
+    // 用户消息注入；术语与既有扫描经工具结果进入会话。
+    let system = system_prompt().to_string();
+    let prompt = format!(
+        "{}\n\n{}\n\nchunk_id: {}\n目标语言: {}（{}）\n\
+         请先 read_chunk(chunk_id, true) 读取本块原文与上下文，然后 submit_scan 提交本块扫描结论。",
+        role_prompt(Role::Scanner),
+        SCANNER_TOOL_CONTRACT,
+        chunk.id,
+        ctx.target_language,
+        ctx.target_language_name,
+    );
+    // 扫描是抽取任务：输出只有术语表与风格描述，单档输入即可。
+    let (max_tokens, mut params) = ctx
+        .model
+        .request_params(chunk.chars as usize)
+        .map_err(RunError::Internal)?;
+    // 与审查同理：结构化抽取不需要长思考，降档避免挤占输出封顶。
+    apply_review_thinking(&mut params, &ctx.model.format, max_tokens);
+    let request = RunRequest::new(
+        Role::Scanner,
+        system,
+        prompt,
+        ctx.model.model().map_err(RunError::Internal)?,
+        scanner_tools(ctx, chunk_id),
+        ctx.run_limits(),
+        ctx.run_sink(),
+        ctx.scope.clone(),
+    )
+    .with_phase(Phase::PrepareConstraints)
+    .with_current_work(Some(chunk_current_work(&chunk, Role::Scanner)))
+    .with_budget(ctx.budget.clone())
+    .with_budget_config(ctx.budget_config.clone())
+    .with_compaction(
+        crate::agent::CompactionConfig::new(ctx.budget_config.clone(), ctx.scope.clone())
+            .with_scheduler(ctx.scheduler.clone())
+            .with_tracker(ctx.budget.clone()),
+    )
+    .with_scheduler(ctx.scheduler.clone())
+    .with_request_params(max_tokens, params);
+    let outcome = runtime::run(request, ctx.control.cancel.child()).await?;
+    accumulate_usage(ctx, outcome.usage);
+    // 产物判定：scan 存在且带当前 prepare_constraints 版本戳（与 plan_dispatch
+    // 的复用口径一致）。没有产物时先解析失败摘要，内容拒绝归类为 Refused。
+    let versions = phase_versions(ctx);
+    let saved_valid = read_scan(ctx, chunk_id)
+        .ok()
+        .flatten()
+        .is_some_and(|_| stamped(ctx, "scan", chunk_id, versions.prepare_constraints));
+    if !saved_valid {
+        if let Some((reason, detail)) = parse_failure_summary(&outcome.text)
+            && reason_indicates_refusal(&reason)
+        {
+            return Err(RunError::Refused {
+                reason,
+                message: detail,
+            });
+        }
+        return Err(RunError::Internal("扫描子任务没有提交结论".into()));
+    }
+    Ok(outcome.usage)
 }
 
 /// 审查请求的思考降档：按协议写入对应字段。

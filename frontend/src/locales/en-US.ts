@@ -481,6 +481,7 @@ export default {
       currentChunk: "Current: chunk {chunk}",
       previewOwner: "{agent} {chunk}",
       agentTranslator: "Translator",
+      agentScanner: "Scanner",
       agentReviewer: "Reviewer",
       completed: "Whole-work translation saved",
       completedWithUsage: "Whole-work translation saved · {tokens} tokens used",

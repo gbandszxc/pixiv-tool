@@ -36,13 +36,14 @@ resource_id: skill:smart-translator
 
 | 角色 | 职责 | 工具白名单 |
 | --- | --- | --- |
-| 协调者 `role:coordinator` | 阶段推进、门禁判断、派发、定点修订、抽样、发布 | `load_resource`、`prepare_source`、`read_chunk_summary`、`read_chunk`、`submit_scan`、`freeze_constraints`、`dispatch_translation`、`dispatch_review`、`revise_draft`、`read_review_summary`、`merge_drafts`、`record_global_review`、`publish`、`reset_phase`、`job_status` |
+| 协调者 `role:coordinator` | 阶段推进、门禁判断、派发、定点修订、抽样、发布 | `load_resource`、`prepare_source`、`read_chunk_summary`、`read_chunk`、`submit_scan`、`freeze_constraints`、`dispatch_scan`、`dispatch_translation`、`dispatch_review`、`revise_draft`、`read_review_summary`、`merge_drafts`、`record_global_review`、`publish`、`reset_phase`、`job_status` |
+| 扫描 `role:scanner` | 只扫指定块，提交术语与风格基调 | `load_resource`、`read_chunk`、`submit_scan` |
 | 翻译 `role:translator` | 只翻指定块 | `load_resource`、`read_chunk`、`submit_translation` |
 | 审查 `role:reviewer` | 只审指定块 | `load_resource`、`read_chunk`、`read_translation`、`submit_review` |
 
 - 协调者不调用 `submit_translation`、`read_translation`、`submit_review`。
-- 协调者的定点修订只能用 `revise_draft` 替换审查点名的片段；整块重写用 `dispatch_translation`，不得借 `revise_draft` 改整块。
-- 翻译与审查子 Agent 不调用协调者工具，不派生下一层子 Agent。
+- 协调者的定点修订只能用 `revise_draft` 替换审查点名的片段；整块重写用 `dispatch_translation`，不得借 `revise_draft` 改整块。`submit_scan` 直用仅限冻结冲突的定点修正；Pass 1 常规扫描一律走 `dispatch_scan`。
+- 扫描、翻译与审查子 Agent 不调用协调者工具，不派生下一层子 Agent。
 - 未注册工具、路径参数、通配符、跨角色工具一律拒绝。
 
 ### 3.2 工具签名
@@ -55,8 +56,9 @@ resource_id: skill:smart-translator
 | `prepare_source` | `prepare_source()` → `{pages, chunks, segments, budget}` | 协调者 |
 | `read_chunk_summary` | `read_chunk_summary(chunk_ids[])` → 每块摘要 | 协调者 |
 | `read_chunk` | `read_chunk(chunk_id, include_context)` → `{segments, context, terms, style}`；约束未冻结时 `terms` / `style` 为空 | 全部 |
-| `submit_scan` | `submit_scan(chunk_id, terms[], style, notes, confidence)` → 已提交或冲突提示 | 协调者 |
+| `submit_scan` | `submit_scan(chunk_id, terms[], style, notes, confidence)` → 已提交或冲突提示 | 协调者（冲突修正）、扫描 |
 | `freeze_constraints` | `freeze_constraints()` → `{version, terms, style, conflicts, unresolved}` | 协调者 |
+| `dispatch_scan` | `dispatch_scan(chunk_ids[])` → 每块 `{chunk_id, status, usage, issue_count}` | 协调者 |
 | `dispatch_translation` | `dispatch_translation(chunk_ids[])` → 每块 `{chunk_id, status, usage, issue_count}` | 协调者 |
 | `dispatch_review` | `dispatch_review(chunk_ids[])` → 每块 `{chunk_id, status, usage, issue_count}` | 协调者 |
 | `revise_draft` | `revise_draft(chunk_id, patches:[{segment_id, text}])` → `{chunk_id, version, patched, pending_review}`；只替换点名片段，不新增 / 删除 / 重排 | 协调者 |
@@ -76,6 +78,7 @@ resource_id: skill:smart-translator
 | --- | --- |
 | `skill:smart-translator` | 本文件 |
 | `role:coordinator` | 协调者角色契约 |
+| `role:scanner` | 扫描角色契约 |
 | `role:translator` | 翻译角色契约 |
 | `role:reviewer` | 审查角色契约 |
 | `reference:domain-acg` | ACG / 游戏 / 同人 |
@@ -103,7 +106,7 @@ resource_id: skill:smart-translator
 | 阶段 | 目标 | 主工具 | 进入下一阶段的条件 |
 | --- | --- | --- | --- |
 | Pass 0 原文注册 | 建立页、行、片段映射与语义切块 | `prepare_source`、`read_chunk_summary`、`job_status` | 至少 1 页、1 块、1 片段；每块摘要可读；预算可覆盖当前块集合 |
-| Pass 1 约束准备 | 逐块扫描，冻结术语与风格 | `read_chunk`、`submit_scan`、`freeze_constraints` | 每块扫描已提交；冻结版本已生成；无阻断性未决项 |
+| Pass 1 约束准备 | 逐块扫描，冻结术语与风格 | `dispatch_scan`、`freeze_constraints` | 每块扫描已提交；冻结版本已生成；无阻断性未决项 |
 | 确认分支 | 可选的人工确认 | `job_status`、`freeze_constraints` | 自动模式直接继续；确认模式等待运行层恢复 |
 | Pass 2 翻译 | 逐块生成译文草稿 | `dispatch_translation`、`job_status` | 每块译文提交成功 |
 | Pass 3 审查 | 独立对照审查 | `dispatch_review`、`read_review_summary` | 每块有明确结论；无未解决 critical / major |
@@ -141,7 +144,7 @@ resource_id: skill:smart-translator
 
 调用 `job_status()` 记录阶段、计数与预算。每进入一个阶段、每次大批量派发前重新读取。
 
-`pending_scan` / `pending_translate` / `pending_review` 是当前待办块的权威清单：从检查点继续或压缩后记忆模糊时，以它为准决定下一批 `read_chunk` / `submit_scan` / 派发，不依赖历史回忆，也不重复处理不在清单中的块。
+`pending_scan` / `pending_translate` / `pending_review` 是当前待办块的权威清单：从检查点继续或压缩后记忆模糊时，以它为准决定下一批 `dispatch_scan` / `dispatch_translation` / `dispatch_review` 派发，不依赖历史回忆，也不重复处理不在清单中的块。
 
 ### 5.3 格式与标记
 
@@ -166,9 +169,9 @@ resource_id: skill:smart-translator
 
 ### 6.2 逐块扫描
 
-按块顺序对每块调用 `read_chunk(chunk_id, true)`。上下文只用于判断指称、专名、语气与切分边界。
+扫描由扫描子 Agent（`role:scanner`）按块执行：协调者用 `dispatch_scan(chunk_ids)` 按批次派发（批次规则同 Pass 2），每个扫描子 Agent 独立读取自己的块并提交扫描结论；协调者不逐块直读原文，避免把全文拉回主上下文。`submit_scan` 直用仅限冻结冲突的定点修正（单块读取 + 单块重扫 + 重新冻结）。
 
-单轮并行调用不超过 2 个 `read_chunk`；收到运行层的预算跳过提示后，在下一轮继续按序读取未返回的块，不要重复读取已成功返回的块。
+扫描子 Agent 读取本块时调用 `read_chunk(chunk_id, true)`。上下文只用于判断指称、专名、语气与切分边界；扫描是聚合的输入，不是裁定——跨块冲突由协调者在冻结时合并，扫描者只做保守记录，不确定的如实标注。
 
 每块提取：
 
@@ -193,7 +196,7 @@ resource_id: skill:smart-translator
 
 ### 6.3 提交扫描
 
-对每块调用：
+扫描子 Agent 对自己的块调用（协调者冲突修正时对单块调用）：
 
 ```text
 submit_scan(

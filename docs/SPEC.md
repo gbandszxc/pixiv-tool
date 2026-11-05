@@ -358,8 +358,9 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
 原文已是目标语言且未强制时直接返回「无需翻译」，不创建 Job、不调用模型。
 
 - **阶段**：`prepare_source`（注册整篇原文，建立页 / 行 / 片段映射，按语义边界与字符
-  预算切块并生成前后邻接窗口）→ `prepare_constraints`（逐块扫描术语、人物关系、风格
-  与对白，聚合并冻结约束版本）→ `translate`（按块派发翻译子 Agent）→ `review`（独立
+  预算切块并生成前后邻接窗口）→ `prepare_constraints`（按块派发扫描子 Agent
+  `dispatch_scan` 扫描术语、人物关系、风格与对白，聚合并冻结约束版本，ADR 0051）→
+  `translate`（按块派发翻译子 Agent）→ `review`（独立
   审查子 Agent 对照原文、译文与冻结约束）→ `repair`（局部问题用 `revise_draft` 定点
   修订，必要时只返工受影响块并复检）→
   `global_review`（主 Agent 读取摘要与抽样，不把全文塞回上下文）→ `publish`（校验块
@@ -374,14 +375,23 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   `notifications_enabled` 开启则发送一条系统通知（标题与正文跟随界面语言，含小说
   标题；重启后的等待不重复通知）。浮层状态页在等待确认时显示「术语与风格待确认」
   引导卡，可一键切到术语与风格页、滚到「确认并继续」并把焦点落到该按钮。
-- **并发**：模型请求受三级闸门控制——全局并发（默认 4，1~16）、单小说子任务并发
-  （默认 4，1~16）、同时活跃小说数（默认 2，1~8）；实际并发取全局与单小说的较小值。
+- **并发**：模型请求受三级闸门控制——全局并发上限（默认 8，1~16）、单小说子任务并发
+  （默认 6，1~16）、同时活跃小说数（默认 2，1~8）；实际并发取全局与单小说的较小值。
+  全局闸默认**自适应收敛**（AIMD，ADR 0050）：连续 2 次成功容量倍增爬升逼近上限，
+  限流（429 / 5xx）、超时与断流等负信号把容量减半（下限 1），起步为上限的一半；
+  鉴权、余额、内容拒绝等与速率无关的错误不收缩。`translation_agent_adaptive_concurrency`
+  关闭时全局容量恒等于上限。容量变化记录在应用日志（`AIMD 全局调度容量`）。
   等待子任务、执行工具与暂停期间不持有模型请求许可，压缩摘要请求同样经过全局闸门；
-  一本长篇不能占满全部槽位。同一小说仍串行，不同小说可并行。三级闸门之外，传输层
+  一本长篇不能占满全部槽位。同一小说仍串行，不同小说可并行；子任务并发不再另设
+  Job 级闸门，统一由模型请求许可约束。三级闸门之外，传输层
   另设进程级共享在飞请求闸门（上限 32，跨 Job / 子 Agent / 块与重试统一计数）：
   并发上限下的理论峰值（8 本 × 16 = 128 在飞，重试再叠加）被收口到 32，超出部分
   在闸门排队形成背压，避免同一网关被并发长请求压爆；许可覆盖单次请求全程，流式
   响应持至流读完或被丢弃。
+- **流间空闲看门狗**：流式与非流式请求在单请求总超时之外叠加响应体读取空闲超时
+  （`translation_stream_idle_seconds`，默认 60，10~300）：响应体两次读取之间超过该
+  时长即断开报错，挂死流不再占满总超时；keepalive 字节计为活跃。看门狗错误沿用
+  「请求结果未知」归类与恢复路径（ADR 0050）。
 - **实时预览**：主会话与子任务的正文 / 思考增量只进界面预览，不落盘、不写日志；
   每个角色的预览每轮只保留最近 240 字符，模型调用开始与工具派发时以空占位让出槽位。
   并发子任务按「角色 + 块」分槽，主会话生成时优先，否则粘滞跟随当前焦点块，焦点块
@@ -445,7 +455,7 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   改写为规范值（保留结构、读音本地化为拼音），记 `annotation_policy_normalized` WARN。
   审查不得因「存在标记」判违规，也不得提出删标记类修法；`revise_draft` 每块限 4 轮，
   超限以 `revise_limit` 拒绝并引导整块返工或阶段重置（ADR 0041）。
-- **派发结果与未知块**：`dispatch_translation` / `dispatch_review` 按块返回
+- **派发结果与未知块**：`dispatch_scan` / `dispatch_translation` / `dispatch_review` 按块返回
   `status=ok|permanent|budget_exhausted|unknown_outcome|content_refused|skipped|...`；
   只有 `permanent` / `budget_exhausted` 这类全局错误把整批标为 `fatal`，单块
   `unknown_outcome` 与 `content_refused` 只标记该块并继续返回其他块。结果未知且不
@@ -551,9 +561,10 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
 
 | 参数（翻译运行） | 值 |
 |---|---|
-| 全局 / 单小说请求并发 | 4 / 4（1~16） |
+| 全局 / 单小说请求并发 | 8 / 6（1~16）；全局默认自适应收敛（AIMD，可关） |
 | 同时活跃小说 | 2（1~8） |
 | 单请求超时 | 600s（30~3600，`translation_timeout_seconds`） |
+| 流间空闲看门狗 | 60s（10~300，`translation_stream_idle_seconds`） |
 | 自动网络重试 | 2 次（0~5），退避 1s 起、上限 120s，尊重 `Retry-After` |
 | 每块质检返工 / 超限细分 | 2 轮（0~5）/ 3 层（0~5） |
 | 单子任务轮次 / 主 Agent 无进展上限 | 24（4~128）/ 8 轮（3~32） |
@@ -799,10 +810,12 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "translation_model": "",
   "translation_target_language": "",
   "translation_timeout_seconds": 600,
+  "translation_stream_idle_seconds": 60,
   "translation_extra": {},
-  "translation_agent_global_concurrency": 4,
-  "translation_agent_novel_concurrency": 4,
+  "translation_agent_global_concurrency": 8,
+  "translation_agent_novel_concurrency": 6,
   "translation_agent_active_novels": 2,
+  "translation_agent_adaptive_concurrency": true,
   "translation_agent_retry_limit": 2,
   "translation_agent_backoff_base_ms": 1000,
   "translation_agent_backoff_max_seconds": 120,
@@ -899,15 +912,18 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   整篇 Job 会发起多次请求，超时按每次请求计算；超时可用的错误文案跟随该值报出实际秒数。
   「检测可用」按草稿里的同名字段（缺省 600）计时，「获取模型列表」固定 30 秒。
   手改 settings.json 写入区间外的值（含 0/负数）时加载期回落默认。见 ADR 0023。
-- **翻译运行参数（22 个键；仅 `translation_confirm_before_start` 留在一级，其余在二级「高级设置」）**：`TRANSLATION_AGENT_INT_RULES`
+- `translation_stream_idle_seconds`：流间空闲看门狗（秒），默认 `60`，合法区间 10~300；
+  与单请求总超时独立校验（`stream_idle_invalid`），消费时经 `legacy::stream_idle_seconds`
+  兜底 clamp。见 ADR 0050。
+- **翻译运行参数（23 个键；仅 `translation_confirm_before_start` 留在一级，其余在二级「高级设置」）**：`TRANSLATION_AGENT_INT_RULES`
   （`settings.rs`）是区间与默认值的唯一真相源，布尔键见 `TRANSLATION_AGENT_BOOL_KEYS`。
   一级「小说翻译」只放连接与常用项；下列参数收在「高级设置」二级页，一级入口显示
   「推荐 / 已修改 N 项」摘要与错误计数。
 
   | 键 | 默认 | 区间 | 含义 |
   |---|---|---|---|
-  | `translation_agent_global_concurrency` | 4 | 1~16 | 全局模型请求并发（所有小说共用） |
-  | `translation_agent_novel_concurrency` | 4 | 1~16 | 单小说子任务并发（受全局上限约束） |
+  | `translation_agent_global_concurrency` | 8 | 1~16 | 全局模型请求并发上限（所有小说共用）；自适应开启时按连续成功爬升、限流减半 |
+  | `translation_agent_novel_concurrency` | 6 | 1~16 | 单小说子任务并发（受全局上限约束） |
   | `translation_agent_active_novels` | 2 | 1~8 | 同时活跃小说数，其余排队 |
   | `translation_agent_retry_limit` | 2 | 0~5 | 自动网络重试次数（不含首次） |
   | `translation_agent_backoff_base_ms` | 1000 | 500~30000 | 自动退避基础延迟（毫秒） |
@@ -927,6 +943,7 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   | `translation_agent_context_chars` | 600 | 0~20000 | 邻接参考窗口（前后各多少字符） |
   | `translation_call_budget` | 0 | 0~1000000 | 整篇累计模型调用预算；0 = 自动 `64 + 32 × 初始分块数` |
   | `translation_agent_replay_unknown` | false | 布尔 | 请求结果未知时是否自动重放（可能重复计费） |
+  | `translation_agent_adaptive_concurrency` | true | 布尔 | 全局并发自适应收敛（AIMD，ADR 0050）；关闭时容量恒等于并发上限 |
   | `translation_confirm_before_start` | false | 布尔 | 启动前确认术语与风格（浮层可对本次任务覆盖） |
 
   保存前交叉校验：分块目标 ≤ 上限、输出上限 ≤ 上下文窗口、近期历史 + 摘要目标 ≤
@@ -1950,7 +1967,8 @@ ADR 按需追加，不强制一次性写完。
 
 - Linux Secret Service cookie 实现
 - EPUB exporter 实现
-- 自适应限速（基于响应延迟与 429 频率）
+- ~~自适应限速（基于响应延迟与 429 频率）~~（已落地：并发按限流 / 超时信号 AIMD 收敛，
+  ADR 0050；基于响应延迟的精细调节仍待定）
 - 任务启动弹窗恢复（"上次任务进行到 80/200，是否继续"）
 - 安装器（NSIS / Inno Setup）
 - 带签名的无人值守静默安装（应用内下载与安装引导已落地，见 §7.2）

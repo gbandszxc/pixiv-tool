@@ -107,7 +107,7 @@ export interface JobUsage {
 export interface JobCurrent {
   page?: number;
   chunk_id?: string;
-  role: "main" | "translator" | "reviewer";
+  role: "main" | "scanner" | "translator" | "reviewer";
 }
 
 /** 实时生成预览：summary 优先，reasoning 为思考尾窗。 */

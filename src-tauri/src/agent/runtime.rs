@@ -510,6 +510,13 @@ impl RunState {
         }
     }
 
+    /// 模型请求失败：限流 / 超时 / 断流类负信号收缩自适应调度容量（ADR 0050）。
+    fn report_scheduler_failure(&self, error: &RunError) {
+        if let (Some(scheduler), RunError::Provider { class, .. }) = (&self.scheduler, error) {
+            scheduler.report_failure(*class);
+        }
+    }
+
     fn store_projection(&self, compacted: Vec<Arc<Message>>, original_len: usize) {
         if let Ok(mut cache) = self.compaction_cache.lock() {
             *cache = Some(CompactionCache {
@@ -796,6 +803,10 @@ impl AgentHook for RuntimeHooks {
             // 用量由流里的 CompletionCall 统一累计（避免与 hook 重复计数）；
             // 模型回答已到：立即归还调度许可，随后可能进入工具执行。
             self.state.release_model_permit();
+            // 请求成功完成：自适应调度容量按连续成功爬升（ADR 0050）。
+            if let Some(scheduler) = &self.state.scheduler {
+                scheduler.report_success();
+            }
         }
         if let Some(name) = event.tool_name() {
             let failed = event
@@ -1225,14 +1236,20 @@ fn map_prompt_error(error: PromptError, state: &RunState) -> RunError {
             }
         },
         PromptError::MaxTurns { max_turns, .. } => RunError::MaxTurns(max_turns as u32),
-        PromptError::Provider(error) => classify_provider_error(&error),
+        PromptError::Provider(error) => {
+            let mapped = classify_provider_error(&error);
+            state.report_scheduler_failure(&mapped);
+            mapped
+        }
         PromptError::Report(report) => {
             let class = classify_http(report.http_status, report.code.as_deref(), &report.message);
-            RunError::Provider {
+            let mapped = RunError::Provider {
                 class,
                 code: report.code,
                 message: safe_text(&report.message, 240),
-            }
+            };
+            state.report_scheduler_failure(&mapped);
+            mapped
         }
         PromptError::Memory { error, .. } => RunError::Internal(safe_text(&error.to_string(), 200)),
         other => RunError::Internal(safe_text(&other.to_string(), 200)),

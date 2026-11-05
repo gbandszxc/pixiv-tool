@@ -77,10 +77,13 @@ const reasoningLine = computed(() => (summaryLine.value ? "" : clip(props.job.pr
 const ownerLabel = computed(() => {
   const owner = props.job.preview?.owner;
   if (!owner || owner.role === "main") return "";
-  const agent =
-    owner.role === "translator"
-      ? t("translation.job.agentTranslator")
-      : t("translation.job.agentReviewer");
+  const agentKey =
+    owner.role === "scanner"
+      ? "translation.job.agentScanner"
+      : owner.role === "translator"
+        ? "translation.job.agentTranslator"
+        : "translation.job.agentReviewer";
+  const agent = t(agentKey);
   return owner.chunk_id
     ? t("translation.job.previewOwner", { agent, chunk: owner.chunk_id })
     : agent;

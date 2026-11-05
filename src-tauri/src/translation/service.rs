@@ -26,7 +26,6 @@ use std::{
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::Semaphore;
 
 use crate::{
     agent::{
@@ -95,6 +94,8 @@ pub struct ModelConfig {
     key: String,
     pub extra_json: Value,
     pub timeout_seconds: u64,
+    /// 流间空闲看门狗秒数（ADR 0050）；挂死流不必等满总超时。
+    pub idle_timeout_seconds: u64,
     pub session_seed: String,
 }
 
@@ -105,6 +106,7 @@ impl std::fmt::Debug for ModelConfig {
             .field("base_url", &self.base_url)
             .field("model", &self.model)
             .field("timeout_seconds", &self.timeout_seconds)
+            .field("idle_timeout_seconds", &self.idle_timeout_seconds)
             .field("session_seed", &self.session_seed)
             .finish_non_exhaustive()
     }
@@ -120,7 +122,8 @@ impl ModelConfig {
             self.key.clone(),
             self.extra_json.clone(),
             self.timeout_seconds,
-        )?;
+        )?
+        .with_idle_timeout(self.idle_timeout_seconds);
         let session = session_id(&self.session_seed);
         let header = session_header_for(&provider.endpoint, &session);
         Ok(provider.with_session_header(header))
@@ -437,8 +440,6 @@ pub struct JobContext {
     /// 显式 flush 点（终态 transition）整文件落盘；单个互斥锁同时承担原
     /// journal_lock 的追加串行化职责（flush 写盘期间 append 阻塞等待）。
     journal: StdMutex<JournalBuffer>,
-    /// 单 Job 子任务并发闸门。
-    pub dispatch_gate: Arc<Semaphore>,
     /// 分块计划写路径串行化：`split_chunk` 的读计划 → 派生 ID → 写计划是
     /// 多步组合操作，并发派发同时缩块时无锁的后写会覆盖先写（丢 split
     /// 条目）或让两批派生块分到相同 ID（产物相互覆盖）。同步短临界区，
@@ -1275,6 +1276,7 @@ impl TranslationService {
             timeout_seconds: legacy::translation_timeout_seconds(
                 settings.translation_timeout_seconds,
             ),
+            idle_timeout_seconds: legacy::stream_idle_seconds(settings.translation_stream_idle_seconds),
             session_seed: format!("pixiv-tool-novel-{}", novel.novel_id),
         };
         let settings_json = settings_snapshot_json(&settings, target_code, &model);
@@ -1358,9 +1360,6 @@ impl TranslationService {
         let budget = Arc::new(BudgetTracker::new(call_limit));
 
         let emitter = Arc::new(JobEmitter::new(self.inner.sink.clone(), scope.clone()));
-        let dispatch_gate = Arc::new(Semaphore::new(
-            settings.translation_agent_novel_concurrency.clamp(1, 16) as usize,
-        ));
         let ctx = Arc::new(JobContext {
             scope: scope.clone(),
             store: store.clone(),
@@ -1378,7 +1377,6 @@ impl TranslationService {
             confirm_before_start: settings.translation_confirm_before_start,
             manifest_lock: StdMutex::new(()),
             journal: StdMutex::new(JournalBuffer::empty()),
-            dispatch_gate,
             plan_lock: StdMutex::new(()),
             plan_cache: StdMutex::new(None),
             usage: StdMutex::new(TokenUsage::default()),
@@ -2135,6 +2133,12 @@ impl TranslationService {
                 .unwrap_or_else(|| {
                     legacy::translation_timeout_seconds(settings.translation_timeout_seconds)
                 }),
+            idle_timeout_seconds: model_snapshot
+                .get("idle_timeout_seconds")
+                .and_then(Value::as_u64)
+                .unwrap_or_else(|| {
+                    legacy::stream_idle_seconds(settings.translation_stream_idle_seconds)
+                }),
             session_seed: format!("pixiv-tool-novel-{}", manifest.novel_id),
         };
         // 3. 预算：累计用量与手动追加都从 manifest 还原，不因重启清零。
@@ -2159,9 +2163,6 @@ impl TranslationService {
             budget.add_manual(manifest.attempts.manual_extra, "restart_resume");
         }
         let emitter = Arc::new(JobEmitter::new(self.inner.sink.clone(), scope.clone()));
-        let dispatch_gate = Arc::new(Semaphore::new(
-            settings.translation_agent_novel_concurrency.clamp(1, 16) as usize,
-        ));
         let usage = manifest.usage;
         let ctx = Arc::new(JobContext {
             scope: scope.clone(),
@@ -2181,7 +2182,6 @@ impl TranslationService {
                 && manifest.constraint_version == 0,
             manifest_lock: StdMutex::new(()),
             journal: StdMutex::new(journal),
-            dispatch_gate,
             plan_lock: StdMutex::new(()),
             plan_cache: StdMutex::new(None),
             usage: StdMutex::new(usage),
@@ -3627,14 +3627,10 @@ fn continuation_nudge(ctx: &JobContext, reason: &str, empty_turn: bool) -> Strin
         );
     } else if !pending.pending_scan.is_empty() {
         lines.push(format!(
-            "下一步：对未扫描块 {} 逐个调用 read_chunk(chunk_id, true)，单轮最多 2 个；\
-             每读完一块立刻调用 submit_scan(...)。",
+            "下一步：调用 dispatch_scan([...]) 派发未扫描块 {}，按并发与预算分批；\
+             扫描子 Agent 各自读取并提交，不要逐块直读正文。",
             brief(&pending.pending_scan)
         ));
-        lines.push(
-            r#"submit_scan 参数示例（字段名固定）：{"chunk_id":"c0001","terms":[{"source_term":"勇者","locked_translation":"勇者","term_type":"角色"}],"style":{"formality":"轻小说口语","narration":"第一人称"},"notes":"","confidence":"high"}。没有专有名词时 terms 传 []；style 不能省略。"#
-                .into(),
-        );
     } else if !pending.constraints_frozen {
         lines.push("下一步：全部块已扫描，立即调用 freeze_constraints() 生成冻结版本。".into());
     } else if !pending.pending_translate.is_empty() {
@@ -3747,6 +3743,7 @@ fn settings_snapshot_json(settings: &Settings, target: &str, model: &ModelConfig
             "format": model.format,
             "model": model.model,
             "timeout_seconds": model.timeout_seconds,
+            "idle_timeout_seconds": model.idle_timeout_seconds,
         },
         "confirm_before_start": settings.translation_confirm_before_start,
         "runtime": {
@@ -3954,6 +3951,7 @@ pub(crate) fn test_job_context(
         key: "test-key".into(),
         extra_json: json!({}),
         timeout_seconds: 60,
+        idle_timeout_seconds: 10,
         session_seed: format!("pixiv-tool-test-{}", scope.job_id),
     };
     Arc::new(JobContext {
@@ -3973,7 +3971,6 @@ pub(crate) fn test_job_context(
         confirm_before_start: false,
         manifest_lock: StdMutex::new(()),
         journal: StdMutex::new(JournalBuffer::load(&store)),
-        dispatch_gate: Arc::new(Semaphore::new(2)),
         plan_lock: StdMutex::new(()),
         plan_cache: StdMutex::new(None),
         usage: StdMutex::new(TokenUsage::default()),
@@ -4171,6 +4168,7 @@ mod tests {
             key: "super-secret-key".into(),
             extra_json: json!({}),
             timeout_seconds: 60,
+            idle_timeout_seconds: 10,
             session_seed: "pixiv-tool-novel-1".into(),
         };
         let debug = format!("{config:?}");
@@ -4187,6 +4185,7 @@ mod tests {
             key: "k".into(),
             extra_json: json!({}),
             timeout_seconds: 60,
+            idle_timeout_seconds: 10,
             session_seed: "s".into(),
         };
         let (cap, params) = config.request_params(1_000).unwrap();

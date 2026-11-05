@@ -27,7 +27,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
-use crate::agent::model::transport::WreqTransport;
+use crate::agent::model::transport::{DEFAULT_STREAM_IDLE_TIMEOUT, WreqTransport};
 
 /// 支持的三种协议；`ChatCompletions` 为默认（OpenAI 兼容）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -434,6 +434,8 @@ pub struct ProviderConfig {
     /// 高级 JSON（不含应用保留字段）。
     pub extra_json: Value,
     pub timeout_seconds: u64,
+    /// 流间空闲看门狗秒数（ADR 0050）；默认 60。
+    pub idle_timeout_seconds: u64,
     /// 最终端点；Rig 追加的路径会被传输层整体替换。
     pub endpoint: tauri::Url,
     /// 需要附加的静态会话头（name, value）；仅 opencode host 生效。
@@ -473,11 +475,18 @@ impl ProviderConfig {
             api_key: api_key.into(),
             extra_json,
             timeout_seconds,
+            idle_timeout_seconds: DEFAULT_STREAM_IDLE_TIMEOUT.as_secs(),
             endpoint,
             session_header: None,
             // 闸门在构造时接线：上游从不显式注入，缺省即共享限流。
             gate: Some(shared_gate()),
         })
+    }
+
+    /// 注入流间空闲看门狗秒数（ADR 0050）；覆盖默认 60 秒。
+    pub fn with_idle_timeout(mut self, idle_seconds: u64) -> Self {
+        self.idle_timeout_seconds = idle_seconds.max(1);
+        self
     }
 
     /// 设置会话头；host 不含 `opencode` 时自动忽略。
@@ -492,14 +501,15 @@ impl ProviderConfig {
         self
     }
 
-    /// 构造 wreq 传输：复用进程级共享 client（连接池/TLS 会话），单请求超时
-    /// 与 API key 脱敏按配置下发，禁重定向，叠加会话头与闸门。
+    /// 构造 wreq 传输：复用进程级共享 client（连接池/TLS 会话），单请求超时、
+    /// 流间空闲看门狗与 API key 脱敏按配置下发，禁重定向，叠加会话头与闸门。
     pub fn transport(&self) -> Result<WreqTransport, String> {
         let mut transport = WreqTransport::new(
             shared_client()?.clone(),
             self.endpoint.clone(),
             Duration::from_secs(self.timeout_seconds),
         )
+        .with_idle_timeout(Duration::from_secs(self.idle_timeout_seconds.max(1)))
         .with_gate(self.gate.clone())
         .with_redact_key(self.api_key.clone());
         if let Some((name, value)) = &self.session_header {

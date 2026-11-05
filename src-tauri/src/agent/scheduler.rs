@@ -1,8 +1,10 @@
 //! 全局模型请求调度：全局 FIFO 闸门 + 单小说上限 + 活跃小说上限。
 //!
-//! 实际并发取「全局并发」与「单小说并发」的较小值，因此一本长篇无法占满所有
-//! 槽位。等待许可可被取消（tokio `Semaphore` 的等待者随 future drop 移除，
-//! 不泄漏许可）。
+//! 全局闸默认自适应（AIMD，ADR 0050）：模型请求连续成功时容量倍增爬升逼近
+//! 设置上限；限流 / 超时 / 断流等负信号把容量减半。关闭自适应时容量恒等于
+//! 上限（静态语义）。实际并发取「全局并发」与「单小说并发」的较小值，因此
+//! 一本长篇无法占满所有槽位。等待许可可被取消（tokio `Semaphore` 的等待者
+//! 随 future drop 移除，不泄漏许可）。
 
 use std::{
     collections::HashMap,
@@ -14,25 +16,29 @@ use std::{
 
 use tokio::sync::{Mutex as AsyncMutex, OwnedSemaphorePermit, Semaphore};
 
+use super::FailureClass;
 use crate::settings::Settings;
 
 /// 调度参数（来自二级高级设置；越界值在构造时收敛到安全区间）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeConfig {
-    /// 全局模型请求并发，1~16。
+    /// 全局模型请求并发的自适应上限，1~16；自适应关闭时即固定并发。
     pub global_concurrency: usize,
     /// 单小说子任务并发，1~16，实际受全局上限约束。
     pub novel_concurrency: usize,
     /// 同时活跃小说数，1~8。
     pub active_novels: usize,
+    /// 全局并发是否自适应收敛（AIMD）。关闭时容量恒等于 `global_concurrency`。
+    pub adaptive_concurrency: bool,
 }
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            global_concurrency: 4,
-            novel_concurrency: 4,
+            global_concurrency: 8,
+            novel_concurrency: 6,
             active_novels: 2,
+            adaptive_concurrency: true,
         }
     }
 }
@@ -44,6 +50,7 @@ impl RuntimeConfig {
             global_concurrency: clamp(settings.translation_agent_global_concurrency, 1, 16),
             novel_concurrency: clamp(settings.translation_agent_novel_concurrency, 1, 16),
             active_novels: clamp(settings.translation_agent_active_novels, 1, 8),
+            adaptive_concurrency: settings.translation_agent_adaptive_concurrency,
         }
     }
 
@@ -59,6 +66,165 @@ fn clamp(value: i64, min: usize, max: usize) -> usize {
     (value.max(min as i64).min(max as i64)) as usize
 }
 
+/// 连续成功达到该次数后容量倍增（slow-start 式爬升）。
+const AIMD_SUCCESS_THRESHOLD: u32 = 2;
+
+/// 全局闸的自适应状态。
+struct AimdState {
+    /// 当前生效容量（目标值）。
+    current: usize,
+    /// 连续成功计数；达到阈值时容量倍增爬升。
+    consecutive_success: u32,
+    /// 缩容时未能立即回收的许可数：由 [`DynamicGatePermit`] 归还时吞掉。
+    deficit: usize,
+}
+
+/// 全局模型请求闸：tokio `Semaphore` + AIMD 容量控制。
+///
+/// 扩容直接 `add_permits`；缩容尽量立即 `forget` 可用许可，差额记入
+/// `deficit`，由在途许可归还时吞掉（不再返还），最终收敛到目标容量。
+struct DynamicGate {
+    sem: Arc<Semaphore>,
+    state: Mutex<AimdState>,
+    max: usize,
+    adaptive: bool,
+}
+
+impl DynamicGate {
+    fn new(max: usize, adaptive: bool) -> Self {
+        let initial = if adaptive {
+            // 半上限起步：连续成功即倍增，两个请求周期内逼近上限；
+            // 冷启动即满速容易直接触发限流。
+            max.div_ceil(2).max(1)
+        } else {
+            max
+        };
+        Self {
+            sem: Arc::new(Semaphore::new(initial)),
+            state: Mutex::new(AimdState {
+                current: initial,
+                consecutive_success: 0,
+                deficit: 0,
+            }),
+            max,
+            adaptive,
+        }
+    }
+
+    async fn acquire(&self) -> Option<OwnedSemaphorePermit> {
+        self.sem.clone().acquire_owned().await.ok()
+    }
+
+    fn available(&self) -> usize {
+        self.sem.available_permits()
+    }
+
+    fn current_capacity(&self) -> usize {
+        self.state
+            .lock()
+            .map(|state| state.current)
+            .unwrap_or(self.max)
+    }
+
+    /// 成功完成一次模型请求：连续成功达阈值时容量倍增（封顶上限）。
+    fn report_success(&self) {
+        if !self.adaptive {
+            return;
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.consecutive_success = state.consecutive_success.saturating_add(1);
+        if state.consecutive_success < AIMD_SUCCESS_THRESHOLD || state.current >= self.max {
+            return;
+        }
+        state.consecutive_success = 0;
+        let old = state.current;
+        let new = old.saturating_mul(2).min(self.max);
+        Self::apply(&self.sem, &mut state, new);
+        log::info!("AIMD 全局调度容量 {old}→{new}（连续成功爬升）");
+    }
+
+    /// 一次模型请求失败：只有限流 / 超时 / 断流类负信号才减半容量；
+    /// 鉴权、余额、内容拒绝等与速率无关的错误不收缩。
+    fn report_failure(&self, class: FailureClass) {
+        if !self.adaptive {
+            return;
+        }
+        if !matches!(
+            class,
+            FailureClass::Retryable | FailureClass::UnknownOutcome | FailureClass::NotSent
+        ) {
+            return;
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.consecutive_success = 0;
+        if state.current <= 1 {
+            return;
+        }
+        let old = state.current;
+        let new = (state.current / 2).max(1);
+        Self::apply(&self.sem, &mut state, new);
+        log::info!("AIMD 全局调度容量 {old}→{new}（负信号：{class}）");
+    }
+
+    /// 把目标容量应用到信号量；返回后 `state.current == new`。
+    fn apply(sem: &Semaphore, state: &mut AimdState, new: usize) {
+        if new > state.current {
+            sem.add_permits(new - state.current);
+        } else if new < state.current {
+            let want = state.current - new;
+            let mut removed = 0;
+            while removed < want {
+                match sem.try_acquire() {
+                    Ok(permit) => {
+                        permit.forget();
+                        removed += 1;
+                    }
+                    Err(_) => break,
+                }
+            }
+            state.deficit += want - removed;
+        }
+        state.current = new;
+    }
+
+    /// 许可归还：缩容欠账未清时吞掉本次归还（不再返还信号量）。
+    fn reclaim_on_release(&self) -> bool {
+        if !self.adaptive {
+            return false;
+        }
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.deficit > 0 {
+            state.deficit -= 1;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// 全局闸许可；drop 归还，缩容欠账时被吞掉（协助容量收敛）。
+struct DynamicGatePermit {
+    /// `None` 表示已被 forget 消费。
+    permit: Option<OwnedSemaphorePermit>,
+    gate: Arc<DynamicGate>,
+}
+
+impl Drop for DynamicGatePermit {
+    fn drop(&mut self) {
+        if self.gate.reclaim_on_release()
+            && let Some(permit) = self.permit.take()
+        {
+            permit.forget();
+        }
+    }
+}
+
 struct NovelSlot {
     /// 单小说模型请求上限。
     model: Arc<Semaphore>,
@@ -69,7 +235,7 @@ struct NovelSlot {
 }
 
 struct Inner {
-    global: Arc<Semaphore>,
+    global: Arc<DynamicGate>,
     active_novels: Arc<Semaphore>,
     novel_concurrency: usize,
     slots: Mutex<HashMap<i64, Arc<NovelSlot>>>,
@@ -87,7 +253,10 @@ impl Scheduler {
         let config = config.clone().normalized();
         Self {
             inner: Arc::new(Inner {
-                global: Arc::new(Semaphore::new(config.global_concurrency)),
+                global: Arc::new(DynamicGate::new(
+                    config.global_concurrency,
+                    config.adaptive_concurrency,
+                )),
                 active_novels: Arc::new(Semaphore::new(config.active_novels)),
                 novel_concurrency: config.novel_concurrency,
                 slots: Mutex::new(HashMap::new()),
@@ -124,7 +293,13 @@ impl Scheduler {
     pub async fn model_permit(&self, novel_id: i64) -> ModelPermit {
         let slot = self.slot(novel_id);
         let novel = slot.model.clone().acquire_owned().await.ok();
-        let global = self.inner.global.clone().acquire_owned().await.ok();
+        let global = self.inner.global.acquire().await.map(|permit| {
+            let gate = self.inner.global.clone();
+            DynamicGatePermit {
+                permit: Some(permit),
+                gate,
+            }
+        });
         ModelPermit {
             _slot: slot,
             _novel: novel,
@@ -132,9 +307,24 @@ impl Scheduler {
         }
     }
 
+    /// 模型请求成功完成：自适应容量按连续成功爬升（静态模式为空操作）。
+    pub fn report_success(&self) {
+        self.inner.global.report_success();
+    }
+
+    /// 模型请求失败：限流 / 超时 / 断流类负信号收缩全局容量（静态模式为空操作）。
+    pub fn report_failure(&self, class: FailureClass) {
+        self.inner.global.report_failure(class);
+    }
+
+    /// 当前全局生效容量（自适应目标值，诊断用）。
+    pub fn current_global_capacity(&self) -> usize {
+        self.inner.global.current_capacity()
+    }
+
     /// 当前全局可用许可（诊断 / 测试）。
     pub fn available_global(&self) -> usize {
-        self.inner.global.available_permits()
+        self.inner.global.available()
     }
 
     /// 当前单小说可用许可（诊断 / 测试）。
@@ -207,7 +397,7 @@ impl Drop for ActiveClaim {
 pub struct ModelPermit {
     _slot: Arc<NovelSlot>,
     _novel: Option<OwnedSemaphorePermit>,
-    _global: Option<OwnedSemaphorePermit>,
+    _global: Option<DynamicGatePermit>,
 }
 
 impl ModelPermit {
@@ -226,6 +416,14 @@ mod tests {
             global_concurrency: global,
             novel_concurrency: novel,
             active_novels: active,
+            adaptive_concurrency: false,
+        }
+    }
+
+    fn adaptive_config(max: usize) -> RuntimeConfig {
+        RuntimeConfig {
+            adaptive_concurrency: true,
+            ..config(max, 4, 4)
         }
     }
 
@@ -325,5 +523,85 @@ mod tests {
             .await
             .expect("取消等待者后许可必须归还");
         assert!(again.has_permits());
+    }
+
+    #[tokio::test]
+    async fn aimd_starts_at_half_and_climbs_to_max() {
+        let scheduler = Scheduler::new(&adaptive_config(4));
+        assert_eq!(scheduler.current_global_capacity(), 2, "半上限起步");
+        // 单次成功不爬升；连续两次成功容量倍增到上限。
+        scheduler.report_success();
+        assert_eq!(scheduler.current_global_capacity(), 2);
+        scheduler.report_success();
+        assert_eq!(scheduler.current_global_capacity(), 4);
+        // 已到上限：继续成功不再变化。
+        scheduler.report_success();
+        assert_eq!(scheduler.current_global_capacity(), 4);
+    }
+
+    #[tokio::test]
+    async fn aimd_growth_expands_immediately_available_permits() {
+        let scheduler = Scheduler::new(&adaptive_config(4));
+        let _first = scheduler.model_permit(1).await;
+        let _second = scheduler.model_permit(1).await;
+        assert_eq!(scheduler.available_global(), 0);
+        scheduler.report_success();
+        scheduler.report_success();
+        assert_eq!(scheduler.current_global_capacity(), 4);
+        let third = tokio::time::timeout(Duration::from_millis(100), scheduler.model_permit(1))
+            .await
+            .expect("容量爬升后第三个请求应立即可得");
+        assert!(third.has_permits());
+    }
+
+    #[tokio::test]
+    async fn aimd_failure_halves_capacity_reclaiming_inflight_permits() {
+        let scheduler = Scheduler::new(&adaptive_config(8));
+        assert_eq!(scheduler.current_global_capacity(), 4);
+        // 占满初始容量 4（FIFO 下顺序取得）。
+        let mut permits = Vec::new();
+        for _ in 0..4 {
+            permits.push(scheduler.model_permit(1).await);
+        }
+        assert_eq!(scheduler.available_global(), 0);
+        // 负信号减半：目标 2，全部许可在途 → 欠账 2。
+        scheduler.report_failure(FailureClass::Retryable);
+        assert_eq!(scheduler.current_global_capacity(), 2);
+        // 先归还 2 个：被缩容欠账吞掉，可用许可仍为 0（在途 2 = 目标容量 2）。
+        drop(permits.pop());
+        drop(permits.pop());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(scheduler.available_global(), 0, "归还应被缩容欠账吞掉");
+        // 剩余 2 个归还后欠账已清，正常返还：可用 = 目标容量 2。
+        drop(permits.pop());
+        drop(permits.pop());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(scheduler.available_global(), 2);
+    }
+
+    #[tokio::test]
+    async fn aimd_ignores_non_rate_failures() {
+        let scheduler = Scheduler::new(&adaptive_config(4));
+        scheduler.report_failure(FailureClass::Permanent);
+        scheduler.report_failure(FailureClass::ContentRefused);
+        scheduler.report_failure(FailureClass::InputTooLarge);
+        assert_eq!(
+            scheduler.current_global_capacity(),
+            2,
+            "与速率无关的错误不收缩容量"
+        );
+    }
+
+    #[tokio::test]
+    async fn adaptive_disabled_is_static() {
+        let scheduler = Scheduler::new(&config(4, 4, 4));
+        scheduler.report_success();
+        scheduler.report_success();
+        scheduler.report_failure(FailureClass::Retryable);
+        assert_eq!(
+            scheduler.current_global_capacity(),
+            4,
+            "关闭自适应时容量恒等于上限"
+        );
     }
 }

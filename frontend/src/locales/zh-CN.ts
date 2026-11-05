@@ -482,6 +482,7 @@ export default {
       currentChunk: "当前：分块 {chunk}",
       previewOwner: "{agent} {chunk}",
       agentTranslator: "翻译",
+      agentScanner: "扫描",
       agentReviewer: "审查",
       completed: "整篇译文已保存",
       completedWithUsage: "整篇译文已保存 · 用量 {tokens} tokens",

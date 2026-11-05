@@ -83,14 +83,21 @@ pub struct Settings {
     /// 小说翻译单请求超时（秒），默认 [`DEFAULT_TRANSLATION_TIMEOUT_SECONDS`]（10 分钟）；
     /// 合法区间 [`TRANSLATION_TIMEOUT_MIN_SECONDS`] ~ [`TRANSLATION_TIMEOUT_MAX_SECONDS`]。
     pub translation_timeout_seconds: i64,
+    /// 流间空闲看门狗（秒，ADR 0050）：流式响应两次增量之间超过该时长即断开重试；
+    /// 默认 [`DEFAULT_STREAM_IDLE_SECONDS`]，合法区间 [`STREAM_IDLE_MIN_SECONDS`] ~
+    /// [`STREAM_IDLE_MAX_SECONDS`]。
+    pub translation_stream_idle_seconds: i64,
     /// 模型请求体扩展；不含凭据或应用保留字段，可用键随协议不同。
     pub translation_extra: Value,
-    /// 全局模型请求并发（所有小说共用），默认 4，区间 1~16。
+    /// 全局模型请求并发的自适应上限（所有小说共用），默认 8，区间 1~16；
+    /// 自适应开启时按连续成功爬升、限流减半，关闭时即固定并发（ADR 0050）。
     pub translation_agent_global_concurrency: i64,
-    /// 单小说子任务并发，默认 4，区间 1~16（实际受全局上限约束）。
+    /// 单小说子任务并发，默认 6，区间 1~16（实际受全局上限约束）。
     pub translation_agent_novel_concurrency: i64,
     /// 同时活跃小说数，默认 2，区间 1~8。
     pub translation_agent_active_novels: i64,
+    /// 全局并发是否自适应收敛（AIMD，ADR 0050）；默认开启。
+    pub translation_agent_adaptive_concurrency: bool,
     /// 自动网络重试次数（不含首次），默认 2，区间 0~5。
     pub translation_agent_retry_limit: i64,
     /// 自动退避基础延迟（毫秒），默认 1000，区间 500~30000。
@@ -172,10 +179,12 @@ impl Default for Settings {
             translation_models: Vec::new(),
             translation_target_language: String::new(),
             translation_timeout_seconds: DEFAULT_TRANSLATION_TIMEOUT_SECONDS,
+            translation_stream_idle_seconds: DEFAULT_STREAM_IDLE_SECONDS,
             translation_extra: serde_json::json!({}),
-            translation_agent_global_concurrency: 4,
-            translation_agent_novel_concurrency: 4,
+            translation_agent_global_concurrency: 8,
+            translation_agent_novel_concurrency: 6,
             translation_agent_active_novels: 2,
+            translation_agent_adaptive_concurrency: true,
             translation_agent_retry_limit: 2,
             translation_agent_backoff_base_ms: 1_000,
             translation_agent_backoff_max_seconds: 120,
@@ -251,6 +260,13 @@ pub const TRANSLATION_TIMEOUT_MIN_SECONDS: i64 = 30;
 /// 小说翻译单请求超时合法区间上限（秒）= 1 小时。
 pub const TRANSLATION_TIMEOUT_MAX_SECONDS: i64 = 3600;
 
+/// 流间空闲看门狗默认值（秒，ADR 0050）：两次流式增量之间超过 60 秒视为挂死。
+pub const DEFAULT_STREAM_IDLE_SECONDS: i64 = 60;
+/// 流间空闲看门狗合法区间下限（秒）：再小会把慢首字的健康连接误判为挂死。
+pub const STREAM_IDLE_MIN_SECONDS: i64 = 10;
+/// 流间空闲看门狗合法区间上限（秒）：再大失去看门狗意义，总超时兜底。
+pub const STREAM_IDLE_MAX_SECONDS: i64 = 300;
+
 /// 通用 Agent 运行参数的整数区间定义。
 ///
 /// 加载期回落与保存期校验共用本表（单一真相源），避免两处区间漂移。
@@ -282,14 +298,14 @@ impl TranslationIntRule {
 pub const TRANSLATION_AGENT_INT_RULES: &[TranslationIntRule] = &[
     TranslationIntRule {
         key: "translation_agent_global_concurrency",
-        default: 4,
+        default: 8,
         min: 1,
         max: 16,
-        label: "全局模型请求并发",
+        label: "全局模型请求并发上限",
     },
     TranslationIntRule {
         key: "translation_agent_novel_concurrency",
-        default: 4,
+        default: 6,
         min: 1,
         max: 16,
         label: "单小说子任务并发",
@@ -423,9 +439,10 @@ pub const TRANSLATION_AGENT_INT_RULES: &[TranslationIntRule] = &[
 ];
 
 /// 布尔运行参数键；保存时只校验类型。
-pub const TRANSLATION_AGENT_BOOL_KEYS: [&str; 2] = [
+pub const TRANSLATION_AGENT_BOOL_KEYS: [&str; 3] = [
     "translation_agent_replay_unknown",
     "translation_confirm_before_start",
+    "translation_agent_adaptive_concurrency",
 ];
 
 /// 按键查整数区间定义。
@@ -739,6 +756,9 @@ impl Settings {
                     "translation_confirm_before_start" => {
                         self.translation_confirm_before_start = false;
                     }
+                    "translation_agent_adaptive_concurrency" => {
+                        self.translation_agent_adaptive_concurrency = true;
+                    }
                     _ => {}
                 }
             }
@@ -926,6 +946,26 @@ fn translation_timeout_error() -> SettingsError {
             "翻译超时时间必须是 {TRANSLATION_TIMEOUT_MIN_SECONDS}~{TRANSLATION_TIMEOUT_MAX_SECONDS} 秒之间的整数"
         ),
     )
+}
+
+/// JSON 值形式的流间空闲看门狗校验（bool / 非整数 / 越界都拒绝），通过时返回该整数。
+pub fn validate_stream_idle_value(v: &Value) -> Result<i64, SettingsError> {
+    let error = || {
+        SettingsError::new(
+            "stream_idle_invalid",
+            Some("translation_stream_idle_seconds"),
+            format!(
+                "流间空闲看门狗必须是 {STREAM_IDLE_MIN_SECONDS}~{STREAM_IDLE_MAX_SECONDS} 秒之间的整数"
+            ),
+        )
+    };
+    if v.is_boolean() {
+        return Err(error());
+    }
+    match v.as_i64() {
+        Some(n) if (STREAM_IDLE_MIN_SECONDS..=STREAM_IDLE_MAX_SECONDS).contains(&n) => Ok(n),
+        _ => Err(error()),
+    }
 }
 
 /// JSON 值形式的图片缓存上限校验（bool / 非整数 / 越界都拒绝），通过时返回该整数。
@@ -1701,9 +1741,10 @@ mod tests {
     #[test]
     fn translation_agent_defaults_match_plan() {
         let settings = Settings::default();
-        assert_eq!(settings.translation_agent_global_concurrency, 4);
-        assert_eq!(settings.translation_agent_novel_concurrency, 4);
+        assert_eq!(settings.translation_agent_global_concurrency, 8);
+        assert_eq!(settings.translation_agent_novel_concurrency, 6);
         assert_eq!(settings.translation_agent_active_novels, 2);
+        assert!(settings.translation_agent_adaptive_concurrency);
         assert_eq!(settings.translation_agent_retry_limit, 2);
         assert_eq!(settings.translation_agent_backoff_base_ms, 1_000);
         assert_eq!(settings.translation_agent_backoff_max_seconds, 120);
@@ -1721,6 +1762,7 @@ mod tests {
         assert_eq!(settings.translation_agent_chunk_max_chars, 6_000);
         assert_eq!(settings.translation_agent_context_chars, 600);
         assert_eq!(settings.translation_call_budget, 0, "0 = 自动预算");
+        assert_eq!(settings.translation_stream_idle_seconds, 60);
         assert!(!settings.translation_agent_replay_unknown);
         assert!(!settings.translation_confirm_before_start);
         validate_translation_agent_settings(&settings).unwrap();
@@ -1741,7 +1783,7 @@ mod tests {
         )
         .unwrap();
         let settings = Settings::load_or_init(&dir);
-        assert_eq!(settings.translation_agent_global_concurrency, 4);
+        assert_eq!(settings.translation_agent_global_concurrency, 8);
         assert_eq!(settings.translation_agent_context_window, 131_072);
         // 交叉冲突（目标 > 上限）整组回落默认。
         assert_eq!(settings.translation_agent_chunk_target_chars, 3_000);
