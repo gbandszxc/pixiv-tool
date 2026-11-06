@@ -1066,7 +1066,7 @@ export default {
       sModeTag: "Tag partial",
       sModeTagFull: "Tag exact",
       sModeTc: "Title & caption",
-      usersIriLabel: "users-entered (bookmarks)",
+      usersIriLabel: "Bookmarks",
       usersIriNone: "No filter",
       total: "About {count} results",
       localSortLabel: "Sort this page",
