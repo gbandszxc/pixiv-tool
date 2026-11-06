@@ -664,30 +664,29 @@ const typeTabs = computed(() => [
   flex: none;
 }
 
-/* 过滤行：tabs + 排序/对象/匹配 + 行尾本页排序，单行不换行；
-   窄窗先把本页排序组换到第二行（见 1040px 断点），640px 以下纵向堆叠 */
+/* 过滤行：tabs + 排序/对象/匹配/users入り + 行尾本页排序。与全站筛选行统一 wrap
+   配方：常规宽度自然单行（本页排序组 margin-left: auto 靠右），宽度不足时整项
+   换行而非压缩——禁用收缩（flex: none）是因为 Material 下拉被压缩后文字会溢出
+   边框与相邻标签重叠；断点随实际内容宽度生效，不依赖视口媒体查询（内容可用
+   宽度受侧栏展开/收起与超宽窗口封顶影响，视口宽度判断不了）。 */
 .filter-row {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-md);
+  gap: var(--space-sm) var(--space-md);
   margin-top: 0;
   margin-bottom: var(--space-md);
-  min-width: 0;
 }
 
 .type-tabs-wrap {
   flex: none;
-  min-width: 0;
-  overflow: hidden;
 }
 
 .select-item {
   display: flex;
-  flex: 0 1 auto;
+  flex: none;
   align-items: center;
   gap: var(--space-xs);
-  min-width: 0;
 }
 
 /* 标签 12px 小字；下拉贴合选中项文本宽度（不设 flex: 1，避免等分撑满整行） */
@@ -752,14 +751,7 @@ const typeTabs = computed(() => [
   margin-top: var(--space-lg);
 }
 
-/* 视口 < 1040px 时内容区已放不下完整筛选行（约 740px）：退回换行；
-   640px 以下进一步纵向堆叠（见下） */
-@media (max-width: 1040px) {
-  .filter-row {
-    flex-wrap: wrap;
-  }
-}
-
+/* 视口 ≤ 640px：纵向堆叠（更窄窗口由过滤行自身的 wrap 逐级承接） */
 @media (max-width: 640px) {
   /* 工具行换行：输入框与按钮纵向堆叠，输入框占满整行 */
   .tool-row {
@@ -774,10 +766,6 @@ const typeTabs = computed(() => [
   .filter-row {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .select-item {
-    min-width: 0;
   }
 
   /* 堆叠布局下下拉撑满整行 */
