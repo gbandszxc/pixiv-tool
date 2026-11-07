@@ -78,7 +78,9 @@
 
       <!-- 宫格模式 -->
       <div v-else class="history-grid-wrap">
-        <div class="history-grid">
+        <!-- 宫格列数档位（styles/tiered-grid.css）：列数取每页条数的因数
+             （20 → 2/4/5/10；50 → 2/5/10；100 → 2/4/5/10），容量切换随 store.pageSize 联动 -->
+        <div class="history-grid" :class="['tiered-grid', 'cap-' + historyStore.pageSize]">
           <article v-for="row in rows" :key="rowKey(row)" class="history-card" :class="{ 'is-selected': checkedRowKeys.includes(rowKey(row)) }">
             <!-- 小说书本封面（方形） -->
             <div v-if='row.category === "novel"' class="card-cover-wrap novel-cover-wrap" :style='bookStyle(row.id)' @click='goDetail(row)'>
@@ -391,6 +393,9 @@ onUnmounted(() => {
 .row-actions svg, .card-hover-actions svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2; }
 .btn-delete { --md-icon-button-icon-color: var(--md-sys-color-error); color: var(--md-sys-color-error); }
 .history-grid-wrap { width: 100%; }
+/* 页面宿主即宫格的档位查询容器：.history-grid（tiered-grid）列数按本元素实际宽度
+ * 取每页条数的因数档（styles/tiered-grid.css），本条 auto-fill 仅作无容器兜底 */
+.history-view { container-type: inline-size; }
 .history-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--space-md); }
 .history-card { position: relative; display: flex; flex-direction: column; border-radius: 16px; background: var(--md-sys-color-surface-container); border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 18%, transparent); overflow: hidden; transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease; }
 .history-card:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,.08); border-color: color-mix(in srgb, var(--md-sys-color-outline) 40%, transparent); }
@@ -433,6 +438,5 @@ onUnmounted(() => {
 .m3-empty, .m3-loading { padding: var(--space-xl); color: var(--ink-muted); text-align: center; }
 @media (max-width: 640px) {
   .history-search { min-width: 100%; }
-  .history-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 }
 </style>

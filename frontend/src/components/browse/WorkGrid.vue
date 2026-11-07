@@ -38,8 +38,14 @@ const props = withDefaults(
     /**
      * 页码分页每页条数（列数档位取其因数保证每行排满）：
      * 20 → 2 / 4 / 5 / 10 列；30（小说搜索）→ 2 / 3 / 5 / 6 / 10 列。
+     * 非分页的定长网格也可传该值并配合 tiered 启用档位（频道页 12 条板块）。
      */
     pageSize?: number;
+    /**
+     * 非分页定长网格显式启用列数档位（styles/tiered-grid.css，容量 = pageSize）；
+     * paginated 模式自动启用。默认关闭，无限滚动网格保持 auto-fill 不受影响。
+     */
+    tiered?: boolean;
   }>(),
   {
     loading: false,
@@ -52,6 +58,7 @@ const props = withDefaults(
     hideR18Hint: false,
     paginated: false,
     pageSize: 20,
+    tiered: false,
   }
 );
 
@@ -63,6 +70,15 @@ const emit = defineEmits<{
 }>();
 
 const { t } = useI18n();
+
+/**
+ * 列数档位 class（styles/tiered-grid.css）：paginated 自动启用，容量 = pageSize
+ * （搜索页 20 / 30）；非分页定长网格（频道页 12 条板块）经 tiered 显式启用。
+ * 档位由宿主 container-type 查询容器宽度驱动，无容器时退回基础 auto-fill。
+ */
+const gridTierClass = computed(() =>
+  props.paginated || props.tiered ? ["tiered-grid", `cap-${props.pageSize}`] : []
+);
 
 /** 频道页覆盖只影响本实例，避免全局开关再次隐藏手动选中的作品。 */
 const r18Filter = useGlobalR18Filter();
@@ -135,7 +151,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="work-grid-wrap">
     <!-- 首屏骨架：纯 surface-container 色块，不做闪烁动画（DESIGN.md 克制动效 / reduced-motion） -->
-    <div v-if="loading && !visibleItems.length" class="work-grid" :class="{ paginated, 'page-30': pageSize === 30 }" aria-hidden="true">
+    <div v-if="loading && !visibleItems.length" class="work-grid" :class="[{ paginated }, gridTierClass]" aria-hidden="true">
       <div v-for="n in skeletonCount" :key="n" class="skeleton-card">
         <div class="skeleton-cover" :class="{ portrait: n % 5 === 0 }"></div>
         <div class="skeleton-line w70"></div>
@@ -164,7 +180,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
-      <div class="work-grid" :class="{ paginated, 'page-30': pageSize === 30 }">
+      <div class="work-grid" :class="[{ paginated }, gridTierClass]">
         <WorkCard
           v-for="(item, index) in visibleItems"
           :key="`${item.kind}:${item.id}`"
@@ -213,65 +229,24 @@ onBeforeUnmount(() => {
 
 .work-grid {
   display: grid;
+  /* 基础列（渐进增强兜底）：paginated / tiered 网格的列数档位由全局
+   * styles/tiered-grid.css 按容器查询接管（paginated 自动、tiered 显式启用），
+   * 无容器宿主时保持本条 auto-fill 不变。 */
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: var(--space-md) var(--space-lg);
 }
 
+/* 大屏最小卡宽升级只作用于非档位网格：tiered 网格列数由全局档位表全权接管，
+ * 不再叠加 auto-fill 媒体查询（否则会在宽屏压掉档位列数）。 */
 @media (min-width: 1440px) {
-  .work-grid:not(.paginated) {
+  .work-grid:not(.paginated):not(.tiered-grid) {
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   }
 }
 
 @media (min-width: 1920px) {
-  .work-grid:not(.paginated) {
+  .work-grid:not(.paginated):not(.tiered-grid) {
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  }
-}
-
-/*
- * 页码分页模式：列数只取每页条数的因数，保证任何响应宽度下每行都排满、末行不残缺。
- * 默认 20 条/页 → 2 / 4 / 5 / 10 列；30 条/页（小说搜索）→ 2 / 3 / 5 / 6 / 10 列
- *（.page-30）。≥764px 与 ≥1544px 档的选择器必须显式带上 .page-30：同名特异性下
- * 靠后规则覆盖低档的 .page-30，否则低档的 3 类选择器会因特异性更高把所有更宽
- * 档位压回 3 列（2026-10-30 教训）。
- * 档位由外层查询容器宽度决定（搜索页 `.grid-host`
- * 提供 container-type: inline-size）；无容器时退回基础 2 列。
- * 阈值 = 列数 × 140px 最小卡宽 + (列数 - 1) × 16px 列间距。
- */
-.work-grid.paginated {
-  grid-template-columns: repeat(2, 1fr);
-}
-
-@container (min-width: 452px) {
-  .work-grid.paginated.page-30 {
-    grid-template-columns: repeat(3, 1fr);
-  }
-}
-
-@container (min-width: 608px) {
-  .work-grid.paginated {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-
-@container (min-width: 764px) {
-  .work-grid.paginated,
-  .work-grid.paginated.page-30 {
-    grid-template-columns: repeat(5, 1fr);
-  }
-}
-
-@container (min-width: 920px) {
-  .work-grid.paginated.page-30 {
-    grid-template-columns: repeat(6, 1fr);
-  }
-}
-
-@container (min-width: 1544px) {
-  .work-grid.paginated,
-  .work-grid.paginated.page-30 {
-    grid-template-columns: repeat(10, 1fr);
   }
 }
 

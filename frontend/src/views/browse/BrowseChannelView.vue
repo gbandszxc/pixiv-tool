@@ -164,14 +164,14 @@ function openTag(name: string): void {
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.followNew") }}</h2>
         </div>
-        <WorkGrid :items="followItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="followItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint tiered :page-size="SECTION_LIMIT" @select="openWork" />
       </section>
 
       <section class="channel-section">
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.recommend") }}</h2>
         </div>
-        <WorkGrid :items="recommendItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="recommendItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint tiered :page-size="SECTION_LIMIT" @select="openWork" />
       </section>
 
       <section class="channel-section">
@@ -182,7 +182,7 @@ function openTag(name: string): void {
             <md-text-button @click="openRanking">{{ t("browse.channel.viewFullRanking") }}</md-text-button>
           </div>
         </div>
-        <WorkGrid :items="rankingItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="rankingItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint tiered :page-size="SECTION_LIMIT" @select="openWork" />
       </section>
 
       <!-- #标签推荐板块（官方 /illustration 同位置：排行之后、最新投稿之前；仅插画频道有数据） -->
@@ -193,14 +193,14 @@ function openTag(name: string): void {
             <span>{{ t("browse.channel.tagRecommendSuffix") }}</span>
           </h2>
         </div>
-        <WorkGrid :items="section.items" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="section.items" :loading="loading" :r18-filter="filter" hooks hide-r18-hint tiered :page-size="SECTION_LIMIT" @select="openWork" />
       </section>
 
       <section class="channel-section">
         <div class="section-head">
           <h2 class="section-title">{{ t("browse.channel.newPost") }}</h2>
         </div>
-        <WorkGrid :items="newPostItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint @select="openWork" />
+        <WorkGrid :items="newPostItems" :loading="loading" :r18-filter="filter" hooks hide-r18-hint tiered :page-size="SECTION_LIMIT" @select="openWork" />
       </section>
 
       <section v-if="trendingTags.length" class="channel-section">
@@ -225,6 +225,13 @@ function openTag(name: string): void {
 </template>
 
 <style scoped>
+/* 各板块是宫格的档位查询容器（container-type: inline-size）：板块内 WorkGrid
+ * 以 tiered cap-12 定长启用列数档位，列数按板块实际宽度取 12 的因数档
+ * 2/3/4/6 列（styles/tiered-grid.css） */
+.channel-section {
+  container-type: inline-size;
+}
+
 .channel-section + .channel-section {
   margin-top: var(--space-xl);
 }

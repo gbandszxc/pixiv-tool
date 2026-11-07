@@ -38,6 +38,12 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100];
 type HistoryKind = "all" | "illust" | "manga" | "novel";
 const page = ref(1);
 const pageSize = ref(20);
+/**
+ * 宫格列数档位 class（styles/tiered-grid.css）：列数取每页条数的因数
+ * （20 → 2/4/5/10；50 → 2/5/10；100 → 2/4/5/10），容量切换随 pageSize 联动；
+ * 查询容器是页面宿主 .browse-history。
+ */
+const gridTierClass = computed(() => ["tiered-grid", `cap-${pageSize.value}`]);
 const kind = ref<HistoryKind>("all");
 const items = ref<BrowseHistoryItem[]>([]);
 const total = ref(0);
@@ -196,7 +202,7 @@ onBeforeUnmount(() => window.removeEventListener(HISTORY_RESTORED_EVENT, onHisto
     </div>
 
     <!-- 首屏骨架：纯 surface-container 色块，无闪烁动画（对齐 WorkGrid 骨架规范） -->
-    <div v-if="loading && !cards.length" class="history-grid" aria-hidden="true">
+    <div v-if="loading && !cards.length" class="history-grid" :class="gridTierClass" aria-hidden="true">
       <div v-for="n in 12" :key="n" class="skeleton-card">
         <div class="skeleton-cover" :class="{ portrait: n % 5 === 0 }"></div>
         <div class="skeleton-line w70"></div>
@@ -222,7 +228,7 @@ onBeforeUnmount(() => window.removeEventListener(HISTORY_RESTORED_EVENT, onHisto
       <p v-if="hiddenCount > 0" class="state-text">{{ t("common.browseR18Hidden", { count: hiddenCount }) }}</p>
     </div>
 
-    <div v-else class="history-grid">
+    <div v-else class="history-grid" :class="gridTierClass">
       <WorkCard
         v-for="(card, index) in cards"
         :key="card.key"
@@ -309,6 +315,12 @@ onBeforeUnmount(() => window.removeEventListener(HISTORY_RESTORED_EVENT, onHisto
 
 .pager {
   margin-top: var(--space-lg);
+}
+
+/* 页面宿主即宫格的档位查询容器：.history-grid（tiered-grid）列数按本元素实际宽度
+ * 取每页条数的因数档（styles/tiered-grid.css），本条 auto-fill 仅作无容器兜底。 */
+.browse-history {
+  container-type: inline-size;
 }
 
 .history-grid {

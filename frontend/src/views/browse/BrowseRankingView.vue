@@ -247,7 +247,7 @@ function openWork(item: BrowseWorkItem): void {
         <p class="r18-hidden-note">{{ t("common.browseR18Hidden", { count: hiddenCount }) }}</p>
       </template>
     </WorkGrid>
-    <div v-else class="ranking-grid">
+    <div v-else class="ranking-grid tiered-grid cap-50">
       <div v-for="item in visibleItems" :key="`${item.kind}:${item.id}`" class="rank-cell">
         <span
           v-if="item.rank != null"
@@ -324,7 +324,14 @@ function openWork(item: BrowseWorkItem): void {
   font-variant-numeric: tabular-nums;
 }
 
-/* 与 WorkGrid 同款网格参数（auto-fill 自适应降列） */
+/* 页面宿主即榜单网格的档位查询容器：.ranking-grid（tiered-grid cap-50）列数按
+ * 本元素实际宽度取 50 条/页的因数档 2/5/10 列（styles/tiered-grid.css） */
+.browse-ranking {
+  container-type: inline-size;
+}
+
+/* 基础列与 WorkGrid 同参（auto-fill 兜底）；列数档位由全局 styles/tiered-grid.css
+ * 按容器查询接管（.rank-cell 叠徽标结构不受列数影响） */
 .ranking-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));

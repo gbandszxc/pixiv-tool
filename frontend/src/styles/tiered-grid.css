@@ -1,0 +1,78 @@
+/* ── 分页 / 定长作品网格·列数档位（tiered-grid）──────────────────────────
+ * 与 WorkGrid.vue paginated 模式同源（原 WorkGrid scoped 档位块迁移于此，供
+ * 搜索页 WorkGrid 与系列目录 / 排行榜 / 频道板块等自绘网格共用）。
+ *
+ * 用法：网格元素加 `tiered-grid` + 容量 class（cap-12 / cap-20 / cap-30 / cap-50 /
+ * cap-100），其外层宿主加 `container-type: inline-size`。宿主缺失或容器宽度低于
+ * 最低档（296px）时 @container 规则不生效，网格保持组件自身的基础
+ * `repeat(auto-fill, minmax(160px, 1fr))` —— 行为与无档位时一致（渐进增强）。
+ *
+ * 两条核心规则（新增容量 / 档位时同样遵守）：
+ * 1. 列数只取页容量的因数，保证满页时每行（含末行）铺满、不出现布局性残行：
+ *    12 → 2/3/4/6；20 → 2/4/5/10；30 → 2/3/5/6/10；50 → 2/5/10；100 → 2/4/5/10（列数封顶 10）。
+ * 2. 阈值 = 列数 × 140px 最小卡宽 + (列数 − 1) × 16px 列间距
+ *    → 2列296 / 3列452 / 4列608 / 5列764 / 6列920 / 10列1544。
+ *
+ * 纪律：所有档位必须从窄到宽声明（本文件按 296 → 1544 排列）——同名特异性下
+ * 后声明天然覆盖先声明，任何一档不得提高自身特异性或调换声明顺序，否则低档会
+ * 把更宽档位压回低列数（2026-10-30 搜索页 .page-30 的教训）。
+ * 选择器双写 .tiered-grid（特异性 (0,3,0)）：各网格组件的 scoped 基础规则
+ * （.work-grid[data-v] 等，(0,2,0)）随路由 chunk 在全局样式之后注入，同特异性
+ * 会压过本文件——档位必须无视加载顺序稳定赢下层叠。
+ */
+
+/* ≥296px：2 列（所有容量档共用） */
+@container (min-width: 296px) {
+  .tiered-grid.tiered-grid.cap-12,
+  .tiered-grid.tiered-grid.cap-20,
+  .tiered-grid.tiered-grid.cap-30,
+  .tiered-grid.tiered-grid.cap-50,
+  .tiered-grid.tiered-grid.cap-100 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ≥452px：3 列（12 / 30 的因数） */
+@container (min-width: 452px) {
+  .tiered-grid.tiered-grid.cap-12,
+  .tiered-grid.tiered-grid.cap-30 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* ≥608px：4 列（12 / 20 / 100 的因数） */
+@container (min-width: 608px) {
+  .tiered-grid.tiered-grid.cap-12,
+  .tiered-grid.tiered-grid.cap-20,
+  .tiered-grid.tiered-grid.cap-100 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* ≥764px：5 列（20 / 30 / 50 / 100 的因数） */
+@container (min-width: 764px) {
+  .tiered-grid.tiered-grid.cap-20,
+  .tiered-grid.tiered-grid.cap-30,
+  .tiered-grid.tiered-grid.cap-50,
+  .tiered-grid.tiered-grid.cap-100 {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+/* ≥920px：6 列（12 / 30 的因数） */
+@container (min-width: 920px) {
+  .tiered-grid.tiered-grid.cap-12,
+  .tiered-grid.tiered-grid.cap-30 {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+}
+
+/* ≥1544px：10 列（20 / 30 / 50 / 100 的因数；列数封顶 10） */
+@container (min-width: 1544px) {
+  .tiered-grid.tiered-grid.cap-20,
+  .tiered-grid.tiered-grid.cap-30,
+  .tiered-grid.tiered-grid.cap-50,
+  .tiered-grid.tiered-grid.cap-100 {
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+  }
+}

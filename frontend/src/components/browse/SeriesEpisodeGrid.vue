@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * 系列分集·宫格模式：`repeat(auto-fill, minmax(160px,1fr))`（与 WorkGrid 同参）。
+ * 系列分集·宫格模式：`repeat(auto-fill, minmax(160px,1fr))` 兜底 +
+ * tiered-grid 列数档位（列数取每页条数的因数，满页每行铺满，与 WorkGrid paginated 同源）。
  * - illust：封面卡（1:1 封面 + 左上角 #N 序号胶囊（作品卡页数徽标 recipe）+
  *   R-18 右上角徽标（ink 底 surface 字）+ 标题两行截断）→ /browse/work/illust/{id}；
  * - novel：目录瓦片卡（大号 #N + 标题两行 + 字数元信息）→ /browse/work/novel/{id}。
@@ -75,11 +76,18 @@ function metaText(ep: SeriesEpisodeView): string {
 }
 
 const skeletons = computed(() => Array.from({ length: props.skeletonCount }, (_, i) => i + 1));
+
+/**
+ * 列数档位 class（styles/tiered-grid.css）：列数取每页条数的因数，满页每行铺满——
+ * illust 官方页码制恒 12 条/页 → 2/3/4/6 列；novel 目录 30 条/页 → 2/3/5/6/10 列。
+ * 查询容器是父级 .series-body（container-type: inline-size）。
+ */
+const gridTierClass = computed(() => ["tiered-grid", props.kind === "novel" ? "cap-30" : "cap-12"]);
 </script>
 
 <template>
   <!-- 首屏骨架：纯色块，无动画 -->
-  <div v-if="loading" class="ep-grid" aria-hidden="true">
+  <div v-if="loading" class="ep-grid" :class="gridTierClass" aria-hidden="true">
     <div v-for="n in skeletons" :key="n" class="ep-card skeleton">
       <template v-if="kind === 'illust'">
         <div class="ep-cover-box"></div>
@@ -94,7 +102,7 @@ const skeletons = computed(() => Array.from({ length: props.skeletonCount }, (_,
     </div>
   </div>
 
-  <div v-else class="ep-grid">
+  <div v-else class="ep-grid" :class="gridTierClass">
     <!-- illust：封面卡 -->
     <template v-if="kind === 'illust'">
       <router-link
@@ -137,6 +145,8 @@ const skeletons = computed(() => Array.from({ length: props.skeletonCount }, (_,
 </template>
 
 <style scoped>
+/* 基础列（渐进增强兜底）：列数档位由全局 styles/tiered-grid.css 按容器查询接管
+ * （illust cap-12 / novel cap-30，查询容器为父级 .series-body）。 */
 .ep-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));

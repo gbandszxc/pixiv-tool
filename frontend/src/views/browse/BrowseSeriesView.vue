@@ -460,8 +460,12 @@ function openInPixiv(): void {
 
 /* 末行与翻页器之间的滚动末端余量（承自 .app-content 原底部内边距，见 App.vue .series-page）：
  * 既留出末行呼吸空间，也是全局搜索悬浮按钮（bottom 3 × space-xl、高 2 × space-xl + space-sm）
- * 的驻留带，末行不被它压住。空列表时由 .series-state 自带的间距承担，不叠加。 */
+ * 的驻留带，末行不被它压住。空列表时由 .series-state 自带的间距承担，不叠加。
+ * 同时作为分集宫格的档位查询容器（container-type: inline-size）：SeriesEpisodeGrid
+ * 的 tiered-grid 列数按本元素实际宽度取每页条数的因数档（illust 12 → 2/3/4/6 列、
+ * novel 30 → 2/3/5/6/10 列，styles/tiered-grid.css）。 */
 .series-body {
+  container-type: inline-size;
   margin-bottom: calc(var(--space-xl) * 3);
   transition: opacity 0.15s ease;
 }
