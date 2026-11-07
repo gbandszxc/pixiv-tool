@@ -18,6 +18,8 @@
  * （sticky 底部、surface 底 + 上缘 divider、md-icon-button + 跳页 select），
  * 不显示页码窗口与总数区，供系列页 / 阅读器迁移；
  * 左右各留可选插槽——#leading（如字号缩放）/ #trailing（如阅读进度条）。
+ * 翻页组两端另留可选插槽——#prepend（prev 之前）/ #append（next 之后，如跨话导航）；
+ * 无插槽时翻页组 DOM 与不加时一致（default 变体无此二插槽）。
  */
 import { computed, ref } from "vue";
 import { useI18n } from "vue-i18n";
@@ -65,6 +67,10 @@ defineSlots<{
   leading?: () => unknown;
   /** reader 变体右侧插槽（如小说阅读器阅读进度条）；无插槽时第 3 列留空平衡 */
   trailing?: () => unknown;
+  /** reader 变体翻页组 prev 按钮之前的插槽（如系列上一话导航）；无插槽时 DOM 与现状一致 */
+  prepend?: () => unknown;
+  /** reader 变体翻页组 next 按钮之后的插槽（如系列下一话导航）；无插槽时 DOM 与现状一致 */
+  append?: () => unknown;
 }>();
 
 const { t } = useI18n();
@@ -163,6 +169,7 @@ function onJump(): void {
   <nav v-if="variant === 'reader'" class="app-pagination is-reader" :aria-label="t('common.pagination.navLabel')">
     <div v-if="$slots.leading" class="reader-leading"><slot name="leading" /></div>
     <div class="reader-inner">
+      <slot name="prepend" />
       <md-icon-button
         :aria-label="t('common.pagination.prevPage')"
         :title="t('common.pagination.prevPage')"
@@ -192,6 +199,7 @@ function onJump(): void {
       >
         <svg class="pager-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
       </md-icon-button>
+      <slot name="append" />
     </div>
     <div v-if="$slots.trailing" class="reader-trailing"><slot name="trailing" /></div>
   </nav>

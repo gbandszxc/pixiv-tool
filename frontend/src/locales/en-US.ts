@@ -1083,6 +1083,7 @@ export default {
       words: "{count} words",
       readingTime: "~{count} min read",
       bookmarks: "{count} bookmarks",
+      prevEpisode: "Previous episode",
       nextEpisode: "Next episode",
       relatedTitle: "Related novels",
       emptyContent: "This novel has no text content",

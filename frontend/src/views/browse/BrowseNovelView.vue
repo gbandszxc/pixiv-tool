@@ -3,7 +3,8 @@
  * 小说阅读器整页（/browse/work/novel/:id，browse-ui-v1 / F4）。
  *
  * 结构：吸顶顶栏（返回 / 标题 / 作者 / 收藏 / 评论 / 返填 / 在浏览器中打开）+ 居中 720px 正文列
- * （信息头 → NovelContent 分页正文 → 下一话 → 面板）+ 底部吸底翻页器。
+ * （信息头 → NovelContent 分页正文 → 面板）+ 底部吸底翻页器（系列小说经翻页组两端
+ * 图标按钮跳上一话 / 下一话，非系列小说不渲染）。
  * 面板 = 相关推荐（默认）/ 评论，由顶栏评论按钮切换，评论按需分页拉取。
  * 数据来自 browseWorkDetail("novel", id)，相关推荐 browseRelated("novel", id, 12) 一次性。
  */
@@ -21,6 +22,7 @@ import BookmarkButton from "../../components/browse/BookmarkButton.vue";
 import CopyWorkId from "../../components/browse/CopyWorkId.vue";
 import {
   browseHistoryRecord,
+  browseNovelSeries,
   browseRelated,
   browseWorkDetail,
   errorMessage,
@@ -105,6 +107,49 @@ const hasContent = computed(() => content.value.trim().length > 0);
 const embeddedImages = computed(() => detail.value?.embedded_images ?? {});
 const series = computed(() => detail.value?.series ?? null);
 const nextEpisodeId = computed(() => series.value?.next_id ?? null);
+
+// ===== 系列上下话导航（底栏翻页组两端图标按钮） =====
+
+/**
+ * 上一话 id：series.order ≤ 1（无前话）、请求失败或查不到时为 null（按钮禁用）。
+ * 下一话直接复用详情响应的 series.next_id，无需额外请求。
+ */
+const prevEpisodeId = shallowRef<number | null>(null);
+/** 竞态守卫：切话重载期间旧请求晚到时不串话（与 translationGeneration 同代际思路） */
+let prevEpisodeGeneration = 0;
+
+/**
+ * 解析上一话：series_content 游标为排他下界（取 contentOrder 大于游标的下 30 条，asc），
+ * 传 order-31 拿回 [order-30, order-1] 一批，取其中 order 最大且小于当前 order 的条目
+ * 即上一话（容忍系列跳号）；失败静默降级为禁用，不打断阅读。
+ */
+async function resolvePrevEpisode(): Promise<void> {
+  const current = series.value;
+  if (!current || current.order <= 1) {
+    prevEpisodeGeneration += 1;
+    prevEpisodeId.value = null;
+    return;
+  }
+  const generation = ++prevEpisodeGeneration;
+  try {
+    const data = await browseNovelSeries(current.id, Math.max(0, current.order - 31));
+    if (generation !== prevEpisodeGeneration) return;
+    const prev = data.contents
+      .filter((entry) => entry.series_order < current.order)
+      .sort((a, b) => b.series_order - a.series_order)[0];
+    prevEpisodeId.value = prev?.id ?? null;
+  } catch (err) {
+    if (generation !== prevEpisodeGeneration) return;
+    console.debug("[browse-novel] 上一话解析失败，禁用上一话按钮", err);
+    prevEpisodeId.value = null;
+  }
+}
+
+// 挂进整页重载同一生命周期：load() 先置 detail = null（series → null，此处重置上一话），
+// 详情就绪后 series → 新对象，再按新系列解析；组件复用切 id 时不会残留上一话状态。
+watch(series, () => {
+  void resolvePrevEpisode();
+});
 
 const translationMode = ref<TranslationMode>("bilingual");
 /** 页码（1 起）→ 已投影译文行（行号页内 0 起）；整篇 Job 完成后由后端一次性投影。 */
@@ -470,6 +515,14 @@ function goEpisode(id: number): void {
   router.push(`/browse/work/novel/${id}`);
 }
 
+function goPrevEpisode(): void {
+  if (prevEpisodeId.value) goEpisode(prevEpisodeId.value);
+}
+
+function goNextEpisode(): void {
+  if (nextEpisodeId.value) goEpisode(nextEpisodeId.value);
+}
+
 function goRelated(target: BrowseWorkItem): void {
   router.push(`/browse/work/novel/${target.id}`);
 }
@@ -620,13 +673,6 @@ function openInPixiv(): void {
           <p class="state-text strong">{{ t("browse.novel.emptyContent") }}</p>
         </div>
 
-        <!-- 系列导航：下一话 -->
-        <div v-if="nextEpisodeId" class="series-nav">
-          <md-outlined-button @click="goEpisode(nextEpisodeId)">
-            {{ t("browse.novel.nextEpisode") }}<span class="nav-arrow" aria-hidden="true">→</span>
-          </md-outlined-button>
-        </div>
-
         <!-- 面板：相关推荐（默认）/ 评论（顶栏按钮切换；评论挂载时才拉取，分页自持） -->
         <section ref="panelEl" class="side-panel">
           <template v-if="panel === 'related'">
@@ -653,6 +699,20 @@ function openInPixiv(): void {
       :total-pages="totalPages"
       @update:currentPage="gotoPage"
     >
+      <!-- 系列上下话导航（仅系列小说渲染）：双 chevron 与翻页组内单 chevron（页内翻页）语义分层 -->
+      <template #prepend>
+        <md-icon-button
+          v-if="series"
+          class="episode-nav-btn"
+          :aria-label="t('browse.novel.prevEpisode')"
+          :title="t('browse.novel.prevEpisode')"
+          :disabled="!prevEpisodeId"
+          @click="goPrevEpisode"
+        >
+          <!-- lucide chevrons-left -->
+          <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m11 17-5-5 5-5" /><path d="m18 17-5-5 5-5" /></svg>
+        </md-icon-button>
+      </template>
       <template #leading>
         <div class="font-scale">
           <md-icon-button
@@ -713,6 +773,19 @@ function openInPixiv(): void {
           ></md-slider>
           <span class="read-progress-value" aria-hidden="true">{{ progressPercent }}%</span>
         </div>
+      </template>
+      <template #append>
+        <md-icon-button
+          v-if="series"
+          class="episode-nav-btn"
+          :aria-label="t('browse.novel.nextEpisode')"
+          :title="t('browse.novel.nextEpisode')"
+          :disabled="!nextEpisodeId"
+          @click="goNextEpisode"
+        >
+          <!-- lucide chevrons-right -->
+          <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 17 5-5-5-5" /><path d="m13 17 5-5-5-5" /></svg>
+        </md-icon-button>
       </template>
     </AppPagination>
   </div>
@@ -1144,17 +1217,7 @@ html.dark .novel-view[class*="read-bg-"] {
   margin-top: var(--space-xs);
 }
 
-/* 系列导航 / 相关推荐 */
-
-.series-nav {
-  display: flex;
-  justify-content: center;
-  margin: var(--space-xl) 0 0;
-}
-
-.nav-arrow {
-  margin-left: var(--space-xs);
-}
+/* 相关推荐 */
 
 /* 面板：相关推荐 / 评论（顶栏按钮切换）；滚动区内滚入视野只需少量上缘余量（顶栏在本层之外不遮挡） */
 .side-panel {
@@ -1184,6 +1247,12 @@ html.dark .novel-view[class*="read-bg-"] {
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
+}
+
+/* 底栏系列上下话图标按钮（经 AppPagination #prepend / #append 渲染）：
+   禁用态与翻页器 pg-nav 同口径（降 --ink-subtle，经 md-icon-button disabled token 下发） */
+.episode-nav-btn:disabled {
+  --md-icon-button-disabled-icon-color: var(--ink-subtle);
 }
 
 .scale-value {

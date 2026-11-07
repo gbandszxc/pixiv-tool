@@ -1083,6 +1083,7 @@ export default {
       words: "{count} 字",
       readingTime: "约 {count} 分钟",
       bookmarks: "{count} 收藏",
+      prevEpisode: "上一话",
       nextEpisode: "下一话",
       relatedTitle: "相关小说推荐",
       emptyContent: "本篇没有正文内容",

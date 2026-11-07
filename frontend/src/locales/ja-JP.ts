@@ -1040,6 +1040,7 @@ export default {
       words: "{count} 文字",
       readingTime: "約 {count} 分",
       bookmarks: "{count} ブックマーク",
+      prevEpisode: "前の話",
       nextEpisode: "次の話",
       relatedTitle: "おすすめの関連小説",
       emptyContent: "この小説には本文がありません",
