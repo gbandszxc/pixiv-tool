@@ -1840,6 +1840,11 @@ bash ./dev.sh dev start  # 默认动作也是 start；后台 Vite + Rust 热重�
    `src-tauri/icons/`）
 4. 脚本 `build` / `build release` 生成 release 安装包，`build debug` 生成
    debug 安装包（均调用本地 Tauri CLI，不使用 `--no-bundle`）。
+5. Windows MSI 安装器使用自定义 WiX 模板（`tauri.conf.json` 的
+   `bundle.windows.wix.template` → `src-tauri/wix/main.wxs`，官方模板 fork）：
+   桌面快捷方式默认不创建，安装向导目录页提供复选框手动开启；勾选状态经
+   HKCU 注册表 + AppSearch 持久化，应用内更新的被动安装沿用该选择。
+   模板与上游 CLI 版本的同步要求见 `docs/PACKAGING.md` §9。
 
 ### 8.4 发布方式（GitHub Actions 发版 CI）
 

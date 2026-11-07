@@ -299,3 +299,41 @@ CI 命名或产物扩展发生变化必须同时更新 `update_download_cmds.rs`
 不属于 Tauri updater 签名包，不要求 createUpdaterArtifacts，不提供静默替换或签名验证。
 macOS 未签名限制仍见 §7，DMG 打开后仍需手动拖入 Applications 替换；Linux AppImage 仍需手动替换。安装包缺失或系统打开失败时保持应用运行，可重试、打开下载目录或重新下载。Windows/macOS/Linux
 安装器交接应在对应平台实机验收；离线测试仅验证下载与引导状态，不执行真实安装。
+
+## 9. Windows MSI 安装器（自定义 WiX 模板）
+
+`tauri.conf.json` 的 `bundle.windows.wix.template` 指向 `src-tauri/wix/main.wxs`——
+官方默认模板的 fork，基底为 tauri-cli **v2.11.4** 的
+`crates/tauri-bundler/src/bundle/windows/msi/main.wxs`（文件头注释已标记来源）。
+行为差异（唯一功能改动）：
+
+- **桌面快捷方式改为可选，默认不创建**：官方模板无条件创建桌面快捷方式；
+  本 fork 在 `ApplicationShortcutDesktop` 组件上加
+  `<Condition>INSTALLDESKTOPSHORTCUT</Condition>`，属性默认未定义 =
+  向导中不勾选 = 不创建。开始菜单快捷方式不受影响。
+- **向导交互**：用 `CustomInstallDirDlg`（官方 `InstallDirDlg` 的定制拷贝，
+  含全部原有控件与路径校验逻辑）替换向导链中的目录选择页，仅新增
+  "Create desktop shortcut" 复选框（`CheckBoxValue="1"`）。导航重接：
+  无 license 时 WelcomeDlg → CustomInstallDirDlg → VerifyReadyDlg；有
+  license 时 LicenseAgreementDlg 之后插入。覆盖行用 Order="2"，与官方
+  `WixUI_InstallDir` 库内 NewDialog 的 Order（0/1/2/4）兼容。
+- **选择持久化**：勾选安装后组件写入 HKCU
+  `Software\<manufacturer>\<product>` 的 `Desktop Shortcut` 值（官方模板
+  固有 keypath）；`INSTALLDESKTOPSHORTCUT` 属性由 AppSearch 从该值恢复，
+  因此**应用内更新的静默/被动安装沿用上一次的选择**——首次安装勾选过的
+  用户升级后桌面快捷方式保留，未勾选过的保持默认关。卸载/重装语义不变。
+
+维护要求：
+
+- **升级 `@tauri-apps/cli` 时必须重新对照上游 main.wxs 重放这份改动**：
+  拉取对应 tag（`tauri-cli-v<版本>`）的上游模板，三方比对后更新本文件。
+  上游若提供了等价的内建选项，应优先回归官方实现并删除 fork。
+- 独立验证模板可用本机 `%LOCALAPPDATA%\tauri\WixTools314` 的
+  candle/light（`candle -ext WixUIExtension -arch x64` +
+  `light -ext WixUIExtension -loc <wxl>`）；模板含 handlebars 占位符，
+  独立验证前需自行渲染。注意模板内 `Software\\` 的双反斜杠由
+  handlebars-rust 渲染折叠为单反斜杠（对照真实 MSI 反编译确认过），
+  独立渲染时同样折叠后才能通过 ICE03 校验。
+- light 输出的 ICE40（REINSTALLMODE）/ ICE57（CMP_UninstallShortcut
+  HKCU keypath）/ ICE61（AllowSameVersionUpgrades）三条 warning 为上游
+  模板固有，官方构建同样存在，不阻断打包。
