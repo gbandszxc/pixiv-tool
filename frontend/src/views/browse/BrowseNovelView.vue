@@ -1024,6 +1024,21 @@ html.dark .novel-view[class*="read-bg-"] {
   }
 }
 
+/* ===== 竖屏（竖屏旋转显示器最大化）适配 =====
+ * 参考逻辑尺寸 1152×2048：正文列默认铺满中间区，竖屏容器较窄时中文每行字数过多、行长难读。
+ * 竖屏给正文列一个有限阅读宽度并水平居中（居中由基础 .reader-column 的 margin:0 auto 提供，
+ * 此处以 margin-inline 再显式声明，保证覆盖自洽），约 720px 配 16px 列内边距、
+ * 100% 字号下约 40 个全角字/行。
+ * 不依赖下方 @media (min-width:1921px),(min-height:1081px) 的 1280px 限宽——竖屏高 2048
+ * 虽命中 min-height 断点，但 1280px 大于竖屏容器宽度、等于没限；本规则特异性更高，把它压到 720px。
+ * 仅 .app-shell.is-portrait 存在时生效，横屏 / 非最大化窗口维持原样。
+ * 骨架 / 错误 / 正文三个分支同为 .reader-column，统一受本规则约束，状态布局一致。
+ * 不动 100cqh 三行 flex、顶/底栏贴边与 .reader-scroll 唯一滚动层。 */
+:global(.app-shell.is-portrait) .reader-column {
+  max-width: 720px;
+  margin-inline: auto;
+}
+
 /* 骨架与状态 */
 
 .skeleton {
