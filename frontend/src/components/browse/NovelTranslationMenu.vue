@@ -2243,4 +2243,17 @@ onBeforeUnmount(() => {
 @media (prefers-reduced-motion: reduce) {
   .panel-tab, .translation-mode, .chunk-item, .budget-tier { transition: none; }
 }
+
+/* 竖屏：浮窗改为贴底抽屉，!important 压过 clampPanel() 写入的内联 left/top。 */
+:global(.app-shell.is-portrait) .translation-popover {
+  position: fixed !important;
+  left: var(--space-lg) !important;
+  right: var(--space-lg) !important;
+  top: auto !important;
+  bottom: var(--space-lg) !important;
+  width: auto !important;
+  max-width: none !important;
+  height: min(45vh, 500px) !important;
+  max-height: calc(100vh - 2 * var(--space-lg)) !important;
+}
 </style>
