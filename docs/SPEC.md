@@ -1169,6 +1169,8 @@ checkbox，默认全选）。动作行为「测试连接（filled 主动作）/ 
 宽度自适应补满），只有更宽的超宽窗口才按「视口高 × 16/9」封顶并居中
 （视觉规格见 `DESIGN.md` §Layout）。
 
+竖屏最大化时另有一套专用布局（侧栏自动折叠为 72px rail、详情页上下堆叠等）；判定信号与滞回、范围、替代方案与风险见 ADR 0052，**非最大化窗口沿用横屏布局**，不按设备物理方向硬判定，用户对侧栏折叠的手动覆盖不持久化。视觉规则同步维护于 `DESIGN.md` §Layout / §Do's and Don'ts / 浏览模式组件 / 核心导航与下载工作区与 `.impeccable/design.json`；后端 / Rust、settings schema、i18n、路由与端点契约均不变。
+
 浏览模式详见 §6.4 与 ADR 0012。
 
 **返回堆栈**：跨页面跳转（包含相关推荐、作者、系列、标签搜索、频道排行、下载页、
@@ -1972,6 +1974,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0037 | 翻译预览的归属、尾窗与稳定展示 | [adr/0037-translation-preview-ownership-and-stability.md](adr/0037-translation-preview-ownership-and-stability.md) |
 | 0038 | 翻译审查收敛与按块返工（审查分级、`revise_draft`、每块额度、`chunk_gate`） | [adr/0038-translation-review-convergence.md](adr/0038-translation-review-convergence.md) |
 | 0039 | ugoira 应用内播放与多 P 按页下载 | [adr/0039-ugoira-playback-and-page-download.md](adr/0039-ugoira-playback-and-page-download.md) |
+| 0040 | 更新下载与安装分离，系统交接成功后退出 | [adr/0040-update-install-and-exit.md](adr/0040-update-install-and-exit.md) |
 | 0041 | ruby 注释策略与标记不变量解耦（归一化 + 修订收敛闸） | [adr/0041-ruby-annotation-policy-decoupling.md](adr/0041-ruby-annotation-policy-decoupling.md) |
 | 0042 | 翻译调用预算手动追加（`novel_translation_grant_budget`） | [adr/0042-translation-budget-manual-grant.md](adr/0042-translation-budget-manual-grant.md) |
 | 0043 | 子任务内容拒绝快速失败与被拒块跳过（`novel_translation_skip_chunks`） | [adr/0043-content-refusal-fast-fail-and-skip.md](adr/0043-content-refusal-fast-fail-and-skip.md) |
@@ -1980,8 +1983,10 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0046 | 翻译等待确认跨重启可确认与系统通知 | [adr/0046-translation-confirmation-persistence-and-notifications.md](adr/0046-translation-confirmation-persistence-and-notifications.md) |
 | 0047 | 日译语言策略收束与校验口径统一 | [adr/0047-language-policy-convergence.md](adr/0047-language-policy-convergence.md) |
 | 0048 | WebDAV 同步浏览历史与登录态（外部目录契约 + 应用层加密 + 手动双向合并） | [adr/0048-webdav-sync-history-and-auth.md](adr/0048-webdav-sync-history-and-auth.md) |
-
-| 0040 | 更新下载与安装分离，系统交接成功后退出 | [adr/0040-update-install-and-exit.md](adr/0040-update-install-and-exit.md) |
+| 0049 | 同步口令可选与内置默认密钥、测试连接门控上传恢复并回显云端备份 | [adr/0049-sync-passphrase-optional-and-connection-gate.md](adr/0049-sync-passphrase-optional-and-connection-gate.md) |
+| 0050 | 模型请求并发自适应收敛（AIMD）与流间空闲看门狗 | [adr/0050-aimd-concurrency-and-stream-idle-watchdog.md](adr/0050-aimd-concurrency-and-stream-idle-watchdog.md) |
+| 0051 | Pass 1 扫描改并行子 Agent 派发（dispatch_scan） | [adr/0051-dispatch-scan-subagent.md](adr/0051-dispatch-scan-subagent.md) |
+| 0052 | 竖屏最大化布局适配（仅竖屏最大化、推翻侧栏不自动隐藏旧决策） | [adr/0052-portrait-maximized-layout.md](adr/0052-portrait-maximized-layout.md) |
 
 ADR 按需追加，不强制一次性写完。
 
