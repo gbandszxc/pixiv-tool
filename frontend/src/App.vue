@@ -1,9 +1,9 @@
 <template>
-  <div class="app-shell" :class="{ collapsed: siderCollapsed, fullscreen: imageFullscreen }">
+  <div class="app-shell" :class="{ collapsed: siderCollapsed, fullscreen: imageFullscreen, 'is-portrait': isPortrait }">
     <aside class="sidebar">
       <header class="sider-header">
         <template v-if="!siderCollapsed"><img src="./assets/icon.png" alt="" /><span class="sider-title">pixiv-tool</span></template>
-        <md-icon-button class="collapse" :aria-label="siderCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')" :title="siderCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')" @click="siderCollapsed = !siderCollapsed"><svg v-if="siderCollapsed" class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m14 9 3 3-3 3" /></svg><svg v-else class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m16 15-3-3 3-3" /></svg></md-icon-button>
+        <md-icon-button class="collapse" :aria-label="siderCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')" :title="siderCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')" @click="toggleSider"><svg v-if="siderCollapsed" class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m14 9 3 3-3 3" /></svg><svg v-else class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m16 15-3-3 3-3" /></svg></md-icon-button>
       </header>
       <nav :aria-label="t('nav.primary')">
         <button v-for="item in menuItems" :key="item.path" class="nav-item" :class="{ active: activeGroup === item.group }" :aria-label="navItemLabel(item)" :title="siderCollapsed ? item.label : undefined" :aria-current="activeGroup === item.group ? 'page' : undefined" @click="navigate(item.path)"><SidebarIcon :name="item.icon" /><span v-if="!siderCollapsed" class="nav-label">{{ item.label }}</span><span v-if="item.group === 'downloads' && taskStore.activeTasks.length" class="task-count" aria-hidden="true">{{ taskStore.activeTasks.length }}</span></button>
@@ -55,6 +55,7 @@ import { useDownloadPanelStore } from "./stores/downloadPanel";
 import { useTaskStore } from "./stores/tasks";
 import { groupRoots, navigationGroup, type NavigationGroup } from "./router/navigation";
 import { usePageScroll } from "./composables/usePageScroll";
+import { useLayoutMode } from "./composables/useLayoutMode";
 import { resetChannelManual } from "./components/browse/r18Filter";
 
 const router = useRouter(); const route = useRoute(); const { t } = useI18n();
@@ -180,6 +181,10 @@ function observeStickyHead(): void {
 onBeforeUnmount(() => { removeBeforeEach(); removeAfterEach(); headObserver?.disconnect(); });
 const showLoginDialog = ref(false); const showSettings = ref(false); const showExitConfirm = ref(false); const exitDialog = ref<HTMLDialogElement>();
 const siderCollapsed = ref(false); const notification = ref(""); let toastTimer: number | undefined; let unlistenExit: (() => void) | undefined;
+const { isPortrait } = useLayoutMode();
+const siderOverridden = ref(false);
+watch(isPortrait, (v) => { if (!siderOverridden.value) siderCollapsed.value = v; });
+function toggleSider() { siderCollapsed.value = !siderCollapsed.value; siderOverridden.value = true; }
 let disposed = false;
 interface MenuItem { path: string; label: string; icon: SidebarIconName; group: NavigationGroup }
 const menuItems = computed<MenuItem[]>(() => [
@@ -248,5 +253,9 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(toastTimer); layoutAnchor 
 @container workspace (min-width:1120px) {
   .workspace.panel-open .workspace-body { grid-template-columns:minmax(0,1fr) calc(var(--space-xl) * 20); grid-template-rows:minmax(0,1fr); }
   .download-panel { border-top:0; border-left:1px solid color-mix(in srgb,var(--md-sys-color-outline) 35%,transparent); }
+}
+:global(.app-shell.is-portrait) .download-panel {
+  height: min(30vh, 240px) !important;
+  max-height: min(30vh, 240px) !important;
 }
 </style>
