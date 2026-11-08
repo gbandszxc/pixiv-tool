@@ -254,7 +254,7 @@ onBeforeUnmount(() => { disposed = true; clearTimeout(toastTimer); layoutAnchor 
   .workspace.panel-open .workspace-body { grid-template-columns:minmax(0,1fr) calc(var(--space-xl) * 20); grid-template-rows:minmax(0,1fr); }
   .download-panel { border-top:0; border-left:1px solid color-mix(in srgb,var(--md-sys-color-outline) 35%,transparent); }
 }
-:global(.app-shell.is-portrait) .download-panel {
+:global(.app-shell.is-portrait .download-panel) {
   height: min(30vh, 240px) !important;
   max-height: min(30vh, 240px) !important;
 }

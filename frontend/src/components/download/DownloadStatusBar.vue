@@ -233,5 +233,5 @@ button:focus-visible { outline:2px solid var(--md-sys-color-primary); outline-of
 .new-download { flex:none; color:var(--md-sys-color-primary); padding:0 var(--space-sm); }
 @media (max-width:640px) { .task-summary { display:none; } .mini-progress { width:calc(var(--space-xl) * 2); } .download-status,.status-link { gap:var(--space-sm); } .translation-full { display:none; } .translation-short { display:inline; } }
 /* 竖屏：浮窗贴底停靠（距底 = 状态栏高度），不遮状态栏、不越视口；!important 压过基础定位与内联 left/top */
-:global(.app-shell.is-portrait) .translation-picker { position:fixed !important; left:auto !important; top:auto !important; right:var(--space-lg) !important; bottom:calc(var(--space-lg) * 2) !important; width:min(560px, calc(100vw - 2 * var(--space-lg))) !important; max-height:calc(100vh - 2 * var(--space-lg)) !important; }
+:global(.app-shell.is-portrait .translation-picker) { position:fixed !important; left:auto !important; top:auto !important; right:var(--space-lg) !important; bottom:calc(var(--space-lg) * 2) !important; width:min(560px, calc(100vw - 2 * var(--space-lg))) !important; max-height:calc(100vh - 2 * var(--space-lg)) !important; }
 </style>

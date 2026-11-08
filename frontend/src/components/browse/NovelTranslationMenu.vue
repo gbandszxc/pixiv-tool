@@ -2245,7 +2245,7 @@ onBeforeUnmount(() => {
 }
 
 /* 竖屏：浮窗改为贴底抽屉，!important 压过 clampPanel() 写入的内联 left/top。 */
-:global(.app-shell.is-portrait) .translation-popover {
+:global(.app-shell.is-portrait .translation-popover) {
   position: fixed !important;
   left: var(--space-lg) !important;
   right: var(--space-lg) !important;

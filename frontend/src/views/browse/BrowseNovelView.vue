@@ -1034,7 +1034,7 @@ html.dark .novel-view[class*="read-bg-"] {
  * 仅 .app-shell.is-portrait 存在时生效，横屏 / 非最大化窗口维持原样。
  * 骨架 / 错误 / 正文三个分支同为 .reader-column，统一受本规则约束，状态布局一致。
  * 不动 100cqh 三行 flex、顶/底栏贴边与 .reader-scroll 唯一滚动层。 */
-:global(.app-shell.is-portrait) .reader-column {
+:global(.app-shell.is-portrait .reader-column) {
   max-width: 720px;
   margin-inline: auto;
 }

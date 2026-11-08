@@ -948,23 +948,23 @@ onBeforeUnmount(detachKeydown);
  * 布局却占「内容容器」，会留下 320px 右栏硬吃宽度。仅 is-portrait 存在时生效，
  * 横屏 / 非最大化窗口保持既有左右分栏 + 信息列独立滚动观感，不回归。
  * 形态沿用既有窄窗堆叠配方：height:auto 整页滚动 / 舞台整宽定高 60vh / 信息列整宽铺流。 */
-:global(.app-shell.is-portrait) .work-view {
+:global(.app-shell.is-portrait .work-view) {
   height: auto;
   min-height: 0;
 }
 
-:global(.app-shell.is-portrait) .work-body {
+:global(.app-shell.is-portrait .work-body) {
   flex-direction: column;
 }
 
-:global(.app-shell.is-portrait) .stage-col {
+:global(.app-shell.is-portrait .stage-col) {
   flex: none;
   width: 100%;
   height: 60vh;
   min-height: 320px;
 }
 
-:global(.app-shell.is-portrait) .info-col {
+:global(.app-shell.is-portrait .info-col) {
   width: 100%;
   overflow: visible;
   padding-right: 0;
