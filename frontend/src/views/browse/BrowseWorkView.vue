@@ -941,4 +941,32 @@ onBeforeUnmount(detachKeydown);
     padding-right: 0;
   }
 }
+
+/* ===== 竖屏旋转显示器（最大化）：上下堆叠，舞台占整宽、信息列移到图下方 =====
+ * 用祖先 class .app-shell.is-portrait 触发（由 useLayoutMode 判定），不再依赖视口断点：
+ * 生产窗口 minWidth 960 > 959，@media (max-width:959px) 基本不触发，且它看「视口宽度」、
+ * 布局却占「内容容器」，会留下 320px 右栏硬吃宽度。仅 is-portrait 存在时生效，
+ * 横屏 / 非最大化窗口保持既有左右分栏 + 信息列独立滚动观感，不回归。
+ * 形态沿用既有窄窗堆叠配方：height:auto 整页滚动 / 舞台整宽定高 60vh / 信息列整宽铺流。 */
+:global(.app-shell.is-portrait) .work-view {
+  height: auto;
+  min-height: 0;
+}
+
+:global(.app-shell.is-portrait) .work-body {
+  flex-direction: column;
+}
+
+:global(.app-shell.is-portrait) .stage-col {
+  flex: none;
+  width: 100%;
+  height: 60vh;
+  min-height: 320px;
+}
+
+:global(.app-shell.is-portrait) .info-col {
+  width: 100%;
+  overflow: visible;
+  padding-right: 0;
+}
 </style>
