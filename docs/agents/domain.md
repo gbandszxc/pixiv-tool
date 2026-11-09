@@ -4,24 +4,9 @@
 
 ## 探索前必读
 
+- **`GLOSSARY.md`** —— 领域术语表（权威）：命名领域概念、写 issue 标题 / 提案 / 测试名时，用词以此为准，不漂移到同义词
 - **`docs/SPEC.md`** —— 本项目的单一真相源（13 章 + 风险登记 + ADR 索引）
-- **`docs/adr/`** —— 读涉及你即将修改区域的 ADR。当前 0001 ~ 0014：
-  - `0001`：初版技术栈选型（桌面壳 + Python 后端；已被 0008 取代，Vue3 前端沿用）
-  - `0002`：登录策略（浏览器登录主导 + 手动 Cookie 兜底）
-  - `0003`：任务模型（Source + Crawler + Task 状态机）
-  - `0004`：Cookie 存储策略（已被 0008 的 keyring 方案取代）
-  - `0005`：R1 spike 结论存档（pywebview 时代；spike 代码与复用清单已随旧栈移除，现行承接在 `src-tauri/src/pixiv/csrf.rs`）
-  - `0006`：真实 Chromium 登录 + macOS Keychain
-  - `0007`：插画抓取（IllustSource / IllustCrawler + novel/pic 目录分域）
-  - `0008`：全量重构为 Tauri 2 + Rust（现行架构）
-  - `0009`：恢复 Webview 登录回退窗（Tauri 原生实现）
-  - `0010`：多账号登录态存储与切换
-  - `0011`：登录窗必然以未登录态打开
-  - `0012`：浏览模式：左侧栏自有 UI 代理 pixiv 只读接口（内嵌浏览器保留；其保留决策已由 0013 推翻）
-  - `0013`：移除内嵌 Pixiv 浏览器（/pixiv），自有浏览 UI 为唯一入口
-  - `0014`：浏览访问历史持久化（browse_history 表 + 3 个 IPC 命令）
-
-> 注：标准 mattpocock 流程用 `CONTEXT.md` 作为术语表。本项目目前用 `docs/SPEC.md` 统一承载规格 + 术语，未单独建 `CONTEXT.md`。如果术语开始膨胀（>20 个专有名词），再用 `/domain-modeling` 拆出 `CONTEXT.md`。
+- **`docs/adr/`** —— 读涉及你即将修改区域的 ADR。完整索引与一句话速查见根目录 `AGENTS.md` 的「ADR 速查」，此处不重复维护清单
 
 ## 文件结构
 
@@ -29,7 +14,7 @@
 
 ```
 /
-├── AGENTS.md / DESIGN.md / PRODUCT.md / README.md
+├── AGENTS.md / GLOSSARY.md / DESIGN.md / PRODUCT.md / README.md
 ├── config/                        ← 用户配置（settings.json；登录态在系统凭据存储，不在文件系统）
 ├── data/                          ← 用户数据（app.db、logs/；绝不入库）
 ├── docs/
@@ -61,13 +46,13 @@
 > issue tracker，`.archive/pywebview-era/` 是 pywebview 旧栈文档归档，
 > `.zcode/` / `.subdriver/` 是 AI 工具会话产物。它们被 `.gitignore` 忽略，
 > 换台机器 clone 不到；现行真相源只有 `docs/`、根目录 `AGENTS.md` /
-> `DESIGN.md` / `PRODUCT.md` / `README.md`。
+> `GLOSSARY.md` / `DESIGN.md` / `PRODUCT.md` / `README.md`。
 
-## 用 SPEC 的术语
+## 用 GLOSSARY.md 的术语
 
-当你的输出（issue 标题、重构提案、假设、测试名）命名一个领域概念时，使用 `docs/SPEC.md` 中定义的术语。不要漂移到同义词。
+当你的输出（issue 标题、重构提案、假设、测试名）命名一个领域概念时，使用根目录 `GLOSSARY.md` 中定义的术语。不要漂移到同义词。
 
-如果你需要的概念不在 SPEC 里——这是个信号：要么你在发明项目不用的语言（重新考虑），要么有真实空缺（标记给后续 grilling）。
+如果你需要的概念不在 `GLOSSARY.md` 里——这是个信号：要么你在发明项目不用的语言（重新考虑），要么有真实空缺（标记给后续 grilling，术语定版后回写 `GLOSSARY.md`）。
 
 ## 标记 ADR 冲突
 

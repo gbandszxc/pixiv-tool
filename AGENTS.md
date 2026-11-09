@@ -8,7 +8,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 
 技术栈：Tauri 2（Rust 后端，`#[tauri::command]` IPC）+ Vue 3 / TypeScript / Vite 6.4.3+ / **@material/web（Material 3）**。**无本地 HTTP 服务、无后端进程**，IPC 直连。
 
-真相源：`docs/SPEC.md`（单上下文仓库，不另设 `CONTEXT.md`）。
+真相源：`docs/SPEC.md`；领域术语表：根目录 `GLOSSARY.md`（单上下文仓库，2026-11 按 `docs/agents/domain.md` 既定触发条件——专有名词超 20 个——拆出）。命名领域概念时以 `GLOSSARY.md` 为准，行为规格以 `SPEC.md` 为准。
 
 ---
 
@@ -60,6 +60,7 @@ AI agent 动本仓库前的入口。先读本文件，再按「文档地图」�
 | 文档 | 定位 | 何时更新 |
 |---|---|---|
 | `docs/SPEC.md` | 项目规格：范围 / 技术栈 / 架构 / 数据模型 / IPC 命令 / 风险登记 | 任何行为、契约、参数、目录职责变化（对照「硬约束 1」） |
+| `GLOSSARY.md` | 领域术语表：固定领域概念的中英名、定义与禁用同义词 | 新增、改名或收窄领域概念时更新；与 SPEC 行为描述出现矛盾时同批对齐两处（命名以 GLOSSARY.md 为准、行为以 SPEC 为准） |
 | `DESIGN.md` | 前端视觉与交互规范真相源：色彩 / 字号 / 间距 / 圆角 / 层级 / 动效 / 组件 | 改 token、组件规则或视觉方向时，与 `.impeccable/design.json` 同批更新 |
 | `.impeccable/design.json` | `DESIGN.md` 的结构化伴随视图（impeccable 工具消费） | 与 `DESIGN.md` 一一对应，同上 |
 | `docs/adr/` | 架构决策记录，当前 `0001` ~ `0052` | 满足「新开 ADR 触发条件」时追加；编号连续，旧档不删 |
