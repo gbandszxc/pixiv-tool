@@ -92,7 +92,7 @@
       </fieldset>
       <div class="m3-field">
         <div class="field-label"><label for="saucenao-api-key">{{ t('settings.saucenaoApiKey') }}</label><HelpTooltip :label="t('settings.saucenaoApiKey')" :text="t('settings.saucenaoApiKeyHint')" /><md-icon-button class="saucenao-key-link" :aria-label="t('settings.saucenaoGetKey')" :title="t('settings.saucenaoGetKey')" @click="openSaucenaoKeyPage"><svg class="saucenao-key-link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg></md-icon-button></div>
-        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" type="password" autocomplete="new-password" class="settings-api-key-input" :class="{ 'key-highlight': saucenaoKeyHighlight }" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /></div>
+        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" type="password" autocomplete="new-password" class="settings-api-key-input" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /></div>
       </div>
     </template>
 
@@ -301,7 +301,7 @@ import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
 import { errorMessage, errorPayload, setWindowTheme, type Settings } from "../../api/tauri";
 import { formatTemplatePlaceholders, ILLUST_TEMPLATE_PLACEHOLDERS, NOVEL_TEMPLATE_PLACEHOLDERS, validateFilenameTemplate, type FilenameTemplateKind } from "../../utils/filenameTemplate";
-import { clearSaucenaoHistory, listSaucenaoHistory, SAUCENAO_KEY_FIELD_ID } from "../../api/saucenao";
+import { clearSaucenaoHistory, listSaucenaoHistory } from "../../api/saucenao";
 import { clearBrowseSearchHistory, listBrowseSearchHistory } from "../../api/browse";
 import { openInBrowser } from "../../utils/pixivHooks";
 import { notify } from "../../ui/notify";
@@ -394,7 +394,7 @@ watch(() => [form.value.translation_api_url, form.value.translation_api_format],
 watch(() => [form.value.translation_api_url, form.value.translation_api_format, translationKey.value, clearTranslationKey.value, form.value.translation_model, translationJson.value], () => {
   probeVersion++; testResult.value = ""; modelsError.value = "";
 }, { flush: "sync" });
-onBeforeUnmount(() => { probeRequest++; window.clearTimeout(saucenaoKeyHighlightTimer); });
+onBeforeUnmount(() => { probeRequest++; });
 function parseTranslationJson(): Record<string, unknown> {
   try {
     const extra = JSON.parse(translationJson.value);
@@ -779,13 +779,10 @@ function openSaucenaoKeyPage(): void {
   void openInBrowser("https://saucenao.com/user.php?page=search-api").catch(() => notify(t("saucenao.openFailed")));
 }
 
-/** Key 字段描边脉冲进行中标记（类挂在字段宿主上，动画结束由定时器摘除）。 */
-const saucenaoKeyHighlight = ref(false);
-let saucenaoKeyHighlightTimer = 0;
 /**
- * SettingsDialog 打开时按 focusField 定位：滚动到视野中央 + 聚焦；目标是
- * SauceNAO Key 时再描边脉冲两次（0.8s × 2，总时长 1.6s 后摘类）。reduced-motion
- * 由全局兜底把动画压到瞬时。供弹窗打开流程经 defineExpose 调用。
+ * SettingsDialog 打开时按 focusField 定位：滚动到视野中央 + 聚焦。高亮交由
+ * md-outlined-text-field 原生 focus 描边，不叠加额外高亮层。供弹窗打开流程
+ * 经 defineExpose 调用。
  */
 async function focusField(id: string): Promise<void> {
   await nextTick();
@@ -795,10 +792,6 @@ async function focusField(id: string): Promise<void> {
   await field.updateComplete;
   field.scrollIntoView({ block: "center" });
   field.focus();
-  if (id !== SAUCENAO_KEY_FIELD_ID) return;
-  saucenaoKeyHighlight.value = true;
-  window.clearTimeout(saucenaoKeyHighlightTimer);
-  saucenaoKeyHighlightTimer = window.setTimeout(() => { saucenaoKeyHighlight.value = false; }, 1700);
 }
 
 // ===== 维护分区：以图识图搜索历史清理（立即执行，不受底部保存影响）=====
@@ -918,13 +911,6 @@ fieldset.translation-group > .m3-field:last-child { margin-bottom: 0; }
 /* SauceNAO Key 获取入口：32px 图标按钮（与 HelpTooltip 同高、标签行不被撑高），16px lucide external-link */
 .saucenao-key-link { width: 32px; height: 32px; --md-icon-button-icon-size: 16px; }
 .saucenao-key-link svg { width: 16px; height: 16px; stroke-width: 2; }
-/* 直达定位（以图识图引导）的描边脉冲：primary 2px 外环两次（0.8s × 2），静态描边恒透明、
- * 动画结束后无残留；reduced-motion 由全局兜底压到瞬时。 */
-.key-highlight { outline: 2px solid transparent; outline-offset: 2px; border-radius: 12px; animation: saucenao-key-pulse 0.8s ease 2; }
-@keyframes saucenao-key-pulse {
-  0%, 100% { outline-color: transparent; }
-  40% { outline-color: var(--md-sys-color-primary); }
-}
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
 /* 维护组：名称与帮助图标在左、动作按钮在右，行间以 divider 分隔 */
 .settings-maintenance { display: grid; margin-top: var(--space-md); border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }

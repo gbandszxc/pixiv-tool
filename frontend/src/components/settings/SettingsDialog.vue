@@ -42,9 +42,10 @@ import { SETTINGS_SECTIONS, type SettingsSection } from "./sections";
 import { notify } from "../../ui/notify";
 
 /**
- * initialSection：打开时定位到的分组（缺省「通用」）；focusField：定位后额外滚动
- * + 聚焦 + 描边脉冲的字段 DOM id（如以图识图引导直达 SauceNAO Key）。两者由打开方
- * 传入（App.vue 经 OPEN_SETTINGS_EVENT 的 detail 转发），不传即旧行为、旧调用点零破坏。
+ * initialSection：打开时定位到的分组（缺省「通用」）；focusField：定位后滚动居中
+ * 并聚焦的字段 DOM id（如以图识图引导直达 SauceNAO Key），高亮交由 md 组件原生
+ * focus 描边。两者由打开方传入（App.vue 经 OPEN_SETTINGS_EVENT 的 detail 转发），
+ * 不传即旧行为、旧调用点零破坏。
  */
 const props = withDefaults(defineProps<{ show: boolean; initialSection?: SettingsSection; focusField?: string | null }>(), {
   initialSection: "general",
