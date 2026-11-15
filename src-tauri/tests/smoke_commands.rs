@@ -379,7 +379,7 @@ fn saucenao_history_list_delete_clear_round_trip() {
     assert_eq!(limited[0].source, "https://example.com/c.jpg");
     // 非法 limit → Err（同 browse_history 分页校验先例）。
     let err = saucenao_history_list_impl(&state, Some(0)).unwrap_err();
-    assert_eq!(err, "limit 必须在 1~50 之间");
+    assert_eq!(err, "limit 必须在 1~200 之间");
 
     // delete：存在 → deleted=1；重复删除幂等 deleted=0。
     let id = items[0].id;
@@ -433,7 +433,7 @@ fn browse_search_history_list_delete_clear_round_trip() {
     assert_eq!(limited[0].word, "空");
     // 非法 limit → Err（同 saucenao_history_list 先例）。
     let err = browse_search_history_list_impl(&state, Some(0)).unwrap_err();
-    assert_eq!(err, "limit 必须在 1~50 之间");
+    assert_eq!(err, "limit 必须在 1~200 之间");
 
     // delete：存在 → deleted=1；重复删除幂等 deleted=0。
     let id = items[0].id;
