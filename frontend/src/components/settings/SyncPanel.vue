@@ -81,6 +81,10 @@
           <md-checkbox id="sync-scope-auth" :checked="scopeAuth" @change="setScope('auth', ($event.target as HTMLInputElement).checked)" />
           {{ t("sync.scopeAuth") }}
         </label>
+        <label class="m3-choice">
+          <md-checkbox id="sync-scope-saucenao" :checked="scopeSaucenao" @change="setScope('saucenao', ($event.target as HTMLInputElement).checked)" />
+          {{ t("sync.scopeSaucenao") }}
+        </label>
       </div>
       <p v-if="!hasScope" class="sync-note is-error" role="status">{{ t("sync.scopeRequired") }}</p>
     </fieldset>
@@ -138,6 +142,8 @@
  * 云端已有备份时上传先弹原生 dialog 二次确认覆盖风险，暂无备份直接上传；
  * 「从云端恢复」同样二次确认。
  * 恢复成功且导入了历史时广播 HISTORY_RESTORED_EVENT，浏览历史页据此回到第 1 页重拉。
+ * 同步范围含浏览历史 / 登录状态 / SauceNAO API Key（ADR 0053）：Key 只随加密档案
+ * 传输，上传 / 恢复回执只提示是否携带 / 恢复，不回显值。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -191,17 +197,24 @@ let ticker: ReturnType<typeof setInterval> | undefined;
 /** 范围默认全选：老配置 / mock 缺键时按 true 回显。 */
 const scopeHistory = computed(() => props.values.sync_scope_history !== false);
 const scopeAuth = computed(() => props.values.sync_scope_auth !== false);
-const hasScope = computed(() => scopeHistory.value || scopeAuth.value);
+const scopeSaucenao = computed(() => props.values.sync_scope_saucenao !== false);
+const hasScope = computed(() => scopeHistory.value || scopeAuth.value || scopeSaucenao.value);
 const scopes = computed<SyncScope[]>(() => [
   ...(scopeHistory.value ? ["history" as const] : []),
   ...(scopeAuth.value ? ["auth" as const] : []),
+  ...(scopeSaucenao.value ? ["saucenao" as const] : []),
 ]);
 const canAct = computed(() => !busy.value && hasScope.value && props.connection !== null);
 
+/** 范围摘要 = 所选范围短名拼接（新范围扩展只加名字键，不新增组合文案）。 */
 const scopeSummary = computed(() => {
   if (!hasScope.value) return t("sync.scopeNone");
-  if (scopeHistory.value && scopeAuth.value) return t("sync.scopeBoth");
-  return scopeHistory.value ? t("sync.scopeHistoryOnly") : t("sync.scopeAuthOnly");
+  const names = [
+    ...(scopeHistory.value ? [t("sync.scopeNameHistory")] : []),
+    ...(scopeAuth.value ? [t("sync.scopeNameAuth")] : []),
+    ...(scopeSaucenao.value ? [t("sync.scopeNameSaucenao")] : []),
+  ];
+  return names.join(" · ");
 });
 
 const statusKind = computed(() => props.status?.kind ?? "idle");
@@ -283,7 +296,8 @@ function clearPassphrase(): void {
 }
 function setScope(scope: SyncScope, checked: boolean): void {
   if (scope === "history") props.values.sync_scope_history = checked;
-  else props.values.sync_scope_auth = checked;
+  else if (scope === "auth") props.values.sync_scope_auth = checked;
+  else props.values.sync_scope_saucenao = checked;
   clearFieldError("scope");
 }
 
@@ -343,11 +357,14 @@ async function runUpload(): Promise<void> {
     const result = await syncUpload(scopes.value, buildConfig());
     // 上传成功 = 云端产生了新备份：回显卡同步刷新（时间取本机完成时刻）
     emit("update:connection", { has: true, time: new Date().toISOString() });
-    setStatus("success", t("sync.uploadDone", {
+    const uploadNotes = [t("sync.uploadDone", {
       size: formatBytes(result.bytes),
       history: formatCount(result.history_count),
       accounts: formatCount(result.account_count),
-    }));
+    })];
+    // SauceNAO Key 只回是否携带，不回显值（ADR 0053）
+    if (result.saucenao_included) uploadNotes.push(t("sync.saucenaoIncluded"));
+    setStatus("success", uploadNotes.join(" · "));
   } catch (error) {
     handleActionError(error);
   } finally {
@@ -388,6 +405,7 @@ async function runDownload(): Promise<void> {
       history: formatCount(result.history_imported),
       accounts: formatCount(result.accounts_imported),
     })];
+    if (result.saucenao_restored) notes.push(t("sync.saucenaoRestored"));
     if (result.active_changed) notes.push(t("sync.activeChanged"));
     if (result.auth_changed) notes.push(t("sync.authChanged"));
     setStatus("success", notes.join(" · "));

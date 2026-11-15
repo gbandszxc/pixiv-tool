@@ -237,6 +237,8 @@ export interface Settings {
   sync_scope_history?: boolean;
   /** 同步范围：登录状态（默认 true） */
   sync_scope_auth?: boolean;
+  /** 同步范围：SauceNAO API Key（默认 true，随加密档案同步） */
+  sync_scope_saucenao?: boolean;
   /** 只回传凭据是否存在，永不回传 API Key。 */
   translation_key_configured: boolean;
   translation_key_error: string;

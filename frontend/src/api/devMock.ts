@@ -88,13 +88,14 @@ function ensureSettings(): Settings {
       translation_extra: {},
       // 系统通知开关（默认开启）
       notifications_enabled: true,
-      // 高级 → 同步：默认两项范围都勾选；样例账户已保存凭据，仅用于浏览器视觉验收
+      // 高级 → 同步：默认范围全勾选；样例账户已保存凭据，仅用于浏览器视觉验收
       webdav_url: "https://dav.example.com/remote.php/dav/files/me/pixiv-tool/",
       webdav_username: "pixiv",
       webdav_password_configured: true,
       sync_passphrase_configured: true,
       sync_scope_history: true,
       sync_scope_auth: true,
+      sync_scope_saucenao: true,
       translation_key_configured: false,
       translation_key_error: "",
     };
@@ -174,6 +175,7 @@ export function mockSyncUpload(scopes: SyncScope[], config?: SyncConfig): SyncUp
     bytes: 18432,
     history_count: scopes.includes("history") ? 128 : 0,
     account_count: scopes.includes("auth") ? 2 : 0,
+    saucenao_included: scopes.includes("saucenao"),
   };
 }
 
@@ -187,5 +189,6 @@ export function mockSyncDownload(scopes: SyncScope[], config?: SyncConfig): Sync
     accounts_imported: scopes.includes("auth") ? 2 : 0,
     active_changed: false,
     auth_changed: scopes.includes("auth"),
+    saucenao_restored: scopes.includes("saucenao"),
   };
 }

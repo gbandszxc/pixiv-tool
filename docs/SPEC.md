@@ -868,7 +868,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   "webdav_url": "",
   "webdav_username": "",
   "sync_scope_history": true,
-  "sync_scope_auth": true
+  "sync_scope_auth": true,
+  "sync_scope_saucenao": true
 }
 ```
 
@@ -931,7 +932,8 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
 - `saucenao_api_key`：SauceNAO API Key（默认 `""`），「以图识图」（§7
   `saucenao_search`）的**必填前置**：trim 后为空一律拒绝发起搜索。在
   saucenao.com 免费注册后于 `user.php?page=search-api` 页面获取；仅保存在本机
-  settings.json——不入库、不写日志、不进报错原文。接口行为与错误形态见
+  settings.json——不入库、不写日志、不进报错原文。可通过 WebDAV 同步在设备间
+  搬运（范围 `saucenao`，密文随包、回执只回布尔，ADR 0053）。接口行为与错误形态见
   `docs/research/saucenao-api.md`。
 - `translation_api_url` / `translation_api_format` / `translation_model` / `translation_target_language` / `translation_extra`：小说翻译 API 基址或当前协议的完整端点、接口协议（`chat_completions` 默认 / `responses` / `anthropic`，白名单外加载期回落默认）、模型 ID、目标语言 code（白名单见 §7 `novel_translation_start`；空串 = 跟随界面语言 `language`）、自定义请求体 JSON 对象，默认空字符串/`chat_completions`/空字符串/空字符串/空对象。URL 按协议推导端点后缀（`/chat/completions`、`/responses`、`/messages`），`/models` 同源推导；OpenAI 系凭据走 Bearer，Anthropic 走 `x-api-key` + `anthropic-version: 2023-06-01`，请求体与响应解析随协议装配（输出上限按输入字符数分档：≤6k 字符 16,384、6k~24k 65,536、>24k 262,144（对齐现代模型输出上限，见 ADR 0033），字段随协议为 `max_completion_tokens`/`max_output_tokens`/`max_tokens`，高级 JSON 显式给出的上限优先；思考默认开启，三协议分别注入 `reasoning_effort: medium`、`reasoning: {effort: medium, summary: auto}`、`thinking` budget 4096，用户显式给出的思考字段优先、`none`/`disabled` 关闭。见 ADR 0033）。高级 JSON 支持 reasoning_effort、max_completion_tokens、供应商 thinking 等扩展；按协议归一化后再装配（ADR 0032）：Responses 把 `reasoning_effort` 移入 `reasoning.effort` 并补 `reasoning.summary: "auto"`、`max_completion_tokens`/`max_tokens` 改名 `max_output_tokens`、剔除 `stream_options`；Anthropic 把 `reasoning_effort`（或 OpenAI 形状 `reasoning.effort`）转成 `thinking: {type: enabled, budget_tokens}`、`max_completion_tokens`/`max_output_tokens` 改名 `max_tokens`、剔除 `stream_options` 与 `reasoning`；用户显式给出的目标协议字段（含 `thinking`）优先；Anthropic 开启思考时 `temperature` 归一为 1、`top_p` < 0.95 剔除（该协议硬约束）。保留字段按协议追加（responses 禁 `input`/`instructions`，anthropic 禁 `system`），不允许覆盖；`stream_options` 允许覆盖（个别不兼容网关关闭 Chat Completions 的默认用量上报注入，ADR 0030）。见 ADR 0018、ADR 0020、ADR 0034。JSON 上限 16KB，模型 ID 上限 256 字节。HTTP 仅允许本机模型，其他须 HTTPS；禁重定向、URL 凭据/query/fragment。
 - `translation_models`：缓存的已获取模型列表（字符串数组，默认 `[]`），在设置页面成功获取模型后随设置持久化写入，供设置面板与小说阅读页翻译浮窗下拉快速选择模型；切换 API 地址或接口协议时清空。
@@ -990,16 +992,16 @@ Python 版逐字段兼容，`src-tauri/src/settings.rs`）：
   凭据（否则 `sync_url_invalid`），并 trim、去掉尾部 `/`。远端文件固定为
   `<目录>/pixiv-tool-sync.bin`。用户名非空时必须有 WebDAV 密码，否则动作报
   `sync_config_incomplete`。
-- `sync_scope_history` / `sync_scope_auth`：同步范围开关（浏览访问历史 / 多账号
-  登录态），默认均 `true`；设置弹窗「高级 → 同步」默认全选，两项都关时动作按钮
-  禁用。命令参数 `scopes` 只接受 `history` / `auth`，空集或未知值 →
-  `sync_no_scope`。
+- `sync_scope_history` / `sync_scope_auth` / `sync_scope_saucenao`：同步范围开关
+  （浏览访问历史 / 多账号登录态 / SauceNAO API Key，ADR 0053），默认均 `true`；
+  设置弹窗「高级 → 同步」默认全选，全部关闭时动作按钮禁用。命令参数 `scopes`
+  只接受 `history` / `auth` / `saucenao`，空集或未知值 → `sync_no_scope`。
 - 同步凭据**不进** `settings.json`：WebDAV 密码与同步口令（加密口令）分别在系统
   凭据库 service `pixiv-tool.sync` 的 `webdav-password` /
   `sync-passphrase` 条目，落点与写回顺序见 §5.3、ADR 0048。同步口令不设长度限制、
   允许未配置（trim 后为空 = 未配置）：未配置时用内置默认口令派生加密密钥
   （ADR 0049，保护强度为混淆级）。
-- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 54 个键，
+- 以上各键在 `settings_save` 白名单内（`settings_cmds.rs` 的 `WRITABLE_KEYS` 共 57 个键，
   含兼容保留的 `backend_port`；`saucenao_api_key` 为用户凭据，见 §7）。`translation_api_key` 是独立写入参数，不进 Settings 或文件；省略保持，空串删除。`settings_get` 额外返回 `translation_key_configured` 布尔值与 `translation_key_error` 安全文案，以及 `webdav_password_configured` / `sync_passphrase_configured` 两个布尔（凭据库不可用按未配置降级，不返回任何原文）。
 - `settings_save(settings, webdav_password?, sync_passphrase?)`：后两个可选参数是
   同步凭据的独立写入通道，语义与 `translation_api_key` 一致——省略 = 保持既有
@@ -1166,13 +1168,15 @@ app 版本，读不到显示 `--`）+ 右对齐 **GitHub 主页入口**（图标
 「高级」组为分类入口页（`AdvancedPanel.vue`），当前只有「同步」一项，点击在同一
 内容区切到二级页（`SyncPanel.vue`，不叠模态），顶部「返回高级」回入口。同步页分两组：
 连接（WebDAV 地址 / 用户名 / 密码 / 同步口令，已存凭据在标签行以中性描边胶囊回显
-「已保存」、可清除且待清除时切 error 文案）与同步范围（浏览历史 / 登录状态两个
-checkbox，默认全选）。动作行为「测试连接（filled 主动作）/ 上传 / 从云端恢复
+「已保存」、可清除且待清除时切 error 文案）与同步范围（浏览历史 / 登录状态 /
+SauceNAO API Key 三个 checkbox，默认全选，ADR 0053）。动作行为「测试连接（filled 主动作）/ 上传 / 从云端恢复
 （outlined 次要）」：直接使用当前草稿值（`config` 覆盖）不要求先保存。上传 / 恢复
 在测试连接成功前禁用；测试成功后显示云端备份回显卡
 （是否有备份与备份时间；地址 / 用户名 / WebDAV 密码草稿变化即失效需重测，上传成功
 即刷新为最新备份；回显状态切页保留、关闭设置复位）。动作进行中禁用全部按钮并显示
-进行中文案，回执为会话级。云端已有备份时「上传到云端」先弹原生 dialog 二次确认，
+进行中文案，回执为会话级。上传 / 恢复回执在涉及 SauceNAO Key 时追加布尔指示
+（上传携带 →「已包含 SauceNAO Key」、恢复写入 →「已恢复 SauceNAO Key」，ADR 0053；
+只提示是否，不回显 Key 值）。云端已有备份时「上传到云端」先弹原生 dialog 二次确认，
 文案写明将整体覆盖云端已有备份（含回显的备份时间）且无法找回，暂无备份时直接
 上传；「从云端恢复」同样先弹原生 dialog 二次确认，文案写明合并与覆盖范围——
 两枚确认弹窗统一 `min(420px, 90vw)` 定宽，正文自然换行不随文案长度撑宽；恢复后
@@ -1585,10 +1589,10 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
-| `settings_get` / `settings_save(settings, webdavPassword?, syncPassphrase?)` | 配置读写（白名单 54 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板 / 4 个 WebDAV 同步键；API Key 与同步凭据独立写入，`settings_get` 仅返回 `{is-saved}` 布尔，见 §5.2）。`settings_save` 失败返回结构化载荷 `{code, field, message}`（ADR 0044，错误码表见 §5.2） |
+| `settings_get` / `settings_save(settings, webdavPassword?, syncPassphrase?)` | 配置读写（白名单 57 键 + 校验，含翻译 URL / 协议 / 模型 / 目标语言 / 单请求超时 / 高级 JSON / 22 个翻译运行参数 / 详情页图片缩放 / 三个下载文件名模板 / 5 个 WebDAV 同步键；API Key 与同步凭据独立写入，`settings_get` 仅返回 `{is-saved}` 布尔，见 §5.2）。`settings_save` 失败返回结构化载荷 `{code, field, message}`（ADR 0044，错误码表见 §5.2） |
 | `sync_test_connection(config?)` | 测试 WebDAV 连通性并探测云端备份：校验地址、`MKCOL` 目录后 `HEAD` 同步包（不支持 HEAD 的 405/501 回退 `GET` 取响应头），不读写包内容、不要求同步口令。`config` 为可选草稿覆盖 `{webdavUrl, webdavUsername, webdavPassword, syncPassphrase}`（省略 = 已保存值 + 凭据库）。返回 `{status:"ok", http_status, has_backup, backup_time}`（MKCOL 实际状态码，目录已存在也算通；`has_backup` = 远端包存在，`backup_time` = 远端 `Last-Modified` 原文，404 无备份时两者为空/`false`）。错误为 `SyncError` |
-| `sync_upload(scopes, config?)` | 按所选范围导出 → `PTSYNC01` 加密 → `MKCOL` + `PUT` 固定文件 `pixiv-tool-sync.bin`。`scopes` 白名单 `history` / `auth`（去重，空集或未知值 `sync_no_scope`）。返回 `{exported_at, bytes, history_count, account_count}`（导出侧只含已登记且 Cookie 有 PHPSESSID 的账号） |
-| `sync_download(scopes, config?)` | `GET` → 解密 → 解析 → 按所选范围合并：历史 `ON CONFLICT(kind, work_id)` 仅 `visited_at` 更晚才更新；账号同名覆盖、不删本地额外账号，本地 active 优先、无 active 才回落云端 active；写后失效会话缓存。返回 `{exported_at, history_imported, accounts_imported, active_changed, auth_changed}`。安全上限：响应体 8 MiB、单请求 30s、重定向不跟随、网络错误直连重试一次 |
+| `sync_upload(scopes, config?)` | 按所选范围导出 → `PTSYNC01` 加密 → `MKCOL` + `PUT` 固定文件 `pixiv-tool-sync.bin`。`scopes` 白名单 `history` / `auth` / `saucenao`（去重，空集或未知值 `sync_no_scope`）。返回 `{exported_at, bytes, history_count, account_count, saucenao_included}`（导出侧只含已登记且 Cookie 有 PHPSESSID 的账号；`saucenao_included` = 包内是否携带本机 SauceNAO Key——scope 含 saucenao 且本机 Key trim 非空，只回布尔不回显值，ADR 0053） |
+| `sync_download(scopes, config?)` | `GET` → 解密 → 解析 → 按所选范围合并：历史 `ON CONFLICT(kind, work_id)` 仅 `visited_at` 更晚才更新；账号同名覆盖、不删本地额外账号，本地 active 优先、无 active 才回落云端 active；包内 SauceNAO Key 非空时覆盖本机设置并持久化（先落盘再更新内存），未携带 / 未选范围时本机不变；写后失效会话缓存。返回 `{exported_at, history_imported, accounts_imported, active_changed, auth_changed, saucenao_restored}`（`saucenao_restored` 只回布尔，ADR 0053）。安全上限：响应体 8 MiB、单请求 30s、重定向不跟随、网络错误直连重试一次 |
 | `novel_translation_start(novel, force)` | 启动或加入整篇翻译 Job；novel=`{novel_id,title,tags,description,content}`（content ≤ 8MB，非法 id / 空内容拒绝）。启动前校验设置、URL、模型与 Key，任何失败不创建 Job；原文已是目标语言且 `force=false` 时返回 `already_target_language:true` 与未落库的空快照。同一作品、原文版本、目标语言重复启动加入既有 Job，`force=true` 新建。返回 `{job: TranslationJobSnapshot, already_target_language}`，命令立即返回、后台 tokio 继续执行。目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言（ADR 0018） |
 | `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
 | `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds,refused_chunks,skipped_chunks}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms,skipped}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；`refused_chunks` 是被模型按内容政策拒绝的块 ID、`skipped_chunks` 是用户显式跳过的块 ID（均升序，serde 默认兼容旧载荷，ADR 0043）；任务不存在或清单损坏返回可读错误 |
@@ -1908,7 +1912,7 @@ CI 只在构建期注入版本号、不回写仓库，因此**每次发版后需
 | 项 | 策略 |
 |---|---|
 | Cookie 存储 | 系统凭据存储（Windows Credential Manager / macOS Keychain / Linux Secret Service） |
-| WebDAV 同步 | 同步包为 `PTSYNC01` 密文（PBKDF2-HMAC-SHA256 600k + AES-256-GCM，AAD 绑定包头），WebDAV 密码与同步口令只进系统凭据库 service `pixiv-tool.sync`，不进 settings.json / 数据库 / 日志；同步口令可选，未设置时用内置默认口令派生密钥（混淆级保护，ADR 0049）；错误与日志不含 URL 凭据、Cookie、密码或口令原文；手动触发，无后台同步 |
+| WebDAV 同步 | 同步包为 `PTSYNC01` 密文（PBKDF2-HMAC-SHA256 600k + AES-256-GCM，AAD 绑定包头），WebDAV 密码与同步口令只进系统凭据库 service `pixiv-tool.sync`，不进 settings.json / 数据库 / 日志；同步口令可选，未设置时用内置默认口令派生密钥（混淆级保护，ADR 0049）；包内 Cookie 与 SauceNAO API Key（ADR 0053）同档加密传输，回执与日志只回是否携带、不出现原文；错误与日志不含 URL 凭据、Cookie、密码或口令原文；手动触发，无后台同步 |
 | 网络监听 | **无**——不再有本地 HTTP 服务，IPC 仅限本 webview |
 | 错误上报 | **不集成**（隐私优先） |
 | 鉴权 | 不需要（无网络面） |
@@ -2003,6 +2007,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0050 | 模型请求并发自适应收敛（AIMD）与流间空闲看门狗 | [adr/0050-aimd-concurrency-and-stream-idle-watchdog.md](adr/0050-aimd-concurrency-and-stream-idle-watchdog.md) |
 | 0051 | Pass 1 扫描改并行子 Agent 派发（dispatch_scan） | [adr/0051-dispatch-scan-subagent.md](adr/0051-dispatch-scan-subagent.md) |
 | 0052 | 竖屏最大化布局适配（仅竖屏最大化、推翻侧栏不自动隐藏旧决策） | [adr/0052-portrait-maximized-layout.md](adr/0052-portrait-maximized-layout.md) |
+| 0053 | SauceNAO API Key 纳入 WebDAV 同步（范围 `saucenao`、载荷 v1 追加字段、回执只回布尔） | [adr/0053-saucenao-key-webdav-sync.md](adr/0053-saucenao-key-webdav-sync.md) |
 
 ADR 按需追加，不强制一次性写完。
 

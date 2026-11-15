@@ -7,8 +7,8 @@
 import { invoke, isTauri } from "./tauri";
 import { mockSyncDownload, mockSyncTestConnection, mockSyncUpload } from "./devMock";
 
-/** 同步范围：浏览历史 / 登录状态（含多账户）。 */
-export type SyncScope = "history" | "auth";
+/** 同步范围：浏览历史 / 登录状态（含多账户）/ SauceNAO API Key。 */
+export type SyncScope = "history" | "auth" | "saucenao";
 
 /** 动作期的草稿覆盖；省略字段表示沿用已保存值，空串表示该动作不使用该凭据。 */
 export interface SyncConfig {
@@ -40,6 +40,8 @@ export interface SyncUploadResult {
   bytes: number;
   history_count: number;
   account_count: number;
+  /** 本次上传是否携带 SauceNAO API Key（只回布尔，不回显值）。 */
+  saucenao_included: boolean;
 }
 
 /** sync_download：导入计数 + 当前账户 / 登录态是否被云端覆盖。 */
@@ -49,6 +51,8 @@ export interface SyncDownloadResult {
   accounts_imported: number;
   active_changed: boolean;
   auth_changed: boolean;
+  /** 本次恢复是否把云端的 SauceNAO API Key 写入了本机设置（只回布尔，不回显值）。 */
+  saucenao_restored: boolean;
 }
 
 /**

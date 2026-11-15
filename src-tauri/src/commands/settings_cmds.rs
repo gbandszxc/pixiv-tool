@@ -25,7 +25,7 @@ use crate::state::AppState;
 
 /// 可更新键白名单（其余键忽略，对齐旧 update_config 的 setattr 循环）。
 /// `saucenao_api_key` 属用户凭据，任何日志不得输出该值。
-const WRITABLE_KEYS: [&str; 56] = [
+const WRITABLE_KEYS: [&str; 57] = [
     "translation_api_url",
     "translation_api_format",
     "translation_model",
@@ -82,6 +82,7 @@ const WRITABLE_KEYS: [&str; 56] = [
     "webdav_username",
     "sync_scope_history",
     "sync_scope_auth",
+    "sync_scope_saucenao",
 ];
 
 /// 读取当前配置。
@@ -288,7 +289,7 @@ pub fn apply_settings_patch(
             "设置项 notifications_enabled 必须是布尔值",
         ));
     }
-    for key in ["sync_scope_history", "sync_scope_auth"] {
+    for key in ["sync_scope_history", "sync_scope_auth", "sync_scope_saucenao"] {
         if patch_obj.get(key).is_some_and(|value| !value.is_boolean()) {
             return Err(SettingsError::new(
                 "settings_bool_invalid",

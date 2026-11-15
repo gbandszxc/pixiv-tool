@@ -148,6 +148,8 @@ pub struct Settings {
     pub sync_scope_history: bool,
     /// 同步范围：多账户登录态（默认 true）。
     pub sync_scope_auth: bool,
+    /// 同步范围：SauceNAO API Key（默认 true；随加密档案同步，ADR 0053）。
+    pub sync_scope_saucenao: bool,
 }
 
 impl Default for Settings {
@@ -209,6 +211,7 @@ impl Default for Settings {
             webdav_username: String::new(),
             sync_scope_history: true,
             sync_scope_auth: true,
+            sync_scope_saucenao: true,
         }
     }
 }

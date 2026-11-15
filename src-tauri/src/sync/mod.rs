@@ -8,7 +8,8 @@
 //! - [`service`]：编排：配置解析 → 导出/导入 → 加解密 → 网络
 //!
 //! 错误一律是 [`SyncError`]（`{code, field, message}`，ADR 0044 形状）；
-//! 任何日志与错误文案都不得出现 cookie、WebDAV 密码或同步口令原文。
+//! 任何日志与错误文案都不得出现 cookie、SauceNAO API Key、WebDAV 密码或
+//! 同步口令原文。
 
 pub mod archive;
 pub mod crypto;
@@ -21,18 +22,21 @@ pub use service::{DownloadSummary, SyncConfigOverride, TestConnectionOutcome, Up
 use serde::Serialize;
 
 /// 同步范围白名单（命令参数 `scopes` 的合法值）。
-pub const SYNC_SCOPES: [&str; 2] = ["history", "auth"];
+pub const SYNC_SCOPES: [&str; 3] = ["history", "auth", "saucenao"];
 
 /// 远端固定文件名（`${base_url}/pixiv-tool-sync.bin`）。
 pub const REMOTE_FILE_NAME: &str = "pixiv-tool-sync.bin";
 
-/// 同步范围（命令参数白名单内的一对取值）。
+/// 同步范围（命令参数白名单内的取值）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     /// 浏览访问历史（`browse_history` 表）。
     History,
     /// pixiv 多账户登录态（账号索引 + 每账号 keyring 条目）。
     Auth,
+    /// SauceNAO API Key（`settings.saucenao_api_key`，随加密档案同步；
+    /// 与 Cookie 同档传输：只走 AES-256-GCM 密文，日志与错误文案不出现原文）。
+    SaucenaoKey,
 }
 
 /// 归一化 `scopes` 参数：去重 + 白名单过滤；空集或含未知值 → `sync_no_scope`。
@@ -42,6 +46,7 @@ pub fn normalize_scopes(raw: &[String]) -> Result<Vec<Scope>, SyncError> {
         let scope = match value.trim() {
             "history" => Scope::History,
             "auth" => Scope::Auth,
+            "saucenao" => Scope::SaucenaoKey,
             _ => return Err(SyncError::no_scope()),
         };
         if !scopes.contains(&scope) {
@@ -176,14 +181,28 @@ mod tests {
 
     #[test]
     fn scopes_dedupe_and_reject_unknown() {
-        let scopes =
-            normalize_scopes(&["history".into(), "auth".into(), "history".into()]).unwrap();
-        assert_eq!(scopes, vec![Scope::History, Scope::Auth]);
+        let scopes = normalize_scopes(&[
+            "history".into(),
+            "auth".into(),
+            "saucenao".into(),
+            "history".into(),
+        ])
+        .unwrap();
+        assert_eq!(scopes, vec![Scope::History, Scope::Auth, Scope::SaucenaoKey]);
         assert_eq!(
             normalize_scopes(&["history".into()]).unwrap(),
             vec![Scope::History]
         );
-        for bad in [vec![], vec!["cookies".to_string()], vec!["".to_string()]] {
+        assert_eq!(
+            normalize_scopes(&[" saucenao ".into()]).unwrap(),
+            vec![Scope::SaucenaoKey]
+        );
+        for bad in [
+            vec![],
+            vec!["cookies".to_string()],
+            vec!["".to_string()],
+            vec!["saucenaoo".to_string()],
+        ] {
             assert_eq!(normalize_scopes(&bad).unwrap_err().code, "sync_no_scope");
         }
         // 去重后仍非空

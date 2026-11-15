@@ -37,6 +37,9 @@ pub struct UploadSummary {
     pub bytes: usize,
     pub history_count: usize,
     pub account_count: usize,
+    /// 本次上传的包是否携带 SauceNAO API Key（scope 含 saucenao 且本机已配置）。
+    /// 只回布尔，不回显 key 原文（ADR 0053）。
+    pub saucenao_included: bool,
 }
 
 /// `sync_download` 返回体。
@@ -47,6 +50,9 @@ pub struct DownloadSummary {
     pub accounts_imported: usize,
     pub active_changed: bool,
     pub auth_changed: bool,
+    /// 本次恢复是否把云端携带的 SauceNAO API Key 写入了本机设置
+    /// （scope 含 saucenao 且包内 key 非空）。只回布尔，不回显 key 原文。
+    pub saucenao_restored: bool,
 }
 
 /// 测试连接结果：MKCOL 状态码 + 云端备份探测。
@@ -85,7 +91,8 @@ pub async fn upload(
     let endpoint = resolve_endpoint(&settings, over, keys::read)?;
     let passphrase = resolve_passphrase(over, keys::read)?;
 
-    let (payload, counts) = archive::build_payload(&state.db, &state.accounts, &scopes)?;
+    let (payload, counts) =
+        archive::build_payload(&state.db, &state.accounts, &scopes, Some(&settings.saucenao_api_key))?;
     let plaintext =
         serde_json::to_vec(&payload).map_err(|_| SyncError::internal("同步包序列化失败"))?;
     let packed = crypto::encrypt(&passphrase, &plaintext)?;
@@ -97,6 +104,7 @@ pub async fn upload(
         bytes,
         history_count: counts.history_count,
         account_count: counts.account_count,
+        saucenao_included: payload.saucenao_api_key.is_some(),
     })
 }
 
@@ -133,13 +141,48 @@ pub async fn download(
         (0, false, false)
     };
 
+    // SauceNAO Key（ADR 0053）：包内 key 非空才覆盖本机设置并持久化；
+    // 未选范围或云端未携带时本机保持不变。
+    let saucenao_restored = if scopes.contains(&Scope::SaucenaoKey) {
+        match payload.saucenao_api_key.as_deref() {
+            Some(key) => {
+                store_saucenao_key(&state.settings, &state.paths.config_dir, key)?;
+                true
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
+
     Ok(DownloadSummary {
         exported_at: payload.exported_at,
         history_imported,
         accounts_imported,
         active_changed,
         auth_changed,
+        saucenao_restored,
     })
+}
+
+/// 云端 SauceNAO Key 覆盖本机设置：短锁内先落盘再更新内存（`settings_save`
+/// 同序，磁盘失败时内存保持旧值）。`key` 由 `parse_payload` 保证 trim 后非空；
+/// 日志与错误文案不出现 key 原文。
+fn store_saucenao_key(
+    settings: &std::sync::Mutex<Settings>,
+    config_dir: &std::path::Path,
+    key: &str,
+) -> Result<(), SyncError> {
+    let mut guard = settings
+        .lock()
+        .map_err(|_| SyncError::internal("设置表锁中毒"))?;
+    let mut updated = guard.clone();
+    updated.saucenao_api_key = key.to_string();
+    updated
+        .save(config_dir)
+        .map_err(|_| SyncError::internal("写入 SauceNAO API Key 设置失败"))?;
+    *guard = updated;
+    Ok(())
 }
 
 /// 解析 WebDAV 端点：`over` 优先，其次 settings / keyring。
@@ -281,6 +324,32 @@ mod tests {
 
     fn no_credentials(_: &str) -> Result<Option<String>, String> {
         Ok(None)
+    }
+
+    /// 云端 SauceNAO Key 覆盖本机设置：内存更新 + settings.json 落盘一致；
+    /// 空白 key 在 parse_payload 期已滤为 `None`，这里只覆盖非空值（ADR 0053）。
+    #[test]
+    fn store_saucenao_key_updates_memory_and_disk() {
+        let dir = std::env::temp_dir().join(format!(
+            "pixiv-tool-sync-store-key-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = std::sync::Mutex::new(Settings::default());
+        assert_eq!(settings.lock().unwrap().saucenao_api_key, "");
+
+        store_saucenao_key(&settings, &dir, "restored-key").unwrap();
+        assert_eq!(settings.lock().unwrap().saucenao_api_key, "restored-key");
+        // 落盘内容一致（settings.json 可读回）
+        let saved =
+            Settings::load_or_init(&dir);
+        assert_eq!(saved.saucenao_api_key, "restored-key");
+
+        // 再次恢复以云端为准覆盖
+        store_saucenao_key(&settings, &dir, "other-key").unwrap();
+        assert_eq!(settings.lock().unwrap().saucenao_api_key, "other-key");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn credential(value: &'static str) -> impl Fn(&str) -> Result<Option<String>, String> {

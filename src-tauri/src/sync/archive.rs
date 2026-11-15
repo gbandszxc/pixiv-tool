@@ -5,12 +5,16 @@
 //!   "version": 1,
 //!   "exported_at": "<UTC RFC3339>",
 //!   "history": [ ... ] | null,
-//!   "accounts": { "active": "uid" | null, "items": [ ... ] } | null
+//!   "accounts": { "active": "uid" | null, "items": [ ... ] } | null,
+//!   "saucenao_api_key": "..." | null
 //! }
 //! ```
 //!
-//! 未选范围对应字段为 `null`。导出侧只写「已登记 + 有 PHPSESSID」的账户；
-//! 导入侧逐条校验，非法条目静默跳过（历史按「仅更晚覆盖」合并，账户索引同名覆盖）。
+//! 未选范围对应字段为 `null`。`saucenao_api_key` 是 v1 载荷的追加字段（ADR 0053）：
+//! serde 对未知字段宽容 + `Option`/`default`，旧客户端可读新载荷、新客户端可读旧
+//! 载荷，`PAYLOAD_VERSION` 保持 1。导出侧只写「已登记 + 有 PHPSESSID」的账户与
+//! trim 后非空的本机 SauceNAO Key；导入侧逐条校验，非法条目静默跳过（历史按
+//! 「仅更晚覆盖」合并，账户索引同名覆盖，Key 非空才覆盖本机）。
 
 use std::collections::HashMap;
 
@@ -73,6 +77,10 @@ pub struct SyncPayload {
     pub exported_at: String,
     pub history: Option<Vec<HistoryItem>>,
     pub accounts: Option<AccountsPayload>,
+    /// SauceNAO API Key（scope 含 saucenao 且本机 trim 后非空才携带，ADR 0053）。
+    /// v1 载荷追加字段：`default` + `Option` 兼容不含该字段的旧包。
+    #[serde(default)]
+    pub saucenao_api_key: Option<String>,
 }
 
 /// 导出计数（命令返回用）。
@@ -88,6 +96,8 @@ pub struct ParsedPayload {
     pub exported_at: String,
     pub history: Option<Vec<HistoryItem>>,
     pub accounts: Option<AccountsPayload>,
+    /// 云端携带的 SauceNAO API Key（解析期已 trim 并滤掉空白；`None` = 不覆盖本机）。
+    pub saucenao_api_key: Option<String>,
 }
 
 /// 浏览历史 kind 白名单（与 `list_browse_history` 的过滤值一致）。
@@ -109,10 +119,14 @@ pub fn normalize_visited_at(raw: &str) -> Option<String> {
 }
 
 /// 统计状态里的浏览历史与登录态，构造载荷（未选范围字段为 `None`）。
+///
+/// `saucenao_api_key` 传本机当前值（可为 `None`）；仅当 scope 含 saucenao 且
+/// trim 后非空才写入载荷（ADR 0053），否则字段为 `None`。
 pub fn build_payload(
     db: &Db,
     accounts: &AccountManager,
     scopes: &[Scope],
+    saucenao_api_key: Option<&str>,
 ) -> Result<(SyncPayload, ExportCounts), SyncError> {
     let mut counts = ExportCounts::default();
 
@@ -152,12 +166,22 @@ pub fn build_payload(
         None
     };
 
+    let saucenao = if scopes.contains(&Scope::SaucenaoKey) {
+        saucenao_api_key
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+    } else {
+        None
+    };
+
     Ok((
         SyncPayload {
             version: PAYLOAD_VERSION,
             exported_at: crate::db::now_iso(),
             history,
             accounts: accounts_payload,
+            saucenao_api_key: saucenao,
         },
         counts,
     ))
@@ -194,6 +218,8 @@ struct RawPayload {
     history: Option<Vec<Value>>,
     #[serde(default)]
     accounts: Option<Value>,
+    #[serde(default)]
+    saucenao_api_key: Option<String>,
 }
 
 /// 解析解密后的 JSON：版本校验 + 历史行过滤（kind / work_id / visited_at）+
@@ -218,10 +244,18 @@ pub fn parse_payload(bytes: &[u8]) -> Result<ParsedPayload, SyncError> {
 
     let accounts = raw.accounts.map(parse_accounts).transpose()?;
 
+    // SauceNAO Key（v1 追加字段，ADR 0053）：trim 后非空才算携带；旧包无该
+    // 字段或值为空白 → `None`，下载侧据此保持本机不变。
+    let saucenao_api_key = raw
+        .saucenao_api_key
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty());
+
     Ok(ParsedPayload {
         exported_at: raw.exported_at,
         history,
         accounts,
+        saucenao_api_key,
     })
 }
 
@@ -474,5 +508,53 @@ mod tests {
         ] {
             assert_eq!(parse_payload(raw).unwrap_err().code, "sync_payload_invalid");
         }
+    }
+
+    /// SauceNAO Key（ADR 0053）：scope 含 saucenao 且本机 key trim 非空才进载荷；
+    /// 序列化 → 解析往返原样带回；空白 / 未选范围不携带。
+    #[test]
+    fn build_and_parse_roundtrip_saucenao_key() {
+        let (db, dir) = temp_db("saucenao");
+        let accounts = AccountManager::new(&dir);
+        let scopes = [Scope::SaucenaoKey];
+
+        let (payload, _) = build_payload(&db, &accounts, &scopes, Some("  abc-key-123  ")).unwrap();
+        assert_eq!(payload.saucenao_api_key.as_deref(), Some("abc-key-123"));
+        let bytes = serde_json::to_vec(&payload).unwrap();
+        let parsed = parse_payload(&bytes).unwrap();
+        assert_eq!(parsed.saucenao_api_key.as_deref(), Some("abc-key-123"));
+
+        // 本机未配置（None）或空白 → 不携带
+        let (payload, _) = build_payload(&db, &accounts, &scopes, None).unwrap();
+        assert!(payload.saucenao_api_key.is_none());
+        let (payload, _) = build_payload(&db, &accounts, &scopes, Some("   ")).unwrap();
+        assert!(payload.saucenao_api_key.is_none());
+
+        // scope 不含 saucenao：本机有 key 也不携带
+        let (payload, _) =
+            build_payload(&db, &accounts, &[Scope::History], Some("abc-key-123")).unwrap();
+        assert!(payload.saucenao_api_key.is_none());
+
+        cleanup(&dir);
+    }
+
+    /// 下载侧兼容：v1 追加字段 trim 后非空才保留；空白与旧载荷（无该字段）
+    /// 都解析为 `None`，本机设置保持不变。
+    #[test]
+    fn parse_saucenao_key_blank_and_legacy_compat() {
+        let with_key = br#"{"version":1,"exported_at":"x","history":null,"accounts":null,"saucenao_api_key":"  abc123  "}"#;
+        let parsed = parse_payload(with_key).unwrap();
+        assert_eq!(parsed.saucenao_api_key.as_deref(), Some("abc123"));
+
+        // 空白值 = 云端未携带，不覆盖本机
+        let blank = br#"{"version":1,"exported_at":"x","history":null,"accounts":null,"saucenao_api_key":"   "}"#;
+        assert!(parse_payload(blank).unwrap().saucenao_api_key.is_none());
+
+        // 旧客户端上传的载荷没有该字段（PAYLOAD_VERSION 保持 1，双向可读）
+        let legacy = br#"{"version":1,"exported_at":"x","history":null,"accounts":null}"#;
+        let parsed = parse_payload(legacy).unwrap();
+        assert!(parsed.saucenao_api_key.is_none());
+        assert!(parsed.history.is_none());
+        assert!(parsed.accounts.is_none());
     }
 }
