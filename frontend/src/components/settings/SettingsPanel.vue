@@ -36,7 +36,7 @@
       </div>
       <fieldset class="m3-field settings-fieldset">
         <legend>{{ t("settings.outputFormats") }}</legend>
-        <div class="m3-row"><label v-for="format in formats" :key="format" class="m3-choice"><md-checkbox :checked="form.output_formats.includes(format)" @change="toggleFormat(format, ($event.target as HTMLInputElement).checked)" />{{ format === "txt" ? "TXT" : "Markdown" }}</label></div>
+        <div class="m3-row"><label v-for="format in formats" :key="format" class="m3-choice"><md-checkbox :checked="form.output_formats.includes(format)" @change="toggleFormat(format, ($event.target as HTMLInputElement).checked)" />{{ format === "txt" ? "TXT" : format === "markdown" ? "Markdown" : "EPUB" }}</label></div>
       </fieldset>
       <div class="m3-field">
         <label for="illust-filename-template">{{ t("settings.filenameTemplateIllust") }}</label>
@@ -312,7 +312,8 @@ const props = withDefaults(defineProps<{ section: SettingsSection; active?: bool
 const { t, te, locale } = useI18n();
 const settingsStore = useSettingsStore();
 const authStore = useAuthStore();
-const formats = ["txt", "markdown"];
+// 下载输出格式可勾选项（后端 task_create 白名单 txt|markdown|epub）；默认值仍为 txt+markdown，EPUB 仅加选项
+const formats = ["txt", "markdown", "epub"];
 const confirmDialog = ref<HTMLDialogElement | null>(null);
 const form = ref<Settings>({ ...settingsStore.settings });
 const translationKey = ref("");

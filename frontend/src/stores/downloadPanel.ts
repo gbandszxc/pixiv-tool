@@ -1,11 +1,13 @@
 import { defineStore } from "pinia";
 import { reactive, ref } from "vue";
 import type { IllustPage } from "../api/browse";
+import type { NovelTranslationExportFormat } from "../api/translation";
 import type { DownloadTarget } from "../utils/pixivHooks";
 
 export type DownloadFormKind = DownloadTarget["form"];
 function emptyDraft() {
-  return { sourceType: "single", sourceId: "", formats: ["txt", "markdown"], translationFormats: [] as string[], edited: false };
+  // formats：抓取输出格式（后端 task_create 白名单 txt|markdown|epub）；translationFormats：译文导出格式
+  return { sourceType: "single", sourceId: "", formats: ["txt", "markdown"], translationFormats: [] as NovelTranslationExportFormat[], edited: false };
 }
 
 /** 单篇插画的分页缓存：同一作品命中缓存不重复请求详情。 */

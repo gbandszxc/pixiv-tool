@@ -6,7 +6,7 @@ import { useDownloadPanelStore, type DownloadFormKind, type PageCache } from "..
 import { useTaskStore } from "../../stores/tasks";
 import { parsePixivUrl } from "../../utils/pixivUrl";
 import { browseWorkDetail, errorMessage, illustSavedPages } from "../../api/browse";
-import { exportNovelTranslation } from "../../api/translation";
+import { exportNovelTranslation, exportNovelTranslationSeries, type NovelTranslationExportFormat } from "../../api/translation";
 import { notify } from "../../ui/notify";
 import PageDownloadPicker from "./PageDownloadPicker.vue";
 import SectionTabs from "../browse/SectionTabs.vue";
@@ -17,12 +17,18 @@ const draft = computed(() => panel.drafts[panel.kind]);
 const prefix = computed(() => panel.kind === "novel" ? "crawl" : "illust");
 const tabs = computed(() => [{ value: "novel", label: t("nav.crawlNovel") }, { value: "illustration", label: t("nav.crawlIllustration") }]);
 const sources = computed(() => panel.kind === "novel" ? ["single", "series", "user"] : ["single", "user"]);
+/** 小说抓取输出格式（后端 task_create 白名单 txt|markdown|epub），展示顺序即 UI 顺序 */
+const CRAWL_FORMATS = ["txt", "markdown", "epub"];
+/** 译文导出格式（后端 novel_translation_export / _export_series 白名单），UI 暴露 txt / markdown / epub */
+const TRANSLATION_FORMATS: NovelTranslationExportFormat[] = ["txt", "markdown", "epub"];
+/** 格式展示名（字面量，跟随现有惯例不做 i18n） */
+const FORMAT_LABELS: Record<string, string> = { txt: "TXT", markdown: "Markdown", epub: "EPUB" };
 function switchKind(value: string) { if (!panel.submitting) { panel.kind = value as DownloadFormKind; panel.error = ""; } }
 function editSource(value: string) { draft.value.sourceId = value; draft.value.edited = true; panel.error = ""; }
 function editType(value: string) { draft.value.sourceType = value; draft.value.edited = true; panel.error = ""; }
 function formatChange(value: string, checked: boolean) { draft.value.formats = checked ? [...draft.value.formats, value] : draft.value.formats.filter(format => format !== value); }
-/** 译文格式勾选（仅小说单篇表单渲染）；独立于原文 formats，提交时走本地导出命令 */
-function translationFormatChange(value: string, checked: boolean) { draft.value.translationFormats = checked ? [...draft.value.translationFormats, value] : draft.value.translationFormats.filter(format => format !== value); }
+/** 译文格式勾选（小说单篇 / 系列表单渲染）；独立于原文 formats，提交时走本地导出命令 */
+function translationFormatChange(value: NovelTranslationExportFormat, checked: boolean) { draft.value.translationFormats = checked ? [...draft.value.translationFormats, value] : draft.value.translationFormats.filter(format => format !== value); }
 watch(() => panel.visible, async (visible) => { if (visible) { await nextTick(); root.value?.querySelector<HTMLElement>("md-outlined-text-field")?.focus(); } });
 watch(() => panel.pendingTarget, async (target) => { await nextTick(); if (target) confirm.value?.showModal(); else confirm.value?.close(); });
 
@@ -140,8 +146,8 @@ async function submit() {
   const parsed = parsePixivUrl(form.sourceId);
   const supported = kind === "novel" ? ["novel-single", "novel-series", "user"] : ["illustration", "user"];
   const id = parsed && supported.includes(parsed.kind) ? parsed.id : form.sourceId.trim();
-  // 译文格式只在小说单篇表单渲染；此处兜底过滤，防止切来源后残留勾选混入提交
-  const translationFormats = kind === "novel" && form.sourceType === "single" ? [...form.translationFormats] : [];
+  // 译文导出只在小说单篇 / 系列表单生效；此处兜底过滤，防止切来源后残留勾选混入提交
+  const translationFormats = kind === "novel" && (form.sourceType === "single" || form.sourceType === "series") ? [...form.translationFormats] : [];
   if (!id || (kind === "novel" && !form.formats.length && !translationFormats.length)) { panel.error = t(`${prefix.value}.invalidInput`); return; }
   // 选择器可见但一页未选：阻止 Enter 绕过按钮禁用态提交整件下载
   if (showPicker.value && pageSelectionCount.value === 0) { panel.error = t("browse.work.pageSelectRequired"); return; }
@@ -150,10 +156,16 @@ async function submit() {
   panel.submitting = true; panel.error = "";
   let exportedDir = "";
   let createdTaskId = "";
+  /** 失败兜底文案按阶段区分：译文导出失败与任务创建失败各有默认提示 */
+  let exportingTranslation = false;
   try {
-    // 译文勾选走本地导出（不联网、不建任务）；原文勾选照旧创建抓取任务
+    // 译文勾选走本地导出（不联网、不建任务）；原文勾选照旧创建抓取任务。
+    // 系列来源走系列整包导出（要求全系列每一话都已完成翻译），单篇走既有单篇导出
     if (translationFormats.length) {
-      const files = await exportNovelTranslation(Number(id), translationFormats);
+      exportingTranslation = true;
+      const files = form.sourceType === "series"
+        ? await exportNovelTranslationSeries(Number(id), translationFormats)
+        : await exportNovelTranslation(Number(id), translationFormats);
       if (session !== panel.session) return;
       exportedDir = files[0]?.replace(/[\\/][^\\/]+$/, "") ?? "";
     }
@@ -170,7 +182,12 @@ async function submit() {
     if (pages.length) notify(t("browse.work.pageDownloadStarted", { count: pages.length }));
     else if (createdTaskId) notify(t(`${kind === "novel" ? "crawl" : "illust"}.taskCreated`, { id: createdTaskId }));
     await tasks.fetchTasks().catch(() => {});
-  } catch (error) { if (session === panel.session) panel.error = errorMessage(error) || t(`${prefix.value}.createFailed`); }
+  } catch (error) {
+    if (session === panel.session) {
+      const fallback = exportingTranslation ? t("crawl.translationExportFailed") : t(`${prefix.value}.createFailed`);
+      panel.error = errorMessage(error) || fallback;
+    }
+  }
   finally { panel.submitting = false; }
 }
 </script>
@@ -188,9 +205,14 @@ async function submit() {
           <legend>{{ t(`${prefix}.sourceType`) }}</legend>
           <div class="m3-row"><label v-for="source in sources" :key="source" class="m3-choice"><md-radio name="download-source" :disabled="panel.submitting" :checked="draft.sourceType === source" @change="editType(source)" />{{ t(`${prefix}.${source}`) }}</label></div>
           <md-outlined-text-field :disabled="panel.submitting" :label="t(`${prefix}.input`)" :placeholder="t(`${prefix}.inputPlaceholder.${draft.sourceType}`)" :value="draft.sourceId" @input="editSource(($event.target as HTMLInputElement).value)" @keydown.enter.prevent="submit" />
-          <div v-if="panel.kind === 'novel'" class="m3-field"><label>{{ t('crawl.outputFormats') }}</label><div class="m3-row"><label v-for="format in ['txt', 'markdown']" :key="format" class="m3-choice"><md-checkbox :disabled="panel.submitting" :checked="draft.formats.includes(format)" @change="formatChange(format, ($event.target as HTMLInputElement).checked)" />{{ format === 'txt' ? 'TXT' : 'Markdown' }}</label></div></div>
-          <!-- 译文格式：仅小说单篇显示，走本地导出命令（需已完成整篇翻译），与抓取任务无关 -->
-          <div v-if="panel.kind === 'novel' && draft.sourceType === 'single'" class="m3-field"><label>{{ t('crawl.translationFormats') }}</label><div class="m3-row"><label v-for="format in ['txt', 'markdown']" :key="format" class="m3-choice"><md-checkbox :disabled="panel.submitting" :checked="draft.translationFormats.includes(format)" @change="translationFormatChange(format, ($event.target as HTMLInputElement).checked)" />{{ format === 'txt' ? 'TXT' : 'Markdown' }}</label></div></div>
+          <div v-if="panel.kind === 'novel'" class="m3-field"><label>{{ t('crawl.outputFormats') }}</label><div class="m3-row"><label v-for="format in CRAWL_FORMATS" :key="format" class="m3-choice"><md-checkbox :disabled="panel.submitting" :checked="draft.formats.includes(format)" @change="formatChange(format, ($event.target as HTMLInputElement).checked)" />{{ FORMAT_LABELS[format] }}</label></div></div>
+          <!-- 译文格式：小说单篇 / 系列显示，走本地导出命令（需已完成整篇翻译；系列要求每话都有译文），与抓取任务无关 -->
+          <div v-if="panel.kind === 'novel' && draft.sourceType !== 'user'" class="m3-field"><label>{{ t('crawl.translationFormats') }}</label><div class="m3-row"><label v-for="format in TRANSLATION_FORMATS" :key="format" class="m3-choice"><md-checkbox :disabled="panel.submitting" :checked="draft.translationFormats.includes(format)" @change="translationFormatChange(format, ($event.target as HTMLInputElement).checked)" />{{ FORMAT_LABELS[format] }}</label></div></div>
+          <!-- series 来源提示：整包语义与译文导出前置条件，supporting 文字样式 -->
+          <div v-if="panel.kind === 'novel' && draft.sourceType === 'series'" class="series-hints">
+            <p class="field-hint">{{ t('crawl.seriesBundleHint') }}</p>
+            <p class="field-hint">{{ t('crawl.translationSeriesHint') }}</p>
+          </div>
         </fieldset>
         <p v-if="panel.error" class="m3-alert error" role="alert">{{ panel.error }}</p>
         <md-filled-button :disabled="panel.submitting || (showPicker && pageSelectionCount === 0)" @click="submit">{{ panel.submitting ? t('common.loading') : submitLabel }}</md-filled-button>
@@ -223,6 +245,9 @@ legend { padding:0; margin-bottom:var(--space-sm); }
 md-outlined-text-field { width:100%; }
 md-filled-button { align-self:flex-start; }
 .m3-alert { margin:0; overflow-wrap:anywhere; }
+/* series 来源提示行：supporting 文字样式（沿用 M3 on-surface-variant token，不新增颜色） */
+.series-hints { display:flex; flex-direction:column; gap:var(--space-xs); }
+.field-hint { margin:0; color:var(--ink-muted); font-size:12px; }
 /* 单列落位（右侧 480px）时选择器排在表单下方，与表单同距 */
 .panel-body > :deep(.page-picker) { margin-top:var(--space-lg); }
 

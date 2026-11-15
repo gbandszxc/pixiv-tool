@@ -9,7 +9,7 @@
  * 首个 Job 走 queued → prepare → translate → review → completed，第二个 Job 以
  * needs_attention 收尾（演示待处理形态），与真实后端无关。
  */
-import { invoke, isTauri, listen } from "./tauri";
+import { errorPayload, errorMessage, invoke, isTauri, listen } from "./tauri";
 
 export interface NovelTranslationInput {
   novel_id: number;
@@ -363,13 +363,48 @@ export async function getNovelTranslationResult(novelId: number): Promise<Transl
   return invoke("novel_translation_result", { novelId });
 }
 
-/** 译文本地导出（txt / markdown）；返回写入文件路径列表，无已完成译文时抛错。 */
-export async function exportNovelTranslation(novelId: number, formats: string[]): Promise<string[]> {
+/**
+ * 译文导出格式白名单（单篇与系列共用）。
+ * 与后端 `novel_translation_export` / `novel_translation_export_series` 一致：
+ * txt / md / markdown 同义（md 为文件扩展名别名），epub 为电子书整包。
+ */
+export type NovelTranslationExportFormat = "txt" | "md" | "markdown" | "epub";
+
+/** 导出产物扩展名：markdown 落盘为 .md，其余格式名即扩展名。 */
+function exportExtension(format: string): string {
+  return format === "markdown" ? "md" : format;
+}
+
+/**
+ * 单篇译文本地导出；返回写入文件路径列表，无已完成译文时抛错。
+ * 失败可能 reject 结构化载荷 { code, field, message }（ADR 0044），用 errorMessage() 取文案。
+ */
+export async function exportNovelTranslation(novelId: number, formats: NovelTranslationExportFormat[]): Promise<string[]> {
   if (!isTauri()) {
     if (!formats.length) throw new Error("未选择有效的导出格式");
-    return formats.map((ext) => `C:\\mock\\output\\novel\\mock_1_CN.${ext === "markdown" ? "md" : ext}`);
+    return formats.map((ext) => `C:\\mock\\output\\novel\\mock_1_CN.${exportExtension(ext)}`);
   }
   return invoke("novel_translation_export", { novelId, formats });
+}
+
+/**
+ * 系列整包译文导出（各话译文拼接为每格式一个文件）。
+ * 要求全系列每一话都已有目标语言 Completed 译文；契约失败形态 `200 + { error: { code, field, message } }`
+ * 走 Ok 通道返回，这里归一化为抛出——结构化载荷原样上抛（errorMessage 可取 message 文案），
+ * 非 { code, message } 形状转 Error；命令以 Err reject 的 string / 结构化载荷则原样穿透，统一由调用方 catch。
+ */
+export async function exportNovelTranslationSeries(seriesId: number, formats: NovelTranslationExportFormat[]): Promise<string[]> {
+  if (!isTauri()) {
+    if (!formats.length) throw new Error("未选择有效的导出格式");
+    return formats.map((ext) => `C:\\mock\\output\\novel\\mock_series_1_CN.${exportExtension(ext)}`);
+  }
+  const result = await invoke<unknown>("novel_translation_export_series", { seriesId, formats });
+  if (result && typeof result === "object" && !Array.isArray(result) && "error" in (result as Record<string, unknown>)) {
+    const payload = errorPayload((result as { error: unknown }).error);
+    if (payload) throw payload;
+    throw new Error(errorMessage((result as { error: unknown }).error));
+  }
+  return result as string[];
 }
 
 /** 确认术语与风格（确认模式）。 */
