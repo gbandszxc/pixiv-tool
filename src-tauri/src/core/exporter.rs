@@ -1,4 +1,4 @@
-//! 导出器：txt / markdown + 文件名净化。
+//! 导出器：txt / markdown / epub + 文件名净化。
 //!
 //! 语义对齐 Python `core/exporter.py`，其中 markdown 的 `[rb:A>B] → A(B)`
 //! 规则在 Python 版写在了 stripped 变量上、追加的是原始 line（未生效），
@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::core::epub::EpubBook;
 use crate::core::filename_template::{NovelNameInfo, render_novel};
 
 /// 文件名非法字符（对齐 Python `re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)`）。
@@ -140,7 +141,48 @@ fn write_export(
     Ok(vec![filepath])
 }
 
+/// 模板优先的文件名决策（系列整包各格式共用）：模板渲染为空 → 回落
+/// [`make_filename`]（`series_order = None` 时输出 `{sanitize(标题)}_{novel_id}.{ext}`，
+/// 整包场景 novel_id 传 series_id，即契约的 `{sanitize(系列标题)}_{sid}.{ext}`）。
+pub fn make_bundle_filename(meta: &ExportMeta, ext: &str, template: &str) -> String {
+    make_filename_with_template(meta, ext, template).unwrap_or_else(|| make_filename(meta, ext))
+}
+
+/// EPUB 输出器：[`EpubBook`]（封面 / 内嵌图 / 章节 body）由爬虫侧收集资源后
+/// 构建，这里只负责组装 zip 与写盘（文件名规则同 txt/md：模板渲染为空回落
+/// 现行命名）。`export` 忽略 `content` 参数（正文已在 book 章节 body 内）。
+#[derive(Clone)]
+pub struct EpubExporter {
+    pub book: EpubBook,
+}
+
+impl EpubExporter {
+    pub fn new(book: EpubBook) -> Self {
+        Self { book }
+    }
+
+    /// 组装并写盘，返回生成路径（target_dir 不存在则创建）。
+    pub fn export(
+        &self,
+        _content: &str,
+        meta: &ExportMeta,
+        target_dir: &Path,
+        template: Option<&str>,
+    ) -> io::Result<Vec<PathBuf>> {
+        std::fs::create_dir_all(target_dir)?;
+        let filename = template
+            .and_then(|t| make_filename_with_template(meta, "epub", t))
+            .unwrap_or_else(|| make_filename(meta, "epub"));
+        let filepath = target_dir.join(filename);
+        self.book
+            .write_to(&filepath)
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+        Ok(vec![filepath])
+    }
+}
+
 /// 纯文本输出（多页用空行分隔）。
+#[derive(Clone)]
 pub struct TxtExporter;
 
 impl TxtExporter {
@@ -164,6 +206,7 @@ impl TxtExporter {
 /// - `[pixivimage:` / `[uploadedimage:` 开头行 → `"<!-- 图片占位 -->\n"`
 /// - 行内 `[rb:A>B]` → `A(B)`（**修正**：Python 版此规则写了但作用在原 line 上、
 ///   未生效；Rust 版必须实现该转换）
+#[derive(Clone)]
 pub struct MarkdownExporter;
 
 impl MarkdownExporter {
@@ -181,9 +224,12 @@ impl MarkdownExporter {
 }
 
 /// 按配置选择的导出器。
+#[derive(Clone)]
 pub enum Exporter {
     Txt(TxtExporter),
     Markdown(MarkdownExporter),
+    /// EPUB：携带已收集好资源的 [`EpubBook`]（爬虫侧构建后注入）。
+    Epub(EpubExporter),
 }
 
 impl Exporter {
@@ -197,18 +243,25 @@ impl Exporter {
         match self {
             Exporter::Txt(e) => e.export(content, meta, target_dir, template),
             Exporter::Markdown(e) => e.export(content, meta, target_dir, template),
+            Exporter::Epub(e) => e.export(content, meta, target_dir, template),
         }
     }
 }
 
-/// 根据配置选择启用的导出器（"txt" / "markdown"；未知格式忽略，顺序跟随输入；
-/// 空输入 → 空列表，由调用方决定是否回退默认格式）。
-pub fn create_exporters(formats: &[String]) -> Vec<Exporter> {
+/// 根据配置选择启用的导出器（"txt" / "markdown" / "epub"；未知格式忽略，
+/// 顺序跟随输入；空输入 → 空列表，由调用方决定是否回退默认格式）。
+///
+/// `epub_book = None` 时忽略 "epub" 格式（EPUB 需要 `EpubBook` 由爬虫
+/// 收集封面 / 内嵌图后按篇构建，无书可导时该格式静默跳过）。
+pub fn create_exporters(formats: &[String], epub_book: Option<EpubBook>) -> Vec<Exporter> {
     formats
         .iter()
         .filter_map(|f| match f.as_str() {
             "txt" => Some(Exporter::Txt(TxtExporter)),
             "markdown" => Some(Exporter::Markdown(MarkdownExporter)),
+            "epub" => epub_book
+                .as_ref()
+                .map(|book| Exporter::Epub(EpubExporter::new(book.clone()))),
             _ => None,
         })
         .collect()
@@ -463,13 +516,69 @@ mod tests {
     fn create_exporters_filters_unknown_and_keeps_order() {
         let formats: Vec<String> =
             vec!["epub".into(), "markdown".into(), "txt".into(), "txt".into()];
-        let exporters = create_exporters(&formats);
+        // 无 epub book → epub 格式静默跳过，未知格式跳过，重复保留
+        let exporters = create_exporters(&formats, None);
         assert_eq!(exporters.len(), 3, "未知格式跳过，重复保留");
         // 顺序跟随输入（markdown 在前）
         assert!(matches!(exporters[0], Exporter::Markdown(_)));
         assert!(matches!(exporters[1], Exporter::Txt(_)));
         assert!(matches!(exporters[2], Exporter::Txt(_)));
         // 空输入 → 空
-        assert!(create_exporters(&[]).is_empty());
+        assert!(create_exporters(&[], None).is_empty());
+    }
+
+    /// 最小可用 EpubBook（无封面 / 无内嵌图，仅 1 章节）。
+    fn minimal_epub_book() -> EpubBook {
+        EpubBook {
+            title: "EPUB 测试书".to_string(),
+            author: String::new(),
+            language: "und".to_string(),
+            book_uuid: "22222222-3333-4444-5555-666666666666".to_string(),
+            chapters: vec![crate::core::epub::EpubChapter {
+                title: "正文".to_string(),
+                xhtml_body: "<p>段落</p>".to_string(),
+            }],
+            cover: None,
+            images: Vec::new(),
+            placeholder_cover: None,
+        }
+    }
+
+    #[test]
+    fn epub_exporter_writes_zip_and_respects_naming() {
+        let dir =
+            std::env::temp_dir().join(format!("pixiv-tool-export-epub-{}", uuid::Uuid::new_v4()));
+        let book = minimal_epub_book();
+        let exporter = EpubExporter::new(book);
+        // 现行命名（单篇）
+        let paths = exporter
+            .export("（正文由 book 携带，content 忽略）", &meta("标题", 1, None), &dir, None)
+            .unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], dir.join("标题_12345.epub"));
+        // zip 魔数（EPUB 容器 = zip）
+        let bytes = std::fs::read(&paths[0]).unwrap();
+        assert_eq!(&bytes[..2], b"PK");
+        // 系列整包命名：模板 {order} 空值吸收 + 回落 sanitize(标题)_{sid}
+        // （整包 meta 约定 novel_id = series_id，见 crawler.rs run_series_bundle）
+        let mut bundle = meta("系列标题", 5, None);
+        bundle.novel_id = 777;
+        bundle.series_id = Some(777);
+        assert_eq!(make_bundle_filename(&bundle, "epub", "{order}_{sid}"), "777.epub");
+        assert_eq!(
+            make_bundle_filename(&bundle, "epub", "___"),
+            "系列标题_777.epub",
+            "渲染空 → 回落现行命名（novel_id=series_id）"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_exporters_with_epub_book_yields_epub_branch() {
+        let formats: Vec<String> = vec!["txt".into(), "epub".into()];
+        let exporters = create_exporters(&formats, Some(minimal_epub_book()));
+        assert_eq!(exporters.len(), 2);
+        assert!(matches!(exporters[0], Exporter::Txt(_)));
+        assert!(matches!(exporters[1], Exporter::Epub(_)));
     }
 }

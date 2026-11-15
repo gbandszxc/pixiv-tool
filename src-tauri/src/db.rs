@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS novels (
     modification_date TEXT,
     txt_path          TEXT,
     md_path           TEXT,
+    epub_path         TEXT,
     status            TEXT NOT NULL DEFAULT 'ok'
 );
 CREATE INDEX IF NOT EXISTS idx_novels_series ON novels(series_id);
@@ -145,6 +146,7 @@ pub struct NovelRow {
     pub modification_date: Option<String>,
     pub txt_path: Option<String>,
     pub md_path: Option<String>,
+    pub epub_path: Option<String>,
     pub status: String,
 }
 
@@ -294,6 +296,7 @@ pub struct NovelInsert {
     pub modification_date: Option<String>,
     pub txt_path: Option<String>,
     pub md_path: Option<String>,
+    pub epub_path: Option<String>,
     pub status: String,
 }
 
@@ -312,6 +315,7 @@ impl Default for NovelInsert {
             modification_date: None,
             txt_path: None,
             md_path: None,
+            epub_path: None,
             status: "ok".into(),
         }
     }
@@ -552,6 +556,10 @@ impl Db {
                     [],
                 )?;
             }
+            // EPUB 导出路径（旧库无列，CREATE TABLE IF NOT EXISTS 不会补列）
+            if !has_column(conn, "novels", "epub_path")? {
+                conn.execute("ALTER TABLE novels ADD COLUMN epub_path TEXT", [])?;
+            }
             Ok(())
         })
     }
@@ -566,8 +574,9 @@ impl Db {
             conn.execute(
                 "INSERT OR REPLACE INTO novels
                  (novel_id, title, series_id, series_order, author_id, author_name,
-                  page_count, text_length, captured_at, modification_date, txt_path, md_path, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                  page_count, text_length, captured_at, modification_date,
+                  txt_path, md_path, epub_path, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     row.novel_id,
                     row.title,
@@ -581,6 +590,7 @@ impl Db {
                     row.modification_date,
                     row.txt_path,
                     row.md_path,
+                    row.epub_path,
                     row.status,
                 ],
             )?;
@@ -619,6 +629,17 @@ impl Db {
                         .map(|(_, v)| v.clone())
                         .chain(std::iter::once(SqlValue::Integer(novel_id))),
                 ),
+            )?;
+            Ok(())
+        })
+    }
+
+    /// 更新 epub_path（EPUB 导出回写；epub_path 列仅单篇 epub 使用，系列整包不落 novels 表）。
+    pub fn update_novel_epub_path(&self, novel_id: i64, epub_path: &str) -> Result<(), String> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE novels SET epub_path = ? WHERE novel_id = ?",
+                params![epub_path, novel_id],
             )?;
             Ok(())
         })
@@ -695,13 +716,14 @@ impl Db {
         self.with_conn(|conn| {
             if delete_files {
                 let mut stmt = conn.prepare(&format!(
-                    "SELECT txt_path, md_path FROM novels WHERE novel_id IN ({ph})"
+                    "SELECT txt_path, md_path, epub_path FROM novels WHERE novel_id IN ({ph})"
                 ))?;
                 let paths: Vec<Option<String>> = stmt
                     .query_map(params_from_iter(id_params.iter()), |row| {
                         Ok([
                             row.get::<_, Option<String>>(0)?,
                             row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
                         ])
                     })?
                     .flatten()
@@ -727,12 +749,13 @@ impl Db {
     pub fn delete_all_novels(&self, delete_files: bool) -> Result<usize, String> {
         self.with_conn(|conn| {
             if delete_files {
-                let mut stmt = conn.prepare("SELECT txt_path, md_path FROM novels")?;
+                let mut stmt = conn.prepare("SELECT txt_path, md_path, epub_path FROM novels")?;
                 let paths: Vec<Option<String>> = stmt
                     .query_map([], |row| {
                         Ok([
                             row.get::<_, Option<String>>(0)?,
                             row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
                         ])
                     })?
                     .flatten()
@@ -1515,6 +1538,7 @@ fn novel_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NovelRow> {
         modification_date: row.get("modification_date")?,
         txt_path: row.get("txt_path")?,
         md_path: row.get("md_path")?,
+        epub_path: row.get("epub_path")?,
         status: row.get("status")?,
     })
 }
@@ -1820,6 +1844,61 @@ mod tests {
         assert_eq!(row.md_path.as_deref(), Some("/tmp/a.md"));
         // 空参数 no-op 不报错
         db.update_novel_paths(5, None, None).unwrap();
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn epub_path_migration_and_writeback() {
+        // 旧库：novels 无 epub_path 列（含一行数据），open 后补列、旧行读 None
+        let (dir, path) = {
+            let dir = std::env::temp_dir().join(format!(
+                "pixiv-tool-db-test-legacy-{}",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("app.db");
+            {
+                let conn = rusqlite::Connection::open(&path).unwrap();
+                conn.execute_batch(
+                    "CREATE TABLE novels (
+                        novel_id INTEGER PRIMARY KEY, title TEXT NOT NULL,
+                        series_id INTEGER, series_order INTEGER,
+                        author_id INTEGER NOT NULL, author_name TEXT,
+                        page_count INTEGER, text_length INTEGER,
+                        captured_at TEXT NOT NULL, modification_date TEXT,
+                        txt_path TEXT, md_path TEXT,
+                        status TEXT NOT NULL DEFAULT 'ok');
+                     INSERT INTO novels
+                        (novel_id, title, author_id, captured_at, txt_path)
+                     VALUES (1, '旧库小说', 2, '2026-01-01T00:00:00+00:00', '/tmp/old.txt');",
+                )
+                .unwrap();
+            }
+            (dir, path)
+        };
+        let db = Db::open(&path).unwrap();
+        let row = db.get_novel(1).unwrap();
+        assert_eq!(row.epub_path, None, "迁移后旧行 epub_path 为 NULL");
+        assert_eq!(row.txt_path.as_deref(), Some("/tmp/old.txt"));
+
+        // 回写 + 新 insert 携带 epub_path
+        db.update_novel_epub_path(1, "/tmp/old.epub").unwrap();
+        assert_eq!(
+            db.get_novel(1).unwrap().epub_path.as_deref(),
+            Some("/tmp/old.epub")
+        );
+        db.insert_novel(&NovelInsert {
+            novel_id: 2,
+            title: "新书".into(),
+            captured_at: "2026-01-02T00:00:00+00:00".into(),
+            epub_path: Some("/tmp/new.epub".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            db.get_novel(2).unwrap().epub_path.as_deref(),
+            Some("/tmp/new.epub")
+        );
         cleanup(&dir);
     }
 

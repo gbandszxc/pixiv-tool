@@ -6,12 +6,13 @@
 //!   成功 → {"status":"success","deleted":n}
 //! - novels_delete_all → {"status":"success","deleted":n}
 //! - open_novel_file：不存在 → {"error":"小说不存在"}；无文件 → {"error":"文件不存在"}；
-//!   成功 → {"status":"success"}（reveal_in_file_manager）
+//!   成功 → {"status":"success"}（reveal_in_file_manager）；kind ∈ {txt,md,epub} 可选
+//!   （缺省 txt→md 兜底链；epub 仅读 novels.epub_path，缺失 → {"error":"文件不存在"}）
 //! - illustration_*：同构（{"error":"插画记录不存在"}、{"error":"没有已保存的文件"}、
 //!   {"error":"illustration_ids 不能为空"}）
 //! - illust_saved_pages → {"pages":[0,2],"ugoira":false}（0 起升序；无记录 → 空数组）
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use tauri::State;
@@ -82,10 +83,16 @@ pub async fn illustrations_delete_all(
     Ok(json!({ "status": "success", "deleted": deleted }))
 }
 
-/// 在系统文件管理器中定位小说文件（txt 优先 md 兜底）。
+/// 在系统文件管理器中定位小说文件。`kind ∈ {txt, md, epub}` 可选：
+/// 缺省 / txt / md 走「txt 优先 md 兜底」链（epub 不插队）；epub 仅读
+/// novels.epub_path，缺失或文件不存在 → {"error":"文件不存在"}。
 #[tauri::command]
-pub async fn open_novel_file(state: State<'_, AppState>, novel_id: i64) -> Result<Value, String> {
-    open_novel_file_impl(&state, novel_id)
+pub async fn open_novel_file(
+    state: State<'_, AppState>,
+    novel_id: i64,
+    kind: Option<String>,
+) -> Result<Value, String> {
+    open_novel_file_impl(&state, novel_id, kind.as_deref())
 }
 
 /// 在系统文件管理器中打开插画所在目录（saved_paths[0]）。
@@ -157,7 +164,7 @@ pub fn illustrations_batch_delete_impl(
     Ok(json!({ "status": "success", "deleted": deleted }))
 }
 
-pub fn open_novel_file_impl(state: &AppState, novel_id: i64) -> Result<Value, String> {
+pub fn open_novel_file_impl(state: &AppState, novel_id: i64, kind: Option<&str>) -> Result<Value, String> {
     let Some(novel) = state.db.get_novel(novel_id) else {
         return Ok(json!({ "error": "小说不存在" }));
     };
@@ -166,6 +173,32 @@ pub fn open_novel_file_impl(state: &AppState, novel_id: i64) -> Result<Value, St
     let base_output_dir = anchor_output_dir(&settings.output_dir, &state.paths.data_dir);
     let novel_dir = base_output_dir.join("novel");
 
+    // 显式 kind = epub：只认 novels.epub_path（含 novel 目录下同名文件兜底），
+    // 缺失/文件不存在 → 「文件不存在」，不开下载目录兜底
+    if kind == Some("epub") {
+        let recorded = novel.epub_path.as_deref().filter(|p| !p.is_empty());
+        let candidate: Option<PathBuf> = match recorded {
+            Some(p) if Path::new(p).exists() => Some(PathBuf::from(p)),
+            // 记录路径被移走时，按当前 novel 目录下的同名文件兜底
+            Some(p) => match Path::new(p).file_name() {
+                Some(name) => {
+                    let fallback = novel_dir.join(name);
+                    fallback.exists().then_some(fallback)
+                }
+                None => None,
+            },
+            None => None,
+        };
+        let Some(path) = candidate else {
+            return Ok(json!({ "error": "文件不存在" }));
+        };
+        return match reveal_in_file_manager(&path) {
+            Ok(()) => Ok(json!({ "status": "success" })),
+            Err(msg) => Ok(json!({ "error": msg })),
+        };
+    }
+
+    // 缺省 / txt / md（未知 kind 宽容回落默认链）：txt 优先 md 兜底
     let candidate_paths = [
         novel.txt_path.as_deref(),
         novel.md_path.as_deref(),
@@ -370,7 +403,7 @@ mod tests {
     fn open_novel_file_error_branches() {
         let (state, dir) = temp_state("open-novel");
         // 记录不存在
-        let body = open_novel_file_impl(&state, 9).unwrap();
+        let body = open_novel_file_impl(&state, 9, None).unwrap();
         assert_eq!(body["error"], json!("小说不存在"));
 
         // 记录存在但没有任何文件
@@ -383,7 +416,7 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-        let body = open_novel_file_impl(&state, 10).unwrap();
+        let body = open_novel_file_impl(&state, 10, None).unwrap();
         assert_eq!(body["status"], json!("success"));
 
         // txt_path 指向不存在的文件（用户移走）→ 同样成功打开配置目录
@@ -391,7 +424,45 @@ mod tests {
             .db
             .update_novel_paths(10, Some("/nonexistent/path/x.txt"), None)
             .unwrap();
-        let body = open_novel_file_impl(&state, 10).unwrap();
+        let body = open_novel_file_impl(&state, 10, None).unwrap();
+        assert_eq!(body["status"], json!("success"));
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn open_novel_file_epub_kind_reads_epub_path_only() {
+        let (state, dir) = temp_state("open-novel-epub");
+        // epub 缺失（无记录 / 无 epub_path / 文件不存在）→ 「文件不存在」
+        let body = open_novel_file_impl(&state, 1, Some("epub")).unwrap();
+        assert_eq!(body["error"], json!("小说不存在"));
+        state
+            .db
+            .insert_novel(&NovelInsert {
+                novel_id: 1,
+                title: "t".into(),
+                captured_at: now_iso(),
+                ..Default::default()
+            })
+            .unwrap();
+        let body = open_novel_file_impl(&state, 1, Some("epub")).unwrap();
+        assert_eq!(body["error"], json!("文件不存在"), "epub_path 为空");
+        state
+            .db
+            .update_novel_epub_path(1, "/nonexistent/path/x.epub")
+            .unwrap();
+        let body = open_novel_file_impl(&state, 1, Some("epub")).unwrap();
+        assert_eq!(body["error"], json!("文件不存在"), "epub 文件不存在");
+
+        // epub_path 指向真实文件 → success（reveal 走平台层，测试环境路径存在即可命中）
+        let real = dir.join("novel").join("book.epub");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, b"PK").unwrap();
+        state.db.update_novel_epub_path(1, real.to_string_lossy().as_ref()).unwrap();
+        let body = open_novel_file_impl(&state, 1, Some("epub")).unwrap();
+        assert_eq!(body["status"], json!("success"));
+
+        // kind 缺省走 txt→md 兜底链，epub_path 不参与
+        let body = open_novel_file_impl(&state, 1, None).unwrap();
         assert_eq!(body["status"], json!("success"));
         cleanup(&dir);
     }

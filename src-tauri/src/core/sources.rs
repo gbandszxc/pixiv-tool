@@ -1,9 +1,11 @@
 //! NovelSource / IllustSource —— 解析"来源"得到待抓 id 列表。
 //!
 //! 语义对齐 Python `core/source.py` / `core/illust_source.py`：
-//! - Series：seriesContents 按 contentOrder（缺失用 1-based 遍历序兜底）；
-//! - User（小说）：先展开每个 series（序号为 series 内 order），再补不属任何
-//!   series 的散篇（order=None）；
+//! - Series：系列目录游标循环取**全部话**（`get_series_content_all`，每批 30、
+//!   `last_order` = 末条 contentOrder；废除旧「≤30 话」假设），按 contentOrder
+//!   升序（缺失用 1-based 遍历序兜底）；
+//! - User（小说）：先展开每个 series（序号为 series 内 order，同样游标取全目录），
+//!   再补不属任何 series 的散篇（order=None）；
 //! - User（插画）：illusts + manga 全部 id；
 //! - 非法 id（解析失败）跳过。
 
@@ -37,16 +39,17 @@ impl NovelSource {
     /// 解析为 (novel_id, series_order) 列表（单篇 series_order=None）。
     ///
     /// - Single → [(id, None)]
-    /// - Series → seriesContents 按 contentOrder
-    /// - User → 先展开每个 series（序号为 series 内 order，去重），再补不属任何
-    ///   series 的散篇（order=None，顺序无意义但稳定）
+    /// - Series → 系列目录游标取全部话，按 contentOrder 升序（容忍跳号）
+    /// - User → 先展开每个 series（序号为 series 内 order，游标取全目录，去重），
+    ///   再补不属任何 series 的散篇（order=None，顺序无意义但稳定）
     /// - 非法 id（解析失败）跳过
     pub async fn resolve(&self, api: &PixivApi) -> Result<Vec<(i64, Option<i64>)>> {
         match self {
             NovelSource::Single(id) => Ok(vec![(*id, None)]),
             NovelSource::Series(series_id) => {
-                let contents = api.get_series_content(*series_id).await?;
-                Ok(contents
+                let catalog = api.get_series_content_all(*series_id).await?;
+                Ok(catalog
+                    .items
                     .into_iter()
                     .map(|(novel_id, order)| (novel_id, Some(order)))
                     .collect())
@@ -57,7 +60,7 @@ impl NovelSource {
                 let mut items: Vec<(i64, Option<i64>)> = Vec::new();
                 for (series_id, _title) in &profile.novel_series {
                     // 标题暂不参与解析（NovelData 自带 seriesNavData）
-                    let contents = api.get_series_content(*series_id).await?;
+                    let contents = api.get_series_content_all(*series_id).await?.items;
                     for (novel_id, order) in contents {
                         if seen.insert(novel_id) {
                             items.push((novel_id, Some(order)));
