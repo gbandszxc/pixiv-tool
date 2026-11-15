@@ -873,9 +873,8 @@ export default {
     // Image search page (views/SaucenaoView.vue) + sidebar entry (nav.saucenao)
     title: "Image Search",
     subtitle: "Reverse-search images with SauceNAO to identify anime sources and their original pixiv posts",
-    dragHint: "Drag an image here, or",
+    dragHint: "Drag an image here",
     chooseFile: "Choose a file",
-    or: "—— or ——",
     urlLabel: "Image URL",
     urlPlaceholder: "A public image URL starting with https://",
     searching: "Searching…",
@@ -892,7 +891,6 @@ export default {
     sourcePixiv: "pixiv",
     noTitle: "(untitled)",
     workId: "Work {id}",
-    previewEmpty: "Image preview",
     thumbUnavailable: "Thumbnail failed to load",
     removeImage: "Remove selected image",
     fileFilterName: "Image",

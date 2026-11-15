@@ -874,9 +874,8 @@ export default {
     // 以图识图页（views/SaucenaoView.vue）+ 侧栏入口（nav.saucenao）
     title: "以图识图",
     subtitle: "通过 SauceNAO 反向搜索图片，识别动漫图源与 pixiv 原作",
-    dragHint: "把图片拖到这里，或",
+    dragHint: "把图片拖到这里",
     chooseFile: "选择文件",
-    or: "—— 或 ——",
     urlLabel: "图片 URL",
     urlPlaceholder: "https:// 开头的公网图片直链",
     searching: "正在搜索…",
@@ -893,7 +892,6 @@ export default {
     sourcePixiv: "pixiv",
     noTitle: "（无标题）",
     workId: "作品 {id}",
-    previewEmpty: "图片预览",
     thumbUnavailable: "缩略图加载失败",
     removeImage: "移除所选图片",
     fileFilterName: "图片",

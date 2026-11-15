@@ -4,15 +4,20 @@ import PageBackButton from "../components/navigation/PageBackButton.vue";
 /**
  * 以图识图页（SauceNAO 反向图片搜索）。
  *
- * - 输入三通道：拖拽文件（Tauri onDragDropEvent）、系统文件选择对话框、公网图片 URL；
- *   搜索源优先级 = 已选本地文件 > URL 输入（SauceNAO 免费档 4 次/30s，选定/拖入
- *   不自动发请求，统一由「搜索」触发，避免误拖烧配额）。
+ * - 输入两通道：右侧整块拖拽热区（Tauri onDragDropEvent + 系统文件对话框，
+ *   「选择文件」为主按钮，空态整块可点）与独立成行的公网图片 URL；搜索源优先级 =
+ *   已选本地文件 > URL 输入（SauceNAO 免费档 4 次/30s，选定/拖入不自动发请求，
+ *   统一由「搜索」触发，避免误拖烧配额）。
+ * - 本地预览走仓库自建 pixiv-download 协议（默认 asset 协议未启用、CSP 不放行；
+ *   协议按扩展名白名单 jpg/jpeg/png/webp/gif 读本地图片，与本页文件过滤器一致，
+ *   注册见 src-tauri/src/lib.rs）；浏览器 mock 无真实路径，仅显示文件名。
  * - 状态机 idle | loading | done | empty | error；key 未配置时显示引导条
  *   （不打请求），「打开设置」派发 OPEN_SETTINGS_EVENT 由 App.vue 弹设置窗。
  * - 结果排序：pixiv（index 5/6）恒最前（组内 similarity 降序），其余 similarity 降序
  *   （后端按 SauceNAO 原序返回，排序在本页做）。
  * - 缩略图为 saucenao 签名临时 URL，原样直连（不走 pixiv-img），no-referrer +
- *   加载失败占位块；错误条文案 = 后端 Err 原样（errorMessage 归一化）。
+ *   加载失败占位块；相似度 = 13px 数值为准 + primary 进度条作补充（aria-hidden）；
+ *   错误条文案 = 后端 Err 原样（errorMessage 归一化）。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
@@ -44,9 +49,13 @@ const fileName = ref("");
 const urlInput = ref("");
 const dragHover = ref(false);
 
-/** Tauri 环境用 asset 协议生成本地预览地址；浏览器环境无路径，预览跳过。 */
+/**
+ * Tauri 环境用仓库自建 pixiv-download 协议生成本地预览地址（默认 asset 协议未启用，
+ * CSP img-src 也不放行，直用必裂；该协议按扩展名白名单读任意本地图片）；浏览器环境
+ * 无路径，预览跳过。
+ */
 const previewSrc = computed(() =>
-  filePath.value && isTauri() ? convertFileSrc(filePath.value) : ""
+  filePath.value && isTauri() ? convertFileSrc(filePath.value, "pixiv-download") : ""
 );
 
 function baseName(path: string): string {
@@ -79,6 +88,11 @@ async function chooseFile(): Promise<void> {
   } catch {
     // 用户取消或对话框不可用：静默
   }
+}
+
+/** 空态热区整块可点（等价「选择文件」）；有图后热区只承载预览与移除，点击不再开对话框。 */
+function onZoneClick(): void {
+  if (!filePath.value) chooseFile();
 }
 
 // ===== 拖拽（仅 Tauri；浏览器无此 API，静默降级为仅文件选择 / URL）=====
@@ -209,6 +223,11 @@ function quotaLine(quota: SaucenaoQuota): string {
   });
 }
 
+/** 相似度进度条宽度：0-100 钳制（后端 parseFloat，防御越界值）。 */
+function simPercent(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
 function openResult(item: SaucenaoResult): void {
   if (!item.ext_url) return;
   void openInBrowser(item.ext_url).catch(() => notify(t("saucenao.openFailed")));
@@ -232,46 +251,44 @@ function onThumbError(index: number): void {
   <div class="page-view">
     <div class="page-heading saucenao-heading"><PageBackButton /><h1 class="page-title">{{ t("saucenao.title") }}</h1><HelpTooltip :label="t('saucenao.title')" :text="`${t('saucenao.subtitle')}\n\n${t('saucenao.idleHint')}`" /></div>
 
-    <!-- 输入卡片：左预览 + 右操作 -->
-    <div class="input-card" :class="{ dragging: dragHover }">
-      <div class="preview">
-        <img v-if="previewSrc" :src="previewSrc" class="preview-img" :alt="fileName" />
+    <!-- 输入卡片：左 URL 通道（次要）+ 右整块拖拽热区（主动线）；窄窗上下堆叠、热区在上 -->
+    <div class="input-card">
+      <div class="drop-zone" :class="{ 'drag-over': dragHover, empty: !filePath }" @click="onZoneClick">
+        <img v-if="previewSrc" :src="previewSrc" class="zone-preview-img" :alt="fileName" />
         <template v-else-if="fileName">
           <!-- 浏览器 mock 环境：本地文件无可预览路径，仅显示文件名 -->
-          <span class="preview-filename" :title="fileName">{{ fileName }}</span>
+          <span class="zone-filename" :title="fileName">{{ fileName }}</span>
         </template>
         <template v-else>
-          <svg class="preview-placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <!-- lucide image -->
-            <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+          <svg class="zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide image-up -->
+            <path d="M10.3 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10l-3.1-3.1a2 2 0 0 0-2.814.014L6 21" />
+            <path d="m14 19.5 3-3 3 3" />
+            <path d="M17 22v-5.5" />
             <circle cx="9" cy="9" r="2" />
-            <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
           </svg>
-          <span class="preview-placeholder-text">{{ t("saucenao.previewEmpty") }}</span>
+          <span class="zone-hint">{{ t("saucenao.dragHint") }}</span>
+          <md-filled-button class="zone-choose" :disabled="phase === 'loading'" @click.stop="chooseFile">
+            {{ t("saucenao.chooseFile") }}
+          </md-filled-button>
         </template>
-        <md-icon-button
+        <button
           v-if="filePath || fileName"
-          class="preview-remove"
+          type="button"
+          class="zone-remove"
           :aria-label="t('saucenao.removeImage')"
           :title="t('saucenao.removeImage')"
-          @click="removeImage"
+          @click.stop="removeImage"
         >
-          <svg class="bar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <!-- lucide x -->
             <path d="M18 6 6 18" />
             <path d="m6 6 12 12" />
           </svg>
-        </md-icon-button>
+        </button>
       </div>
 
-      <div class="input-body">
-        <p class="drag-hint">{{ t("saucenao.dragHint") }}</p>
-        <div>
-          <md-outlined-button :disabled="phase === 'loading'" @click="chooseFile">
-            {{ t("saucenao.chooseFile") }}
-          </md-outlined-button>
-        </div>
-        <div class="or-divider" aria-hidden="true"><span>{{ t("saucenao.or") }}</span></div>
+      <div class="url-channel">
         <div class="url-row">
           <md-outlined-text-field
             class="url-field"
@@ -338,9 +355,13 @@ function onThumbError(index: number): void {
 
         <div class="item-main">
           <div class="item-top">
-            <span class="sim-badge">{{ item.similarity.toFixed(1) }}%</span>
+            <span class="sim-value">{{ item.similarity.toFixed(1) }}%</span>
             <span v-if="item.is_pixiv" class="source-chip">{{ sourceName(item) }}</span>
             <span v-else class="source-name" :title="item.index_name">{{ sourceName(item) }}</span>
+          </div>
+          <!-- 相似度可视化：数值为准、条作补充，对读屏隐藏 -->
+          <div class="sim-track" aria-hidden="true">
+            <div class="sim-fill" :style="{ width: `${simPercent(item.similarity)}%` }"></div>
           </div>
           <p class="item-title" :title="displayTitle(item)">{{ displayTitle(item) }}</p>
           <p v-if="authorLine(item)" class="item-author" :title="authorLine(item)">{{ authorLine(item) }}</p>
@@ -371,98 +392,128 @@ function onThumbError(index: number): void {
 
 <style scoped>
 .saucenao-heading { margin-bottom: var(--space-md); }
-/* ===== 输入卡片 ===== */
+
+/* ===== 输入卡片：左 URL 通道 + 右整块拖拽热区 ===== */
 
 .input-card {
   display: flex;
+  align-items: stretch;
   gap: var(--space-xl);
   padding: var(--space-xl);
   /* 16px = DESIGN.md rounded.card（与 .form-card / .m3-card 同规格） */
   border-radius: 16px;
   background: var(--md-sys-color-surface-container);
-  /* outline 常驻占位（透明），拖入高亮时不产生布局位移 */
-  outline: 2px solid transparent;
 }
 
-.input-card.dragging {
-  outline-color: var(--md-sys-color-primary);
-}
-
-.preview {
+/* 整块拖拽热区：空态整块可点（等价「选择文件」），有图后承载大图预览。
+   320px（20 × space-lg）× 240px（10 × space-xl）两态等高，采纳图片不跳动。 */
+.drop-zone {
   position: relative;
   flex: none;
+  order: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-xs);
-  width: 160px;
-  height: 160px;
+  gap: var(--space-sm);
+  width: 320px;
+  height: 240px;
+  padding: var(--space-md);
+  /* 虚线占位配方同小说正文未收录图（outline 45% 虚线边 + control 圆角） */
+  border: 1px dashed color-mix(in srgb, var(--md-sys-color-outline) 45%, transparent);
   border-radius: 12px;
   overflow: hidden;
+  background: color-mix(in srgb, var(--md-sys-color-outline) 6%, transparent);
+  /* outline 常驻占位（透明），拖入高亮时不产生布局位移 */
+  outline: 2px solid transparent;
+  transition: outline-color 0.15s ease, background-color 0.15s ease;
+}
+
+.drop-zone.empty {
+  cursor: pointer;
+}
+
+.drop-zone.empty:hover {
   background: color-mix(in srgb, var(--md-sys-color-outline) 10%, transparent);
+}
+
+/* 拖拽悬停：primary 2px 描边 + 8% primary 状态层（事件挂 webview 层，热区高亮即视觉落点） */
+.drop-zone.drag-over {
+  outline-color: var(--md-sys-color-primary);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+.zone-icon {
+  width: 40px;
+  height: 40px;
   color: var(--ink-subtle);
 }
 
-.preview-img {
+.zone-hint {
+  font-size: 14px;
+  color: var(--ink-muted);
+}
+
+.zone-preview-img {
   width: 100%;
   height: 100%;
   object-fit: contain;
 }
 
-.preview-filename {
-  max-width: 90%;
+.zone-filename {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--ink-muted);
 }
 
-.preview-placeholder-icon {
-  width: 40px;
-  height: 40px;
-  stroke-width: 2;
-}
-
-.preview-placeholder-text {
-  font-size: 12px;
-  color: var(--ink-subtle);
-}
-
-.preview-remove {
+/* 移除按钮：28px 快捷动作配方（与作品卡快捷动作同款，浮于预览之上） */
+.zone-remove {
   position: absolute;
-  top: 0;
-  right: 0;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--md-sys-color-surface-container);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
 }
 
-.input-body {
+.zone-remove:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container));
+}
+
+.zone-remove:active {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container));
+}
+
+.zone-remove:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.zone-remove svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* URL 通道：独立一行，字段与搜索按钮同排 */
+.url-channel {
   flex: 1;
   min-width: 0;
+  order: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: var(--space-md);
-}
-
-.drag-hint {
-  margin: 0;
-  color: var(--ink-muted);
-}
-
-.or-divider {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-  color: var(--ink-subtle);
-  font-size: 12px;
-}
-
-.or-divider::before,
-.or-divider::after {
-  content: "";
-  flex: 1;
-  border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
 }
 
 .url-row {
@@ -546,18 +597,22 @@ function onThumbError(index: number): void {
   padding: var(--space-md) var(--space-lg);
   border-radius: 16px;
   background: var(--md-sys-color-surface-container);
+  transition: background-color 0.15s ease;
 }
 
-.result-item:hover {
+.result-item:hover,
+.result-item:focus-within {
   background: color-mix(in srgb, var(--md-sys-color-outline) 8%, var(--md-sys-color-surface-container));
 }
 
+/* 统一 96px（8 × space-lg）方形缩略图；衬底兼作透明 PNG 底色，与失败占位块同配方 */
 .thumb {
   flex: none;
   width: 96px;
   height: 96px;
   border-radius: 12px;
   overflow: hidden;
+  background: color-mix(in srgb, var(--md-sys-color-outline) 12%, var(--md-sys-color-surface-container));
 }
 
 .thumb-img {
@@ -592,24 +647,25 @@ function onThumbError(index: number): void {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-xs);
+  gap: var(--space-sm);
 }
 
-.sim-badge {
+/* 相似度数值：13px/700 等宽数字（识别 badge 字号），为相似度的权威表达 */
+.sim-value {
+  flex: none;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+/* pixiv 来源徽标：primary-container 胶囊（与排行前三徽标同级强调），本行唯一胶囊 */
+.source-chip {
   flex: none;
   padding: 1px 10px;
   border-radius: 999px;
   background: var(--md-sys-color-primary-container);
   color: var(--md-sys-color-on-primary-container);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.source-chip {
-  padding: 1px 10px;
-  border-radius: 999px;
-  background: var(--md-sys-color-secondary-container);
-  color: var(--md-sys-color-on-secondary-container);
   font-size: 12px;
   font-weight: 600;
 }
@@ -622,8 +678,23 @@ function onThumbError(index: number): void {
   color: var(--ink-muted);
 }
 
+/* 相似度进度条：6px（= space-xs）轨道 + primary 填充，轨道同滑杆 inactive 配方 */
+.sim-track {
+  height: 6px;
+  margin-top: var(--space-xs);
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--md-sys-color-outline) 30%, transparent);
+}
+
+.sim-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--md-sys-color-primary);
+}
+
 .item-title {
-  margin: var(--space-xxs) 0 0;
+  margin: var(--space-sm) 0 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -654,13 +725,18 @@ function onThumbError(index: number): void {
 }
 
 @media (max-width: 640px) {
-  /* 窄窗口：预览与操作区纵向堆叠 */
+  /* 窄窗口：热区在上（DOM 首位），URL 通道在下 */
   .input-card {
     flex-direction: column;
-    align-items: center;
   }
 
-  .input-body {
+  .drop-zone {
+    order: 0;
+    width: 100%;
+  }
+
+  .url-channel {
+    order: 1;
     width: 100%;
   }
 

@@ -835,9 +835,8 @@ export default {
   saucenao: {
     title: "画像から探す",
     subtitle: "SauceNAO の画像検索で、アニメ画像の出典や pixiv の元作品を探します",
-    dragHint: "ここに画像をドロップ、または",
+    dragHint: "ここに画像をドロップ",
     chooseFile: "ファイルを選択",
-    or: "—— または ——",
     urlLabel: "画像 URL",
     urlPlaceholder: "https:// で始まる公開画像の直接 URL",
     searching: "検索中…",
@@ -854,7 +853,6 @@ export default {
     sourcePixiv: "pixiv",
     noTitle: "（無題）",
     workId: "作品 {id}",
-    previewEmpty: "画像プレビュー",
     thumbUnavailable: "サムネイルを読み込めませんでした",
     removeImage: "選択した画像を取り除く",
     fileFilterName: "画像",
