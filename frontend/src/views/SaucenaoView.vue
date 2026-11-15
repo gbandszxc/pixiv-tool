@@ -4,10 +4,13 @@ import PageBackButton from "../components/navigation/PageBackButton.vue";
 /**
  * 以图识图页（SauceNAO 反向图片搜索）。
  *
- * - 输入两通道：右侧整块拖拽热区（Tauri onDragDropEvent + 系统文件对话框，
- *   「选择文件」为主按钮，空态整块可点）与独立成行的公网图片 URL；搜索源优先级 =
- *   已选本地文件 > URL 输入（SauceNAO 免费档 4 次/30s，选定/拖入不自动发请求，
- *   统一由「搜索」触发，避免误拖烧配额）。
+ * - 输入区 v2：输入卡片本体 = 拖拽热区（Tauri onDragDropEvent，任何展示模式下
+ *   都可用且优先于 URL 输入），内部按展示层模式切换三态：空态（image-up 主视觉 +
+ *   「选择文件」filled 主按钮 + 「使用图片 URL」小字链接）、URL 次级模式
+ *   （输入框 + 搜索同行 + 「使用本地文件」小字链接切回）、已采纳态（大图预览 +
+ *   48px filled「搜索」大号主 CTA）。搜索源优先级 = 已选本地文件 > URL 输入
+ *   （SauceNAO 免费档 4 次/30s，选定/拖入不自动发请求，统一由「搜索」触发，
+ *   避免误拖烧配额）。
  * - 本地预览走仓库自建 pixiv-download 协议（默认 asset 协议未启用、CSP 不放行；
  *   协议按扩展名白名单 jpg/jpeg/png/webp/gif 读本地图片，与本页文件过滤器一致，
  *   注册见 src-tauri/src/lib.rs）；浏览器 mock 无真实路径，仅显示文件名。
@@ -59,6 +62,17 @@ const filePath = ref<string | null>(null);
 const fileName = ref("");
 const urlInput = ref("");
 const dragHover = ref(false);
+/** 输入卡片展示层模式：file = 本地主通道（空态热区），url = URL 次级入口。 */
+const inputMode = ref<"file" | "url">("file");
+
+/** 已采纳图片（Tauri 有真实路径；浏览器 mock 只记文件名）。 */
+const adopted = computed(() => filePath.value != null || fileName.value.length > 0);
+
+/** 空态热区（file 主通道 + 尚无图片）：整卡可点 = 选择文件。 */
+const showEmptyZone = computed(() => inputMode.value === "file" && !adopted.value);
+
+/** URL 次级模式（尚无图片时才展示；拖入图片会自动切回 file 主通道）。 */
+const showUrlMode = computed(() => inputMode.value === "url" && !adopted.value);
 
 /**
  * Tauri 环境用仓库自建 pixiv-download 协议生成本地预览地址（默认 asset 协议未启用，
@@ -73,10 +87,11 @@ function baseName(path: string): string {
   return path.split(/[\\/]/).pop() ?? path;
 }
 
-/** 采纳一张本地图片（拖入或选择）：覆盖旧图并回到初始态。 */
+/** 采纳一张本地图片（拖入或选择）：覆盖旧图、切回 file 主通道并回到初始态。 */
 function adoptFile(path: string): void {
   filePath.value = path;
   fileName.value = baseName(path);
+  inputMode.value = "file";
   resetResult();
 }
 
@@ -101,9 +116,9 @@ async function chooseFile(): Promise<void> {
   }
 }
 
-/** 空态热区整块可点（等价「选择文件」）；有图后热区只承载预览与移除，点击不再开对话框。 */
-function onZoneClick(): void {
-  if (!filePath.value) chooseFile();
+/** 空态整卡可点（等价「选择文件」）；URL 模式与已采纳态卡片本体不承载点击。 */
+function onCardClick(): void {
+  if (showEmptyZone.value) chooseFile();
 }
 
 // ===== 拖拽（仅 Tauri；浏览器无此 API，静默降级为仅文件选择 / URL）=====
@@ -254,8 +269,10 @@ async function adoptHistory(item: SaucenaoHistoryItem): Promise<void> {
   if (item.source_type === "file") {
     adoptFile(item.source);
   } else {
-    // file 通道优先级高于 URL：采纳 url 历史前先清掉已选文件，避免填了不生效
+    // file 通道优先级高于 URL：采纳 url 历史前先清掉已选文件，避免填了不生效；
+    // 同时切到 URL 模式，让源在界面上保持可见
     removeImage();
+    inputMode.value = "url";
     urlInput.value = item.source;
   }
   await doSearch();
@@ -335,44 +352,33 @@ function onThumbError(index: number): void {
   <div class="page-view">
     <div class="page-heading saucenao-heading"><PageBackButton /><h1 class="page-title">{{ t("saucenao.title") }}</h1><HelpTooltip :label="t('saucenao.title')" :text="`${t('saucenao.subtitle')}\n\n${t('saucenao.idleHint')}`" /></div>
 
-    <!-- 输入卡片：左 URL 通道（次要）+ 右整块拖拽热区（主动线）；窄窗上下堆叠、热区在上 -->
-    <div class="input-card">
-      <div class="drop-zone" :class="{ 'drag-over': dragHover, empty: !filePath }" @click="onZoneClick">
-        <img v-if="previewSrc" :src="previewSrc" class="zone-preview-img" :alt="fileName" />
-        <template v-else-if="fileName">
-          <!-- 浏览器 mock 环境：本地文件无可预览路径，仅显示文件名 -->
-          <span class="zone-filename" :title="fileName">{{ fileName }}</span>
-        </template>
-        <template v-else>
-          <svg class="zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <!-- lucide image-up -->
-            <path d="M10.3 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10l-3.1-3.1a2 2 0 0 0-2.814.014L6 21" />
-            <path d="m14 19.5 3-3 3 3" />
-            <path d="M17 22v-5.5" />
-            <circle cx="9" cy="9" r="2" />
-          </svg>
-          <span class="zone-hint">{{ t("saucenao.dragHint") }}</span>
-          <md-filled-button class="zone-choose" :disabled="phase === 'loading'" @click.stop="chooseFile">
-            {{ t("saucenao.chooseFile") }}
-          </md-filled-button>
-        </template>
-        <button
-          v-if="filePath || fileName"
-          type="button"
-          class="zone-remove"
-          :aria-label="t('saucenao.removeImage')"
-          :title="t('saucenao.removeImage')"
-          @click.stop="removeImage"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <!-- lucide x -->
-            <path d="M18 6 6 18" />
-            <path d="m6 6 12 12" />
-          </svg>
+    <!-- 输入卡片 v2：卡片本体 = 拖拽热区（任何模式拖拽可用且优先），内部三态切换：
+         空态（file 主通道主视觉）/ URL 次级模式 / 已采纳态（预览 + 搜索主 CTA） -->
+    <div
+      class="input-card"
+      :class="{ 'is-empty': showEmptyZone, 'is-url': showUrlMode, 'is-adopted': adopted, 'drag-over': dragHover }"
+      @click="onCardClick"
+    >
+      <!-- 空态：image-up 主视觉 + 选择文件主按钮 + URL 次级入口小字链接 -->
+      <template v-if="showEmptyZone">
+        <svg class="zone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <!-- lucide image-up -->
+          <path d="M10.3 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v10l-3.1-3.1a2 2 0 0 0-2.814.014L6 21" />
+          <path d="m14 19.5 3-3 3 3" />
+          <path d="M17 22v-5.5" />
+          <circle cx="9" cy="9" r="2" />
+        </svg>
+        <span class="zone-hint">{{ t("saucenao.dragHint") }}</span>
+        <md-filled-button class="zone-choose" :disabled="phase === 'loading'" @click.stop="chooseFile">
+          {{ t("saucenao.chooseFile") }}
+        </md-filled-button>
+        <button type="button" class="mode-link" :disabled="phase === 'loading'" @click.stop="inputMode = 'url'">
+          {{ t("saucenao.useImageUrl") }}
         </button>
-      </div>
+      </template>
 
-      <div class="url-channel">
+      <!-- URL 次级模式：输入框 + 搜索同行（回车触发），下方切回链接 + 拖拽提示 -->
+      <template v-else-if="showUrlMode">
         <div class="url-row">
           <md-outlined-text-field
             class="url-field"
@@ -388,7 +394,45 @@ function onThumbError(index: number): void {
             {{ t("common.search") }}
           </md-filled-button>
         </div>
-      </div>
+        <div class="url-mode-foot">
+          <button type="button" class="mode-link" :disabled="phase === 'loading'" @click.stop="inputMode = 'file'">
+            {{ t("saucenao.useLocalFile") }}
+          </button>
+          <span class="mode-hint">{{ t("saucenao.dropAlsoWorks") }}</span>
+        </div>
+      </template>
+
+      <!-- 已采纳态：大图预览（clamp 高、contain）+ 移除钮右上常驻 + 48px 搜索主 CTA -->
+      <template v-else>
+        <div class="zone-preview">
+          <img v-if="previewSrc" :src="previewSrc" class="zone-preview-img" :alt="fileName" />
+          <!-- 浏览器 mock 环境：本地文件无可预览路径，仅显示文件名 -->
+          <span v-else class="zone-filename" :title="fileName">{{ fileName }}</span>
+          <button
+            type="button"
+            class="zone-remove"
+            :aria-label="t('saucenao.removeImage')"
+            :title="t('saucenao.removeImage')"
+            :disabled="phase === 'loading'"
+            @click.stop="removeImage"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- lucide x -->
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </button>
+        </div>
+        <md-filled-button class="search-cta" :disabled="!canSearch" @click.stop="doSearch">
+          <svg slot="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide search -->
+            <circle cx="11" cy="11" r="8" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          {{ t("common.search") }}
+        </md-filled-button>
+        <span class="mode-hint">{{ t("saucenao.dropToReplace") }}</span>
+      </template>
     </div>
 
     <!-- 搜索历史：输入卡片之下、结果区之上；空列表不渲染整个区块 -->
@@ -524,54 +568,44 @@ function onThumbError(index: number): void {
 <style scoped>
 .saucenao-heading { margin-bottom: var(--space-md); }
 
-/* ===== 输入卡片：左 URL 通道 + 右整块拖拽热区 ===== */
+/* ===== 输入卡片 v2：卡片本体 = 拖拽热区，内部三态（空态 / URL 次级 / 已采纳）===== */
 
 .input-card {
-  display: flex;
-  align-items: stretch;
-  gap: var(--space-xl);
-  padding: var(--space-xl);
-  /* 16px = DESIGN.md rounded.card（与 .form-card / .m3-card 同规格） */
-  border-radius: 16px;
-  background: var(--md-sys-color-surface-container);
-}
-
-/* 整块拖拽热区：空态整块可点（等价「选择文件」），有图后承载大图预览。
-   320px（20 × space-lg）× 240px（10 × space-xl）两态等高，采纳图片不跳动。 */
-.drop-zone {
   position: relative;
-  flex: none;
-  order: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: var(--space-sm);
-  width: 320px;
-  height: 240px;
-  padding: var(--space-md);
-  /* 虚线占位配方同小说正文未收录图（outline 45% 虚线边 + control 圆角） */
-  border: 1px dashed color-mix(in srgb, var(--md-sys-color-outline) 45%, transparent);
-  border-radius: 12px;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--md-sys-color-outline) 6%, transparent);
+  padding: var(--space-xl);
+  /* 16px = DESIGN.md rounded.card（与 .form-card / .m3-card 同规格） */
+  border-radius: 16px;
+  background: var(--md-sys-color-surface-container);
   /* outline 常驻占位（透明），拖入高亮时不产生布局位移 */
   outline: 2px solid transparent;
   transition: outline-color 0.15s ease, background-color 0.15s ease;
 }
 
-.drop-zone.empty {
+/* 空态热区：整卡虚线边传达可拖放（outline 45% 虚线配方同小说正文未收录图），整卡可点 = 选择文件 */
+.input-card.is-empty {
   cursor: pointer;
+  border: 1px dashed color-mix(in srgb, var(--md-sys-color-outline) 45%, transparent);
 }
 
-.drop-zone.empty:hover {
-  background: color-mix(in srgb, var(--md-sys-color-outline) 10%, transparent);
+.input-card.is-empty:hover {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 10%, var(--md-sys-color-surface-container));
 }
 
-/* 拖拽悬停：primary 2px 描边 + 8% primary 状态层（事件挂 webview 层，热区高亮即视觉落点） */
-.drop-zone.drag-over {
+/* 拖拽悬停（任何模式可用且优先）：primary 2px 描边 + 8% primary 淡染，整卡即视觉落点 */
+.input-card.drag-over {
   outline-color: var(--md-sys-color-primary);
-  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container));
+}
+
+/* URL 次级模式：输入行 + 脚注占满卡片宽，左对齐 */
+.input-card.is-url {
+  align-items: stretch;
+  gap: var(--space-md);
 }
 
 .zone-icon {
@@ -583,6 +617,17 @@ function onThumbError(index: number): void {
 .zone-hint {
   font-size: 14px;
   color: var(--ink-muted);
+}
+
+/* 已采纳态预览容器：高 = clamp(240px, 40vh, 480px)（240px = 10 × space-xl，
+   与旧热区等高；480px = 20 × space-xl），大图 contain 居中，移除钮浮于右上 */
+.zone-preview {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: clamp(240px, 40vh, 480px);
 }
 
 .zone-preview-img {
@@ -632,19 +677,67 @@ function onThumbError(index: number): void {
   outline-offset: 2px;
 }
 
+.zone-remove:disabled {
+  cursor: default;
+}
+
 .zone-remove svg {
   width: 16px;
   height: 16px;
 }
 
-/* URL 通道：独立一行，字段与搜索按钮同排 */
-.url-channel {
-  flex: 1;
-  min-width: 0;
-  order: 0;
+/* 搜索主 CTA：48px（3 × space-lg）大号 filled（Material 官方容器高 token），
+   预览正下方一眼可见；带 20px lucide search 图标 */
+.search-cta {
+  --md-filled-button-container-height: 48px;
+  height: 48px;
+  padding: 0 var(--space-xl);
+}
+
+.search-cta svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* 模式切换小字链接：12px ink-muted 下划线，hover 提升为正文色 */
+.mode-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.mode-link:hover {
+  color: var(--ink);
+}
+
+.mode-link:disabled {
+  cursor: default;
+}
+
+.mode-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+/* 非交互提示小字：12px ink-subtle（URL 模式拖拽提示 / 已采纳替换提示） */
+.mode-hint {
+  font-size: 12px;
+  color: var(--ink-subtle);
+}
+
+/* URL 次级模式脚注：切回链接 + 拖拽提示横排 */
+.url-mode-foot {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-md);
 }
 
 .url-row {
@@ -1016,18 +1109,8 @@ function onThumbError(index: number): void {
 }
 
 @media (max-width: 640px) {
-  /* 窄窗口：热区在上（DOM 首位），URL 通道在下 */
-  .input-card {
-    flex-direction: column;
-  }
-
-  .drop-zone {
-    order: 0;
-    width: 100%;
-  }
-
-  .url-channel {
-    order: 1;
+  /* 窄窗口：卡片本体即热区天然纵向，搜索主 CTA 全宽易点；URL 行沿用既有 wrap */
+  .search-cta {
     width: 100%;
   }
 
