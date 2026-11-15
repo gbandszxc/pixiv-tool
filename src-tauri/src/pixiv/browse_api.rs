@@ -1285,6 +1285,15 @@ fn parse_ranking_novel(body: &Value, page: i64) -> BrowseRanking {
     }
 }
 
+/// seriesNavData 的当前话序：真实字段为 `order`（prev/next.order 为邻话），
+/// `orderNumber` 是早期调研误记的名字，仅作兼容兜底；缺省回退 1（单话/未知系列）。
+fn series_order(nav: &Value) -> i64 {
+    nav.get("order")
+        .or_else(|| nav.get("orderNumber"))
+        .and_then(as_i64_loose)
+        .unwrap_or(1)
+}
+
 /// /ajax/illust/{id} body → (item, series)。
 fn parse_illust_detail(body: &Value) -> (BrowseWorkItem, Option<BrowseSeriesRef>) {
     let id = body.get("illustId").and_then(as_i64_loose).unwrap_or(0);
@@ -1334,7 +1343,9 @@ fn parse_illust_detail(body: &Value) -> (BrowseWorkItem, Option<BrowseSeriesRef>
         .map(|s| BrowseSeriesRef {
             id: s.get("seriesId").and_then(as_i64_loose).unwrap_or(0),
             title: str_field(s, "title").unwrap_or_default(),
-            order: s.get("orderNumber").and_then(as_i64_loose).unwrap_or(1),
+            // 实测 seriesNavData 话序字段是 order（2026-11-15，小说 29589687 = order:5、
+            // 插画 151345796 = order:18）；orderNumber 是早期调研误记的名字，仅作兼容兜底。
+            order: series_order(s),
             next_id: None,
         });
     (item, series)
@@ -1449,7 +1460,7 @@ fn parse_novel_detail(body: &Value) -> (BrowseWorkItem, Option<BrowseSeriesRef>)
         .map(|s| BrowseSeriesRef {
             id: s.get("seriesId").and_then(as_i64_loose).unwrap_or(0),
             title: str_field(s, "title").unwrap_or_default(),
-            order: s.get("orderNumber").and_then(as_i64_loose).unwrap_or(1),
+            order: series_order(s),
             next_id: s.pointer("/next/id").and_then(as_i64_loose),
         });
     (item, series)
@@ -3829,7 +3840,7 @@ mod tests {
             "bookmarkData": {"id": "abc"},
             "xRestrict": 0,
             "tags": [{"tag": "風景"}, {"tag": "空"}],
-            "seriesNavData": {"seriesId": 55, "title": "系列", "orderNumber": 3}
+            "seriesNavData": {"seriesId": 55, "title": "系列", "order": 3}
         });
         let (item, series) = parse_illust_detail(&body);
         assert_eq!(item.id, 9000021);
@@ -4022,6 +4033,41 @@ mod tests {
         assert_eq!(series.next_id, Some(9000013), "守卫不影响 next.id 取值");
     }
 
+    /// 详情话序取 seriesNavData.order（2026-11-15 实测：小说 29589687 = 5、
+    /// 插画 151345796 = 18）；早期调研误记的 orderNumber 仅作兼容兜底。
+    #[test]
+    fn parse_detail_series_order_uses_order_field() {
+        let nav = json!({"seriesId": 55, "title": "系列", "order": 5});
+        let (_, illust) = parse_illust_detail(&json!({"seriesNavData": nav}));
+        let (_, novel) = parse_novel_detail(&json!({"seriesNavData": nav}));
+        assert_eq!(illust.unwrap().order, 5, "illust 取 order");
+        assert_eq!(novel.unwrap().order, 5, "novel 取 order");
+
+        // 数字串（pixiv 的 id/话序常为字符串）也要能解析
+        let nav = json!({"seriesId": 55, "title": "系列", "order": "18"});
+        let (_, illust) = parse_illust_detail(&json!({"seriesNavData": nav}));
+        let (_, novel) = parse_novel_detail(&json!({"seriesNavData": nav}));
+        assert_eq!(illust.unwrap().order, 18);
+        assert_eq!(novel.unwrap().order, 18);
+
+        // 两字段并存（假如端点是过渡形态）以真实 order 为准，不被误记旧名覆盖
+        let nav = json!({"seriesId": 55, "title": "系列", "order": 7, "orderNumber": 2});
+        let (_, illust) = parse_illust_detail(&json!({"seriesNavData": nav}));
+        assert_eq!(illust.unwrap().order, 7, "order 优先于 orderNumber");
+
+        // 仅有旧名（兼容历史/代理响应）→ 仍取旧名，不再恒为 1
+        let nav = json!({"seriesId": 55, "title": "系列", "orderNumber": 3});
+        let (_, illust) = parse_illust_detail(&json!({"seriesNavData": nav}));
+        let (_, novel) = parse_novel_detail(&json!({"seriesNavData": nav}));
+        assert_eq!(illust.unwrap().order, 3, "旧名兜底");
+        assert_eq!(novel.unwrap().order, 3, "旧名兜底");
+
+        // 缺话序字段 → 回退 1（不产出 0 / 负数）
+        let nav = json!({"seriesId": 55, "title": "系列"});
+        let (_, illust) = parse_illust_detail(&json!({"seriesNavData": nav}));
+        assert_eq!(illust.unwrap().order, 1);
+    }
+
     #[test]
     fn parse_illust_pages_urls_and_fallback() {
         let body = json!([
@@ -4076,7 +4122,7 @@ mod tests {
             "userId": "28640", "userName": "作者",
             "pageCount": 2,
             "tags": [{"tag": "SF"}],
-            "seriesNavData": {"seriesType": "novel", "seriesId": 1093870, "title": "系列", "orderNumber": 2,
+            "seriesNavData": {"seriesType": "novel", "seriesId": 1093870, "title": "系列", "order": 2,
                 "next": {"id": "9000013", "title": "下一话"}},
             "characterCount": 12345,
             "readingTime": 1500,

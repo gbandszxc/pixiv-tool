@@ -1099,7 +1099,7 @@ async fn live_user_works_illust_novel() {
 #[tokio::test]
 #[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
 async fn live_novel_series_detail_and_content() {
-    let (_, series_id) = novel_with_series().await;
+    let (novel_id, series_id) = novel_with_series().await;
     let detail = common::live_api()
         .get_novel_series(series_id, None)
         .await
@@ -1173,6 +1173,40 @@ async fn live_novel_series_detail_and_content() {
     if let Some(cover) = detail["cover"].as_str() {
         common::assert_pixiv_url(cover, "novel series.cover");
     }
+
+    // 详情 series.order 必须是「该篇在系列中的第几话」：与系列目录里同 id 条目的
+    // contentOrder 一致（2026-11-15 勘误：真实字段 seriesNavData.order，原读
+    // 不存在的 orderNumber → 恒回退 1，系列第 N 话被显示成第 1 话）。
+    // 用详情话序反推 last_order 取目录批次，保证长系列（>30 话）样本也命中。
+    let novel_detail = common::live_api()
+        .get_work_detail_novel(novel_id)
+        .await
+        .unwrap_or_else(|e| panic!("小说详情失败（novel {novel_id}）: {e}"));
+    let series = novel_detail["series"]
+        .as_object()
+        .unwrap_or_else(|| panic!("系列样本（novel {novel_id}）详情应带 series"));
+    let detail_order = series["order"]
+        .as_i64()
+        .expect("详情 series.order 应为数字");
+    assert!(
+        detail_order >= 1,
+        "详情 series.order 应为 >= 1 的话序，实际 {detail_order}"
+    );
+    let window = common::live_api()
+        .get_novel_series(series_id, Some(detail_order - 1))
+        .await
+        .unwrap_or_else(|e| panic!("系列目录游标批失败（series {series_id}）: {e}"));
+    let dir_order = window["contents"]
+        .as_array()
+        .unwrap_or_else(|| panic!("目录 contents 应为数组"))
+        .iter()
+        .find(|c| common::id_of(c) == novel_id)
+        .and_then(|c| c["series_order"].as_i64())
+        .unwrap_or_else(|| panic!("目录游标批应含样本 novel {novel_id}"));
+    assert_eq!(
+        detail_order, dir_order,
+        "详情第 {detail_order} 话应与目录 contentOrder（{dir_order}）一致，而非恒为 1"
+    );
 }
 
 // ----------------------------------------------------------------------

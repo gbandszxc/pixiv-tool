@@ -13,6 +13,9 @@
 > | §5 `{word}` 放路径 | 必须 percent-encode，直拼非 ASCII → HTTP 400 | `search_path` 先 `percent_encode` |
 > | §6 `/ajax/ranking/novel` 的 `date` 为 yyyymmdd | 实为日文展示串（`2026年9月30日`），`prev_date`/`next_date` 恒 null | 后端归一为 yyyymmdd |
 > | §8 `/ajax/user/{id}?full=1` 含 `account` | 响应无 `account` 键（四种组合实测） | `pixiv_id` 恒空串，前端隐藏 @handle 行 |
+> | §7.1 / §7.2 详情 `seriesNavData.orderNumber` | 真实话序字段是 **`order`**（`prev`/`next` 内亦为 `order`），无 `orderNumber` 键 | 见下方 2026-11-15 勘误 |
+
+> **2026-11-15 系列话序字段勘误**：§7.1 / §7.2 原把详情 `seriesNavData` 的话序字段记作 `orderNumber`，真实响应是 **`order`**（`prev` / `next` 内同样是 `order`）。已登录会话实测：小说 29589687（系列 16120153 第 5 话）`seriesNavData.order=5`、同系列 28216658 `order=4`；漫画系列 344074 的插画 151345796 / 151080152 / 150444309 分别 `order=18/17/16`。原 `parse_illust_detail` / `parse_novel_detail` 读不存在的 `orderNumber` 后 `unwrap_or(1)`，导致所有带系列作品都显示「第 1 话」（上一话导航也失效）。已按真实字段 `order` 解析并兼容旧名兜底，现行契约与回归映射见 `docs/PIXIV-API.md` §4.3 / §8.1。
 
 > **2026-10-03 频道模式勘误**：Chrome `/cate_r18.php` 发起 `/ajax/top/illust?mode=r18&lang=zh`。同会话普通快照推荐 18/排行 100 均为一般向，r18 快照推荐 18/排行 100 均为受限；两种模式各有独立标签推荐。`mode=all` 等同普通快照，`mode=safe` 返回业务错误。漫画与小说 r18 请求亦成功。当前契约与测试映射见 `docs/PIXIV-API.md` §4.1 / §8.1。
 
@@ -321,7 +324,7 @@
 | `tags` | Array | `{tag, locked, deletable, userId, userName, translation:{en,...}}` |
 | `width` / `height` | number | 原图尺寸 |
 | `bookmarkCount` / `likeCount` / `commentCount` / `responseCount` / `viewCount` | number | 计数 |
-| `seriesNavData` | Object/null | 所属漫画系列 `{seriesType, seriesId, title, orderNumber, isConcluded, next, isReplaceable}` |
+| `seriesNavData` | Object/null | 所属漫画系列 `{seriesType, seriesId, title, order, isConcluded, prev, next, isWatched, isNotifying}`（`order` 为当前话序；2026-11-15 勘误：原记 `orderNumber` 不存在） |
 | `xRestrict` / `restrict` / `sl` | number | 限制级别（xRestrict: 1=R-18, 2=R-18G）；`sl` 为登录态相关敏感级 |
 | `bookmarkData` / `likeData` | Object/null | 当前用户是否已收藏/点赞 |
 | `isBookmarkable` / `isUnlisted` / `isHowto` / `isOriginal` / `aiType` / `bookStyle` / `commentOff` / `locationMask` | - | 各种状态位 |
@@ -372,7 +375,7 @@ Array，每项：`{ urls: { thumb_mini, small, regular, original }, width, heigh
 | `textEmbeddedImages` | Object | **正文内嵌图索引**：键 = `novelImageId`（即 `[uploadedimage:]` 的 id），值 `{novelImageId, sl, urls}`；`urls` 五档见下 |
 | `pageCount` | number | 页数（按 `[newpage]` 切分；一次请求返回全部页内容，没有按页拉取的接口） |
 | `tags` | Array | 同插画 tags 结构 |
-| `seriesNavData` | Object/null | `{seriesType:"novel", seriesId, title, orderNumber, isConcluded, next}` |
+| `seriesNavData` | Object/null | `{seriesType:"novel", seriesId, title, order, isConcluded, isWatched, isNotifying, prev, next}`（`order` 为当前话序；2026-11-15 勘误：原记 `orderNumber` 不存在） |
 | `userId` / `userName` / `coverUrl` | string | 作者与封面 |
 | `characterCount` / `wordCount` / `useWordCount` | - | 字数/词数 |
 | `readingTime` | number | **阅读时长（秒）**。实测 16,474 字作品返回 `1976`，网页端显示「32分」（`1976 / 60 = 32.9`，向下取整）；早期记为「分钟」为误记 |
