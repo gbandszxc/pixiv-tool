@@ -1192,7 +1192,7 @@ async function mockIllustDetail(kind: "illust" | "manga", id: number): Promise<B
     detail_kind: "illust",
     item: {
       ...item,
-      description: "这是 mock 详情描述，用于视觉验收。",
+      description: "这是 mock 详情描述，用于视觉验收。\n参考作品：https://www.pixiv.net/artworks/9000012 外站示例：https://example.com/notes",
       width: 1200,
       height: 900,
       view_count: 1000 + Math.floor(rand() * 90000),
@@ -1220,7 +1220,7 @@ async function mockNovelDetail(id: number): Promise<BrowseNovelDetail> {
     detail_kind: "novel",
     item: {
       ...item,
-      description: "这是 mock 详情描述，用于视觉验收。",
+      description: "这是 mock 详情描述，用于视觉验收。\n参考作品：https://www.pixiv.net/artworks/9000012 外站示例：https://example.com/notes",
       bookmark_count: 20 + Math.floor(rand() * 2000),
       like_count: 10 + Math.floor(rand() * 1000),
       view_count: 1000 + Math.floor(rand() * 90000),
@@ -1232,6 +1232,7 @@ async function mockNovelDetail(id: number): Promise<BrowseNovelDetail> {
     content:
       "[chapter:序]\n这是 mock 正文第一段，用于小说阅读器的视觉验收。正文正文正文正文正文正文正文正文正文正文。\n\n" +
       "第二段：[rb:注音/よみ] 与 [uploadedimage:9000010] 内嵌图标记，图片由 embedded_images 解析显示。\n" +
+      "内链验收：[[jumpuri:跳转到插画 9000012 > https://www.pixiv.net/artworks/9000012]] 与裸链接 https://www.pixiv.net/users/100004。\n" +
       "[uploadedimage:9000011]\n" +
       "[pixivimage:9000012]\n" +
       "[newpage]\n[chapter:第一章]\n分页后的第一章正文。正文正文正文正文正文正文正文正文正文正文正文正文正文正文。\n\n" +
@@ -1432,13 +1433,14 @@ function mockCommentRoots(kind: ListWorkKind, id: number): BrowseComment[] {
   const total = 10 + Math.floor(rand() * 16); // 10-25
   return Array.from({ length: total }, (_, i) => {
     const authorIndex = Math.floor(rand() * MOCK_AUTHORS.length);
-    const isStamp = rand() < 0.15;
-    const isUrl = !isStamp && rand() < 0.18;
+    // 首条固定为链接评论（确定性回归入口 /tests/navigation.ts 依赖），其余保持随机分布
+    const isStamp = rand() < 0.15 && i > 0;
+    const isUrl = !isStamp && (i === 0 || rand() < 0.18);
     const isMultiline = !isStamp && !isUrl && rand() < 0.2;
     const content = isStamp
       ? ""
       : isUrl
-        ? MOCK_COMMENT_URL_TEXTS[Math.floor(rand() * MOCK_COMMENT_URL_TEXTS.length)]
+        ? MOCK_COMMENT_URL_TEXTS[i === 0 ? 0 : Math.floor(rand() * MOCK_COMMENT_URL_TEXTS.length)]
         : isMultiline
           ? `${MOCK_COMMENT_TEXTS[Math.floor(rand() * MOCK_COMMENT_TEXTS.length)]}\n（补充：第二行文本用于验收 pre-wrap 换行）`
           : MOCK_COMMENT_TEXTS[Math.floor(rand() * MOCK_COMMENT_TEXTS.length)];

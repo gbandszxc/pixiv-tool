@@ -39,7 +39,8 @@ import CopyWorkId from "../../components/browse/CopyWorkId.vue";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
-import { descriptionText } from "../../utils/descriptionText";
+import { descriptionSegments } from "../../utils/descriptionText";
+import { openTextLink } from "../../utils/pixivLinks";
 import { scrollContentToTop } from "../../utils/scroll";
 import type { WorkBookmarkState } from "../../api/browse";
 
@@ -100,8 +101,8 @@ const restrictLabel = computed(() =>
   item.value?.x_restrict === 2 ? t("common.browseR18G") : t("common.browseR18")
 );
 
-/** 描述按纯文本展示并保留换行，绝不 v-html。 */
-const plainDescription = computed(() => descriptionText(item.value?.description));
+/** 描述按纯文本段展示并保留换行，绝不 v-html；链接段站内跳转/外开（utils/pixivLinks）。 */
+const descriptionSegs = computed(() => descriptionSegments(item.value?.description));
 
 const dateText = computed(() => item.value?.create_date?.slice(0, 10) ?? "");
 
@@ -391,6 +392,7 @@ onBeforeUnmount(detachKeydown);
       />
       <!-- 评论：切换右列面板（相关推荐 ⇄ 评论）；选中态走 md-icon-button 的 toggle/selected -->
       <md-icon-button
+        class="comments-panel-toggle"
         toggle
         :selected="panel === 'comments'"
         :aria-label="t('browse.comments.show')"
@@ -556,7 +558,12 @@ onBeforeUnmount(detachKeydown);
           <CopyWorkId :id="item.id" />
 
           <!-- 描述（剥标签纯文本） -->
-          <p v-if="plainDescription" class="description">{{ plainDescription }}</p>
+          <p v-if="descriptionSegs.length" class="description">
+            <template v-for="(seg, i) in descriptionSegs" :key="i">
+              <button v-if="seg.kind === 'link'" type="button" class="text-link" @click="openTextLink(router, seg.url, seg.target)">{{ seg.text }}</button>
+              <template v-else>{{ seg.text }}</template>
+            </template>
+          </p>
 
           <!-- 面板：相关推荐（默认）/ 评论（顶栏按钮切换；评论挂载时才拉取，分页自持） -->
           <div ref="panelEl" class="side-panel">
@@ -873,6 +880,28 @@ onBeforeUnmount(detachKeydown);
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* 描述内联链接（DESIGN.md「正文内联链接」配方） */
+.text-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
+.text-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 /* ===== 骨架 ===== */

@@ -8,14 +8,16 @@
  *   文本与表情贴图二选一：文本走输入框（≤140 字），面板「表情」栏把 `(code)` 追加进草稿、
  *   「贴图」栏点选即发；成功后重拉首页 / 该评论回复首页，展示服务端权威数据。
  *   回复入口只挂在根评论上（回复某条回复的 parent_id 归位语义未验证，不做）。
- * - 正文纯文本渲染（white-space: pre-wrap，绝不 v-html，URL 保持纯文本）；
+ * - 正文纯文本渲染（white-space: pre-wrap，绝不 v-html）；
  *   官方文本表情 `(code)` / `:code:` 渲染为 24px 行内图（未知 code 保持原文，与网页端一致）；
- *   表情贴图评论（stamp_url）渲染 stamp 图。
+ *   表情贴图评论（stamp_url）渲染 stamp 图；
+ *   正文中的链接经 utils/pixivLinks.ts linkify：已封装 pixiv 页面站内跳转，其余外开浏览器。
  * - 未登录错误由 api 层统一联动登录弹窗，此处只展示归一文案 + 重试。
  * - 评论区被作者关闭（roots 恒 400 → 后端 disabled 信封）为终态提示，非错误、无重试。
  */
 import { computed, reactive, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import {
   COMMENT_EMOJI_ID_BY_CODE,
   COMMENT_MAX_CHARS,
@@ -29,6 +31,7 @@ import {
   type ListWorkKind,
 } from "../../api/browse";
 import CommentEmojiPicker from "./CommentEmojiPicker.vue";
+import { linkifyText, openTextLink, type LinkifiedSegment } from "../../utils/pixivLinks";
 
 const props = defineProps<{
   kind: ListWorkKind;
@@ -38,6 +41,7 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
+const router = useRouter();
 
 // ===== roots：评论列表（offset 游标）=====
 
@@ -274,20 +278,31 @@ function submitStamp(id: string): void {
   void submit({ stampId: id });
 }
 
-/** 评论文本分段：官方表情 code（`(code)` / `:code:`）取图片，其余保持纯文本（含换行）。 */
-function contentSegments(text: string): { text: string; emojiId?: number }[] {
-  const segments: { text: string; emojiId?: number }[] = [];
+/** 正文段：纯文本 / 官方表情 / 链接（pixiv 已封装页面站内跳转，其余外开）。 */
+type ContentSegment = { kind: "text"; text: string } | { kind: "emoji"; text: string; emojiId: number } | LinkifiedSegment;
+
+/** 评论文本分段：先按官方表情 code（`(code)` / `:code:`）取图片段，纯文本段再 linkify 出链接段。 */
+function contentSegments(text: string): ContentSegment[] {
+  const segments: ContentSegment[] = [];
   const pattern = /\(([a-z0-9]+)\)|:([a-z0-9]+):/gi;
   let last = 0;
   for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
-    if (last < match.index) segments.push({ text: text.slice(last, match.index) });
+    if (last < match.index) pushTextSegments(segments, text.slice(last, match.index));
     const emojiId = COMMENT_EMOJI_ID_BY_CODE[(match[1] ?? match[2]).toLowerCase()];
     // 未知 code 原样显示（与网页端一致）
-    segments.push(emojiId ? { text: match[0], emojiId } : { text: match[0] });
+    if (emojiId) segments.push({ kind: "emoji", text: match[0], emojiId });
+    else pushTextSegments(segments, match[0]);
     last = match.index + match[0].length;
   }
-  if (last < text.length) segments.push({ text: text.slice(last) });
+  if (last < text.length) pushTextSegments(segments, text.slice(last));
   return segments;
+}
+
+/** 纯文本段 linkify：URL 成链接段（已封装 pixiv 页面 → 站内跳转，其余 → 外开浏览器）。 */
+function pushTextSegments(segments: ContentSegment[], run: string): void {
+  for (const seg of linkifyText(run)) {
+    segments.push(seg);
+  }
 }
 
 // ===== kind / id 变化：整体重置并重拉首屏 =====
@@ -384,16 +399,22 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
                 <span class="user-name">{{ c.user_name }}</span>
                 <span v-if="c.date" class="date">{{ c.date }}</span>
               </div>
-              <!-- 正文：纯文本（契约保证无 HTML）+ 官方文本表情渲染为图片；表情贴图评论渲染 stamp 图 -->
+              <!-- 正文：纯文本（契约保证无 HTML）+ 官方文本表情渲染为图片；表情贴图评论渲染 stamp 图；链接段站内跳转/外开 -->
               <img v-if="c.stamp_url" class="stamp" :src="pxSrc(c.stamp_url)" :alt="t('browse.comments.stampAlt')" />
               <p v-else-if="c.content" class="content">
                 <template v-for="(segment, index) in contentSegments(c.content)" :key="index">
                   <img
-                    v-if="segment.emojiId"
+                    v-if="segment.kind === 'emoji'"
                     class="emoji-inline"
                     :src="pxSrc(commentEmojiUrl(segment.emojiId))"
                     :alt="segment.text"
                   />
+                  <button
+                    v-else-if="segment.kind === 'link'"
+                    type="button"
+                    class="text-link"
+                    @click="openTextLink(router, segment.url, segment.target)"
+                  >{{ segment.text }}</button>
                   <template v-else>{{ segment.text }}</template>
                 </template>
               </p>
@@ -474,11 +495,17 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
                         <p v-else-if="r.content" class="content">
                           <template v-for="(segment, index) in contentSegments(r.content)" :key="index">
                             <img
-                              v-if="segment.emojiId"
+                              v-if="segment.kind === 'emoji'"
                               class="emoji-inline"
                               :src="pxSrc(commentEmojiUrl(segment.emojiId))"
                               :alt="segment.text"
                             />
+                            <button
+                              v-else-if="segment.kind === 'link'"
+                              type="button"
+                              class="text-link"
+                              @click="openTextLink(router, segment.url, segment.target)"
+                            >{{ segment.text }}</button>
                             <template v-else>{{ segment.text }}</template>
                           </template>
                         </p>
@@ -585,6 +612,28 @@ watch(() => [props.kind, props.id] as const, resetAll, { immediate: true });
 }
 
 .reply-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+/* 正文内联链接（DESIGN.md「正文内联链接」配方）：primary 色、继承正文字号换行 */
+.text-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
+.text-link:focus-visible {
   outline: 2px solid var(--md-sys-color-primary);
   outline-offset: 2px;
 }

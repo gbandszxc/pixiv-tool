@@ -36,7 +36,8 @@ import { useSettingsStore } from "../../stores/settings";
 import { useTranslationStore } from "../../stores/translation";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
 import { pixivWorkUrl } from "../../utils/pixivUrl";
-import { descriptionText } from "../../utils/descriptionText";
+import { descriptionSegments, descriptionText } from "../../utils/descriptionText";
+import { openTextLink } from "../../utils/pixivLinks";
 import { formatDateTime } from "../../utils/dateTime";
 import { getNovelTranslationResult, type NovelTranslationInput, type PublishStatus, type TranslatedLine, type TranslationMode } from "../../api/translation";
 
@@ -101,6 +102,8 @@ const readerScrollEl = ref<HTMLElement | null>(null);
 
 const item = computed(() => detail.value?.item ?? null);
 const plainDescription = computed(() => descriptionText(item.value?.description));
+/** 描述按纯文本段展示并保留换行，绝不 v-html；链接段站内跳转/外开（utils/pixivLinks）。 */
+const descriptionSegs = computed(() => descriptionSegments(item.value?.description));
 const content = computed(() => detail.value?.content ?? "");
 const hasContent = computed(() => content.value.trim().length > 0);
 /** 内嵌图 id → URL（详情响应 embedded_images）；正文渲染时按 id 取图 */
@@ -656,7 +659,12 @@ function openInPixiv(): void {
           <div class="info-pid">
             <CopyWorkId :id="item.id" />
           </div>
-          <p v-if="plainDescription" class="description">{{ plainDescription }}</p>
+          <p v-if="descriptionSegs.length" class="description">
+            <template v-for="(seg, i) in descriptionSegs" :key="i">
+              <button v-if="seg.kind === 'link'" type="button" class="text-link" @click="openTextLink(router, seg.url, seg.target)">{{ seg.text }}</button>
+              <template v-else>{{ seg.text }}</template>
+            </template>
+          </p>
         </div>
 
         <!-- 正文（NovelContent 分页渲染，内嵌图经 images 取 URL）；空内容容错 -->
@@ -1218,6 +1226,28 @@ html.dark .novel-view[class*="read-bg-"] {
   color: var(--ink);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* 描述内联链接（DESIGN.md「正文内联链接」配方） */
+.text-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.text-link:hover {
+  text-decoration: underline;
+}
+
+.text-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 .work-meta {

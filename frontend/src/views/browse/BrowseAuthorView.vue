@@ -39,6 +39,8 @@ import {
 } from "../../api/browse";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
+import { descriptionSegments } from "../../utils/descriptionText";
+import { openTextLink } from "../../utils/pixivLinks";
 import { pixivUserUrl } from "../../utils/pixivUrl";
 import { useInfiniteList } from "../../composables/useInfiniteList";
 import { useAuthStore } from "../../stores/auth";
@@ -106,26 +108,9 @@ async function loadProfile(): Promise<void> {
 /** 头像加载失败 → 占位图（圆形 primary 弱色底 + 人形 icon）。 */
 const avatarBroken = ref(false);
 
-// ===== 简介：剥 HTML 标签 + 3 行截断 =====
+// ===== 简介：剥 HTML 为纯文本段（链接段站内跳转/外开）+ 3 行截断 =====
 
-const bioText = computed<string>(() => {
-  const html = profile.value?.comment_html;
-  return html ? htmlToText(html) : "";
-});
-
-/** comment_html → 纯文本。DOMParser 不执行脚本与内联事件，安全；
- * <br> 与块级闭合先换行，避免 textContent 把段落粘连成一行。 */
-function htmlToText(html: string): string {
-  const withBreaks = html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(?:p|div|li)>/gi, "\n");
-  const text = new DOMParser().parseFromString(withBreaks, "text/html").body.textContent ?? "";
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
-}
+const bioSegs = computed(() => descriptionSegments(profile.value?.comment_html));
 
 const bioExpanded = ref(false);
 const bioOverflow = ref(false);
@@ -407,9 +392,14 @@ defineExpose({
               </div>
             </div>
 
-            <!-- 简介：剥标签纯文本，3 行截断 + 展开/收起 -->
-            <div v-if="bioText" class="bio-block">
-              <p ref="bioEl" class="bio-text" :class="{ clamped: !bioExpanded }">{{ bioText }}</p>
+            <!-- 简介：剥 HTML 纯文本段（链接可点），3 行截断 + 展开/收起 -->
+            <div v-if="bioSegs.length" class="bio-block">
+              <p ref="bioEl" class="bio-text" :class="{ clamped: !bioExpanded }">
+                <template v-for="(seg, i) in bioSegs" :key="i">
+                  <button v-if="seg.kind === 'link'" type="button" class="text-link" @click="openTextLink(router, seg.url, seg.target)">{{ seg.text }}</button>
+                  <template v-else>{{ seg.text }}</template>
+                </template>
+              </p>
               <md-text-button v-if="bioOverflow || bioExpanded" class="bio-toggle" @click="toggleBio">
                 {{ bioExpanded ? t("browse.author.collapseBio") : t("browse.author.expandBio") }}
               </md-text-button>
@@ -609,6 +599,28 @@ defineExpose({
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
+}
+
+/* 简介内联链接（DESIGN.md「正文内联链接」配方） */
+.bio-text .text-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.bio-text .text-link:hover {
+  text-decoration: underline;
+}
+
+.bio-text .text-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 .bio-toggle {

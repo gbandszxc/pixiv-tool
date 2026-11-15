@@ -53,6 +53,7 @@ import SectionTabs from "../../components/browse/SectionTabs.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import { notify } from "../../ui/notify";
 import { parseBrowseInput, type ParsedBrowseInput } from "../../utils/parseInput";
+import { browseTargetPath } from "../../utils/pixivLinks";
 import { relativeTime as formatRelativeTime } from "../../utils/relativeTime";
 
 const { t, locale } = useI18n();
@@ -488,31 +489,7 @@ function onUsersIriChange(event: Event): void {
 
 /** 链接识别结果 → 应用自绘页面；支持类型与扩展步骤见 utils/parseInput.ts 文件头。 */
 function pushTarget(target: ParsedBrowseInput): void {
-  switch (target.type) {
-    case "illust-work":
-      void router.push(`/browse/work/illust/${target.id}`);
-      break;
-    case "manga-work":
-      void router.push(`/browse/work/manga/${target.id}`);
-      break;
-    case "novel-work":
-      void router.push(`/browse/work/novel/${target.id}`);
-      break;
-    case "user":
-      void router.push(`/browse/user/${target.id}`);
-      break;
-    case "novel-series":
-      void router.push(`/browse/series/novel/${target.id}`);
-      break;
-    case "illust-series":
-      void router.push(`/browse/series/illust/${target.id}`);
-      break;
-    default: {
-      // 新增 ParsedBrowseInput 类型后必须接入目标页面，遗漏分支会导致类型检查失败。
-      const unhandled: never = target;
-      throw new Error(`未处理的浏览跳转类型：${unhandled}`);
-    }
-  }
+  void router.push(browseTargetPath(target));
 }
 
 /** 结果卡片跳转：novel → 阅读器，其余走插画/漫画查看器（ugoira V1 显示封面帧）。 */

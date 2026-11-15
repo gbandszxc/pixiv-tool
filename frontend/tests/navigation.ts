@@ -65,6 +65,38 @@ async function run(): Promise<void> {
   await back("/browse/work/illust/9000005");
   await back("/browse/home");
 
+  // 正文内链：评论里的 pixiv 链接站内跳转（已封装页面），返回逐层回原作品而非兜底。
+  await router.push("/browse/work/illust/9000005");
+  await nextTick();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await click(".work-topbar md-icon-button.comments-panel-toggle");
+  await waitFor(() => !!document.querySelector(".side-panel .text-link"));
+  const commentLink = [...document.querySelectorAll<HTMLElement>(".side-panel .text-link")]
+    .find((el) => el.textContent?.includes("/artworks/9000012"));
+  assert(commentLink, "mock 评论首条应含 /artworks/9000012 链接");
+  commentLink.click();
+  await waitFor(() => router.currentRoute.value.fullPath === "/browse/work/illust/9000012");
+  await back("/browse/work/illust/9000005");
+
+  // 描述内链接同样站内跳转；小说阅读器 jumpuri 锚文本链到目标作品页。
+  const descLink = [...document.querySelectorAll<HTMLElement>(".description .text-link")]
+    .find((el) => el.textContent?.includes("/artworks/9000012"));
+  assert(descLink, "mock 描述应含 /artworks/9000012 链接");
+  descLink.click();
+  await waitFor(() => router.currentRoute.value.fullPath === "/browse/work/illust/9000012");
+  await back("/browse/work/illust/9000005");
+  await router.push("/browse/work/novel/9000005");
+  await waitFor(() => !!document.querySelector(".novel-content .text-link"));
+  const jumpuriLink = [...document.querySelectorAll<HTMLElement>(".novel-content .text-link")]
+    .find((el) => el.textContent?.trim() === "跳转到插画 9000012");
+  assert(jumpuriLink, "mock 正文应含 jumpuri 锚文本链接");
+  jumpuriLink.click();
+  await waitFor(() => router.currentRoute.value.fullPath === "/browse/work/illust/9000012");
+  // 内链逐层返回：9000012 → 小说（来路）→ 插画 9000005（小说来路）→ 首页
+  await back("/browse/work/novel/9000005");
+  await back("/browse/work/illust/9000005");
+  await back("/browse/home");
+
   // 跨页面、多层堆栈、工具旧路径重定向与完整 query 恢复。
   const chain = [
     "/browse/search?word=landscape&kind=novel",
@@ -90,11 +122,11 @@ async function run(): Promise<void> {
   for (const path of visited.slice(0, -1).reverse()) await back(path);
 
   // 回退后另走分支：旧的前进分支被原生历史替换，新分支仍可返回。
+  // /browse/discover 已是重定向（→ /browse/home），返回落在重定向目标。
   await router.push("/browse/discover");
   await router.push("/browse/feed");
-  await back("/browse/discover");
+  await back("/browse/home");
   await router.push("/browse/bookmark");
-  await back("/browse/discover");
   await back("/browse/home");
 
   for (const path of ["/browse/illustration", "/browse/manga", "/browse/novel", "/browse/watchlist"]) {
@@ -131,10 +163,11 @@ async function run(): Promise<void> {
 
 const result = document.querySelector("#navigation-result")!;
 run().then(() => {
-  result.textContent = "PASS：深链兜底、首页→详情→作者、相关推荐、多层返回、query、重定向与新分支";
+  result.textContent = "PASS：深链兜底、首页→详情→作者、相关推荐、正文内链跳转与返回、多层返回、query、重定向与新分支";
   result.setAttribute("data-status", "passed");
 }).catch((error: unknown) => {
-  result.textContent = `FAIL：${String(error)}`;
+  const stack = error instanceof Error ? `\n${error.stack}` : "";
+  result.textContent = `FAIL：${String(error)}${stack}`;
   result.setAttribute("data-status", "failed");
   console.error(error);
 });

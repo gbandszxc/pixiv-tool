@@ -5,8 +5,9 @@
  * 把 pixiv 原始标记文本渲染为只读正文：
  * - 先按 [newpage] 切页，只渲染当前页（props.page，1 起），页数经 pages-change 通知父级；
  * - 整行 [chapter:X] → 章节标题；整行 [uploadedimage:id] → 图片（id 在 props.images 内时）；
- * - 段落内残留的 jump/内嵌图标记按纯文本剔除（URL 不渲染为链接）；
- * - [jumpuri:文字 > URL] → 只保留可见文字（不开外链）；
+ * - 段落内残留的 jump/内嵌图标记按纯文本剔除（非 URL 跳转标记，不渲染）；
+ * - [[jumpuri:文字 > URL]] → 文字为锚文本的链接：已封装 pixiv 页面站内跳转，其余外开；
+ *   正文与译文中的裸 URL 同样 linkify（utils/pixivLinks.ts）；
  * - 行内 [rb:A>B]（pixiv 注音，容忍旧格式 / 分隔）→ <ruby>A<rt>B</rt></ruby>。
  *
  * 内嵌图：`[uploadedimage:id]` 的 URL 由父级经详情响应的 embedded_images 传入
@@ -17,9 +18,11 @@
  */
 import { computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { pxSrc } from "../../api/browse";
 import { canonicalLanguage, TARGET_LANGUAGE_CODES, type TranslatedLine, type TranslationMode } from "../../api/translation";
 import { useSettingsStore } from "../../stores/settings";
+import { linkifyText, normalizePixivHref, openTextLink, parsePixivLinkTarget, type LinkifiedSegment } from "../../utils/pixivLinks";
 
 const props = defineProps<{
   /** 小说全文（保留原始标记） */
@@ -35,6 +38,7 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: "pages-change", total: number): void }>();
 
 const { t } = useI18n();
+const router = useRouter();
 const settings = useSettingsStore();
 
 /**
@@ -53,11 +57,11 @@ const translationLang = computed(() => {
  * 行内标记一次扫描（顺序即优先级）：
  * 1. 注音 [rb:显示>ルビ]（pixiv 用 > 分隔，容忍 mock/旧格式的 /）；
  * 2. 内嵌图 [uploadedimage:id] / [pixivimage:illustId(-p)]；
- * 3. 站内跳转链接 [[jumpuri:文字 > URL]]（pixiv 实测是双层方括号）→ 只取「文字」；
+ * 3. 站内跳转链接 [[jumpuri:文字 > URL]]（pixiv 实测是双层方括号）→ 文字为锚文本的链接段；
  * 4. 其余跳转 [jump:N] / [jumpurl:...] → 整段丢弃。
  */
 const INLINE_RE =
-  /\[rb:([^>\]/]+)[>/]([^\]]+)\]|\[(?:pixivimage|uploadedimage):([^\]]*)\]|\[\[?jumpuri:([^>\]]*?)\s*>\s*[^\]]*\]\]?|\[(?:jump|jumpurl):[^\]]*\]/g;
+  /\[rb:([^>\]/]+)[>/]([^\]]+)\]|\[(?:pixivimage|uploadedimage):([^\]]*)\]|\[\[?jumpuri:([^>\]]*?)\s*>\s*([^\]]+?)\s*\]\]?|\[(?:jump|jumpurl):[^\]]*\]/g;
 /** 整行章节标题：[chapter:X]。 */
 const CHAPTER_LINE_RE = /^\s*\[chapter:(.*?)\]\s*$/;
 /** 整行跳转标记：[jump:N] / [jumpurl:...]（渲染时忽略）。 */
@@ -67,7 +71,8 @@ type Segment =
   | { kind: "text"; text: string }
   | { kind: "ruby"; base: string; ruby: string }
   /** url 为空串 = 取不到图片地址（整行时由调用方渲染占位块）。 */
-  | { kind: "image"; id: string; url: string };
+  | { kind: "image"; id: string; url: string }
+  | LinkifiedSegment;
 
 type Block =
   | { kind: "chapter"; text: string }
@@ -79,13 +84,20 @@ function imageUrl(id: string): string {
   return props.images?.[id] ?? "";
 }
 
-/** 行内拆 segments（普通文本 / 注音 / 内嵌图交替），供模板按元素渲染（替代 v-html）。 */
+/** 纯文本段 linkify：URL 成链接段（已封装 pixiv 页面 → 站内跳转，其余 → 外开浏览器）。 */
+function pushTextSegments(segments: Segment[], run: string): void {
+  for (const seg of linkifyText(run)) {
+    segments.push(seg);
+  }
+}
+
+/** 行内拆 segments（普通文本 / 注音 / 内嵌图 / 链接交替），供模板按元素渲染（替代 v-html）。 */
 function parseInline(line: string): Segment[] {
   const segments: Segment[] = [];
   let last = 0;
   for (const match of line.matchAll(INLINE_RE)) {
     const start = match.index ?? 0;
-    if (start > last) segments.push({ kind: "text", text: line.slice(last, start) });
+    if (start > last) pushTextSegments(segments, line.slice(last, start));
     if (match[1] !== undefined) {
       segments.push({ kind: "ruby", base: match[1], ruby: match[2] });
     } else if (match[3] !== undefined) {
@@ -93,11 +105,19 @@ function parseInline(line: string): Segment[] {
       segments.push({ kind: "image", id: match[3], url: imageUrl(match[3]) });
     } else if (match[4] !== undefined) {
       const label = match[4].trim();
-      if (label) segments.push({ kind: "text", text: label });
+      const url = (match[5] ?? "").trim();
+      if (!url) {
+        // 无 URL 的退化标记（现网不会出现）：只保留可见文字（与旧行为一致）
+        if (label) segments.push({ kind: "text", text: label });
+      } else {
+        // [[jumpuri:文字 > URL]]：文字为锚文本；已封装 pixiv 页面站内跳转，其余外开
+        const href = normalizePixivHref(url);
+        segments.push({ kind: "link", text: label || url, url: href, target: parsePixivLinkTarget(href) });
+      }
     }
     last = start + match[0].length;
   }
-  if (last < line.length) segments.push({ kind: "text", text: line.slice(last) });
+  if (last < line.length) pushTextSegments(segments, line.slice(last));
   return segments.filter((seg) => seg.kind !== "text" || seg.text.length > 0);
 }
 
@@ -147,6 +167,10 @@ watch(
 
 const blocks = computed(() => parsePage(pages.value[props.page - 1] ?? ""));
 const translatedLines = computed(() => new Map(props.translation?.map(line => [line.line, line.text]) ?? []));
+/** 译文行 linkify 段（模型输出同样可能携带链接，识别规则与原文一致）。 */
+function translatedSegments(line: number): LinkifiedSegment[] {
+  return linkifyText(translatedLines.value.get(line) ?? "");
+}
 const showOriginal = computed(() => props.mode !== "translated");
 const showTranslation = computed(() => props.mode !== "original");
 /** 非末页时，页尾显示分页线提示（当前页之后还有内容）。 */
@@ -195,13 +219,29 @@ const hasMorePages = computed(() => props.page < pages.value.length);
               loading="lazy"
               decoding="async"
             />
+            <button
+              v-else-if="seg.kind === 'link'"
+              type="button"
+              class="text-link"
+              @click="openTextLink(router, seg.url, seg.target)"
+            >{{ seg.text }}</button>
             <template v-else>{{ seg.text }}</template>
           </template>
         </p>
         <template v-else v-for="(seg, j) in block.segments" :key="j">
           <img v-if="seg.kind === 'image'" class="novel-image novel-image-inline" :src="pxSrc(seg.url)" :alt="t('browse.novel.imageAlt')" loading="lazy" decoding="async" />
         </template>
-        <p v-if="showTranslation && translatedLines.has(block.line)" class="para translated-text" :lang="translationLang">{{ translatedLines.get(block.line) }}</p>
+        <p v-if="showTranslation && translatedLines.has(block.line)" class="para translated-text" :lang="translationLang">
+          <template v-for="(seg, j) in translatedSegments(block.line)" :key="j">
+            <button
+              v-if="seg.kind === 'link'"
+              type="button"
+              class="text-link"
+              @click="openTextLink(router, seg.url, seg.target)"
+            >{{ seg.text }}</button>
+            <template v-else>{{ seg.text }}</template>
+          </template>
+        </p>
       </div>
     </template>
     <div v-if="hasMorePages" class="page-divider" aria-hidden="true">· · ·</div>
@@ -225,6 +265,32 @@ const hasMorePages = computed(() => props.page < pages.value.length);
   display: block;
   color: var(--md-sys-color-primary);
   white-space: pre-wrap;
+}
+
+/* 正文内联链接（DESIGN.md「正文内联链接」配方）：阅读器内常驻下划线——
+ * 译文整段已是 primary，仅靠颜色无法区分链接与译文文字 */
+.text-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--md-sys-color-primary) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.text-link:hover {
+  text-decoration-color: var(--md-sys-color-primary);
+}
+
+.text-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 .chapter {

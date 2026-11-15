@@ -15,6 +15,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  */
 import { computed, ref, shallowRef, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import {
   browseIllustSeries,
   browseNovelSeries,
@@ -33,6 +34,8 @@ import { useSeriesViewMode, type SeriesEpisodeView, type SeriesKind } from "../.
 import { useThumbTier } from "../../composables/useThumbTier";
 import { notify } from "../../ui/notify";
 import { fillDownloadForm, openInBrowser } from "../../utils/pixivHooks";
+import { descriptionSegments } from "../../utils/descriptionText";
+import { openTextLink } from "../../utils/pixivLinks";
 import { pixivIllustSeriesUrl, pixivSeriesUrl } from "../../utils/pixivUrl";
 
 /** 小说系列每页条数（browse_novel_series 每批 30，页码映射 last_order=(page-1)*30）。 */
@@ -41,6 +44,7 @@ const NOVEL_PAGE_SIZE = 30;
 const props = defineProps<{ kind: SeriesKind; id: number }>();
 
 const { t } = useI18n();
+const router = useRouter();
 
 // ===== 数据（页码分页；切页保留旧内容） =====
 
@@ -171,7 +175,8 @@ function onCoverError(): void {
   coverFailed.value = true;
 }
 
-const caption = computed(() => head.value?.caption.replace(/<[^>]*>/g, "").trim() ?? "");
+/** 系列简介按纯文本段展示（剥 HTML、保留 <br>/块级换行）；链接段站内跳转/外开。 */
+const captionSegs = computed(() => descriptionSegments(head.value?.caption));
 
 const statusLabel = computed(() =>
   head.value?.concluded ? t("browse.series.concluded") : t("browse.series.ongoing")
@@ -264,7 +269,12 @@ function openInPixiv(): void {
           <router-link class="author-link" :to="`/browse/user/${head.userId}`">
             {{ head.userName }}
           </router-link>
-          <p v-if="caption" class="caption">{{ caption }}</p>
+          <p v-if="captionSegs.length" class="caption">
+            <template v-for="(seg, i) in captionSegs" :key="i">
+              <button v-if="seg.kind === 'link'" type="button" class="text-link" @click="openTextLink(router, seg.url, seg.target)">{{ seg.text }}</button>
+              <template v-else>{{ seg.text }}</template>
+            </template>
+          </p>
           <p class="stats">{{ statsText }}</p>
           <div class="head-actions">
             <md-outlined-button
@@ -400,7 +410,30 @@ function openInPixiv(): void {
   color: var(--ink-muted);
   font-size: 14px;
   line-height: 1.5;
+  white-space: pre-line;
   overflow-wrap: anywhere;
+}
+
+/* 简介内联链接（DESIGN.md「正文内联链接」配方） */
+.caption .text-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--md-sys-color-primary);
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.caption .text-link:hover {
+  text-decoration: underline;
+}
+
+.caption .text-link:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
 }
 
 .stats {
