@@ -88,6 +88,12 @@ rand = "0.9"
 # `deflate-flate2` 只开 `_deflate-any` 标记，必须同时显式打开 `flate2`
 # 这个可选依赖 feature，否则 zip 内部 `use flate2::…` 无法解析（实测编译失败）。
 zip = { version = "2.4.2", default-features = false, features = ["deflate-flate2", "flate2"] }
+# EPUB 导出（src/core/epub.rs）：
+# png —— 占位封面绘制（RGBA 1000x1414 编码）；flate2 已在依赖树，无新增压缩栈。
+png = "0.17"
+# ab_glyph —— 占位封面文字光栅化的轮廓提取（outline curves）；
+# 自带 outline 不含光栅化器，像素填充在 epub.rs 内按扫描线自实现（不引入 image 栈）。
+ab_glyph = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # Alt 唤出菜单栏走 WebView2 的 AcceleratorKeyPressed 事件；
