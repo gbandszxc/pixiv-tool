@@ -156,7 +156,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 与 translation/ 共 90 个 #[tauri::command]（translation 20 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 3 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
+│     ├─ commands/              # 与 translation/ 共 93 个 #[tauri::command]（translation 20 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 6 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
 │     ├─ cookies.rs             # keyring CookieStore
@@ -796,6 +796,24 @@ CREATE TABLE IF NOT EXISTS saucenao_search_history (
 );
 CREATE INDEX IF NOT EXISTS idx_saucenao_search_history_searched
   ON saucenao_search_history(searched_at DESC);
+
+-- 浏览搜索历史（浏览关键词搜索：插画/漫画/小说；`browse_search` 第一页成功后
+-- 自动记录；word+kind+order+mode+s_mode+users_iri 六元组全等去重，重复搜索
+-- 刷新 searched_at，保留最近 50 条、超出裁剪最旧；过滤器列 NOT NULL DEFAULT ''
+-- 避开 SQLite NULL 参与唯一约束的不等价坑）
+CREATE TABLE IF NOT EXISTS browse_search_history (
+  id          INTEGER PRIMARY KEY,
+  word        TEXT NOT NULL,             -- 搜索词（trim 后入库）
+  kind        TEXT NOT NULL,             -- 'illust' | 'manga' | 'novel'
+  "order"     TEXT NOT NULL DEFAULT '',  -- 排序（SQL 关键字列名加引号）
+  mode        TEXT NOT NULL DEFAULT '',  -- 过滤模式
+  s_mode      TEXT NOT NULL DEFAULT '',  -- 搜索方式
+  users_iri   TEXT NOT NULL DEFAULT '',  -- 收藏数档位过滤（空 = 未用）
+  searched_at TEXT NOT NULL,             -- RFC3339 UTC，最新在前
+  UNIQUE(word, kind, "order", mode, s_mode, users_iri)
+);
+CREATE INDEX IF NOT EXISTS idx_browse_search_history_searched
+  ON browse_search_history(searched_at DESC);
 ```
 
 **轻量迁移**：`Db::open` 先按 `PRAGMA table_info(<表>)` 探测列是否存在，缺失即
@@ -1626,6 +1644,9 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_history_record(kind, workId, title, authorId, authorName, cover?, pageCount, xRestrict)` | 记录一次浏览访问（同 kind+workId 覆写并按访问时间置顶；作品详情页加载成功后上报） |
 | `browse_history_list(page, pageSize, kind?)` | 浏览访问历史分页查询（`visited_at` 倒序，最近访问在前）；page ≥ 1，pageSize 为 1–200，拒绝偏移溢出；`kind` 省略=全部，否则 illust/manga/novel 过滤，非法值报错 |
 | `browse_history_clear()` | 清空浏览访问历史（返回 `{status, deleted}`） |
+| `browse_search_history_list(limit?)` | 浏览搜索历史（插画/漫画/小说关键词搜索；最新在前；limit 缺省 50，取值 1–50，表内全量即 50 条）。条目 `{id, word, kind, order, mode, s_mode, users_iri, searched_at}` |
+| `browse_search_history_delete(id)` | 删除单条浏览搜索历史（返回 `{status, deleted}`；id 不存在幂等，deleted=0） |
+| `browse_search_history_clear()` | 清空浏览搜索历史（返回 `{status, deleted}` 清除条数） |
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
 | `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位（若文件存在则高亮选中；若文件已移走或删除则回退打开用户在设置中配置的下载目录，进入 pic / novel 子目录，未改即默认输出目录，杜绝报错） |
@@ -1634,7 +1655,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
 | `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |
 | `browse_follow_latest(kind, mode, page)` | 关注的新作品（p + isLastPage）；mode = all|safe|r18，动态页范围 tab 三档直传 |
-| `browse_search(kind, word, order, mode, s_mode, type, page, users_iri?)` | 插画/漫画/小说搜索（total + lastPage；透传已有可选 like_count/bookmark_count/view_count，小说自带收藏数）；users_iri = `100`/`500`/`1000`/`5000`/`10000` 可选收藏数档位过滤（后端拼词 `{word} {N}users入り` 借社区标签实现收藏数下限过滤，非排序；缺省不拼词行为不变；白名单外含空串报错；与 s_mode=s_tag_full 组合报错） |
+| `browse_search(kind, word, order, mode, s_mode, type, page, users_iri?)` | 插画/漫画/小说搜索（total + lastPage；透传已有可选 like_count/bookmark_count/view_count，小说自带收藏数）；users_iri = `100`/`500`/`1000`/`5000`/`10000` 可选收藏数档位过滤（后端拼词 `{word} {N}users入り` 借社区标签实现收藏数下限过滤，非排序；缺省不拼词行为不变；白名单外含空串报错；与 s_mode=s_tag_full 组合报错）；第一页搜索成功后自动记录浏览搜索历史（后端权威，前端不补记；word trim 后入库，word+kind+order+mode+s_mode+users_iri 六元组全等去重、重复搜索刷新 `searched_at`，保留最近 50 条、超出裁剪最旧；翻页、计数补取不记录；记录失败只降级打日志不阻断结果） |
 | `browse_work_counts(kind, ids)` | 作品三项计数批量（搜索页本页排序用；逐项请求详情端点，ids ≤ 60；单项失败跳过，全局限速排队） |
 | `browse_ranking(kind, mode, page, date)` | 排行榜：illust/manga/ugoira 走 ranking.php?format=json，novel 走 /ajax/ranking/novel（每页 50，含 prev/next_date） |
 | `browse_work_detail(kind, id)` | 作品详情：illust+pages+ugoira_meta / novel 全文（含 series 导航 + 正文内嵌图索引 `embedded_images`） |

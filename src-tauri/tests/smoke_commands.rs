@@ -12,6 +12,8 @@
 
 use pixiv_tool_lib::commands::browse_history_cmds::{
     browse_history_clear_impl, browse_history_list_impl, browse_history_record_impl,
+    browse_search_history_clear_impl, browse_search_history_delete_impl,
+    browse_search_history_list_impl,
 };
 use pixiv_tool_lib::commands::history_cmds::history_list_impl;
 use pixiv_tool_lib::commands::misc_cmds::{
@@ -23,7 +25,8 @@ use pixiv_tool_lib::commands::saucenao_cmds::{
 };
 use pixiv_tool_lib::commands::settings_cmds::apply_settings_patch;
 use pixiv_tool_lib::db::{
-    BrowseHistoryEntry, Db, IllustrationInsert, NovelInsert, SaucenaoSearchHistoryEntry, now_iso,
+    BrowseHistoryEntry, BrowseSearchHistoryEntry, Db, IllustrationInsert, NovelInsert,
+    SaucenaoSearchHistoryEntry, now_iso,
 };
 use pixiv_tool_lib::paths::AppPaths;
 use pixiv_tool_lib::settings::Settings;
@@ -390,5 +393,59 @@ fn saucenao_history_list_delete_clear_round_trip() {
     assert_eq!(body["deleted"], json!(2));
     assert!(saucenao_history_list_impl(&state, None).unwrap().is_empty());
     assert_eq!(saucenao_history_clear_impl(&state).unwrap()["deleted"], json!(0));
+    cleanup(&dir);
+}
+
+/// 浏览搜索历史命令：列表（缺省 50 / 显式 limit / 非法 limit）→
+/// 单条删除（含幂等 0）→ 清空计数（存储层去重与 50 条裁剪单测在 db.rs 内）。
+#[test]
+fn browse_search_history_list_delete_clear_round_trip() {
+    let (state, dir) = temp_state("browse-search-history");
+
+    // 播种 3 条（显式 searched_at 控制顺序；word+kind 组合各不相同）。
+    for (word, kind, ts) in [
+        ("風", "illust", "2026-01-01T00:00:01+00:00"),
+        ("海", "manga", "2026-01-01T00:00:02+00:00"),
+        ("空", "novel", "2026-01-01T00:00:03+00:00"),
+    ] {
+        state
+            .db
+            .record_browse_search_history(&BrowseSearchHistoryEntry {
+                word: word.into(),
+                kind: kind.into(),
+                order: String::new(),
+                mode: String::new(),
+                s_mode: String::new(),
+                users_iri: String::new(),
+                searched_at: ts.into(),
+            })
+            .unwrap();
+    }
+
+    // list 缺省 limit：最新在前。
+    let items = browse_search_history_list_impl(&state, None).unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].word, "空");
+    assert_eq!(items[0].kind, "novel");
+    // 显式 limit 生效。
+    let limited = browse_search_history_list_impl(&state, Some(1)).unwrap();
+    assert_eq!(limited.len(), 1);
+    assert_eq!(limited[0].word, "空");
+    // 非法 limit → Err（同 saucenao_history_list 先例）。
+    let err = browse_search_history_list_impl(&state, Some(0)).unwrap_err();
+    assert_eq!(err, "limit 必须在 1~50 之间");
+
+    // delete：存在 → deleted=1；重复删除幂等 deleted=0。
+    let id = items[0].id;
+    assert_eq!(browse_search_history_delete_impl(&state, id).unwrap()["deleted"], json!(1));
+    assert_eq!(browse_search_history_delete_impl(&state, id).unwrap()["deleted"], json!(0));
+    assert_eq!(browse_search_history_list_impl(&state, None).unwrap().len(), 2);
+
+    // clear：返回清除条数；二次清空 deleted=0。
+    let body = browse_search_history_clear_impl(&state).unwrap();
+    assert_eq!(body["status"], json!("success"));
+    assert_eq!(body["deleted"], json!(2));
+    assert!(browse_search_history_list_impl(&state, None).unwrap().is_empty());
+    assert_eq!(browse_search_history_clear_impl(&state).unwrap()["deleted"], json!(0));
     cleanup(&dir);
 }

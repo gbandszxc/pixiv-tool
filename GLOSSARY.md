@@ -117,6 +117,10 @@ _Avoid_: 内嵌浏览器（已移除）
 作品级访问记录的持久化（`browse_history` 表），可经同步上云恢复。
 _Avoid_: 访问历史、浏览访问历史
 
+**浏览搜索历史 (Browse Search History)**:
+浏览关键词搜索（插画 / 漫画 / 小说）每次成功搜索的落库记录（`browse_search_history` 表）：按搜索词与过滤条件六元组全等去重、重复搜索刷新时间，保留最近 50 条；与浏览历史、以图识图搜索历史是并列概念，互不归属。
+_Avoid_: 关键词历史、搜索记录（与「以图识图搜索历史」混用）
+
 **图片代理 (Image Proxy)**:
 `pixiv-img` / `pixiv-ugoira` / `pixiv-download` 自定义协议下的图片通道：磁盘缓存 + CDN 闸门，前端永不直连 pixiv 图床。
 _Avoid_: CDN 直链

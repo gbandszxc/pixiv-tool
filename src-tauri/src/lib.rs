@@ -373,10 +373,13 @@ pub fn run() {
             commands::saucenao_cmds::saucenao_history_clear,
             // history
             commands::history_cmds::history_list,
-            // browse_history（浏览访问历史）
+            // browse_history（浏览访问历史 + 浏览搜索历史）
             commands::browse_history_cmds::browse_history_record,
             commands::browse_history_cmds::browse_history_list,
             commands::browse_history_cmds::browse_history_clear,
+            commands::browse_history_cmds::browse_search_history_list,
+            commands::browse_history_cmds::browse_search_history_delete,
+            commands::browse_history_cmds::browse_search_history_clear,
             // novels / illustrations
             commands::misc_cmds::novel_delete,
             commands::misc_cmds::novels_batch_delete,

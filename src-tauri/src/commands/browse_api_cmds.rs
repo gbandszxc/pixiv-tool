@@ -24,6 +24,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tauri::State;
 
+use crate::db::BrowseSearchHistoryEntry;
 use crate::pixiv::api::PixivApi;
 use crate::pixiv::client::PixivClient;
 use crate::state::AppState;
@@ -368,6 +369,7 @@ pub async fn browse_follow_latest_impl(
 
 /// 搜索（含 total；order/s_mode/type/users_iri 缺省由 api 层兜底或校验）。
 /// `type` 为 Rust 关键字：形参用 r#type，Tauri 宏 unraw 后与前端键名 "type" 对齐。
+/// 第一页搜索成功后自动记录浏览搜索历史（见 `browse_search_impl`）。
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn browse_search(
@@ -409,10 +411,26 @@ pub async fn browse_search_impl(
 ) -> Result<Value, String> {
     validate_search(kind, word, mode)?;
     validate_page(page)?;
-    build_browse_api(state)?
+    let result = build_browse_api(state)?
         .get_search(kind, word, order, mode, s_mode, type_, page, users_iri)
-        .await
-        .map_err(|err| err.to_string())
+        .await;
+    // 成功路径且仅第一页时自动记录浏览搜索历史（后端权威；翻页、计数补取不记录；
+    // word trim 后入库，记录失败只降级打日志，不阻断已成功的搜索结果）
+    if page == 1 && result.is_ok() {
+        let entry = BrowseSearchHistoryEntry {
+            word: word.trim().to_string(),
+            kind: kind.to_string(),
+            order: order.unwrap_or_default().to_string(),
+            mode: mode.unwrap_or_default().to_string(),
+            s_mode: s_mode.unwrap_or_default().to_string(),
+            users_iri: users_iri.unwrap_or_default().to_string(),
+            searched_at: crate::db::now_iso(),
+        };
+        if let Err(err) = state.db.record_browse_search_history(&entry) {
+            log::warn!("记录浏览搜索历史失败: {err}");
+        }
+    }
+    result.map_err(|err| err.to_string())
 }
 
 /// 作品三项计数批量（搜索页本页排序用）。ids 上限 60（= 一个接口页）；

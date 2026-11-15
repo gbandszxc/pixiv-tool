@@ -18,6 +18,9 @@ pub const TERMINAL_TASK_STATUSES: [&str; 3] = ["done", "failed", "canceled"];
 /// 以图识图搜索历史保留条数上限（超出裁剪最旧；list 的 limit 上限同值）。
 pub const SAUCENAO_SEARCH_HISTORY_KEEP: i64 = 50;
 
+/// 浏览搜索历史保留条数上限（超出裁剪最旧；list 的 limit 上限同值）。
+pub const BROWSE_SEARCH_HISTORY_KEEP: i64 = 50;
+
 /// IPC 分页不能使用 SQLite 的负 LIMIT（全表），也不能溢出 OFFSET。
 fn history_offset(page: i64, page_size: i64) -> Result<i64, String> {
     if page < 1 || !(1..=200).contains(&page_size) {
@@ -103,6 +106,23 @@ CREATE TABLE IF NOT EXISTS saucenao_search_history (
 );
 CREATE INDEX IF NOT EXISTS idx_saucenao_search_history_searched
     ON saucenao_search_history(searched_at DESC);
+
+-- 浏览搜索历史（浏览关键词搜索：插画/漫画/小说；六元组全等去重，
+-- 重复搜索刷新 searched_at，保留最近 50 条；过滤器列 NOT NULL DEFAULT ''
+-- 避开 SQLite NULL 参与唯一约束的不等价坑）
+CREATE TABLE IF NOT EXISTS browse_search_history (
+    id          INTEGER PRIMARY KEY,
+    word        TEXT NOT NULL,             -- 搜索词（trim 后入库）
+    kind        TEXT NOT NULL,             -- 'illust' | 'manga' | 'novel'
+    \"order\"     TEXT NOT NULL DEFAULT '',  -- 排序（SQL 关键字列名加引号）
+    mode        TEXT NOT NULL DEFAULT '',  -- 过滤模式
+    s_mode      TEXT NOT NULL DEFAULT '',  -- 搜索方式
+    users_iri   TEXT NOT NULL DEFAULT '',  -- 收藏数档位过滤（空 = 未用）
+    searched_at TEXT NOT NULL,             -- RFC3339 UTC，最新在前
+    UNIQUE(word, kind, \"order\", mode, s_mode, users_iri)
+);
+CREATE INDEX IF NOT EXISTS idx_browse_search_history_searched
+    ON browse_search_history(searched_at DESC);
 ";
 
 /// 统一 UTC ISO 时间戳（等价 Python `datetime.now(timezone.utc).isoformat()`）。
@@ -230,6 +250,32 @@ pub struct SaucenaoSearchHistoryRow {
     pub source: String,
     pub label: String,
     pub result_count: i64,
+    pub searched_at: String,
+}
+
+/// browse_search_history 插入参数（word+kind+order+mode+s_mode+users_iri 六元组
+/// 全等去重、重复搜索覆写刷新；searched_at 由调用方给 now_iso()）。
+#[derive(Debug, Clone)]
+pub struct BrowseSearchHistoryEntry {
+    pub word: String,
+    pub kind: String,
+    pub order: String,
+    pub mode: String,
+    pub s_mode: String,
+    pub users_iri: String,
+    pub searched_at: String,
+}
+
+/// browse_search_history 表整行。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseSearchHistoryRow {
+    pub id: i64,
+    pub word: String,
+    pub kind: String,
+    pub order: String,
+    pub mode: String,
+    pub s_mode: String,
+    pub users_iri: String,
     pub searched_at: String,
 }
 
@@ -1216,6 +1262,98 @@ impl Db {
                 |row| row.get(0),
             )?;
             conn.execute("DELETE FROM saucenao_search_history", [])?;
+            Ok(total as usize)
+        })
+    }
+
+    // ------------------------------------------------------------------
+    // browse_search_history（浏览搜索历史）
+    // ------------------------------------------------------------------
+
+    /// 记录一次浏览搜索（word+kind+order+mode+s_mode+users_iri 六元组全等去重，
+    /// 重复搜索覆写并按新 searched_at 置顶），随后裁剪到最近
+    /// [`BROWSE_SEARCH_HISTORY_KEEP`] 条（超出裁剪最旧）。
+    pub fn record_browse_search_history(
+        &self,
+        entry: &BrowseSearchHistoryEntry,
+    ) -> Result<(), String> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO browse_search_history
+                 (word, kind, \"order\", mode, s_mode, users_iri, searched_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    entry.word,
+                    entry.kind,
+                    entry.order,
+                    entry.mode,
+                    entry.s_mode,
+                    entry.users_iri,
+                    entry.searched_at,
+                ],
+            )?;
+            // 保留最近 N 条（本次刚写入的行 searched_at 最新，必然在内）
+            conn.execute(
+                "DELETE FROM browse_search_history WHERE id NOT IN
+                 (SELECT id FROM browse_search_history
+                  ORDER BY searched_at DESC, id DESC LIMIT ?1)",
+                params![BROWSE_SEARCH_HISTORY_KEEP],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// 浏览搜索历史（最新在前；limit 取值 1–[`BROWSE_SEARCH_HISTORY_KEEP`]，
+    /// 表本身也被裁剪到该上限，因此 50 即全量）。
+    pub fn list_browse_search_history(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<BrowseSearchHistoryRow>, String> {
+        if !(1..=BROWSE_SEARCH_HISTORY_KEEP).contains(&limit) {
+            return Err(format!("limit 必须在 1~{BROWSE_SEARCH_HISTORY_KEEP} 之间"));
+        }
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, word, kind, \"order\", mode, s_mode, users_iri, searched_at
+                 FROM browse_search_history
+                 ORDER BY searched_at DESC, id DESC LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![limit], |row| {
+                    Ok(BrowseSearchHistoryRow {
+                        id: row.get("id")?,
+                        word: row.get("word")?,
+                        kind: row.get("kind")?,
+                        order: row.get("order")?,
+                        mode: row.get("mode")?,
+                        s_mode: row.get("s_mode")?,
+                        users_iri: row.get("users_iri")?,
+                        searched_at: row.get("searched_at")?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// 删除单条浏览搜索历史，返回删除条数（0 = id 不存在）。
+    pub fn delete_browse_search_history(&self, id: i64) -> Result<usize, String> {
+        self.with_conn(|conn| {
+            let deleted =
+                conn.execute("DELETE FROM browse_search_history WHERE id = ?1", params![id])?;
+            Ok(deleted)
+        })
+    }
+
+    /// 清空浏览搜索历史，返回删除条数。
+    pub fn clear_browse_search_history(&self) -> Result<usize, String> {
+        self.with_conn(|conn| {
+            let total: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM browse_search_history",
+                [],
+                |row| row.get(0),
+            )?;
+            conn.execute("DELETE FROM browse_search_history", [])?;
             Ok(total as usize)
         })
     }
@@ -2211,6 +2349,168 @@ mod tests {
         assert_eq!(db.clear_saucenao_search_history().unwrap(), 2);
         assert!(db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP).unwrap().is_empty());
         assert_eq!(db.clear_saucenao_search_history().unwrap(), 0);
+        cleanup(&dir);
+    }
+
+    // ------------------------------------------------------------------
+    // browse_search_history
+    // ------------------------------------------------------------------
+
+    /// 构造一条浏览搜索历史（过滤器缺省为空串，时间戳保证递增可辨）。
+    fn browse_search_entry(word: &str, kind: &str, searched_at: &str) -> BrowseSearchHistoryEntry {
+        BrowseSearchHistoryEntry {
+            word: word.into(),
+            kind: kind.into(),
+            order: String::new(),
+            mode: String::new(),
+            s_mode: String::new(),
+            users_iri: String::new(),
+            searched_at: searched_at.into(),
+        }
+    }
+
+    #[test]
+    fn browse_search_history_dedup_refreshes_and_orders() {
+        let (db, dir) = temp_db("browse-search-dedup");
+        db.record_browse_search_history(&browse_search_entry(
+            "風",
+            "illust",
+            "2026-01-01T00:00:00+00:00",
+        ))
+        .unwrap();
+        db.record_browse_search_history(&browse_search_entry(
+            "海",
+            "novel",
+            "2026-01-02T00:00:00+00:00",
+        ))
+        .unwrap();
+        // 同词同 kind 同过滤器重复搜索：刷新 searched_at，仍是 2 行且置顶
+        db.record_browse_search_history(&browse_search_entry(
+            "風",
+            "illust",
+            "2026-01-03T00:00:00+00:00",
+        ))
+        .unwrap();
+        let rows = db
+            .list_browse_search_history(BROWSE_SEARCH_HISTORY_KEEP)
+            .unwrap();
+        assert_eq!(rows.len(), 2, "六元组 UNIQUE 去重");
+        assert_eq!(rows[0].word, "風", "刷新后按新时间置顶");
+        assert_eq!(rows[0].searched_at, "2026-01-03T00:00:00+00:00");
+        assert_eq!(rows[1].word, "海");
+        // 同词同 kind 但过滤器不同 → 不同条目（去重键是六元组，不只看 word）
+        let mut with_filter = browse_search_entry("風", "illust", "2026-01-04T00:00:00+00:00");
+        with_filter.order = "date_d".into();
+        with_filter.s_mode = "s_tag".into();
+        db.record_browse_search_history(&with_filter).unwrap();
+        let rows = db
+            .list_browse_search_history(BROWSE_SEARCH_HISTORY_KEEP)
+            .unwrap();
+        assert_eq!(rows.len(), 3, "同词不同过滤器是不同条目");
+        assert_eq!(rows[0].word, "風");
+        assert_eq!(rows[0].order, "date_d");
+        assert_eq!(rows[0].s_mode, "s_tag");
+        assert_eq!(rows[1].word, "風", "无过滤器的旧条目不被误覆盖");
+        assert_eq!(rows[1].order, "");
+        // 最新在前（乱序写入同样成立）
+        db.record_browse_search_history(&browse_search_entry(
+            "空",
+            "manga",
+            "2026-01-03T12:00:00+00:00",
+        ))
+        .unwrap();
+        let rows = db
+            .list_browse_search_history(BROWSE_SEARCH_HISTORY_KEEP)
+            .unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.word.as_str()).collect::<Vec<_>>(),
+            vec!["風", "空", "風", "海"]
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn browse_search_history_trims_to_keep_limit() {
+        let (db, dir) = temp_db("browse-search-trim");
+        // 写入 55 条（时间戳逐小时递增），保留最近 50
+        for i in 0..55i64 {
+            let ts = format!("2026-01-{:02}T{:02}:00:00+00:00", 1 + i / 24, i % 24);
+            db.record_browse_search_history(&browse_search_entry(
+                &format!("词-{i}"),
+                "manga",
+                &ts,
+            ))
+            .unwrap();
+        }
+        let rows = db
+            .list_browse_search_history(BROWSE_SEARCH_HISTORY_KEEP)
+            .unwrap();
+        assert_eq!(rows.len(), BROWSE_SEARCH_HISTORY_KEEP as usize);
+        // 最新在前：词-54 ... 词-5（最旧 5 条被裁剪）
+        assert_eq!(rows[0].word, "词-54");
+        assert_eq!(rows[49].word, "词-5");
+        assert!(
+            !rows.iter().any(|r| r.word == "词-4"),
+            "超出上限的最旧条目被裁剪"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn browse_search_history_list_limit_validation() {
+        let (db, dir) = temp_db("browse-search-limit");
+        db.record_browse_search_history(&browse_search_entry(
+            "詞",
+            "novel",
+            "2026-01-01T00:00:00+00:00",
+        ))
+        .unwrap();
+        // limit 生效：只取前 N 条
+        let rows = db.list_browse_search_history(1).unwrap();
+        assert_eq!(rows.len(), 1);
+        // 非法 limit 拒绝（0 / 超上限 / 负数）
+        assert_eq!(
+            db.list_browse_search_history(0).unwrap_err(),
+            "limit 必须在 1~50 之间"
+        );
+        assert!(db.list_browse_search_history(51).is_err());
+        assert!(db.list_browse_search_history(-1).is_err());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn browse_search_history_delete_and_clear_counts() {
+        let (db, dir) = temp_db("browse-search-del");
+        for name in ["a", "b", "c"] {
+            db.record_browse_search_history(&browse_search_entry(
+                name,
+                "illust",
+                "2026-01-01T00:00:00+00:00",
+            ))
+            .unwrap();
+        }
+        // delete：存在 → 1；不存在 → 0
+        let target = db.list_browse_search_history(BROWSE_SEARCH_HISTORY_KEEP).unwrap()[0].id;
+        assert_eq!(db.delete_browse_search_history(target).unwrap(), 1);
+        assert_eq!(
+            db.delete_browse_search_history(target).unwrap(),
+            0,
+            "重复删除幂等返回 0"
+        );
+        assert_eq!(
+            db.list_browse_search_history(BROWSE_SEARCH_HISTORY_KEEP)
+                .unwrap()
+                .len(),
+            2
+        );
+        // clear：返回清除条数，二次 clear 返回 0
+        assert_eq!(db.clear_browse_search_history().unwrap(), 2);
+        assert!(
+            db.list_browse_search_history(BROWSE_SEARCH_HISTORY_KEEP)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(db.clear_browse_search_history().unwrap(), 0);
         cleanup(&dir);
     }
 }
