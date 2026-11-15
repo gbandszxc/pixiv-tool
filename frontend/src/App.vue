@@ -17,7 +17,7 @@
     <div class="main-pane">
     <main ref="contentEl" class="app-content" :class="{ 'detail-page': route.path.startsWith('/browse/work/'), 'series-page': route.name === 'browse-series' }" tabindex="-1">
       <router-view v-slot="{ Component, route: pageRoute }">
-        <KeepAlive :key="browseSession" :include="cachedBrowseViews" :max="20">
+        <KeepAlive :key="browseSession" :include="cachedViews" :max="20">
           <component :is="Component" :key="pageRoute.path.startsWith('/browse/') ? pageRoute.path : undefined" />
         </KeepAlive>
       </router-view>
@@ -110,23 +110,25 @@ function onContentScroll(): void {
   scrollFrame = requestAnimationFrame(() => { scrollFrame = 0; captureLayout(); });
 }
 
-const cachedBrowseViews = [
+const cachedViews = [
   "BrowseHomeView", "BrowseChannelView", "BrowseDiscoverView", "BrowseFeedView",
   "BrowseWatchlistView", "BrowseSearchView", "BrowseRankingView", "BrowseBookmarkView",
   "BrowseHistoryView", "BrowseMeView", "BrowseAuthorView", "BrowseSeriesView", "BrowseWorkView",
+  "SaucenaoView",
 ];
 const browseSession = computed(() => `${authStore.isLoggedIn}:${authStore.userId}`);
 // 与 KeepAlive 相同的 20 页 LRU 边界；主内容滚动不在 window 上。
 const browseScroll = new Map<string, number>();
 /** 缓存集内的页面返回时按 path 恢复主内容滚动。插画/漫画详情（BrowseWorkView）同样入缓存：
  * 作者页与相关推荐的往返复用已加载的舞台，不再重新加载；小说阅读器自持阅读位置与翻译状态，
- * 暂不纳入。 */
-function isCachedBrowsePage(path: string): boolean {
+ * 暂不纳入。以图识图（/saucenao）入缓存：站内打开→返回保留输入与结果状态，不重置页面。 */
+function isCachedPage(path: string): boolean {
+  if (path === "/saucenao") return true;
   if (path.startsWith("/browse/work/")) return /^\/browse\/work\/(illust|manga)\//.test(path);
   return path.startsWith("/browse/");
 }
 const removeBeforeEach = router.beforeEach((to, from) => {
-  if (to.path !== from.path && isCachedBrowsePage(from.path)) {
+  if (to.path !== from.path && isCachedPage(from.path)) {
     browseScroll.set(from.path, contentEl.value?.scrollTop ?? 0);
   }
 });
@@ -149,7 +151,7 @@ const removeAfterEach = router.afterEach(async (to, from, failure) => {
   }
   if (to.path === from.path) return;
   const top = browseScroll.get(to.path) ?? 0;
-  if (isCachedBrowsePage(to.path)) {
+  if (isCachedPage(to.path)) {
     browseScroll.delete(to.path);
     browseScroll.set(to.path, top);
     if (browseScroll.size > 20) browseScroll.delete(browseScroll.keys().next().value!);
@@ -161,7 +163,7 @@ const removeAfterEach = router.afterEach(async (to, from, failure) => {
 });
 watch(browseSession, () => {
   browseScroll.clear(); panel.reset(); resetChannelManual();
-  if (isCachedBrowsePage(route.path)) browseScroll.set(route.path, 0);
+  if (isCachedPage(route.path)) browseScroll.set(route.path, 0);
   contentEl.value?.scrollTo({ top: 0, behavior: "instant" });
 });
 /** 吸顶页头实测高度写入滚动容器，供次级吸顶条（.app-page-head.is-sub）取 top 偏移、

@@ -27,7 +27,7 @@ import PageBackButton from "../components/navigation/PageBackButton.vue";
  *   加载失败占位块；相似度 = 13px 数值为准 + primary 进度条作补充（aria-hidden）；
  *   错误条文案 = 后端 Err 原样（errorMessage 归一化）。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -122,18 +122,20 @@ function onCardClick(): void {
 }
 
 // ===== 拖拽（仅 Tauri；浏览器无此 API，静默降级为仅文件选择 / URL）=====
+//
+// 本页入 KeepAlive 缓存（App.vue cachedViews）：失活即摘除监听，避免在别的页面
+// 拖入图片被本页收下；激活（含首次挂载）时重新挂载并刷新一次历史。
 
 let unlistenDragDrop: (() => void) | undefined;
+let attachSeq = 0;
 let disposed = false;
 
-onMounted(async () => {
-  // 直跳本页时确保 settings 已就绪（App.vue 挂载时也拉过一次，幂等）
-  void settingsStore.fetchSettings().catch(() => {});
-  void refreshHistory();
+async function attachDrag(): Promise<void> {
   if (!isTauri()) return;
+  const seq = ++attachSeq;
   try {
     const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
-      if (disposed) return;
+      if (disposed || seq !== attachSeq) return;
       if (event.payload.type === "enter") {
         dragHover.value = true;
       } else if (event.payload.type === "leave") {
@@ -144,17 +146,38 @@ onMounted(async () => {
         if (path) adoptFile(path);
       }
     });
-    if (disposed) unlisten();
-    else unlistenDragDrop = unlisten;
+    if (disposed || seq !== attachSeq) {
+      unlisten();
+      return;
+    }
+    unlistenDragDrop = unlisten;
   } catch {
     // 拖拽事件不可用时静默降级（选择文件 / URL 通道不受影响）
   }
+}
+
+function detachDrag(): void {
+  attachSeq += 1; // 作废在途注册，避免异步回写竞态
+  unlistenDragDrop?.();
+  unlistenDragDrop = undefined;
+  dragHover.value = false;
+}
+
+onMounted(() => {
+  // 直跳本页时确保 settings 已就绪（App.vue 挂载时也拉过一次，幂等）
+  void settingsStore.fetchSettings().catch(() => {});
 });
+
+onActivated(() => {
+  void attachDrag();
+  void refreshHistory();
+});
+
+onDeactivated(detachDrag);
 
 onBeforeUnmount(() => {
   disposed = true;
-  unlistenDragDrop?.();
-  unlistenDragDrop = undefined;
+  detachDrag();
 });
 
 // ===== 搜索状态机 =====
