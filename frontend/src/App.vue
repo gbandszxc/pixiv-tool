@@ -31,7 +31,7 @@
   </div>
   <dialog ref="exitDialog" class="m3-dialog exit-dialog" aria-labelledby="exit-dialog-title" @close="showExitConfirm = false"><h2 id="exit-dialog-title">{{ t('app.exitConfirmTitle') }}</h2><p>{{ t('app.exitConfirmBody') }}</p><div class="m3-row dialog-actions"><md-text-button @click="showExitConfirm = false">{{ t('common.cancel') }}</md-text-button><md-filled-button @click="invoke('app_exit').catch(() => {})">{{ t('app.exit') }}</md-filled-button></div></dialog>
   <LoginDialog v-model:show="showLoginDialog" />
-  <SettingsDialog v-model:show="showSettings" />
+  <SettingsDialog v-model:show="showSettings" :initial-section="settingsSection" :focus-field="settingsFocusField" />
   <div v-if="notification" class="m3-snackbar" role="status">{{ notification }}</div>
 </template>
 
@@ -48,7 +48,8 @@ import { useAuthStore } from "./stores/auth";
 import { useSettingsStore } from "./stores/settings";
 import { invoke, isTauri, setWindowTheme } from "./api/tauri";
 import { OPEN_LOGIN_EVENT } from "./api/browse";
-import { OPEN_SETTINGS_EVENT } from "./api/saucenao";
+import { OPEN_SETTINGS_EVENT, type OpenSettingsDetail } from "./api/saucenao";
+import { SETTINGS_SECTIONS, type SettingsSection } from "./components/settings/sections";
 import DownloadPanel from "./components/download/DownloadPanel.vue";
 import DownloadStatusBar from "./components/download/DownloadStatusBar.vue";
 import { useDownloadPanelStore } from "./stores/downloadPanel";
@@ -211,10 +212,24 @@ watch(() => settingsStore.settings.theme_color, (palette) => { document.document
 function onNotification(event: Event) { notification.value = (event as CustomEvent<string>).detail; clearTimeout(toastTimer); toastTimer = window.setTimeout(() => notification.value = "", 3200); }
 /** 浏览接口报未登录（api/browse.ts 派发）→ 复用现有登录弹窗。 */
 function onOpenLogin() { showLoginDialog.value = true; }
-/** 以图识图页「打开设置」引导（api/saucenao.ts 派发）→ 复用设置弹窗。 */
-function onOpenSettings() { showSettings.value = true; }
-/** 账号菜单的「设置」入口：开模态设置弹窗（菜单自行关闭）。 */
-function openSettings() { showSettings.value = true; }
+/** 设置弹窗的初始分区与聚焦字段：事件可携带 detail 直达（如以图识图引导 → images + Key 字段），入口默认回到「通用」。 */
+const settingsSection = ref<SettingsSection>("general");
+const settingsFocusField = ref<string | null>(null);
+/** 以图识图页「打开设置」引导（api/saucenao.ts 派发，detail 携带目标分区）→ 复用设置弹窗并直达定位。 */
+function onOpenSettings(event: Event) {
+  const detail = (event as CustomEvent<OpenSettingsDetail | undefined>).detail;
+  // 分区按 sections.ts 白名单校验，未知值回落「通用」，不把非法值传进弹窗
+  const section = SETTINGS_SECTIONS.includes(detail?.section as SettingsSection) ? (detail!.section as SettingsSection) : "general";
+  settingsSection.value = section;
+  settingsFocusField.value = detail?.focusField ?? null;
+  showSettings.value = true;
+}
+/** 账号菜单的「设置」入口：开模态设置弹窗（菜单自行关闭），落在默认「通用」分区。 */
+function openSettings() {
+  settingsSection.value = "general";
+  settingsFocusField.value = null;
+  showSettings.value = true;
+}
 onMounted(() => {
   stopTasks = taskStore.startMonitoring();
   window.addEventListener('keydown', onWorkspaceKey);

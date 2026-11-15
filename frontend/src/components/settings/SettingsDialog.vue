@@ -35,13 +35,21 @@
  * 保存（IPC 在途）期间 saving 置位：底部两键禁用，Esc / ✕ / backdrop 一律不响应，
  * 防止重复提交或「取消回滚后再被成功分支关闭」的竞态；失败时 saving 复位留在弹窗。
  */
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import SettingsPanel from "./SettingsPanel.vue";
 import { SETTINGS_SECTIONS, type SettingsSection } from "./sections";
 import { notify } from "../../ui/notify";
 
-const props = defineProps<{ show: boolean }>();
+/**
+ * initialSection：打开时定位到的分组（缺省「通用」）；focusField：定位后额外滚动
+ * + 聚焦 + 描边脉冲的字段 DOM id（如以图识图引导直达 SauceNAO Key）。两者由打开方
+ * 传入（App.vue 经 OPEN_SETTINGS_EVENT 的 detail 转发），不传即旧行为、旧调用点零破坏。
+ */
+const props = withDefaults(defineProps<{ show: boolean; initialSection?: SettingsSection; focusField?: string | null }>(), {
+  initialSection: "general",
+  focusField: null,
+});
 const emit = defineEmits<{ (e: "update:show", value: boolean): void }>();
 const { t } = useI18n();
 const dialog = ref<HTMLDialogElement | null>(null);
@@ -52,7 +60,18 @@ const activeSection = ref<SettingsSection>("general");
 /** 保存 IPC 在途标记：防双击重复提交，期间禁用底部两键并拦下全部关闭路径（失败必复位）。 */
 const saving = ref(false);
 const navItems = computed(() => SETTINGS_SECTIONS.map(id => ({ id, label: t(`settings.groups.${id}`) })));
-watch(() => props.show, (show) => { if (!dialog.value) return; if (show) dialog.value.showModal(); else dialog.value.close(); });
+watch(() => props.show, (show) => {
+  if (!dialog.value) return;
+  if (show) {
+    // 每次打开都按打开方意图定位分区（缺省「通用」）；要聚焦字段时等分区渲染完成再交给 SettingsPanel
+    activeSection.value = props.initialSection;
+    dialog.value.showModal();
+    if (props.focusField) {
+      const fieldId = props.focusField;
+      void nextTick(() => { void settingsPanel.value?.focusField(fieldId); });
+    }
+  } else dialog.value.close();
+});
 function selectSection(id: SettingsSection) { activeSection.value = id; if (body.value) body.value.scrollTop = 0; }
 /** Esc / ✕ / backdrop 的统一关闭请求：保存中一律不关（IPC 在途，关了会与成功分支竞态）；
  * 平时有未保存改动先确认，否则直接关。 */

@@ -782,6 +782,15 @@ export default {
     showR18Hint: "When off, R-18 / R-18G works are hidden from lists; work pages stay reachable with the blur mask.",
     saucenaoApiKey: "SauceNAO API Key",
     saucenaoApiKeyHint: "Required for reverse image search. Register free at saucenao.com and find it on the user.php?page=search-api page; stored locally only",
+    // Key-page link next to the SauceNAO key field + the search-history cleanup item in Maintenance (runs immediately, independent of Save)
+    saucenaoGetKey: "Open the page to get a key",
+    saucenaoHistoryLabel: "Image search history",
+    saucenaoHistoryHint: "A record of every successful search (file name or URL and hit count), stored in the local database only, up to 50 entries.",
+    saucenaoHistoryCount: "Total: {count}",
+    saucenaoHistoryClearTitle: "Clear search history",
+    saucenaoHistoryClearConfirm: "Clear the entire image search history? This cannot be undone.",
+    saucenaoHistoryCleared: "Search history cleared",
+    saucenaoHistoryClearFailed: "Failed to clear, please try again",
     appearanceHint: "Theme and palette preview instantly; they are written only when you press Save.",
   },
   // Advanced → Sync (WebDAV backup): index page + sync subpage; error keys mirror backend codes
@@ -898,6 +907,15 @@ export default {
     thumbUnavailable: "Thumbnail failed to load",
     removeImage: "Remove selected image",
     fileFilterName: "Image",
+    // Search history section (clicking a row adopts that source and searches again; relative time in min/h/d, over 30 days falls back to a short date)
+    getApiKey: "Get an API key",
+    historyTitle: "Search history",
+    historyResults: "{n} result | {n} results",
+    historyJustNow: "just now",
+    historyMinutesAgo: "{n} min ago",
+    historyHoursAgo: "{n} h ago",
+    historyDaysAgo: "{n} d ago",
+    historyDelete: "Delete this entry",
   },
   browse: {
     refresh: "Refresh",

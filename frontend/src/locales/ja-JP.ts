@@ -745,6 +745,15 @@ export default {
     showR18Hint: "オフにすると、一覧で R-18 / R-18G 作品を非表示にします。すでに開いている作品の詳細は引き続き閲覧でき、ぼかし表示も維持されます。",
     saucenaoApiKey: "SauceNAO API キー",
     saucenaoApiKeyHint: "画像検索に必要です。saucenao.com で無料登録し、user.php?page=search-api で取得してください。この端末の設定ファイルにのみ保存されます",
+    // SauceNAO キー欄の取得リンク + メンテナンスの検索履歴削除（すぐに実行され、「保存」とは無関係）
+    saucenaoGetKey: "キー取得ページを開く",
+    saucenaoHistoryLabel: "画像検索履歴",
+    saucenaoHistoryHint: "検索に成功するたびの記録（ファイル名または URL とヒット件数）です。端末のデータベースにのみ保存され、最大 50 件まで残ります。",
+    saucenaoHistoryCount: "全 {count} 件",
+    saucenaoHistoryClearTitle: "検索履歴を削除",
+    saucenaoHistoryClearConfirm: "画像検索の履歴をすべて削除しますか？この操作は元に戻せません。",
+    saucenaoHistoryCleared: "検索履歴を削除しました",
+    saucenaoHistoryClearFailed: "削除に失敗しました。もう一度お試しください",
     appearanceHint: "テーマと配色はすぐにプレビューに反映されます。「保存」を押すと設定に保存されます。",
   },
   // 詳細設定 → 同期（WebDAV バックアップ）：入口ページと同期サブページ。エラーキーはバックエンドの code に対応
@@ -860,6 +869,15 @@ export default {
     thumbUnavailable: "サムネイルを読み込めませんでした",
     removeImage: "選択した画像を取り除く",
     fileFilterName: "画像",
+    // 検索履歴（行クリックでそのソースを採用して再検索；相対時刻は分/時/日、30 日超は短い日付）
+    getApiKey: "API キーを取得",
+    historyTitle: "検索履歴",
+    historyResults: "{n} 件",
+    historyJustNow: "たった今",
+    historyMinutesAgo: "{n} 分前",
+    historyHoursAgo: "{n} 時間前",
+    historyDaysAgo: "{n} 日前",
+    historyDelete: "この履歴を削除",
   },
   browse: {
     refresh: "更新",

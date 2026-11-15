@@ -20,6 +20,18 @@ export { errorMessage, invoke, isTauri };
 /** 打开设置弹窗的自定义事件名（本页「key 未配置」引导条派发，App.vue 监听）。 */
 export const OPEN_SETTINGS_EVENT = "pixiv-tool:open-settings";
 
+/** 设置弹窗「浏览与图片」分区内 SauceNAO Key 字段的 DOM id（SettingsPanel 模板定义）。 */
+export const SAUCENAO_KEY_FIELD_ID = "saucenao-api-key";
+
+/**
+ * OPEN_SETTINGS_EVENT 的 detail：不传（或 detail 缺省）时设置弹窗按默认「通用」
+ * 分区打开，旧派发点零破坏；本页引导条传 `images` + Key 字段 id 做分区直达与聚焦。
+ */
+export interface OpenSettingsDetail {
+  section: string;
+  focusField?: string;
+}
+
 // ===== 契约类型（snake_case，与 Rust SaucenaoSearchResponse 一致）=====
 
 /** 单条匹配结果（后端已完成 similarity 数值化与 pixiv_id/member_id 回退链提取）。 */

@@ -783,6 +783,15 @@ export default {
     showR18Hint: "关闭后，列表会隐藏 R-18 / R-18G 作品；已打开的作品详情仍可访问并保留模糊遮罩。",
     saucenaoApiKey: "SauceNAO API Key",
     saucenaoApiKeyHint: "以图识图功能必需。在 saucenao.com 免费注册后，于 user.php?page=search-api 页面获取；仅保存在本机配置文件中",
+    // SauceNAO Key 字段旁的获取入口（浏览器外链）+ 维护分区搜索历史清理项（立即执行，不受保存影响）
+    saucenaoGetKey: "打开获取 Key 的页面",
+    saucenaoHistoryLabel: "以图识图搜索历史",
+    saucenaoHistoryHint: "每次成功搜索的来源记录（文件名或 URL 与命中数），仅保存在本机数据库，最多保留 50 条。",
+    saucenaoHistoryCount: "共 {count} 条",
+    saucenaoHistoryClearTitle: "清除搜索历史",
+    saucenaoHistoryClearConfirm: "确定清空全部以图识图搜索历史？此操作不可恢复。",
+    saucenaoHistoryCleared: "搜索历史已清除",
+    saucenaoHistoryClearFailed: "清除失败，请重试",
     appearanceHint: "主题与配色即时预览，点击「保存」后才写入设置。",
   },
   // 高级 → 同步（WebDAV 备份）：入口页 + 二级同步页；错误码键 = 后端 code
@@ -899,6 +908,15 @@ export default {
     thumbUnavailable: "缩略图加载失败",
     removeImage: "移除所选图片",
     fileFilterName: "图片",
+    // 搜索历史区（历史行点击即采纳该源重搜；相对时间到分钟/小时/天，超 30 天回落短日期）
+    getApiKey: "获取 API Key",
+    historyTitle: "搜索历史",
+    historyResults: "{n} 个结果",
+    historyJustNow: "刚刚",
+    historyMinutesAgo: "{n} 分钟前",
+    historyHoursAgo: "{n} 小时前",
+    historyDaysAgo: "{n} 天前",
+    historyDelete: "删除这条历史",
   },
   browse: {
     refresh: "刷新",

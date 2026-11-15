@@ -12,7 +12,12 @@ import PageBackButton from "../components/navigation/PageBackButton.vue";
  *   协议按扩展名白名单 jpg/jpeg/png/webp/gif 读本地图片，与本页文件过滤器一致，
  *   注册见 src-tauri/src/lib.rs）；浏览器 mock 无真实路径，仅显示文件名。
  * - 状态机 idle | loading | done | empty | error；key 未配置时显示引导条
- *   （不打请求），「打开设置」派发 OPEN_SETTINGS_EVENT 由 App.vue 弹设置窗。
+ *   （不打请求），「打开设置」派发 OPEN_SETTINGS_EVENT（携带 images 分区与 Key
+ *   字段 id）由 App.vue 直达设置弹窗并聚焦，「获取 API Key」走系统浏览器外链。
+ * - 搜索历史：输入卡片之下、结果区之上（空列表不渲染；最新在前 ≤50 条，后端
+ *   在 saucenao_search 成功后权威记录，本页只在挂载与每次成功搜索后刷新）。
+ *   点击整行 = 采纳该源并立即搜索；hover 单条删除；file 条目缩略图走
+ *   pixiv-download 协议、url 条目直连（no-referrer + 失败占位块，同结果缩略图）。
  * - 结果排序：pixiv（index 5/6）恒最前（组内 similarity 降序），其余 similarity 降序
  *   （后端按 SauceNAO 原序返回，排序在本页做）。
  * - 缩略图为 saucenao 签名临时 URL，原样直连（不走 pixiv-img），no-referrer +
@@ -27,9 +32,14 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   OPEN_SETTINGS_EVENT,
+  SAUCENAO_KEY_FIELD_ID,
+  deleteSaucenaoHistory,
   errorMessage,
   isTauri,
+  listSaucenaoHistory,
   searchSaucenao,
+  type OpenSettingsDetail,
+  type SaucenaoHistoryItem,
   type SaucenaoQuota,
   type SaucenaoResult,
 } from "../api/saucenao";
@@ -37,7 +47,7 @@ import { useSettingsStore } from "../stores/settings";
 import { openInBrowser } from "../utils/pixivHooks";
 import { notify } from "../ui/notify";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const router = useRouter();
 const settingsStore = useSettingsStore();
 
@@ -103,6 +113,7 @@ let disposed = false;
 onMounted(async () => {
   // 直跳本页时确保 settings 已就绪（App.vue 挂载时也拉过一次，幂等）
   void settingsStore.fetchSettings().catch(() => {});
+  void refreshHistory();
   if (!isTauri()) return;
   try {
     const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
@@ -187,9 +198,77 @@ async function doSearch(): Promise<void> {
     quota.value = data.quota;
     brokenThumbs.value = new Set();
     phase.value = results.value.length ? "done" : "empty";
+    // 本页搜索成功即刷新历史（后端在 saucenao_search 成功路径内已权威记录）
+    void refreshHistory();
   } catch (err) {
     errorText.value = errorMessage(err);
     phase.value = "error";
+  }
+}
+
+// ===== 搜索历史（后端权威记录，本页只读 + 删；空列表不渲染整个区块）=====
+
+const historyItems = ref<SaucenaoHistoryItem[]>([]);
+/** 缩略图加载失败的条目 id（file 路径被移动 / url 签名失效 → 占位块）。 */
+const brokenHistoryThumbs = ref<Set<number>>(new Set());
+
+async function refreshHistory(): Promise<void> {
+  try {
+    historyItems.value = await listSaucenaoHistory();
+    brokenHistoryThumbs.value = new Set();
+  } catch {
+    // 历史是辅助信息，读取失败静默保留旧列表，不打断搜索主流程
+  }
+}
+
+/** file 条目经 pixiv-download 协议现场取（同本页预览），url 条目直连。 */
+function historyThumbSrc(item: SaucenaoHistoryItem): string {
+  if (item.source_type === "file") return isTauri() ? convertFileSrc(item.source, "pixiv-download") : "";
+  return item.source;
+}
+
+function onHistoryThumbError(id: number): void {
+  brokenHistoryThumbs.value.add(id);
+}
+
+/** 元信息行：命中数 · 相对时间（分钟/小时/天，超 30 天回落短日期）。 */
+function historyMeta(item: SaucenaoHistoryItem): string {
+  // {n} 命名插值：英文键用管道复数（1 result / N results），中文日文无分支直接插值
+  return `${t("saucenao.historyResults", { n: item.result_count })} · ${relativeTime(item.searched_at)}`;
+}
+
+function relativeTime(searchedAt: string): string {
+  const at = new Date(searchedAt).getTime();
+  if (Number.isNaN(at)) return "";
+  const minutes = Math.floor(Math.max(0, Date.now() - at) / 60_000);
+  if (minutes < 1) return t("saucenao.historyJustNow");
+  if (minutes < 60) return t("saucenao.historyMinutesAgo", { n: minutes });
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return t("saucenao.historyHoursAgo", { n: hours });
+  const days = Math.floor(hours / 24);
+  if (days < 30) return t("saucenao.historyDaysAgo", { n: days });
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: "short" }).format(at);
+}
+
+/** 点击历史条目 = 采纳该源并立即搜索（loading 期按钮已禁用，此处再防御）。 */
+async function adoptHistory(item: SaucenaoHistoryItem): Promise<void> {
+  if (phase.value === "loading") return;
+  if (item.source_type === "file") {
+    adoptFile(item.source);
+  } else {
+    // file 通道优先级高于 URL：采纳 url 历史前先清掉已选文件，避免填了不生效
+    removeImage();
+    urlInput.value = item.source;
+  }
+  await doSearch();
+}
+
+async function deleteHistory(item: SaucenaoHistoryItem): Promise<void> {
+  try {
+    await deleteSaucenaoHistory(item.id);
+    historyItems.value = historyItems.value.filter((entry) => entry.id !== item.id);
+  } catch (err) {
+    notify(errorMessage(err));
   }
 }
 
@@ -238,8 +317,15 @@ function openWork(item: SaucenaoResult): void {
   void router.push(`/browse/work/illust/${item.pixiv_id}`);
 }
 
+/** 打开设置并直达「浏览与图片」分区、聚焦高亮 SauceNAO Key 字段。 */
 function openSettingsDialog(): void {
-  window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT));
+  const detail: OpenSettingsDetail = { section: "images", focusField: SAUCENAO_KEY_FIELD_ID };
+  window.dispatchEvent(new CustomEvent<OpenSettingsDetail>(OPEN_SETTINGS_EVENT, { detail }));
+}
+
+/** 系统浏览器打开 SauceNAO 获取 Key 页面。 */
+function openGetApiKey(): void {
+  void openInBrowser("https://saucenao.com/user.php?page=search-api").catch(() => notify(t("saucenao.openFailed")));
 }
 
 function onThumbError(index: number): void {
@@ -307,9 +393,56 @@ function onThumbError(index: number): void {
       </div>
     </div>
 
+    <!-- 搜索历史：输入卡片之下、结果区之上；空列表不渲染整个区块 -->
+    <section v-if="historyItems.length" class="history-section" :aria-label="t('saucenao.historyTitle')">
+      <span class="history-title">{{ t("saucenao.historyTitle") }}</span>
+      <div v-for="item in historyItems" :key="item.id" class="history-row">
+        <button type="button" class="history-item" :disabled="phase === 'loading'" :title="item.label" @click="adoptHistory(item)">
+          <span class="history-thumb" aria-hidden="true">
+            <img
+              v-if="!brokenHistoryThumbs.has(item.id) && historyThumbSrc(item)"
+              class="history-thumb-img"
+              :src="historyThumbSrc(item)"
+              loading="lazy"
+              referrerpolicy="no-referrer"
+              alt=""
+              @error="onHistoryThumbError(item.id)"
+            />
+            <span v-else class="history-thumb-placeholder">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <!-- lucide image -->
+                <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+                <circle cx="9" cy="9" r="2" />
+                <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+              </svg>
+            </span>
+          </span>
+          <span class="history-main">
+            <span class="history-label">{{ item.label }}</span>
+            <span class="history-meta">{{ historyMeta(item) }}</span>
+          </span>
+        </button>
+        <button
+          type="button"
+          class="history-remove"
+          :aria-label="t('saucenao.historyDelete')"
+          :title="t('saucenao.historyDelete')"
+          :disabled="phase === 'loading'"
+          @click.stop="deleteHistory(item)"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <!-- lucide x -->
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+      </div>
+    </section>
+
     <!-- key 未配置引导条（不打请求） -->
     <div v-if="!hasKey" class="m3-alert warning guide-bar">
       <span class="guide-text">{{ t("saucenao.needKey") }}</span>
+      <md-text-button @click="openGetApiKey">{{ t("saucenao.getApiKey") }}</md-text-button>
       <md-text-button @click="openSettingsDialog">{{ t("saucenao.openSettings") }}</md-text-button>
     </div>
 
@@ -530,6 +663,166 @@ function onThumbError(index: number): void {
 
 .search-btn {
   flex: none;
+}
+
+/* ===== 搜索历史：surface-container 圆角行（结果行同配方），缩略图更紧凑（48px = 4 × space-lg） ===== */
+
+.history-section {
+  margin-top: var(--space-lg);
+}
+
+/* 区标题与结果计数同层级：12px/600 ink-muted */
+.history-title {
+  display: block;
+  margin-bottom: var(--space-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: var(--space-sm);
+  padding: var(--space-xs) var(--space-md);
+  border-radius: 16px;
+  background: var(--md-sys-color-surface-container);
+  transition: background-color 0.15s ease;
+}
+
+.history-row:hover,
+.history-row:focus-within {
+  background: color-mix(in srgb, var(--md-sys-color-outline) 8%, var(--md-sys-color-surface-container));
+}
+
+/* 行主体（缩略图 + 两行信息）是可点按钮；删除 X 为兄弟节点，不嵌套 */
+.history-item {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-md);
+  min-width: 0;
+  padding: var(--space-xs) 0;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.history-item:disabled {
+  cursor: default;
+}
+
+.history-item:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+/* 缩略图：48px 方形（control 圆角 + outline 12% 衬底），衬底兼作透明 PNG 底色与失败占位 */
+.history-thumb {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--md-sys-color-outline) 12%, var(--md-sys-color-surface-container));
+}
+
+.history-thumb-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.history-thumb-placeholder {
+  color: var(--ink-subtle);
+}
+
+.history-thumb-placeholder svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+}
+
+.history-main {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.history-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.history-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink-muted);
+}
+
+/* 单条删除：28px 快捷动作配方（同拖拽热区移除钮），hover / focus-within 才显现 */
+.history-remove {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--md-sys-color-surface-container);
+  color: var(--ink);
+  cursor: pointer;
+  opacity: 0;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.history-row:hover .history-remove,
+.history-row:focus-within .history-remove {
+  opacity: 1;
+}
+
+/* 触摸设备没有 hover：删除按钮常驻（同全屏看图控件惯例） */
+@media (hover: none) {
+  .history-remove {
+    opacity: 1;
+  }
+}
+
+.history-remove:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container));
+}
+
+.history-remove:active {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container));
+}
+
+.history-remove:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.history-remove:disabled {
+  cursor: default;
+}
+
+.history-remove svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* ===== 引导条 / 状态条（warning / error 配色走全局 .m3-alert.*） ===== */

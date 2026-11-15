@@ -91,8 +91,8 @@
         <div class="m3-row"><label class="m3-choice"><md-checkbox :checked="form.show_r18" @change="form.show_r18 = ($event.target as HTMLInputElement).checked" />{{ t("settings.showR18") }}</label></div>
       </fieldset>
       <div class="m3-field">
-        <div class="field-label"><label for="saucenao-api-key">{{ t('settings.saucenaoApiKey') }}</label><HelpTooltip :label="t('settings.saucenaoApiKey')" :text="t('settings.saucenaoApiKeyHint')" /></div>
-        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" type="password" autocomplete="new-password" class="settings-api-key-input" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /></div>
+        <div class="field-label"><label for="saucenao-api-key">{{ t('settings.saucenaoApiKey') }}</label><HelpTooltip :label="t('settings.saucenaoApiKey')" :text="t('settings.saucenaoApiKeyHint')" /><md-icon-button class="saucenao-key-link" :aria-label="t('settings.saucenaoGetKey')" :title="t('settings.saucenaoGetKey')" @click="openSaucenaoKeyPage"><svg class="saucenao-key-link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg></md-icon-button></div>
+        <div class="m3-row"><md-outlined-text-field id="saucenao-api-key" type="password" autocomplete="new-password" class="settings-api-key-input" :class="{ 'key-highlight': saucenaoKeyHighlight }" :value="form.saucenao_api_key" @input="form.saucenao_api_key = ($event.target as HTMLInputElement).value" /></div>
       </div>
     </template>
 
@@ -230,6 +230,13 @@
       <MaintenancePanel v-if="active" />
       <div class="settings-maintenance">
         <div class="settings-maintenance-item">
+          <span class="settings-maintenance-text">
+            <span class="field-label"><strong>{{ t("settings.saucenaoHistoryLabel") }}</strong><HelpTooltip :label="t('settings.saucenaoHistoryLabel')" :text="t('settings.saucenaoHistoryHint')" /></span>
+            <span class="field-hint">{{ t("settings.saucenaoHistoryCount", { count: saucenaoHistoryCount }) }}</span>
+          </span>
+          <md-text-button class="danger-button" :disabled="saucenaoHistoryCount === 0" @click="openHistoryConfirm">{{ t("common.clear") }}</md-text-button>
+        </div>
+        <div class="settings-maintenance-item">
           <span class="settings-maintenance-text"><span class="field-label"><strong>{{ t("settings.authLabel") }}</strong><HelpTooltip :label="t('settings.authLabel')" :text="t('settings.clearAuthHint')" /></span></span>
           <md-text-button class="danger-button" @click="openConfirm">{{ t("common.clear") }}</md-text-button>
         </div>
@@ -240,6 +247,12 @@
       <h2 id="clear-auth-dialog-title">{{ t("settings.clearAuth") }}</h2>
       <p>{{ t("settings.clearAuthConfirm") }}</p>
       <div class="m3-row dialog-actions"><md-text-button @click="closeConfirm">{{ t("common.cancel") }}</md-text-button><md-filled-button @click="handleConfirm">{{ t("settings.clearAuth") }}</md-filled-button></div>
+    </dialog>
+
+    <dialog ref="historyConfirmDialog" class="m3-dialog" aria-labelledby="clear-saucenao-history-title">
+      <h2 id="clear-saucenao-history-title">{{ t("settings.saucenaoHistoryClearTitle") }}</h2>
+      <p>{{ t("settings.saucenaoHistoryClearConfirm") }}</p>
+      <div class="m3-row dialog-actions"><md-text-button @click="closeHistoryConfirm">{{ t("common.cancel") }}</md-text-button><md-filled-button @click="handleHistoryConfirm">{{ t("settings.saucenaoHistoryClearTitle") }}</md-filled-button></div>
     </dialog>
   </section>
 </template>
@@ -275,6 +288,8 @@ import { groupRoots } from "../../router/navigation";
 import { useAuthStore } from "../../stores/auth";
 import { errorMessage, errorPayload, setWindowTheme, type Settings } from "../../api/tauri";
 import { formatTemplatePlaceholders, ILLUST_TEMPLATE_PLACEHOLDERS, NOVEL_TEMPLATE_PLACEHOLDERS, validateFilenameTemplate, type FilenameTemplateKind } from "../../utils/filenameTemplate";
+import { clearSaucenaoHistory, listSaucenaoHistory, SAUCENAO_KEY_FIELD_ID } from "../../api/saucenao";
+import { openInBrowser } from "../../utils/pixivHooks";
 import { notify } from "../../ui/notify";
 import type { SettingsSection } from "./sections";
 
@@ -365,7 +380,7 @@ watch(() => [form.value.translation_api_url, form.value.translation_api_format],
 watch(() => [form.value.translation_api_url, form.value.translation_api_format, translationKey.value, clearTranslationKey.value, form.value.translation_model, translationJson.value], () => {
   probeVersion++; testResult.value = ""; modelsError.value = "";
 }, { flush: "sync" });
-onBeforeUnmount(() => { probeRequest++; });
+onBeforeUnmount(() => { probeRequest++; window.clearTimeout(saucenaoKeyHighlightTimer); });
 function parseTranslationJson(): Record<string, unknown> {
   try {
     const extra = JSON.parse(translationJson.value);
@@ -612,6 +627,8 @@ watch(() => props.section, (section) => {
   }
   // 离开「高级」时回到子项索引，避免下次进入直接落在同步页。
   if (section !== "advanced") advancedView.value = "menu";
+  // 进入维护分区即刷新搜索历史条数（立即执行项的实时计数，与保存无关）。
+  if (section === "maintenance" && props.active) void refreshSaucenaoHistoryCount();
 });
 watch(() => [form.value.theme, form.value.theme_color], applyPreview);
 onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180;
@@ -625,13 +642,14 @@ onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settings
   // 旧响应 / 旧 mock 缺同步键时按默认值补齐：范围默认全选，地址与用户名为空。
   if (typeof form.value.sync_scope_history !== "boolean") form.value.sync_scope_history = true;
   if (typeof form.value.sync_scope_auth !== "boolean") form.value.sync_scope_auth = true;
+  if (typeof form.value.sync_scope_saucenao !== "boolean") form.value.sync_scope_saucenao = true;
   if (!form.value.webdav_url) form.value.webdav_url = "";
   if (!form.value.webdav_username) form.value.webdav_username = "";
   resetTranslationDraft(); resetSyncDraft(); savedSnapshot.value = snapshot(); if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
   // 诊断是会话级状态，不属于设置草稿：每次打开设置都以后端为准回显。
   if (props.active) void loadDiagnosticStatus(); });
-/** 设置弹窗每次打开时重新读取诊断开关（可能有别处改过，或应用重启后已复位）。 */
-watch(() => props.active, (active) => { if (active) void loadDiagnosticStatus(); });
+/** 设置弹窗每次打开时重新读取诊断开关（可能有别处改过，或应用重启后已复位）；直达维护分区时同样刷新历史计数。 */
+watch(() => props.active, (active) => { if (active) { void loadDiagnosticStatus(); if (props.section === "maintenance") void refreshSaucenaoHistoryCount(); } });
 /** 有未保存改动：弹窗据此决定关闭前是否提示。 */
 function hasUnsaved() { return Boolean(translationKey.value) || clearTranslationKey.value || Boolean(webdavPassword.value) || clearWebdavPassword.value || Boolean(syncPassphrase.value) || clearSyncPassphrase.value || Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
 /** 回滚到上次保存值（取消 / 确认放弃修改）。主题预览随表单回到已保存值。 */
@@ -645,7 +663,7 @@ function reset() {
   resetTranslationDraft(); resetSyncDraft(); syncStatus.value = null; savedSnapshot.value = snapshot();
   if (form.value.language && form.value.language !== locale.value) applyLanguage(form.value.language);
 }
-defineExpose({ save, reset, hasUnsaved });
+defineExpose({ save, reset, hasUnsaved, focusField });
 /** 后端结构化错误 field → 错误 ref 回填（ADR 0044）；未列出的键落 Snackbar 兜底。 */
 const FIELD_ERROR_SETTERS: Record<string, (text: string) => void> = {
   output_dir: (text) => { outputDirError.value = text; },
@@ -737,6 +755,60 @@ async function save(): Promise<boolean> {
     return false;
   }
 }
+// ===== SauceNAO Key 直达聚焦与获取入口（以图识图引导经 OPEN_SETTINGS_EVENT detail 派发）=====
+
+/** 系统浏览器打开 SauceNAO 获取 Key 页面（images 分区 Key 字段旁的图标入口）。 */
+function openSaucenaoKeyPage(): void {
+  void openInBrowser("https://saucenao.com/user.php?page=search-api").catch(() => notify(t("saucenao.openFailed")));
+}
+
+/** Key 字段描边脉冲进行中标记（类挂在字段宿主上，动画结束由定时器摘除）。 */
+const saucenaoKeyHighlight = ref(false);
+let saucenaoKeyHighlightTimer = 0;
+/**
+ * SettingsDialog 打开时按 focusField 定位：滚动到视野中央 + 聚焦；目标是
+ * SauceNAO Key 时再描边脉冲两次（0.8s × 2，总时长 1.6s 后摘类）。reduced-motion
+ * 由全局兜底把动画压到瞬时。供弹窗打开流程经 defineExpose 调用。
+ */
+async function focusField(id: string): Promise<void> {
+  await nextTick();
+  // Material Web 组件等 updateComplete 再聚焦，否则内部 input 尚未就绪
+  const field = document.getElementById(id) as (HTMLElement & { updateComplete?: Promise<boolean> }) | null;
+  if (!field) return;
+  await field.updateComplete;
+  field.scrollIntoView({ block: "center" });
+  field.focus();
+  if (id !== SAUCENAO_KEY_FIELD_ID) return;
+  saucenaoKeyHighlight.value = true;
+  window.clearTimeout(saucenaoKeyHighlightTimer);
+  saucenaoKeyHighlightTimer = window.setTimeout(() => { saucenaoKeyHighlight.value = false; }, 1700);
+}
+
+// ===== 维护分区：以图识图搜索历史清理（立即执行，不受底部保存影响）=====
+
+const historyConfirmDialog = ref<HTMLDialogElement | null>(null);
+const saucenaoHistoryCount = ref(0);
+/** 进入维护分区时读取当前条数；读失败按 0 显示并禁用清理（与空缓存禁用同口径）。 */
+async function refreshSaucenaoHistoryCount(): Promise<void> {
+  try {
+    saucenaoHistoryCount.value = (await listSaucenaoHistory()).length;
+  } catch {
+    saucenaoHistoryCount.value = 0;
+  }
+}
+async function openHistoryConfirm(): Promise<void> { await nextTick(); historyConfirmDialog.value?.showModal(); }
+function closeHistoryConfirm(): void { historyConfirmDialog.value?.close(); }
+async function handleHistoryConfirm(): Promise<void> {
+  closeHistoryConfirm();
+  try {
+    await clearSaucenaoHistory();
+    saucenaoHistoryCount.value = 0;
+    notify(t("settings.saucenaoHistoryCleared"));
+  } catch (err) {
+    notify(errorMessage(err) || t("settings.saucenaoHistoryClearFailed"));
+  }
+}
+
 async function handleBrowse() {
   try {
     // 文本框已有路径时以其为初始目录；空值 / 不存在 / 含非法字符时由对话框插件回落默认位置。
@@ -801,6 +873,16 @@ fieldset.translation-group > .m3-field:last-child { margin-bottom: 0; }
 .translation-advanced-error { flex: none; color: var(--md-sys-color-error); font-size: 12px; font-weight: 600; }
 .translation-advanced-chevron { flex: none; width: 18px; height: 18px; color: var(--ink-muted); }
 .danger-button { --md-text-button-label-text-color: var(--md-sys-color-error); }
+/* SauceNAO Key 获取入口：32px 图标按钮（与 HelpTooltip 同高、标签行不被撑高），16px lucide external-link */
+.saucenao-key-link { width: 32px; height: 32px; --md-icon-button-icon-size: 16px; }
+.saucenao-key-link svg { width: 16px; height: 16px; stroke-width: 2; }
+/* 直达定位（以图识图引导）的描边脉冲：primary 2px 外环两次（0.8s × 2），静态描边恒透明、
+ * 动画结束后无残留；reduced-motion 由全局兜底压到瞬时。 */
+.key-highlight { outline: 2px solid transparent; outline-offset: 2px; border-radius: 12px; animation: saucenao-key-pulse 0.8s ease 2; }
+@keyframes saucenao-key-pulse {
+  0%, 100% { outline-color: transparent; }
+  40% { outline-color: var(--md-sys-color-primary); }
+}
 .palette-options { display: flex; flex-wrap: wrap; gap: var(--space-sm) var(--space-lg); }.palette-option { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 40px; }.palette-swatch { width: 18px; height: 18px; border: 1px solid var(--md-sys-color-outline); border-radius: 50%; }/* 色块取各色板 primary 的规范值，改色板时必须与 main.css 的 [data-palette] 定义、.impeccable/design.json 的 extensions.palettes 同步 */.palette-pixiv { background: #006eaf; }.palette-indigo { background: #445e91; }.palette-jade { background: #006c4d; }.palette-violet { background: #76547b; }.palette-amber { background: #8b5000; }
 /* 维护组：名称与帮助图标在左、动作按钮在右，行间以 divider 分隔 */
 .settings-maintenance { display: grid; margin-top: var(--space-md); border-top: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 35%, transparent); }
