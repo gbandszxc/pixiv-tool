@@ -754,6 +754,14 @@ export default {
     saucenaoHistoryClearConfirm: "画像検索の履歴をすべて削除しますか？この操作は元に戻せません。",
     saucenaoHistoryCleared: "検索履歴を削除しました",
     saucenaoHistoryClearFailed: "削除に失敗しました。もう一度お試しください",
+    // メンテナンスの「ブラウズ検索履歴」行（画像検索履歴と同じレシピ。保存に関係なく即時反映）
+    browseSearchHistoryLabel: "ブラウズ検索履歴",
+    browseSearchHistoryHint: "ブラウズ検索（イラスト・マンガ・小説のキーワード）で検索に成功した記録（キーワードと種類）です。端末のデータベースにのみ保存され、最大 50 件まで残ります。",
+    browseSearchHistoryCount: "全 {count} 件",
+    browseSearchHistoryClearTitle: "ブラウズ検索履歴を削除",
+    browseSearchHistoryClearConfirm: "ブラウズ検索の履歴をすべて削除しますか？この操作は元に戻せません。",
+    browseSearchHistoryCleared: "ブラウズ検索履歴を削除しました",
+    browseSearchHistoryClearFailed: "削除に失敗しました。もう一度お試しください",
     appearanceHint: "テーマと配色はすぐにプレビューに反映されます。「保存」を押すと設定に保存されます。",
   },
   // 詳細設定 → 同期（WebDAV バックアップ）：入口ページと同期サブページ。エラーキーはバックエンドの code に対応
@@ -1053,6 +1061,15 @@ export default {
       localSortView: "閲覧数",
       countsLoading: "このページの件数データを取得中（{total} 件）…",
       countsFailed: "件数データを取得できませんでした。未取得の作品は末尾に表示します",
+    },
+    // 検索ページの履歴ドロップダウン（入力欄フォーカス・入力で開く。browse_search 成功かつ 1 ページ目のときにバックエンドが記録）
+    searchHistory: {
+      label: "検索履歴",
+      delete: "この検索履歴を削除",
+      justNow: "たった今",
+      minutesAgo: "{n} 分前",
+      hoursAgo: "{n} 時間前",
+      daysAgo: "{n} 日前",
     },
     novel: {
       back: "戻る",

@@ -22,18 +22,28 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   透传，后端按档位把 `{N}users入り` 拼进搜索词（搜索词过滤而非排序）；不过滤时
  *   不传参。与 s_tag_full（标签完全一致）互斥——组合词在该匹配下必然失效，双向收口
  *   回落 s_tag（见 normalizeSMode）。
+ * - 搜索历史下拉：输入框聚焦/输入时展开（Google 风格，空历史不渲染）。后端在
+ *   browse_search 成功且第 1 页时权威记录（重复搜索刷新时间，最新在前 ≤50 条），
+ *   本页只读 + 单条删除（不确认，失败 notify），每次展开时重拉。条目 = 关键词 +
+ *   类型徽标 + 相对时间（utils/relativeTime 共用实现）；点击条目 = 按六元组直接
+ *   回写 URL 查询参数（复用下方 replace 写参与自动搜索机制，空缺过滤器按本页
+ *   默认值回落，不经 parseBrowseInput 的 ID 直达解析）；Esc / 外部点击 / 选中后
+ *   关闭，↑↓ 移动高亮 + Enter 选中，loading 期禁点。
  * - 本页排序：维度（点赞/收藏/浏览）下拉 + 升降方向切换（SortDirectionToggle），
  *   仅对当前显示页本地排序；
  *   优先复用列表已有计数（小说自带收藏数），仅所选维度缺失时经 browse_work_counts
  *   整页一次性补取（全局限速），补齐后只重排一次，缺失项垫底。
  */
-import { computed, ref, shallowRef, watch } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import { useRoute, useRouter, type LocationQuery } from "vue-router";
 import { useI18n } from "vue-i18n";
 import {
   browseSearch,
   browseWorkCounts,
+  deleteBrowseSearchHistory,
   errorMessage,
+  listBrowseSearchHistory,
+  type BrowseSearchHistoryItem,
   type BrowseWorkItem,
   type WorkCounts,
 } from "../../api/browse";
@@ -43,8 +53,9 @@ import SectionTabs from "../../components/browse/SectionTabs.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import { notify } from "../../ui/notify";
 import { parseBrowseInput, type ParsedBrowseInput } from "../../utils/parseInput";
+import { relativeTime as formatRelativeTime } from "../../utils/relativeTime";
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
@@ -423,6 +434,7 @@ function commit(): void {
 
 /** 回车 / 搜索按钮：先试 ID 直达（纯数字按当前类型 tab 归属），未命中按关键词搜索（同参数重按视为重试）。 */
 function doSearch(): void {
+  closeHistory();
   const raw = word.value.trim();
   const target = parseBrowseInput(raw, kind.value);
   if (target) {
@@ -517,6 +529,173 @@ const typeTabs = computed(() => [
   { value: "manga", label: t("browse.search.typeManga") },
   { value: "novel", label: t("browse.search.typeNovel") },
 ]);
+
+// ===== 搜索历史下拉（后端在 browse_search 成功且第 1 页时权威记录，本页只读 + 删）=====
+
+const historyItems = ref<BrowseSearchHistoryItem[]>([]);
+const historyOpen = ref(false);
+/** 键盘导航高亮下标（-1 = 无高亮，仍在输入框）。 */
+const historyActive = ref(-1);
+/** 输入框 + 下拉的 relative 容器：下拉定位锚点与外部点击判定范围。 */
+const searchWrapEl = ref<HTMLElement | null>(null);
+/** md-outlined-text-field 宿主：focusin 判定焦点是否落在搜索框内。 */
+const searchFieldEl = ref<HTMLElement | null>(null);
+/** 下拉面板：键盘导航时把高亮行滚入视野。 */
+const historyPanelEl = ref<HTMLElement | null>(null);
+
+/** 类型徽标文案复用类型 tab 的既有键。 */
+const HISTORY_KIND_LABEL_KEYS: Record<string, string> = {
+  illust: "browse.search.typeIllust",
+  manga: "browse.search.typeManga",
+  novel: "browse.search.typeNovel",
+};
+
+async function refreshHistory(): Promise<void> {
+  try {
+    historyItems.value = await listBrowseSearchHistory();
+  } catch {
+    // 历史是辅助信息，读取失败静默保留旧列表，不打断搜索主流程
+  }
+}
+
+/**
+ * 展开下拉：每次展开都重拉一次（后端权威记录，「每次成功搜索后」的刷新时机
+ * 由展开时重拉覆盖——搜索完成后再聚焦必经展开），无需在各搜索路径补挂刷新。
+ */
+async function openHistory(): Promise<void> {
+  historyActive.value = -1;
+  historyOpen.value = true;
+  void refreshHistory();
+}
+
+function closeHistory(): void {
+  historyOpen.value = false;
+  historyActive.value = -1;
+}
+
+/** 焦点进入搜索框时展开（focusin 可穿透 Material 组件的 shadow DOM 冒泡到宿主）。 */
+function onSearchFocusIn(event: FocusEvent): void {
+  const field = searchFieldEl.value;
+  if (field && event.target instanceof Node && field.contains(event.target)) void openHistory();
+}
+
+/** 输入时也展开（「聚焦 / 输入时出历史下拉」）；已展开时不重复重拉，避免逐键 IPC。 */
+function onSearchInput(event: Event): void {
+  word.value = (event.target as HTMLInputElement).value;
+  if (!historyOpen.value) void openHistory();
+}
+
+/** 外部点击关闭：容器（输入框 + 下拉）之外按下指针即收起。 */
+function onDocPointerDown(event: PointerEvent): void {
+  const root = searchWrapEl.value;
+  if (!root || !(event.target instanceof Node) || root.contains(event.target)) return;
+  closeHistory();
+}
+
+/** 条目元信息：相对时间（分钟/小时/天，超 30 天回落短日期；共用 utils/relativeTime）。 */
+function historyTime(item: BrowseSearchHistoryItem): string {
+  return formatRelativeTime(item.searched_at, locale.value, {
+    justNow: t("browse.searchHistory.justNow"),
+    minutesAgo: (n) => t("browse.searchHistory.minutesAgo", { n }),
+    hoursAgo: (n) => t("browse.searchHistory.hoursAgo", { n }),
+    daysAgo: (n) => t("browse.searchHistory.daysAgo", { n }),
+  });
+}
+
+function historyKindLabel(kind: string): string {
+  return t(HISTORY_KIND_LABEL_KEYS[kind] ?? "browse.search.typeIllust");
+}
+
+/** 键盘导航后把高亮行滚入视野（block: nearest 不扰动面板滚动位置）。 */
+async function scrollActiveIntoView(): Promise<void> {
+  await nextTick();
+  const panel = historyPanelEl.value;
+  if (!panel || historyActive.value < 0) return;
+  panel
+    .querySelector<HTMLElement>(`[data-history-idx="${historyActive.value}"]`)
+    ?.scrollIntoView({ block: "nearest" });
+}
+
+/**
+ * 搜索框键盘：↑↓ 移动高亮、Enter 选中高亮项（无高亮回落既有搜索语义）、
+ * Esc 关闭（下拉关闭时 Esc 不拦截，交回默认行为）。仅在消费按键时 preventDefault。
+ */
+function onSearchKeydown(event: KeyboardEvent): void {
+  if (event.key === "Enter") {
+    if (historyOpen.value && historyActive.value >= 0) {
+      const item = historyItems.value[historyActive.value];
+      // 高亮项存在 → 选中该历史并返回（不再走普通搜索）；异常缺项回落普通搜索
+      if (item) {
+        event.preventDefault();
+        void selectHistory(item);
+        return;
+      }
+    }
+    doSearch();
+    return;
+  }
+  if (!historyOpen.value || !historyItems.value.length) return;
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    historyActive.value = Math.min(historyActive.value + 1, historyItems.value.length - 1);
+    void scrollActiveIntoView();
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    historyActive.value = Math.max(historyActive.value - 1, -1);
+    void scrollActiveIntoView();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    closeHistory();
+  }
+}
+
+/**
+ * 点击历史条目：按六元组直接构造查询参数经 router.replace 回写本页 URL，
+ * 复用既有的 query → applyQuery → runSearch 自动搜索机制；空缺 / 非法过滤器
+ * 按本页默认值回落（s_mode 与 users_iri 冲突同批规范化，与 paramsFromQuery 同口径）。
+ * 历史词都是关键词，不经 parseBrowseInput 的 ID 直达解析。
+ */
+function selectHistory(item: BrowseSearchHistoryItem): void {
+  if (loading.value) return;
+  closeHistory();
+  const usersIri = usersIriOf(item.users_iri);
+  const query: Record<string, string> = {
+    word: item.word,
+    kind: oneOf(["illust", "manga", "novel"] as const, item.kind, "illust"),
+    order: oneOf(ORDERS, item.order, "date_d"),
+    mode: oneOf(MODES, item.mode, "all"),
+    s_mode: normalizeSMode(usersIri, oneOf(S_MODES, item.s_mode, "s_tag")),
+  };
+  if (usersIri) query.users_iri = usersIri;
+  void router.replace({ query });
+}
+
+/** 单条删除：不确认（对齐以图识图历史），失败 notify；删除后清键盘高亮。 */
+async function deleteHistory(item: BrowseSearchHistoryItem): Promise<void> {
+  if (loading.value) return;
+  try {
+    await deleteBrowseSearchHistory(item.id);
+    historyItems.value = historyItems.value.filter((entry) => entry.id !== item.id);
+    historyActive.value = -1;
+  } catch (err) {
+    notify(errorMessage(err));
+  }
+}
+
+onMounted(() => {
+  void refreshHistory();
+  document.addEventListener("pointerdown", onDocPointerDown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", onDocPointerDown);
+});
+
+// 页面被 KeepAlive 缓存：回到本页时收起下拉（焦点已丢失）并重拉一次历史
+onActivated(() => {
+  closeHistory();
+  void refreshHistory();
+});
 </script>
 
 <template>
@@ -528,16 +707,62 @@ const typeTabs = computed(() => [
         <ListRefreshButton :busy="loading" :disabled="!word.trim()" @refresh="refreshCurrent" />
       </div>
 
-      <!-- 搜索工具行：大而醒目的输入框 + 搜索按钮 -->
+      <!-- 搜索工具行：大而醒目的输入框 + 搜索按钮；输入容器 relative 承载历史下拉 -->
       <div class="tool-row">
-        <md-outlined-text-field
-          class="search-field"
-          :value="word"
-          :placeholder="t('browse.search.placeholder')"
-          :aria-label="t('nav.browseSearch')"
-          @input="word = ($event.target as HTMLInputElement).value"
-          @keydown.enter="doSearch"
-        />
+        <div ref="searchWrapEl" class="search-wrap" @focusin="onSearchFocusIn">
+          <md-outlined-text-field
+            ref="searchFieldEl"
+            class="search-field"
+            :value="word"
+            :placeholder="t('browse.search.placeholder')"
+            :aria-label="t('nav.browseSearch')"
+            @input="onSearchInput"
+            @keydown="onSearchKeydown"
+          />
+          <!-- 历史下拉：贴输入框下沿、与其同宽；空历史不渲染。等价按钮组
+             （原生 button 各带可读名称），容器 role=group + aria-label 命名 -->
+          <div
+            v-if="historyOpen && historyItems.length"
+            ref="historyPanelEl"
+            class="history-drop"
+            role="group"
+            :aria-label="t('browse.searchHistory.label')"
+          >
+            <div
+              v-for="(item, i) in historyItems"
+              :key="item.id"
+              class="history-drop-row"
+              :class="{ 'is-active': i === historyActive }"
+              :data-history-idx="i"
+            >
+              <button
+                type="button"
+                class="history-main"
+                :disabled="loading"
+                :title="item.word"
+                @click="selectHistory(item)"
+              >
+                <span class="history-word">{{ item.word }}</span>
+                <span class="history-kind" aria-hidden="true">{{ historyKindLabel(item.kind) }}</span>
+                <span class="history-time">{{ historyTime(item) }}</span>
+              </button>
+              <button
+                type="button"
+                class="history-remove"
+                :aria-label="t('browse.searchHistory.delete')"
+                :title="t('browse.searchHistory.delete')"
+                :disabled="loading"
+                @click.stop="deleteHistory(item)"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <!-- lucide x -->
+                  <path d="M18 6 6 18" />
+                  <path d="m6 6 12 12" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
         <md-filled-button class="search-btn" @click="doSearch">
           {{ t("common.search") }}
         </md-filled-button>
@@ -655,13 +880,167 @@ const typeTabs = computed(() => [
   margin-bottom: var(--space-md);
 }
 
-.search-field {
+/* 输入容器（relative）：尺寸职责从输入框上移（窄窗换行由 tool-row 承接），
+   并作为历史下拉的定位锚点与外部点击判定范围 */
+.search-wrap {
+  position: relative;
+  display: flex;
   flex: 1;
   min-width: 240px;
 }
 
+.search-field {
+  flex: 1;
+  min-width: 0;
+}
+
 .search-btn {
   flex: none;
+}
+
+/* ===== 搜索历史下拉：贴输入框下沿、与其同宽（left/right 归零，窄窗口不横向溢出）=====
+   容器配方与账号菜单 / 任务选择菜单 popover 同源：surface-container 底、control 圆角、
+   唯一合法轻阴影；面板在吸顶页头 stacking context（z=5）内，z=1 即盖过页头内其余
+   非定位行与下方内容。≤50 条超出 max-height 后内部滚动。 */
+.history-drop {
+  position: absolute;
+  top: calc(100% + var(--space-xs));
+  left: 0;
+  right: 0;
+  z-index: 1;
+  max-height: min(60vh, 320px);
+  padding: var(--space-xs);
+  overflow-y: auto;
+  border-radius: var(--radius-control);
+  background: var(--md-sys-color-surface-container);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+}
+
+/* 条目行：hover 与键盘高亮同为 8% primary 状态层（菜单行惯例），control 圆角随行 */
+.history-drop-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: 40px;
+  padding: 0 var(--space-xs) 0 var(--space-md);
+  border-radius: var(--radius-control);
+  transition: background-color 0.15s ease;
+}
+
+.history-drop-row:hover,
+.history-drop-row.is-active {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, transparent);
+}
+
+/* 行主体（关键词 + 类型徽标 + 相对时间）是可点按钮；删除 X 为兄弟节点，不嵌套 */
+.history-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+  min-height: 40px;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+}
+
+.history-main:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.history-main:disabled {
+  cursor: default;
+}
+
+/* 关键词加粗（票面要求），单行省略保留完整值于行 title */
+.history-word {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* 类型徽标：中性描边胶囊（与凭据状态胶囊同配方，非选中语义不用容器色） */
+.history-kind {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 20px;
+  padding: 0 var(--space-sm);
+  border: 1px solid color-mix(in srgb, var(--md-sys-color-outline) 60%, transparent);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 相对时间：12px ink-muted 辅助层级，等宽数字防抖动 */
+.history-time {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 单条删除：28px 快捷动作配方（同以图识图历史 / 卡片快捷动作），hover / focus-within 显现 */
+.history-remove {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--md-sys-color-surface-container);
+  color: var(--ink);
+  cursor: pointer;
+  opacity: 0;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.history-drop-row:hover .history-remove,
+.history-drop-row:focus-within .history-remove {
+  opacity: 1;
+}
+
+/* 触摸设备没有 hover：删除按钮常驻（同全站 hover 显现控件惯例） */
+@media (hover: none) {
+  .history-remove {
+    opacity: 1;
+  }
+}
+
+.history-remove:hover {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 8%, var(--md-sys-color-surface-container));
+}
+
+.history-remove:active {
+  background: color-mix(in srgb, var(--md-sys-color-primary) 12%, var(--md-sys-color-surface-container));
+}
+
+.history-remove:focus-visible {
+  outline: 2px solid var(--md-sys-color-primary);
+  outline-offset: 2px;
+}
+
+.history-remove:disabled {
+  cursor: default;
+}
+
+.history-remove svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* 过滤行：tabs + 排序/对象/匹配/users入り + 行尾本页排序。与全站筛选行统一 wrap
@@ -757,10 +1136,6 @@ const typeTabs = computed(() => [
   .tool-row {
     flex-direction: column;
     align-items: stretch;
-  }
-
-  .search-field {
-    min-width: 0;
   }
 
   .filter-row {

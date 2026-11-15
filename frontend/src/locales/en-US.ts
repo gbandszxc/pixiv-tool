@@ -791,6 +791,14 @@ export default {
     saucenaoHistoryClearConfirm: "Clear the entire image search history? This cannot be undone.",
     saucenaoHistoryCleared: "Search history cleared",
     saucenaoHistoryClearFailed: "Failed to clear, please try again",
+    // Maintenance "Browse search history" row (same recipe as the image search history row; takes effect immediately, unaffected by Save)
+    browseSearchHistoryLabel: "Browse search history",
+    browseSearchHistoryHint: "Successful browse searches (keyword and type for illustrations / manga / novels), stored in the local database only, up to 50 entries.",
+    browseSearchHistoryCount: "Total: {count}",
+    browseSearchHistoryClearTitle: "Clear browse search history",
+    browseSearchHistoryClearConfirm: "Clear the entire browse search history? This cannot be undone.",
+    browseSearchHistoryCleared: "Browse search history cleared",
+    browseSearchHistoryClearFailed: "Failed to clear, please try again",
     appearanceHint: "Theme and palette preview instantly; they are written only when you press Save.",
   },
   // Advanced → Sync (WebDAV backup): index page + sync subpage; error keys mirror backend codes
@@ -1096,6 +1104,15 @@ export default {
       localSortView: "Views",
       countsLoading: "Loading counts for {total} items…",
       countsFailed: "Failed to load counts; items without data are placed last",
+    },
+    // Search page history dropdown (opens on input focus/typing; the backend records authoritatively after a successful browse_search on page 1)
+    searchHistory: {
+      label: "Search history",
+      delete: "Delete this search history entry",
+      justNow: "just now",
+      minutesAgo: "{n} min ago",
+      hoursAgo: "{n} h ago",
+      daysAgo: "{n} d ago",
     },
     novel: {
       back: "Back",

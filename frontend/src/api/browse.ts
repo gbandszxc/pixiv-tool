@@ -802,6 +802,59 @@ export async function browseHistoryClear(): Promise<{ status: string; deleted: n
   return invokeBrowse<{ status: string; deleted: number }>("browse_history_clear");
 }
 
+// ===== 浏览搜索历史契约与封装（browse-search-history；!isTauri() → 空实现）=====
+
+/**
+ * 浏览搜索历史条目（`browse_search_history` 表行形状，snake_case）。
+ * 后端在 browse_search 成功且 page == 1 时权威记录（重复搜索刷新 `searched_at`，
+ * 保留最近 50 条），前端只读 + 删，不补记。过滤器列为空串 = 该次搜索未指定，
+ * 回放（点击条目回写 URL 查询参数）时由搜索页按本页默认值兜底。
+ */
+export interface BrowseSearchHistoryItem {
+  id: number;
+  /** 搜索词（trim 后入库）。 */
+  word: string;
+  /** 类型：illust | manga | novel。 */
+  kind: ListWorkKind;
+  /** 排序（空串 = 未指定）。 */
+  order: string;
+  /** 对象档位（空串 = 未指定）。 */
+  mode: string;
+  /** 匹配方式（空串 = 未指定）。 */
+  s_mode: string;
+  /** users入り 收藏数档位（空串 = 不过滤）。 */
+  users_iri: string;
+  /** 最近一次搜索时间（RFC3339 UTC）。 */
+  searched_at: string;
+}
+
+/**
+ * browse_search_history_list：浏览搜索历史，最新在前。
+ * limit 缺省 50（后端保留上限即 50 条，50 = 全量）；非法值后端报错。
+ * 搜索历史不造 mock 数据：`!isTauri()` 时返回空数组（风格对齐 api/saucenao.ts）。
+ */
+export async function listBrowseSearchHistory(limit?: number): Promise<BrowseSearchHistoryItem[]> {
+  if (!isTauri()) return [];
+  return invokeBrowse<BrowseSearchHistoryItem[]>(
+    "browse_search_history_list",
+    limit === undefined ? {} : { limit }
+  );
+}
+
+/** browse_search_history_delete：删除单条历史，返回实际删除条数（0 = id 不存在，幂等）。 */
+export async function deleteBrowseSearchHistory(id: number): Promise<number> {
+  if (!isTauri()) return 0;
+  const res = await invokeBrowse<{ status: string; deleted: number }>("browse_search_history_delete", { id });
+  return res.deleted;
+}
+
+/** browse_search_history_clear：清空全部浏览搜索历史，返回清除条数。 */
+export async function clearBrowseSearchHistory(): Promise<number> {
+  if (!isTauri()) return 0;
+  const res = await invokeBrowse<{ status: string; deleted: number }>("browse_search_history_clear", {});
+  return res.deleted;
+}
+
 // ===== 动图帧 / 已下载页（page-download-ui-v1；!isTauri() → mock）=====
 
 /** browse_ugoira_frames 返回体：frames 为逐帧图片（可播放顺序），delay 为该帧时长（毫秒）。 */

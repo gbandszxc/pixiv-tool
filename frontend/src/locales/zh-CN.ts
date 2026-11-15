@@ -792,6 +792,14 @@ export default {
     saucenaoHistoryClearConfirm: "确定清空全部以图识图搜索历史？此操作不可恢复。",
     saucenaoHistoryCleared: "搜索历史已清除",
     saucenaoHistoryClearFailed: "清除失败，请重试",
+    // 维护分区「浏览搜索历史」清理项（与以图识图搜索历史同款配方；立即执行，不受保存影响）
+    browseSearchHistoryLabel: "浏览搜索历史",
+    browseSearchHistoryHint: "浏览搜索（插画 / 漫画 / 小说关键词）的成功搜索记录（关键词与类型），仅保存在本机数据库，最多保留 50 条。",
+    browseSearchHistoryCount: "共 {count} 条",
+    browseSearchHistoryClearTitle: "清除浏览搜索历史",
+    browseSearchHistoryClearConfirm: "确定清空全部浏览搜索历史？此操作不可恢复。",
+    browseSearchHistoryCleared: "浏览搜索历史已清除",
+    browseSearchHistoryClearFailed: "清除失败，请重试",
     appearanceHint: "主题与配色即时预览，点击「保存」后才写入设置。",
   },
   // 高级 → 同步（WebDAV 备份）：入口页 + 二级同步页；错误码键 = 后端 code
@@ -1096,6 +1104,15 @@ export default {
       localSortView: "浏览数",
       countsLoading: "正在获取本页计数（{total} 项）…",
       countsFailed: "计数获取失败，缺失项排在末尾",
+    },
+    // 搜索页历史下拉（输入框聚焦/输入时展开；后端在 browse_search 成功且第 1 页时权威记录）
+    searchHistory: {
+      label: "搜索历史",
+      delete: "删除该条搜索历史",
+      justNow: "刚刚",
+      minutesAgo: "{n} 分钟前",
+      hoursAgo: "{n} 小时前",
+      daysAgo: "{n} 天前",
     },
     novel: {
       back: "返回",

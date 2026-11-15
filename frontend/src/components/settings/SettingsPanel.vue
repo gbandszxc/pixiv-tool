@@ -237,6 +237,13 @@
           <md-text-button class="danger-button" :disabled="saucenaoHistoryCount === 0" @click="openHistoryConfirm">{{ t("common.clear") }}</md-text-button>
         </div>
         <div class="settings-maintenance-item">
+          <span class="settings-maintenance-text">
+            <span class="field-label"><strong>{{ t("settings.browseSearchHistoryLabel") }}</strong><HelpTooltip :label="t('settings.browseSearchHistoryLabel')" :text="t('settings.browseSearchHistoryHint')" /></span>
+            <span class="field-hint">{{ t("settings.browseSearchHistoryCount", { count: browseSearchHistoryCount }) }}</span>
+          </span>
+          <md-text-button class="danger-button" :disabled="browseSearchHistoryCount === 0" @click="openBrowseHistoryConfirm">{{ t("common.clear") }}</md-text-button>
+        </div>
+        <div class="settings-maintenance-item">
           <span class="settings-maintenance-text"><span class="field-label"><strong>{{ t("settings.authLabel") }}</strong><HelpTooltip :label="t('settings.authLabel')" :text="t('settings.clearAuthHint')" /></span></span>
           <md-text-button class="danger-button" @click="openConfirm">{{ t("common.clear") }}</md-text-button>
         </div>
@@ -253,6 +260,12 @@
       <h2 id="clear-saucenao-history-title">{{ t("settings.saucenaoHistoryClearTitle") }}</h2>
       <p>{{ t("settings.saucenaoHistoryClearConfirm") }}</p>
       <div class="m3-row dialog-actions"><md-text-button @click="closeHistoryConfirm">{{ t("common.cancel") }}</md-text-button><md-filled-button @click="handleHistoryConfirm">{{ t("settings.saucenaoHistoryClearTitle") }}</md-filled-button></div>
+    </dialog>
+
+    <dialog ref="browseHistoryConfirmDialog" class="m3-dialog" aria-labelledby="clear-browse-search-history-title">
+      <h2 id="clear-browse-search-history-title">{{ t("settings.browseSearchHistoryClearTitle") }}</h2>
+      <p>{{ t("settings.browseSearchHistoryClearConfirm") }}</p>
+      <div class="m3-row dialog-actions"><md-text-button @click="closeBrowseHistoryConfirm">{{ t("common.cancel") }}</md-text-button><md-filled-button @click="handleBrowseHistoryConfirm">{{ t("settings.browseSearchHistoryClearTitle") }}</md-filled-button></div>
     </dialog>
   </section>
 </template>
@@ -289,6 +302,7 @@ import { useAuthStore } from "../../stores/auth";
 import { errorMessage, errorPayload, setWindowTheme, type Settings } from "../../api/tauri";
 import { formatTemplatePlaceholders, ILLUST_TEMPLATE_PLACEHOLDERS, NOVEL_TEMPLATE_PLACEHOLDERS, validateFilenameTemplate, type FilenameTemplateKind } from "../../utils/filenameTemplate";
 import { clearSaucenaoHistory, listSaucenaoHistory, SAUCENAO_KEY_FIELD_ID } from "../../api/saucenao";
+import { clearBrowseSearchHistory, listBrowseSearchHistory } from "../../api/browse";
 import { openInBrowser } from "../../utils/pixivHooks";
 import { notify } from "../../ui/notify";
 import type { SettingsSection } from "./sections";
@@ -628,7 +642,10 @@ watch(() => props.section, (section) => {
   // 离开「高级」时回到子项索引，避免下次进入直接落在同步页。
   if (section !== "advanced") advancedView.value = "menu";
   // 进入维护分区即刷新搜索历史条数（立即执行项的实时计数，与保存无关）。
-  if (section === "maintenance" && props.active) void refreshSaucenaoHistoryCount();
+  if (section === "maintenance" && props.active) {
+    void refreshSaucenaoHistoryCount();
+    void refreshBrowseSearchHistoryCount();
+  }
 });
 watch(() => [form.value.theme, form.value.theme_color], applyPreview);
 onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settingsStore.settings.max_wait_seconds !== "number") settingsStore.settings.max_wait_seconds = 180;
@@ -649,7 +666,7 @@ onMounted(async () => { await settingsStore.fetchSettings(); if (typeof settings
   // 诊断是会话级状态，不属于设置草稿：每次打开设置都以后端为准回显。
   if (props.active) void loadDiagnosticStatus(); });
 /** 设置弹窗每次打开时重新读取诊断开关（可能有别处改过，或应用重启后已复位）；直达维护分区时同样刷新历史计数。 */
-watch(() => props.active, (active) => { if (active) { void loadDiagnosticStatus(); if (props.section === "maintenance") void refreshSaucenaoHistoryCount(); } });
+watch(() => props.active, (active) => { if (active) { void loadDiagnosticStatus(); if (props.section === "maintenance") { void refreshSaucenaoHistoryCount(); void refreshBrowseSearchHistoryCount(); } } });
 /** 有未保存改动：弹窗据此决定关闭前是否提示。 */
 function hasUnsaved() { return Boolean(translationKey.value) || clearTranslationKey.value || Boolean(webdavPassword.value) || clearWebdavPassword.value || Boolean(syncPassphrase.value) || clearSyncPassphrase.value || Boolean(savedSnapshot.value) && savedSnapshot.value !== snapshot(); }
 /** 回滚到上次保存值（取消 / 确认放弃修改）。主题预览随表单回到已保存值。 */
@@ -806,6 +823,31 @@ async function handleHistoryConfirm(): Promise<void> {
     notify(t("settings.saucenaoHistoryCleared"));
   } catch (err) {
     notify(errorMessage(err) || t("settings.saucenaoHistoryClearFailed"));
+  }
+}
+
+// ===== 维护分区：浏览搜索历史清理（同以图识图搜索历史配方；立即执行，不受底部保存影响）=====
+
+const browseHistoryConfirmDialog = ref<HTMLDialogElement | null>(null);
+const browseSearchHistoryCount = ref(0);
+/** 进入维护分区时读取当前条数；读失败按 0 显示并禁用清理（与空缓存禁用同口径）。 */
+async function refreshBrowseSearchHistoryCount(): Promise<void> {
+  try {
+    browseSearchHistoryCount.value = (await listBrowseSearchHistory()).length;
+  } catch {
+    browseSearchHistoryCount.value = 0;
+  }
+}
+async function openBrowseHistoryConfirm(): Promise<void> { await nextTick(); browseHistoryConfirmDialog.value?.showModal(); }
+function closeBrowseHistoryConfirm(): void { browseHistoryConfirmDialog.value?.close(); }
+async function handleBrowseHistoryConfirm(): Promise<void> {
+  closeBrowseHistoryConfirm();
+  try {
+    await clearBrowseSearchHistory();
+    browseSearchHistoryCount.value = 0;
+    notify(t("settings.browseSearchHistoryCleared"));
+  } catch (err) {
+    notify(errorMessage(err) || t("settings.browseSearchHistoryClearFailed"));
   }
 }
 

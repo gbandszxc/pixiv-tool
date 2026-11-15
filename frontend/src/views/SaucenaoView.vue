@@ -45,6 +45,7 @@ import {
 } from "../api/saucenao";
 import { useSettingsStore } from "../stores/settings";
 import { openInBrowser } from "../utils/pixivHooks";
+import { relativeTime as formatRelativeTime } from "../utils/relativeTime";
 import { notify } from "../ui/notify";
 
 const { t, locale } = useI18n();
@@ -237,17 +238,14 @@ function historyMeta(item: SaucenaoHistoryItem): string {
   return `${t("saucenao.historyResults", { n: item.result_count })} · ${relativeTime(item.searched_at)}`;
 }
 
+/** 相对时间：分桶逻辑在 utils/relativeTime.ts（与浏览搜索历史共用），此处只解析标签。 */
 function relativeTime(searchedAt: string): string {
-  const at = new Date(searchedAt).getTime();
-  if (Number.isNaN(at)) return "";
-  const minutes = Math.floor(Math.max(0, Date.now() - at) / 60_000);
-  if (minutes < 1) return t("saucenao.historyJustNow");
-  if (minutes < 60) return t("saucenao.historyMinutesAgo", { n: minutes });
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return t("saucenao.historyHoursAgo", { n: hours });
-  const days = Math.floor(hours / 24);
-  if (days < 30) return t("saucenao.historyDaysAgo", { n: days });
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: "short" }).format(at);
+  return formatRelativeTime(searchedAt, locale.value, {
+    justNow: t("saucenao.historyJustNow"),
+    minutesAgo: (n) => t("saucenao.historyMinutesAgo", { n }),
+    hoursAgo: (n) => t("saucenao.historyHoursAgo", { n }),
+    daysAgo: (n) => t("saucenao.historyDaysAgo", { n }),
+  });
 }
 
 /** 点击历史条目 = 采纳该源并立即搜索（loading 期按钮已禁用，此处再防御）。 */
