@@ -41,8 +41,13 @@ use crate::{
         runtime,
         storage::{JobStore, list_jobs},
     },
-    core::exporter::{ExportMeta, make_translation_filename},
+    core::{
+        epub::{EpubBook, EpubChapter, PlaceholderCoverSpec, render_xhtml_body},
+        exporter::{ExportMeta, make_translation_filename, sanitize_filename},
+        filename_template::{NovelNameInfo, render_novel},
+    },
     paths::{AppPaths, anchor_output_dir},
+    pixiv::api::PixivApi,
     settings::Settings,
     translation::{
         artifacts::{
@@ -51,7 +56,10 @@ use crate::{
             TranslationResult,
         },
         chunking::ChunkConfig,
-        publish::{publish_status_with_policy, render_markdown, render_txt, translation_filename_suffix},
+        publish::{
+            publish_status_with_policy, render_markdown, render_markup, render_txt,
+            translation_filename_suffix,
+        },
         source::{parse_segment_id, parse_source},
         tools,
         validation::{merge_pages, validate_merge_with_policy},
@@ -1592,11 +1600,12 @@ impl TranslationService {
         .map_err(|error| format!("读取翻译结果失败：{error}"))?
     }
 
-    /// 译文本地导出：把最新已完成 v2 Job 的译文渲染为 txt / md 写入输出目录
-    /// `novel/`（命名见 `make_translation_filename`，SPEC §4.4）。
+    /// 译文本地导出：把最新已完成 v2 Job 的译文渲染为 txt / md / epub 写入
+    /// 输出目录 `novel/`（命名见 `make_translation_filename`，SPEC §4.4）。
     ///
     /// 与抓取任务无关：不联网、不受已下载去重影响；只接受 `manifest.state =
     /// Completed` 且 `result.status = Complete` 的 Job（v1 旧缓存不支持导出）。
+    /// epub 无网络：正文图片标记全部渲染为占位块，封面为占位封面。
     /// 返回写入文件的绝对路径（同名覆盖）。
     pub async fn export_translation(
         &self,
@@ -1604,12 +1613,13 @@ impl TranslationService {
         formats: &[String],
         naming: Option<TranslationExportNaming>,
     ) -> Result<Vec<String>, String> {
-        // 格式归一化：只认 txt / markdown，大小写不敏感、顺序跟随输入、去重
+        // 格式归一化：只认 txt / markdown / epub，大小写不敏感、顺序跟随输入、去重
         let mut exts: Vec<&'static str> = Vec::new();
         for format in formats {
             let ext = match format.trim().to_ascii_lowercase().as_str() {
                 "txt" => "txt",
                 "markdown" | "md" => "md",
+                "epub" => "epub",
                 _ => continue,
             };
             if !exts.contains(&ext) {
@@ -3963,18 +3973,66 @@ fn export_translation_blocking(
     let target_dir = anchor_output_dir(&settings.output_dir, &paths.data_dir).join("novel");
     let mut written = Vec::with_capacity(exts.len());
     for ext in exts {
-        let content = match *ext {
-            "md" => render_markdown(&source, &result.pages),
-            _ => render_txt(&source, &result.pages),
-        };
         let filename = export_filename(novel_id, settings, naming.as_ref(), ext, &suffix);
         let filepath = target_dir.join(&filename);
-        std::fs::create_dir_all(&target_dir)
-            .and_then(|_| std::fs::write(&filepath, content))
-            .map_err(|error| format!("写入译文文件失败：{error}"))?;
+        std::fs::create_dir_all(&target_dir).map_err(|error| format!("写入译文文件失败：{error}"))?;
+        if *ext == "epub" {
+            let book = translation_epub_book(novel_id, naming.as_ref(), &result, &source);
+            book.write_to(&filepath)
+                .map_err(|error| format!("写入译文 EPUB 失败：{error}"))?;
+        } else {
+            let content = match *ext {
+                "md" => render_markdown(&source, &result.pages),
+                _ => render_txt(&source, &result.pages),
+            };
+            std::fs::write(&filepath, content)
+                .map_err(|error| format!("写入译文文件失败：{error}"))?;
+        }
         written.push(filepath.to_string_lossy().into_owned());
     }
     Ok(written)
+}
+
+/// 译文导出的统一图片解析器：译文导出不联网，全部图片标记渲染为占位块。
+fn no_embed_images(_: &str) -> Option<String> {
+    None
+}
+
+/// 单篇译文的 EPUB 书稿：正文走标记保留投影（[`render_markup`]）+
+/// `core::epub` 渲染器，封面为占位封面（标题 / 作者取本地命名信息，
+/// 缺失用小说 id 兜底）。
+fn translation_epub_book(
+    novel_id: i64,
+    naming: Option<&TranslationExportNaming>,
+    result: &TranslationResult,
+    source: &SourceDoc,
+) -> EpubBook {
+    let (title, author) = naming
+        .map(|naming| (naming.meta.title.clone(), naming.meta.user_name.clone()))
+        .unwrap_or_default();
+    let display_title = if title.is_empty() {
+        novel_id.to_string()
+    } else {
+        title
+    };
+    let body = render_markup(source, &result.pages);
+    EpubBook {
+        title: display_title.clone(),
+        author: author.clone(),
+        language: result.target_language.clone(),
+        book_uuid: uuid::Uuid::new_v4().to_string(),
+        chapters: vec![EpubChapter {
+            title: display_title.clone(),
+            xhtml_body: render_xhtml_body(&body, &no_embed_images),
+        }],
+        cover: None,
+        images: Vec::new(),
+        placeholder_cover: Some(PlaceholderCoverSpec {
+            title: display_title,
+            author,
+            seed_id: novel_id,
+        }),
+    }
 }
 
 /// 译文文件名：`novels` 表完整行 → 模板命名（series_order 非空用系列模板）；
@@ -4010,6 +4068,329 @@ fn export_filename(
         ),
     };
     make_translation_filename(&meta, ext, template, suffix)
+}
+
+// ----------------------------------------------------------------------
+// 系列译文整包导出（novel_translation_export_series）
+// ----------------------------------------------------------------------
+
+/// 系列目录中的一话（联网聚合结果，blocking 层纯消费的纯数据）。
+#[derive(Debug, Clone)]
+pub struct SeriesChapterInput {
+    /// 该话的 novel id（本地 Job 检索键）。
+    pub novel_id: i64,
+    /// contentOrder（升序、容忍跳号；渲染「第 N 话」用）。
+    pub order: i64,
+    /// 该话标题。
+    pub title: String,
+}
+
+/// 联网聚合出的系列目录（标题 / 作者 + 全部话列表）。
+#[derive(Debug, Clone)]
+pub struct SeriesExportCatalog {
+    pub series_id: i64,
+    pub title: String,
+    pub author: String,
+    pub author_id: i64,
+    /// 系列总话数（模板 `{order}` 零填充宽度依据）。
+    pub total: i64,
+    /// contentOrder 升序（容忍跳号）。
+    pub chapters: Vec<SeriesChapterInput>,
+}
+
+/// 系列译文导出结果：成功路径数组；校验失败为结构化
+/// `translation_incomplete` 载荷的中文 message（命令层包 `{error:{...}}`）。
+#[derive(Debug)]
+pub enum SeriesExportOutcome {
+    Written(Vec<String>),
+    Incomplete { message: String },
+}
+
+/// blocking 层内部失败分类：校验失败（可恢复、走 Ok 通道）与 IO 失败（Err 通道）。
+#[derive(Debug)]
+enum SeriesExportFailure {
+    Incomplete(String),
+    Io(String),
+}
+
+impl std::fmt::Display for SeriesExportFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Incomplete(message) | Self::Io(message) => f.write_str(message),
+        }
+    }
+}
+
+impl TranslationService {
+    /// 系列译文整包导出：联网取系列目录（游标循环、contentOrder 升序），
+    /// 以 contentOrder 最小话的最新可用译文 Job 目标语言为基准，要求全系列
+    /// 每话都存在该语言 Completed+Complete 的 Job（`read_exportable_job`
+    /// 口径）；任一话缺失或语言不一致返回
+    /// [`SeriesExportOutcome::Incomplete`]。校验通过后正文 / 译文全部读本地
+    /// Job 产物（不逐话联网），按格式各拼接为一个整包文件写入
+    /// `novel/`，返回落盘路径数组。
+    pub async fn export_series(
+        &self,
+        api: PixivApi,
+        series_id: i64,
+        formats: &[String],
+    ) -> Result<SeriesExportOutcome, String> {
+        // 格式归一化与单篇同一白名单（txt / markdown / epub，大小写不敏感、去重）
+        let mut exts: Vec<&'static str> = Vec::new();
+        for format in formats {
+            let ext = match format.trim().to_ascii_lowercase().as_str() {
+                "txt" => "txt",
+                "markdown" | "md" => "md",
+                "epub" => "epub",
+                _ => continue,
+            };
+            if !exts.contains(&ext) {
+                exts.push(ext);
+            }
+        }
+        if exts.is_empty() {
+            return Err("未选择有效的导出格式".into());
+        }
+        let catalog = fetch_series_catalog(&api, series_id).await?;
+        // 目录聚合、MB 级 Job 产物读取与写文件全是磁盘阻塞操作，挪到阻塞线程
+        let paths = self.inner.paths.clone();
+        let settings = self.settings_snapshot();
+        let outcome = tokio::task::spawn_blocking(move || {
+            export_series_blocking(&paths, &settings, &catalog, &exts)
+        })
+        .await
+        .map_err(|error| format!("系列译文导出失败：{error}"))?;
+        match outcome {
+            Ok(paths) => Ok(SeriesExportOutcome::Written(paths)),
+            Err(SeriesExportFailure::Incomplete(message)) => {
+                Ok(SeriesExportOutcome::Incomplete { message })
+            }
+            Err(SeriesExportFailure::Io(error)) => Err(error),
+        }
+    }
+}
+
+/// 联网聚合系列全目录：`get_novel_series` 游标循环（next_last_order 到底为
+/// null），条目按 contentOrder 升序、容忍跳号。目录为空视为错误。
+async fn fetch_series_catalog(
+    api: &PixivApi,
+    series_id: i64,
+) -> Result<SeriesExportCatalog, String> {
+    let mut title = String::new();
+    let mut author = String::new();
+    let mut author_id = 0i64;
+    let mut total = 0i64;
+    let mut chapters: Vec<SeriesChapterInput> = Vec::new();
+    let mut last_order: Option<i64> = None;
+    loop {
+        let detail = api
+            .get_novel_series(series_id, last_order)
+            .await
+            .map_err(|error| format!("获取系列目录失败：{error}"))?;
+        if title.is_empty() && author.is_empty() && total == 0 {
+            title = detail
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            author = detail
+                .get("user_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            author_id = detail.get("user_id").and_then(Value::as_i64).unwrap_or(0);
+            total = detail.get("total").and_then(Value::as_i64).unwrap_or(0);
+        }
+        if let Some(items) = detail.get("contents").and_then(Value::as_array) {
+            for item in items {
+                let Some(novel_id) = item.get("id").and_then(Value::as_i64) else {
+                    continue;
+                };
+                let order = item
+                    .get("series_order")
+                    .and_then(Value::as_i64)
+                    .unwrap_or((chapters.len() + 1) as i64);
+                let chapter_title = item
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                chapters.push(SeriesChapterInput {
+                    novel_id,
+                    order,
+                    title: chapter_title,
+                });
+            }
+        }
+        match detail.get("next_last_order").and_then(Value::as_i64) {
+            // 到底 / 非法（null、负数、与上一批相同防死循环）→ 结束游标循环
+            Some(next) if next > 0 && last_order != Some(next) => last_order = Some(next),
+            _ => break,
+        }
+    }
+    chapters.sort_by_key(|chapter| chapter.order);
+    if chapters.is_empty() {
+        return Err("系列目录为空，无法导出".into());
+    }
+    Ok(SeriesExportCatalog {
+        series_id,
+        title,
+        author,
+        author_id,
+        total,
+        chapters,
+    })
+}
+
+/// [`TranslationService::export_series`] 的阻塞实现（调用方已在阻塞线程）。
+/// 校验失败返回 [`SeriesExportFailure::Incomplete`]（async 层转结构化
+/// 载荷），磁盘失败返回 [`SeriesExportFailure::Io`]（Err 通道）。
+fn export_series_blocking(
+    paths: &AppPaths,
+    settings: &Settings,
+    catalog: &SeriesExportCatalog,
+    exts: &[&str],
+) -> Result<Vec<String>, SeriesExportFailure> {
+    // 语言基准：contentOrder 最小话的最新可用译文 Job 的目标语言
+    let first = catalog
+        .chapters
+        .first()
+        .expect("目录为空已在聚合层拒绝");
+    let Some((first_result, _)) = read_exportable_job(paths, first.novel_id) else {
+        return Err(SeriesExportFailure::Incomplete(format!(
+            "系列译文不完整：第 {} 话《{}》暂无已完成的译文",
+            first.order, first.title
+        )));
+    };
+    let baseline_language = first_result.target_language.clone();
+
+    // 逐话校验并读入本地 Job 产物（任一话缺失 / 语言不一致 → 整体失败）
+    let mut entries: Vec<(&SeriesChapterInput, TranslationResult, SourceDoc)> =
+        Vec::with_capacity(catalog.chapters.len());
+    for chapter in &catalog.chapters {
+        let Some((result, source)) = read_exportable_job(paths, chapter.novel_id) else {
+            return Err(SeriesExportFailure::Incomplete(format!(
+                "系列译文不完整：第 {} 话《{}》缺少已完成的译文",
+                chapter.order, chapter.title
+            )));
+        };
+        if result.target_language != baseline_language {
+            return Err(SeriesExportFailure::Incomplete(format!(
+                "系列译文不完整：第 {} 话《{}》的目标语言（{}）与系列基准语言（{}）不一致",
+                chapter.order, chapter.title, result.target_language, baseline_language
+            )));
+        }
+        entries.push((chapter, result, source));
+    }
+
+    let suffix = translation_filename_suffix(&baseline_language);
+    let stem = series_export_stem(settings, catalog);
+    let target_dir = anchor_output_dir(&settings.output_dir, &paths.data_dir).join("novel");
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|error| SeriesExportFailure::Io(format!("创建输出目录失败：{error}")))?;
+
+    let mut written = Vec::with_capacity(exts.len());
+    for ext in exts {
+        let filepath = target_dir.join(format!("{stem}_{suffix}.{ext}"));
+        let content = series_export_content(catalog, &entries, ext, &baseline_language)?;
+        std::fs::write(&filepath, content).map_err(|error| {
+            SeriesExportFailure::Io(format!("写入译文文件失败：{error}"))
+        })?;
+        written.push(filepath.to_string_lossy().into_owned());
+    }
+    Ok(written)
+}
+
+/// 系列整包内容渲染：
+/// - txt：每话「第 N 话 标题」分隔行 + 纯文本渲染；
+/// - md：`# 系列标题` + 目录列表 + 每话 `## 第N话 标题` + Markdown 渲染；
+/// - epub：EPUB 组装字节（每话一个章节，nav 目录即话列表，占位封面）。
+fn series_export_content(
+    catalog: &SeriesExportCatalog,
+    entries: &[(&SeriesChapterInput, TranslationResult, SourceDoc)],
+    ext: &str,
+    language: &str,
+) -> Result<Vec<u8>, SeriesExportFailure> {
+    match ext {
+        "md" => {
+            let mut out = format!("# {}\n\n", catalog.title);
+            for (chapter, _, _) in entries {
+                out.push_str(&format!("- 第{}话 {}\n", chapter.order, chapter.title));
+            }
+            for (chapter, result, source) in entries {
+                out.push_str(&format!(
+                    "\n## 第{}话 {}\n\n{}",
+                    chapter.order,
+                    chapter.title,
+                    render_markdown(source, &result.pages)
+                ));
+            }
+            Ok(out.into_bytes())
+        }
+        "epub" => {
+            let chapters = entries
+                .iter()
+                .map(|(chapter, result, source)| EpubChapter {
+                    title: format!("第{}话 {}", chapter.order, chapter.title),
+                    xhtml_body: render_xhtml_body(
+                        &render_markup(source, &result.pages),
+                        &no_embed_images,
+                    ),
+                })
+                .collect();
+            let display_title = if catalog.title.is_empty() {
+                catalog.series_id.to_string()
+            } else {
+                catalog.title.clone()
+            };
+            let book = EpubBook {
+                title: display_title.clone(),
+                author: catalog.author.clone(),
+                language: language.to_string(),
+                book_uuid: uuid::Uuid::new_v4().to_string(),
+                chapters,
+                cover: None,
+                images: Vec::new(),
+                placeholder_cover: Some(PlaceholderCoverSpec {
+                    title: display_title,
+                    author: catalog.author.clone(),
+                    seed_id: catalog.series_id,
+                }),
+            };
+            book.to_bytes().map_err(|error| {
+                SeriesExportFailure::Io(format!("组装系列译文 EPUB 失败：{error}"))
+            })
+        }
+        _ => {
+            let mut parts = Vec::with_capacity(entries.len());
+            for (chapter, result, source) in entries {
+                parts.push(format!(
+                    "第{}话 {}\n\n{}",
+                    chapter.order,
+                    chapter.title,
+                    render_txt(source, &result.pages)
+                ));
+            }
+            Ok(parts.join("\n\n").into_bytes())
+        }
+    }
+}
+
+/// 系列整包文件名词干：`novel_series_filename_template` 渲染（`{order}` 无值
+/// 按空值吸收规则删除并吸收分隔符）；渲染为空回落 `sanitize(系列标题)_{sid}`。
+fn series_export_stem(settings: &Settings, catalog: &SeriesExportCatalog) -> String {
+    let info = NovelNameInfo {
+        user_name: catalog.author.clone(),
+        user_id: catalog.author_id,
+        title: catalog.title.clone(),
+        id: catalog.series_id,
+        series_id: Some(catalog.series_id),
+        series_order: None,
+        page_count: catalog.total,
+    };
+    render_novel(&info, &settings.novel_series_filename_template).unwrap_or_else(|| {
+        format!("{}_{}", sanitize_filename(&catalog.title), catalog.series_id)
+    })
 }
 
 /// 读取任意 Job 的阅读器结果。
@@ -4344,7 +4725,7 @@ mod tests {
 
     #[tokio::test]
     async fn export_translation_rejects_unknown_formats() {
-        // 格式归一化门在 async 入口：只认 txt / markdown，大小写不敏感
+        // 格式归一化门在 async 入口：只认 txt / markdown / epub，大小写不敏感
         let (paths, dir) = fixture("export-format");
         let service = TranslationService::for_tests_with_generation(
             paths.clone(),
@@ -4354,10 +4735,217 @@ mod tests {
             CacheGeneration::new(0),
         );
         let error = service
-            .export_translation(7, &["epub".to_string(), "PDF".to_string()], None)
+            .export_translation(7, &["PDF".to_string(), "xlsx".to_string()], None)
             .await
             .unwrap_err();
         assert!(error.contains("未选择有效的导出格式"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn export_translation_accepts_epub_case_insensitive() {
+        // EPUB 大写放行（白名单大小写不敏感）、pdf 忽略；
+        // 无已完成译文时走到导出前置校验错误，而不是格式错误。
+        let (paths, dir) = fixture("export-epub-format");
+        let service = TranslationService::for_tests_with_generation(
+            paths.clone(),
+            settings(),
+            Arc::new(NoopSink),
+            Some("k".into()),
+            CacheGeneration::new(0),
+        );
+        let error = service
+            .export_translation(7, &["EPUB".to_string(), "pdf".to_string()], None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("暂无已完成的译文"),
+            "epub 应通过白名单进入导出校验：{error}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- 译文 EPUB（单篇）----
+
+    /// 读 zip 文本条目（测试辅助）。
+    fn epub_entry_text(bytes: &[u8], name: &str) -> String {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut file = archive.by_name(name).unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut file, &mut text).unwrap();
+        text
+    }
+
+    /// 读 zip 二进制条目（测试辅助）。
+    fn epub_entry_bytes(bytes: &[u8], name: &str) -> Vec<u8> {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut file = archive.by_name(name).unwrap();
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut file, &mut data).unwrap();
+        data
+    }
+
+    #[test]
+    fn export_translation_writes_epub_with_markers_and_placeholder_cover() {
+        let (paths, dir) = fixture("export-epub");
+        let mut settings = settings();
+        settings.output_dir = dir.join("out").to_string_lossy().into_owned();
+        let (_scope, store) = completed_job_fixture(&paths, 42, "20260101000000-epub");
+
+        let written =
+            export_translation_blocking(&paths, &settings, 42, &["epub"], None).unwrap();
+        let filepath = dir.join("out").join("novel").join("_42_CN.epub");
+        assert_eq!(written[0], filepath.to_string_lossy());
+
+        let bytes = std::fs::read(&filepath).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+        // EPUB 结构：mimetype 首条目且 Stored。
+        assert_eq!(archive.by_index(0).unwrap().name(), "mimetype");
+        assert_eq!(
+            archive.by_name("mimetype").unwrap().compression(),
+            zip::CompressionMethod::Stored
+        );
+        // 章节正文走标记保留投影：译文标题 h2、译文原样输出、页间分页块。
+        let chapter = epub_entry_text(&bytes, "OEBPS/chapter_0001.xhtml");
+        assert!(chapter.contains("<h2>序章</h2>"), "译文标题：{chapter}");
+        assert!(chapter.contains("<p>导入(どうにゅう)しました</p>"), "{chapter}");
+        assert!(chapter.contains(r#"<div class="page-break"></div>"#));
+        assert!(chapter.contains("尾巴译文"));
+        // 译文导出无网络：无内嵌图片条目，封面为占位 PNG。
+        assert!(archive.by_name("OEBPS/images/9001.png").is_err());
+        let cover = epub_entry_bytes(&bytes, "OEBPS/images/cover.png");
+        assert_eq!(&cover[..8], b"\x89PNG\r\n\x1a\n");
+
+        // 缺失译文的行回退原文（保留 ruby 标记、章节标题同样回退）。
+        {
+            let io = StoreIo::new(store.clone());
+            let artifacts = JobArtifacts::new(&io);
+            let mut result = artifacts.read_result().unwrap().unwrap();
+            let page1 = result.pages.get_mut(&1).unwrap();
+            page1.retain(|line| line.line != 0 && line.line != 1);
+            artifacts.write_result(&result).unwrap();
+        }
+        let written =
+            export_translation_blocking(&paths, &settings, 42, &["epub"], None).unwrap();
+        let bytes = std::fs::read(&written[0]).unwrap();
+        let chapter = epub_entry_text(&bytes, "OEBPS/chapter_0001.xhtml");
+        assert!(chapter.contains("<h2>序</h2>"), "章节标题回退原文：{chapter}");
+        assert!(
+            chapter.contains("<ruby>導入<rt>どうにゅう</rt></ruby>しました"),
+            "正文回退原文并保留 ruby：{chapter}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- 系列译文整包导出 ----
+
+    /// 两话系列目录夹具（测试辅助）。
+    fn series_catalog(chapters: &[(i64, i64, &str)]) -> SeriesExportCatalog {
+        SeriesExportCatalog {
+            series_id: 500,
+            title: "系列标题".into(),
+            author: "作者".into(),
+            author_id: 7,
+            total: chapters.len() as i64,
+            chapters: chapters
+                .iter()
+                .map(|(novel_id, order, title)| SeriesChapterInput {
+                    novel_id: *novel_id,
+                    order: *order,
+                    title: (*title).into(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn series_export_blocks_when_volume_missing() {
+        let (paths, dir) = fixture("series-missing");
+        let mut settings = settings();
+        settings.output_dir = dir.join("out").to_string_lossy().into_owned();
+        completed_job_fixture(&paths, 101, "20260101000000-s1");
+        // 第二话无任何 Job → 整体失败
+        let catalog = series_catalog(&[(101, 1, "第一话"), (102, 2, "第二话")]);
+        let failure = export_series_blocking(&paths, &settings, &catalog, &["txt"]).unwrap_err();
+        let SeriesExportFailure::Incomplete(message) = &failure else {
+            panic!("应为 translation_incomplete：{failure}");
+        };
+        assert!(message.contains("系列译文不完整"), "{message}");
+        assert!(message.contains("第二话"), "缺失话数定位：{message}");
+        // 未写出任何文件
+        assert!(!dir.join("out").join("novel").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn series_export_blocks_on_language_mismatch() {
+        let (paths, dir) = fixture("series-lang");
+        let mut settings = settings();
+        settings.output_dir = dir.join("out").to_string_lossy().into_owned();
+        completed_job_fixture(&paths, 101, "20260101000000-s1");
+        let (_, store) = completed_job_fixture(&paths, 102, "20260101000000-s2");
+        // 第二话目标语言改为 en → 与基准（zh-CN）不一致
+        {
+            let io = StoreIo::new(store.clone());
+            let artifacts = JobArtifacts::new(&io);
+            let mut result = artifacts.read_result().unwrap().unwrap();
+            result.target_language = "en".into();
+            artifacts.write_result(&result).unwrap();
+        }
+        let catalog = series_catalog(&[(101, 1, "第一话"), (102, 2, "第二话")]);
+        let failure = export_series_blocking(&paths, &settings, &catalog, &["txt"]).unwrap_err();
+        let SeriesExportFailure::Incomplete(message) = &failure else {
+            panic!("应为 translation_incomplete：{failure}");
+        };
+        assert!(message.contains("第二话"), "{message}");
+        assert!(message.contains("语言"), "语言冲突定位：{message}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn series_export_writes_all_formats_when_complete() {
+        let (paths, dir) = fixture("series-complete");
+        let mut settings = settings();
+        settings.output_dir = dir.join("out").to_string_lossy().into_owned();
+        completed_job_fixture(&paths, 101, "20260101000000-s1");
+        completed_job_fixture(&paths, 102, "20260101000000-s2");
+        let catalog = series_catalog(&[(101, 1, "第一话"), (102, 2, "第二话")]);
+
+        let written =
+            export_series_blocking(&paths, &settings, &catalog, &["txt", "md", "epub"]).unwrap();
+        assert_eq!(written.len(), 3);
+        let novel_dir = dir.join("out").join("novel");
+        // 系列词干 = 系列模板 `{order}_{title}` 渲染：{order} 无值吸收、
+        // 悬挂 `_` 由整体净化剥离 → `系列标题`；后缀取基准语言 zh-CN。
+        assert_eq!(written[0], novel_dir.join("系列标题_CN.txt").to_string_lossy());
+        assert_eq!(written[1], novel_dir.join("系列标题_CN.md").to_string_lossy());
+        assert_eq!(written[2], novel_dir.join("系列标题_CN.epub").to_string_lossy());
+
+        // txt：每话标题分隔行 + 话内纯文本渲染。
+        let txt = std::fs::read_to_string(novel_dir.join("系列标题_CN.txt")).unwrap();
+        assert!(txt.contains("第1话 第一话\n\n"), "话标题分隔行：{txt}");
+        assert!(txt.contains("第2话 第二话\n\n"));
+        assert!(txt.contains("序章"));
+        assert!(txt.contains("尾巴译文"));
+
+        // md：`# 系列标题` + 目录 + 每话 `## 第N话 标题`。
+        let md = std::fs::read_to_string(novel_dir.join("系列标题_CN.md")).unwrap();
+        assert!(md.starts_with("# 系列标题\n"));
+        assert!(md.contains("- 第1话 第一话\n- 第2话 第二话\n"), "目录：{md}");
+        assert!(md.contains("\n## 第1话 第一话\n"));
+        assert!(md.contains("\n## 第2话 第二话\n"));
+
+        // epub：每话一个章节（nav 即目录）+ 占位封面。
+        let bytes = std::fs::read(novel_dir.join("系列标题_CN.epub")).unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+        assert!(archive.by_name("OEBPS/chapter_0001.xhtml").is_ok());
+        assert!(archive.by_name("OEBPS/chapter_0002.xhtml").is_ok());
+        assert!(archive.by_name("OEBPS/images/cover.png").is_ok());
+        let nav = epub_entry_text(&bytes, "OEBPS/nav.xhtml");
+        assert!(nav.contains("第1话 第一话"), "nav 目录：{nav}");
+        assert!(nav.contains("第2话 第二话"));
+        let chapter2 = epub_entry_text(&bytes, "OEBPS/chapter_0002.xhtml");
+        assert!(chapter2.contains("<h2>序章</h2>"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

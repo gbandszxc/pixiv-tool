@@ -36,12 +36,15 @@ pub struct ReviewedPages {
 }
 
 /// 合并稿渲染风格：行级判定一致，仅章节标题 / 页分隔 / 图片占位的写法不同。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum RenderStyle {
     /// `## 标题`、`---` 页分隔、`<!-- 图片占位 -->`。
     Markdown,
     /// 标题独占一行、空行页分隔、`（图片占位）`。
     PlainText,
+    /// EPUB 章节输入：保留 `[chapter:]` / `[rb:]` / 图片标记原样（由
+    /// `core::epub::render_xhtml_body` 统一转换），页间插入整行 `[newpage]`。
+    Markup,
 }
 
 impl RenderStyle {
@@ -49,6 +52,7 @@ impl RenderStyle {
         match self {
             Self::Markdown => format!("\n## {title}\n"),
             Self::PlainText => format!("\n{title}\n"),
+            Self::Markup => format!("[chapter:{title}]\n"),
         }
     }
 
@@ -56,6 +60,7 @@ impl RenderStyle {
         match self {
             Self::Markdown => "\n---\n",
             Self::PlainText => "\n\n",
+            Self::Markup => "[newpage]\n",
         }
     }
 
@@ -63,6 +68,8 @@ impl RenderStyle {
         match self {
             Self::Markdown => "<!-- 图片占位 -->\n",
             Self::PlainText => "（图片占位）\n",
+            // Markup 不经此方法：图片行在 render_doc 中特判为保留原标记。
+            Self::Markup => "",
         }
     }
 }
@@ -100,10 +107,18 @@ fn render_doc(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine>>, style
             } else if source.starts_with("[jump:") {
                 continue;
             } else if source.starts_with("[pixivimage:") || source.starts_with("[uploadedimage:") {
-                out.push(style.image_placeholder().to_string());
+                // Markup 风格保留原标记行，交由 EPUB 渲染器输出图片占位块。
+                if style == RenderStyle::Markup {
+                    out.push(source.to_string());
+                } else {
+                    out.push(style.image_placeholder().to_string());
+                }
             } else if is_pure_markup(line) {
                 // 其它纯标记行（如 [jumpurl:...]）按原文保留，不当作正文翻译。
                 out.push(source.to_string());
+            } else if style == RenderStyle::Markup {
+                // Markup 风格保留 [rb:] 标记原样，交由 EPUB 渲染器输出 <ruby>。
+                out.push(text.to_string());
             } else {
                 out.push(apply_rb(text));
             }
@@ -120,6 +135,14 @@ pub fn render_markdown(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine
 /// 渲染纯文本合并稿（译文导出用）；行级判定与 [`render_markdown`] 一致。
 pub fn render_txt(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine>>) -> String {
     render_doc(doc, pages, RenderStyle::PlainText)
+}
+
+/// 渲染 EPUB 章节输入（译文导出用）：行级判定与 [`render_markdown`] 一致，
+/// 但保留 `[chapter:]` / `[rb:]` / 图片标记原样、页间插整行 `[newpage]`，
+/// 缺失译文的行回退原文；标记 → XHTML 的转换交给
+/// `core::epub::render_xhtml_body`（图片全部解析失败时输出占位块）。
+pub fn render_markup(doc: &SourceDoc, pages: &BTreeMap<u32, Vec<TranslatedLine>>) -> String {
+    render_doc(doc, pages, RenderStyle::Markup)
 }
 
 /// 译文导出文件名的语言后缀：`zh-CN` → `CN`、`zh-TW` → `TW`，其余取 `-` /
@@ -440,6 +463,29 @@ mod tests {
         assert!(txt.contains("\n第一话\n"));
         assert!(txt.contains("漢字(かんじ)です"));
         assert!(txt.contains("尾巴"));
+    }
+
+    #[test]
+    fn markup_keeps_markers_for_epub_renderer() {
+        let markup = render_markup(&doc(), &translations());
+        // 章节标题与 ruby 保留标记原样（不做括注转换），交给 EPUB 渲染器转换。
+        assert!(markup.contains("[chapter:第一章]"));
+        assert!(markup.contains("[rb:汉字>kanji]呀"));
+        assert!(!markup.contains("汉字(kanji)"), "不得做 rb 括注转换");
+        // 图片标记行原样保留；跳转标记行仍删除。
+        assert!(markup.contains("[pixivimage:9]"));
+        assert!(!markup.contains("[jump:1]"));
+        // 页间插入整行 [newpage]（EPUB 渲染器输出分页块）。
+        assert!(markup.contains("\n[newpage]\n"), "页间 [newpage]：{markup}");
+        assert!(markup.contains("尾巴译文"));
+    }
+
+    #[test]
+    fn markup_falls_back_to_source_when_translation_missing() {
+        let markup = render_markup(&doc(), &BTreeMap::new());
+        assert!(markup.contains("[chapter:第一话]"));
+        assert!(markup.contains("[rb:漢字>かんじ]です"));
+        assert!(markup.contains("尾巴"));
     }
 
     #[test]

@@ -11,6 +11,8 @@
 use serde_json::{Value, json};
 use tauri::State;
 
+use crate::commands::browse_api_cmds::build_browse_api;
+use crate::translation::service::SeriesExportOutcome;
 use crate::{state::AppState, translation::NovelInput};
 
 /// 整篇翻译的启动结果（浮层据此区分「已创建 / 原文已是目标语言 / 加入既有任务」）。
@@ -110,6 +112,35 @@ pub async fn novel_translation_export(
         });
     let service = state.translation_service.clone();
     service.export_translation(novel_id, &formats, naming).await
+}
+
+/// 系列译文整包导出：联网取系列目录校验全系列每话均有同语言已完成译文
+/// （基准 = contentOrder 最小话的最新可用译文），通过后读本地 Job 产物按
+/// 格式各拼接为一个整包文件写入 `novel/`，返回写入文件路径列表。
+///
+/// 成功（Ok 通道）返回 `string[]`；全系列译文不完整（缺话 / 缺译文 /
+/// 语言不一致）同样走 Ok 通道返回结构化载荷
+/// `{error:{code:"translation_incomplete",field:"seriesId",message}}`
+/// （ADR 0044 方向）；未登录 / 网络失败 / 写盘失败走 Err 通道。
+#[tauri::command]
+pub async fn novel_translation_export_series(
+    state: State<'_, AppState>,
+    series_id: i64,
+    formats: Vec<String>,
+) -> Result<Value, String> {
+    // 浏览 API：登录守卫（PHPSESSID 非空）+ 指纹伪装客户端（仅取系列目录）
+    let api = build_browse_api(&state)?;
+    let service = state.translation_service.clone();
+    match service.export_series(api, series_id, &formats).await? {
+        SeriesExportOutcome::Written(paths) => Ok(json!(paths)),
+        SeriesExportOutcome::Incomplete { message } => Ok(json!({
+            "error": {
+                "code": "translation_incomplete",
+                "field": "seriesId",
+                "message": message,
+            }
+        })),
+    }
 }
 
 /// 确认术语与风格（确认模式）。
