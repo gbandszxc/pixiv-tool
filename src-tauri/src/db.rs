@@ -16,10 +16,10 @@ use serde_json::Value as JsonValue;
 pub const TERMINAL_TASK_STATUSES: [&str; 3] = ["done", "failed", "canceled"];
 
 /// 以图识图搜索历史保留条数上限（超出裁剪最旧；list 的 limit 上限同值）。
-pub const SAUCENAO_SEARCH_HISTORY_KEEP: i64 = 50;
+pub const SAUCENAO_SEARCH_HISTORY_KEEP: i64 = 200;
 
 /// 浏览搜索历史保留条数上限（超出裁剪最旧；list 的 limit 上限同值）。
-pub const BROWSE_SEARCH_HISTORY_KEEP: i64 = 50;
+pub const BROWSE_SEARCH_HISTORY_KEEP: i64 = 200;
 
 /// IPC 分页不能使用 SQLite 的负 LIMIT（全表），也不能溢出 OFFSET。
 fn history_offset(page: i64, page_size: i64) -> Result<i64, String> {
@@ -2288,20 +2288,26 @@ mod tests {
     #[test]
     fn saucenao_history_trims_to_keep_limit() {
         let (db, dir) = temp_db("saucenao-trim");
-        // 写入 55 条（时间戳逐小时递增），保留最近 50
-        for i in 0..55i64 {
+        // 写入 KEEP + 5 条（时间戳逐小时递增），保留最近 KEEP、最旧 5 条被裁剪
+        let total = SAUCENAO_SEARCH_HISTORY_KEEP + 5;
+        for i in 0..total {
             let ts = format!("2026-01-{:02}T{:02}:00:00+00:00", 1 + i / 24, i % 24);
             db.record_saucenao_search_history(&saucenao_entry(&format!("src-{i}"), &ts, i))
                 .unwrap();
         }
         let rows = db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP).unwrap();
         assert_eq!(rows.len(), SAUCENAO_SEARCH_HISTORY_KEEP as usize);
-        // 最新在前：src-54 ... src-5（最旧 5 条被裁剪）
-        assert_eq!(rows[0].source, "src-54");
-        assert_eq!(rows[0].result_count, 54);
-        assert_eq!(rows[49].source, "src-5");
+        // 最新在前：最旧 5 条被裁剪
+        assert_eq!(rows[0].source, format!("src-{}", total - 1));
+        assert_eq!(rows[0].result_count, total - 1);
+        assert_eq!(
+            rows[(SAUCENAO_SEARCH_HISTORY_KEEP - 1) as usize].source,
+            format!("src-{}", total - SAUCENAO_SEARCH_HISTORY_KEEP)
+        );
         assert!(
-            !rows.iter().any(|r| r.source == "src-4"),
+            !rows
+                .iter()
+                .any(|r| r.source == format!("src-{}", total - SAUCENAO_SEARCH_HISTORY_KEEP - 1)),
             "超出上限的最旧条目被裁剪"
         );
         cleanup(&dir);
@@ -2322,9 +2328,9 @@ mod tests {
         // 非法 limit 拒绝（0 / 超上限 / 负数）
         assert_eq!(
             db.list_saucenao_search_history(0).unwrap_err(),
-            "limit 必须在 1~50 之间"
+            format!("limit 必须在 1~{SAUCENAO_SEARCH_HISTORY_KEEP} 之间")
         );
-        assert!(db.list_saucenao_search_history(51).is_err());
+        assert!(db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP + 1).is_err());
         assert!(db.list_saucenao_search_history(-1).is_err());
         cleanup(&dir);
     }
@@ -2432,8 +2438,9 @@ mod tests {
     #[test]
     fn browse_search_history_trims_to_keep_limit() {
         let (db, dir) = temp_db("browse-search-trim");
-        // 写入 55 条（时间戳逐小时递增），保留最近 50
-        for i in 0..55i64 {
+        // 写入 KEEP + 5 条（时间戳逐小时递增），保留最近 KEEP、最旧 5 条被裁剪
+        let total = BROWSE_SEARCH_HISTORY_KEEP + 5;
+        for i in 0..total {
             let ts = format!("2026-01-{:02}T{:02}:00:00+00:00", 1 + i / 24, i % 24);
             db.record_browse_search_history(&browse_search_entry(
                 &format!("词-{i}"),
@@ -2446,11 +2453,16 @@ mod tests {
             .list_browse_search_history(BROWSE_SEARCH_HISTORY_KEEP)
             .unwrap();
         assert_eq!(rows.len(), BROWSE_SEARCH_HISTORY_KEEP as usize);
-        // 最新在前：词-54 ... 词-5（最旧 5 条被裁剪）
-        assert_eq!(rows[0].word, "词-54");
-        assert_eq!(rows[49].word, "词-5");
+        // 最新在前：最旧 5 条被裁剪
+        assert_eq!(rows[0].word, format!("词-{}", total - 1));
+        assert_eq!(
+            rows[(BROWSE_SEARCH_HISTORY_KEEP - 1) as usize].word,
+            format!("词-{}", total - BROWSE_SEARCH_HISTORY_KEEP)
+        );
         assert!(
-            !rows.iter().any(|r| r.word == "词-4"),
+            !rows
+                .iter()
+                .any(|r| r.word == format!("词-{}", total - BROWSE_SEARCH_HISTORY_KEEP - 1)),
             "超出上限的最旧条目被裁剪"
         );
         cleanup(&dir);
@@ -2471,9 +2483,9 @@ mod tests {
         // 非法 limit 拒绝（0 / 超上限 / 负数）
         assert_eq!(
             db.list_browse_search_history(0).unwrap_err(),
-            "limit 必须在 1~50 之间"
+            format!("limit 必须在 1~{BROWSE_SEARCH_HISTORY_KEEP} 之间")
         );
-        assert!(db.list_browse_search_history(51).is_err());
+        assert!(db.list_browse_search_history(BROWSE_SEARCH_HISTORY_KEEP + 1).is_err());
         assert!(db.list_browse_search_history(-1).is_err());
         cleanup(&dir);
     }
