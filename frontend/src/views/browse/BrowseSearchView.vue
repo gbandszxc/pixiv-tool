@@ -23,7 +23,7 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
  *   不传参。与 s_tag_full（标签完全一致）互斥——组合词在该匹配下必然失效，双向收口
  *   回落 s_tag（见 normalizeSMode）。
  * - 搜索历史下拉：输入框聚焦/输入时展开（Google 风格，空历史不渲染）。后端在
- *   browse_search 成功且第 1 页时权威记录（重复搜索刷新时间，最新在前 ≤50 条），
+ *   browse_search 成功且第 1 页时权威记录（重复搜索刷新时间，最新在前 ≤200 条），
  *   本页只读 + 单条删除（不确认，失败 notify），每次展开时重拉。条目 = 关键词 +
  *   类型徽标 + 相对时间（utils/relativeTime 共用实现）；点击条目 = 按六元组直接
  *   回写 URL 查询参数（复用下方 replace 写参与自动搜索机制，空缺过滤器按本页
@@ -900,14 +900,17 @@ onActivated(() => {
 
 /* ===== 搜索历史下拉：贴输入框下沿、与其同宽（left/right 归零，窄窗口不横向溢出）=====
    容器配方与账号菜单 / 任务选择菜单 popover 同源：surface-container 底、control 圆角、
-   唯一合法轻阴影；面板在吸顶页头 stacking context（z=5）内，z=1 即盖过页头内其余
-   非定位行与下方内容。≤50 条超出 max-height 后内部滚动。 */
+   唯一合法轻阴影；面板在吸顶页头 stacking context（.app-page-head：sticky + z=5 +
+   isolation）内。z=2 是压住过滤行的最小值：下方各 md 组件内部描边 / 指示条层为
+   z=1（@material/web outlined-styles 与 tabs 的既定值，md 宿主自身不建 stacking
+   context），z=1 会与之打平、按 DOM 序被后绘的过滤行盖住；z=2 压回全部过滤层，
+   且不越过 md-menu 弹层的 z=20。≤200 条超出 max-height 后内部滚动。 */
 .history-drop {
   position: absolute;
   top: calc(100% + var(--space-xs));
   left: 0;
   right: 0;
-  z-index: 1;
+  z-index: 2;
   max-height: min(60vh, 320px);
   padding: var(--space-xs);
   overflow-y: auto;

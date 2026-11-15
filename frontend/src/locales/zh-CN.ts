@@ -786,7 +786,7 @@ export default {
     // SauceNAO Key 字段旁的获取入口（浏览器外链）+ 维护分区搜索历史清理项（立即执行，不受保存影响）
     saucenaoGetKey: "打开获取 Key 的页面",
     saucenaoHistoryLabel: "以图识图搜索历史",
-    saucenaoHistoryHint: "每次成功搜索的来源记录（文件名或 URL 与命中数），仅保存在本机数据库，最多保留 50 条。",
+    saucenaoHistoryHint: "每次成功搜索的来源记录（文件名或 URL 与命中数），仅保存在本机数据库，最多保留 200 条。",
     saucenaoHistoryCount: "共 {count} 条",
     saucenaoHistoryClearTitle: "清除搜索历史",
     saucenaoHistoryClearConfirm: "确定清空全部以图识图搜索历史？此操作不可恢复。",
@@ -794,7 +794,7 @@ export default {
     saucenaoHistoryClearFailed: "清除失败，请重试",
     // 维护分区「浏览搜索历史」清理项（与以图识图搜索历史同款配方；立即执行，不受保存影响）
     browseSearchHistoryLabel: "浏览搜索历史",
-    browseSearchHistoryHint: "浏览搜索（插画 / 漫画 / 小说关键词）的成功搜索记录（关键词与类型），仅保存在本机数据库，最多保留 50 条。",
+    browseSearchHistoryHint: "浏览搜索（插画 / 漫画 / 小说关键词）的成功搜索记录（关键词与类型），仅保存在本机数据库，最多保留 200 条。",
     browseSearchHistoryCount: "共 {count} 条",
     browseSearchHistoryClearTitle: "清除浏览搜索历史",
     browseSearchHistoryClearConfirm: "确定清空全部浏览搜索历史？此操作不可恢复。",

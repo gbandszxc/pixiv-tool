@@ -17,8 +17,9 @@ import PageBackButton from "../components/navigation/PageBackButton.vue";
  * - 状态机 idle | loading | done | empty | error；key 未配置时显示引导条
  *   （不打请求），「打开设置」派发 OPEN_SETTINGS_EVENT（携带 images 分区与 Key
  *   字段 id）由 App.vue 直达设置弹窗并聚焦，「获取 API Key」走系统浏览器外链。
- * - 搜索历史：输入卡片之下、结果区之上（空列表不渲染；最新在前 ≤50 条，后端
+ * - 搜索历史：输入卡片之下、结果区之上（空列表不渲染；最新在前 ≤200 条，后端
  *   在 saucenao_search 成功后权威记录，本页只在挂载与每次成功搜索后刷新）。
+ *   区标题在限高容器外，列表本体 max-height min(60vh, 320px) 内部滚动。
  *   点击整行 = 采纳该源并立即搜索；hover 单条删除；file 条目缩略图走
  *   pixiv-download 协议、url 条目直连（no-referrer + 失败占位块，同结果缩略图）。
  * - 结果排序：pixiv（index 5/6）恒最前（组内 similarity 降序），其余 similarity 降序
@@ -458,49 +459,52 @@ function onThumbError(index: number): void {
       </template>
     </div>
 
-    <!-- 搜索历史：输入卡片之下、结果区之上；空列表不渲染整个区块 -->
+    <!-- 搜索历史：输入卡片之下、结果区之上；空列表不渲染整个区块。
+         区标题留在限高容器外，滚动只卷列表本体 -->
     <section v-if="historyItems.length" class="history-section" :aria-label="t('saucenao.historyTitle')">
       <span class="history-title">{{ t("saucenao.historyTitle") }}</span>
-      <div v-for="item in historyItems" :key="item.id" class="history-row">
-        <button type="button" class="history-item" :disabled="phase === 'loading'" :title="item.label" @click="adoptHistory(item)">
-          <span class="history-thumb" aria-hidden="true">
-            <img
-              v-if="!brokenHistoryThumbs.has(item.id) && historyThumbSrc(item)"
-              class="history-thumb-img"
-              :src="historyThumbSrc(item)"
-              loading="lazy"
-              referrerpolicy="no-referrer"
-              alt=""
-              @error="onHistoryThumbError(item.id)"
-            />
-            <span v-else class="history-thumb-placeholder">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <!-- lucide image -->
-                <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
-                <circle cx="9" cy="9" r="2" />
-                <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
-              </svg>
+      <div class="history-list">
+        <div v-for="item in historyItems" :key="item.id" class="history-row">
+          <button type="button" class="history-item" :disabled="phase === 'loading'" :title="item.label" @click="adoptHistory(item)">
+            <span class="history-thumb" aria-hidden="true">
+              <img
+                v-if="!brokenHistoryThumbs.has(item.id) && historyThumbSrc(item)"
+                class="history-thumb-img"
+                :src="historyThumbSrc(item)"
+                loading="lazy"
+                referrerpolicy="no-referrer"
+                alt=""
+                @error="onHistoryThumbError(item.id)"
+              />
+              <span v-else class="history-thumb-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <!-- lucide image -->
+                  <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+                  <circle cx="9" cy="9" r="2" />
+                  <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+                </svg>
+              </span>
             </span>
-          </span>
-          <span class="history-main">
-            <span class="history-label">{{ item.label }}</span>
-            <span class="history-meta">{{ historyMeta(item) }}</span>
-          </span>
-        </button>
-        <button
-          type="button"
-          class="history-remove"
-          :aria-label="t('saucenao.historyDelete')"
-          :title="t('saucenao.historyDelete')"
-          :disabled="phase === 'loading'"
-          @click.stop="deleteHistory(item)"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <!-- lucide x -->
-            <path d="M18 6 6 18" />
-            <path d="m6 6 12 12" />
-          </svg>
-        </button>
+            <span class="history-main">
+              <span class="history-label">{{ item.label }}</span>
+              <span class="history-meta">{{ historyMeta(item) }}</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            class="history-remove"
+            :aria-label="t('saucenao.historyDelete')"
+            :title="t('saucenao.historyDelete')"
+            :disabled="phase === 'loading'"
+            @click.stop="deleteHistory(item)"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <!-- lucide x -->
+              <path d="M18 6 6 18" />
+              <path d="m6 6 12 12" />
+            </svg>
+          </button>
+        </div>
       </div>
     </section>
 
@@ -792,6 +796,13 @@ function onThumbError(index: number): void {
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-muted);
+}
+
+/* 列表限高内部滚动（与搜索页历史下拉同款额度）：后端历史上限 200 条，
+   长列表不再把页面无限撑高；区标题留在容器外，滚动只卷列表本体 */
+.history-list {
+  max-height: min(60vh, 320px);
+  overflow-y: auto;
 }
 
 .history-row {

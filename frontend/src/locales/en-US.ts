@@ -785,7 +785,7 @@ export default {
     // Key-page link next to the SauceNAO key field + the search-history cleanup item in Maintenance (runs immediately, independent of Save)
     saucenaoGetKey: "Open the page to get a key",
     saucenaoHistoryLabel: "Image search history",
-    saucenaoHistoryHint: "A record of every successful search (file name or URL and hit count), stored in the local database only, up to 50 entries.",
+    saucenaoHistoryHint: "A record of every successful search (file name or URL and hit count), stored in the local database only, up to 200 entries.",
     saucenaoHistoryCount: "Total: {count}",
     saucenaoHistoryClearTitle: "Clear search history",
     saucenaoHistoryClearConfirm: "Clear the entire image search history? This cannot be undone.",
@@ -793,7 +793,7 @@ export default {
     saucenaoHistoryClearFailed: "Failed to clear, please try again",
     // Maintenance "Browse search history" row (same recipe as the image search history row; takes effect immediately, unaffected by Save)
     browseSearchHistoryLabel: "Browse search history",
-    browseSearchHistoryHint: "Successful browse searches (keyword and type for illustrations / manga / novels), stored in the local database only, up to 50 entries.",
+    browseSearchHistoryHint: "Successful browse searches (keyword and type for illustrations / manga / novels), stored in the local database only, up to 200 entries.",
     browseSearchHistoryCount: "Total: {count}",
     browseSearchHistoryClearTitle: "Clear browse search history",
     browseSearchHistoryClearConfirm: "Clear the entire browse search history? This cannot be undone.",

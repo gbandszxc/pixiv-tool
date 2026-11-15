@@ -807,7 +807,7 @@ export async function browseHistoryClear(): Promise<{ status: string; deleted: n
 /**
  * 浏览搜索历史条目（`browse_search_history` 表行形状，snake_case）。
  * 后端在 browse_search 成功且 page == 1 时权威记录（重复搜索刷新 `searched_at`，
- * 保留最近 50 条），前端只读 + 删，不补记。过滤器列为空串 = 该次搜索未指定，
+ * 保留最近 200 条），前端只读 + 删，不补记。过滤器列为空串 = 该次搜索未指定，
  * 回放（点击条目回写 URL 查询参数）时由搜索页按本页默认值兜底。
  */
 export interface BrowseSearchHistoryItem {
@@ -830,7 +830,7 @@ export interface BrowseSearchHistoryItem {
 
 /**
  * browse_search_history_list：浏览搜索历史，最新在前。
- * limit 缺省 50（后端保留上限即 50 条，50 = 全量）；非法值后端报错。
+ * limit 缺省 200（后端保留上限即 200 条，200 = 全量）；非法值后端报错。
  * 搜索历史不造 mock 数据：`!isTauri()` 时返回空数组（风格对齐 api/saucenao.ts）。
  */
 export async function listBrowseSearchHistory(limit?: number): Promise<BrowseSearchHistoryItem[]> {

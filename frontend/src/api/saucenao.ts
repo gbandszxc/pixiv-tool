@@ -109,7 +109,7 @@ export interface SaucenaoHistoryItem {
 
 /**
  * saucenao_history_list：搜索历史，最新在前。
- * limit 缺省 50（后端保留上限即 50 条，50 = 全量）；非法值后端报错。
+ * limit 缺省 200（后端保留上限即 200 条，200 = 全量）；非法值后端报错。
  */
 export async function listSaucenaoHistory(limit?: number): Promise<SaucenaoHistoryItem[]> {
   if (!isTauri()) return [];
