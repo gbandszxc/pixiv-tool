@@ -17,7 +17,7 @@
 | 来源 | 说明 |
 |---|---|
 | 单篇小说 | 含多页小说（`pageCount > 1`） |
-| 系列小说 | 系列内多篇独立保存，按系列顺序编号；**不合并**为单文件 |
+| 系列小说 | 整包下载：txt / md / epub 每种格式自动拼接为一个文件（md / epub 含目录），不再逐话独立编号（ADR 0054） |
 | 指定用户的全部小说 | 用户名下所有作品（系列内按序号编号 + 散篇），统一存 `novel/` 平铺 |
 | 单幅插画 | 单张/多页作品，**一律按原图**（`img-original` 直链）下载 |
 | 指定用户的全部插画 | 用户全部插画+漫画作品（`profile/all` 的 illusts+manga），ugoira 动图存原始 zip |
@@ -27,9 +27,8 @@
 - ~~搜索小说~~、~~用户收藏夹 / 插画作品列表页浏览~~：**只读浏览**已于 v1.2 随浏览模式落地
   （§6.4、ADR 0012）；「按搜索结果 / 收藏夹批量抓取」与收藏夹浏览仍不做。列表页下载本身见 ADR 0007
 - 按 tag 批量抓取
-- 小说内嵌图片**落盘下载**（`[pixivimage:...]` / `[uploadedimage:...]` 标记；阅读器
-  内直接显示见 §6.4，此处指抓取产物不入图）
-- EPUB 输出（架构预留接口，不实现）
+- 小说内嵌图片**落盘下载**（`[pixivimage:...]` / `[uploadedimage:...]` 标记不做独立
+  落盘图文件；改为 EPUB 内嵌图片小说，见 ADR 0054；阅读器内直接显示见 §6.4）
 - 自适应限速（V1 用固定并发 + 429 暂停）
 - 任务断点启动弹窗恢复
 - Linux 登录功能（Windows / macOS 支持登录；Linux 走 keyring Secret Service 后端，未实机验证）
@@ -154,9 +153,9 @@ pixiv-tool/
 │     ├─ translation_diagnostics.rs / translation_summary.rs
 │     ├─ sync/                  # WebDAV 同步：mod（范围白名单 / SyncError）/ archive（载荷与历史合并）/ crypto（PTSYNC01 加解密）/ webdav（MKCOL/PUT/GET）/ keys（同步凭据）/ service（编排）
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
-│     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / filename_template
+│     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / epub / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 与 translation/ 共 93 个 #[tauri::command]（translation 20 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 6 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
+│     ├─ commands/              # 与 translation/ 共 95 个 #[tauri::command]（translation 22 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 6 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
 │     ├─ cookies.rs             # keyring CookieStore
@@ -559,12 +558,23 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   没有完整 v2 结果时回退 v1 旧缓存并标记 `partial`，绝不冒充已审查结果；v2 处于
   `partial` / `needs_attention` 时不发布阅读器投影。`novel_translate_page` 命令已移除。
 - **译文本地导出**（`novel_translation_export`，命令见 §7）：把最新已完成 v2 Job 的
-  `result.json` + `source/source.json` 渲染为 txt / md 写入输出目录 `novel/`（命名见
+  `result.json` + `source/source.json` 渲染为 txt / md / epub 写入输出目录 `novel/`（命名见
   §4.4「译文导出命名」）。纯本地操作：不联网、不建抓取任务、不受已下载去重影响；
   只接受 `manifest.state = Completed` 且 `result.status = Complete` 的 Job，v1 旧缓存
   不支持导出（返回明确错误）；`source.json` 缺失按损坏跳过该 Job。渲染沿用发布投影
   行级规则（`translation/publish.rs`：txt 与 markdown 仅章节标题 / 页分隔 / 图片占位
-  的写法不同，缺失译文的行回退原文）。
+  的写法不同，缺失译文的行回退原文）；epub 渲染复用下载管线的 EPUB 结构（§4.4，
+  ADR 0054），正文替换为译文，封面与图片占位规则一致。
+- **系列译文导出**（`novel_translation_export_series`，命令见 §7，ADR 0054）：series
+  来源的整包译文导出，要求**全系列每一话都已有同语言译文**。校验：联网取系列目录
+  （browse `get_novel_series` 游标取全目录），以 contentOrder 最小话的最新可用译文
+  Job 的目标语言为基准，逐话要求存在该语言 `manifest.state = Completed` 且
+  `result.status = Complete` 的 Job（`read_exportable_job` 口径）；任一话缺失译文或
+  语言不一致 → 结构化错误 `{error:{code,field,message}}`，code =
+  `translation_incomplete`（对齐 ADR 0044）。校验通过后正文 / 译文全部读本地 Job
+  产物、不逐话联网，按所选格式各产出一个整包文件（txt / md / epub，结构与下载整包
+  一致、正文为译文），命名 `{系列词干}_{语言后缀}.{ext}`（词干 = 系列模板渲染，
+  规则同 §4.4；语言后缀规则同「译文导出命名」）。
 
 | 参数（翻译运行） | 值 |
 |---|---|
@@ -624,8 +634,8 @@ x-csrf-token。网络错误只回传类别及去 query/fragment 的地址，不�
 ### 4.4 Exporter（输出格式，`core/exporter.rs`）
 
 导出器按配置选择（`create_exporters`）：`txt`（正文原样写入，`[newpage]`
-等标记保留）与 `markdown`（行级标记转换）；未知格式忽略、顺序跟随输入、
-重复保留。EPUB 为 V2+ 预留（架构预留：格式白名单之外的值直接忽略），无实现代码。
+等标记保留）、`markdown`（行级标记转换）与 `epub`（EPUB 3.0 容器，见下
+「EPUB 导出」，ADR 0054）；未知格式忽略、顺序跟随输入、重复保留。
 
 **文件名净化（`sanitize_filename`）**：`[<>:"/\\|?*\x00-\x1f]` 全部替换为
 `_`，再 strip 两侧的 `'_. '`。
@@ -641,12 +651,45 @@ x-csrf-token。网络错误只回传类别及去 query/fragment 的地址，不�
 | 行内 `[rb:A>B]` | `A(B)`（注音转换**已修正生效**——旧 Python 版赋值后未使用） |
 | 其余行 | 原样 |
 
+**EPUB 导出**（`core/epub.rs`，zip crate 手写组装 EPUB 3.0 容器，ADR 0054）：
+
+- **容器结构**：`mimetype`（Stored 无压缩、必须为首文件）→
+  `META-INF/container.xml` → `OEBPS/` 下 `content.opf` + `nav.xhtml` + `toc.ncx` +
+  `style.css` + `cover.xhtml` + `images/*` + 章节 XHTML。单篇 = 1 个章节文件；
+  系列整包 = 每话 1 个章节文件（按 contentOrder 顺序）。
+- **标记转换**（与阅读器渲染口径一致）：
+
+  | 输入 | XHTML 输出 |
+  |---|---|
+  | `[chapter:X]` | `<h2>X</h2>` |
+  | 整行 `[newpage]` | `<div class="page-break">`（CSS `page-break-before: always`） |
+  | `[rb:A>B]`（容忍 `A/B` 旧分隔） | `<ruby>A<rt>B</rt></ruby>` |
+  | `[[jumpuri:text > url]]` | `<a href="url">text</a>`（外链） |
+  | `[jump:...]` / `[jumpurl:...]` | 删除 |
+  | 图片标记 | 取图成功 → `<img>`；失败 → 文字占位块「〔图片占位〕」 |
+  | 其余行 | 逐行 `<p>`（空行折叠，全部 HTML 转义） |
+
+- **内嵌图片取材**：`[uploadedimage:id]` → 同响应 `textEmbeddedImages` 的 URL
+  （1200x1200 优先，回退 original → 480mw → 240mw → 128x128）；`[pixivimage:id(-N)]`
+  → `/ajax/illust/{id}`（第 0 页 `urls.original`）或 `/ajax/illust/{id}/pages`
+  （第 N 项）。经既有 `PixivClient::download_bytes` 下载后内嵌进 `images/*`；
+  单图下载失败降级为文字占位块，不中断任务。
+- **封面**：pixiv 封面优先——单篇取 `coverUrl`，系列取 `/ajax/novel/series/{id}`
+  的 `cover`（兼容字符串与 `{urls:{...}}` 对象两种形态，取 1200x1200 档），下载
+  成功直接用；缺失或下载失败 → 后端生成占位封面 PNG（1000×1414，1:1.414 书籍
+  比例）：色板移植自下载历史宫格 `BOOK_THEMES` 五色（藏青 / 黛绿 / 绯木 / 玄黑 /
+  琥珀，按 novel_id 取模），内容为标题（自动缩字号、最多 3 行）+ 作者名 + 顶部
+  「小说」细框印章字样；`ab_glyph` 光栅化系统字体（Windows msyh.ttc / simhei.ttf /
+  simsun.ttc，macOS PingFang.ttc / Arial Unicode.ttf，Linux NotoSansCJK /
+  wqy-microhei，候选全缺失 → 纯色无字封面）。新增依赖仅 `png` + `ab_glyph`
+  （不引入 `image` / `epub-builder`）。
+
 **默认文件命名（`make_filename`，即下述默认模板的产物）**：
 
 | 来源 | 文件名 |
 |---|---|
-| 单篇 | `<title>_<novelId>.txt/.md` |
-| 系列内 | `{zfill(order)}_<title>.txt/.md`，宽度 = page_count ≤ 99 ? 2 位 : 3 位 |
+| 单篇 | `<title>_<novelId>.txt/.md/.epub` |
+| 系列内（user 来源逐篇） | `{zfill(order)}_<title>.txt/.md/.epub`，宽度 = page_count ≤ 99 ? 2 位 : 3 位（series 来源整包命名见下「系列来源整包」） |
 | 插画单页 | `<title>_<artworkId>_p{N}.<ext>`（多页 p0..pN-1；ext 从 URL 末段取，取不到 → bin） |
 | ugoira 动图 | `<title>_<artworkId>_ugoira.zip`（原图 = 帧序列 zip） |
 
@@ -662,7 +705,7 @@ Windows ADS 注入；正常 jpg/png/gif/zip 等后缀保持不变。
 |---|---|---|
 | `illust_filename_template` | `{title}_{pid}_p{page}` | 插画普通页与 ugoira 词干 |
 | `novel_filename_template` | `{title}_{nid}` | 小说单篇 |
-| `novel_series_filename_template` | `{order}_{title}` | 系列各话（`series_order` 非空时） |
+| `novel_series_filename_template` | `{order}_{title}` | user 来源系列各话（`series_order` 非空时）；series 来源整包词干（`{order}` 无值按空值吸收，ADR 0054） |
 
 默认模板产物与现行命名 byte 级一致。模板 = 字面文本 + `{占位符}`：
 
@@ -709,6 +752,17 @@ novels 表有完整行（含作者 / 系列字段）按 `series_order` 选系列
 多页原图 URL：登录态 `meta.pages[].image_urls.original` 优先，缺失时从 p0
 直链按 `_p0.{ext} → _p{N}.{ext}` 推导兜底。
 
+**系列来源整包**（series 来源，ADR 0054，推翻 V1「各话独立文件」）：series 来源
+下载改为整包自动拼接——txt / md / epub 每种格式各产出一个文件：txt 每话以标题
+分隔行 + 原文原样；md 含目录 + 每话 `## NN. 标题`（标记按上述 markdown 行级规则
+转换）；epub 含 nav 目录、每话一个章节 XHTML。整包文件名走
+`novel_series_filename_template` 渲染（`{order}` 无值按空值 token 吸收规则删除），
+渲染为空回落 `sanitize(系列标题)_{sid}`；user 来源仍逐篇落盘、命名不变。
+EPUB 产物路径写入 `novels.epub_path`（§5.1）。系列目录获取为游标循环聚合
+（不再受「≤30 话」限制），逐话 `get_novel` 全文，复用既有 client 限速管线。
+任务事件沿用 `task://progress` / `task://done`，series 整包 total = 话数、
+done = 已完成话数、current_title = 当前话标题。
+
 ---
 
 ## 5. 数据模型
@@ -732,6 +786,7 @@ CREATE TABLE IF NOT EXISTS novels (
   modification_date TEXT,                  -- pixiv 原始字段，检测更新
   txt_path          TEXT,
   md_path           TEXT,
+  epub_path         TEXT,                  -- EPUB 产物路径（ADR 0054）
   status            TEXT NOT NULL DEFAULT 'ok'   -- 'ok' | 'failed' | 'partial'
 );
 CREATE INDEX IF NOT EXISTS idx_novels_series ON novels(series_id);
@@ -824,6 +879,8 @@ CREATE INDEX IF NOT EXISTS idx_browse_search_history_searched
 - `illustrations.saved_pages`（`TEXT NOT NULL DEFAULT '[]'`）：已保存页的 0 起页码，
   与 `saved_paths` 同序一一对应。旧行该列为空 / 非法 JSON 时按 `saved_paths` 长度推断
   连续页码（ugoira 推断为 `[0]`），**只在读取出口归一、不写回**；ugoira 恒 `[0]`。
+- `novels.epub_path`（`TEXT`，可空）：EPUB 产物路径（ADR 0054）；旧库探测缺失即
+  `ALTER TABLE` 补齐，旧行该列为空、仅在产出 EPUB 后写入。
 
 ### 5.2 配置文件
 
@@ -1239,7 +1296,7 @@ SauceNAO API Key 三个 checkbox，默认全选，ADR 0053）。动作行为「�
 
 现行决策见 ADR 0015。侧栏四入口发现（/browse/home）、关注（/browse/feed）、我的（/browse/bookmark）、下载（/tools/tasks）；二级导航组织现有路由，作者 / 系列 / 详情继承实际来源分组，直达归发现。「我的」分区二级入口为收藏 / 浏览历史 / 主页（`/browse/me`，归 library 分组），三页面顶栏恒定保持一致的大标题与二级胶囊导航，消除菜单切换跳跃；主页复用作者页组件并启用 `isMe` 模式，隐藏内嵌冗余吸顶条与卡片内返回键，动作组（编辑资料、投稿、网页跳转）优雅收纳在个人卡片右上角，作品区 Tab 采用自然定宽（严禁均分宽度），无返回历史时兜底回收藏页。56px 圆形放大镜按钮（无文字，保留可访问名称与 tooltip）+ Ctrl+K / Command+K 跳搜索并聚焦；按钮显示时分页行右侧预留 72px 空间以避免遮挡，以图识图入口在搜索页；阅读器改用顶栏搜索，全屏看图隐藏全局搜索与状态栏。
 
-下载改为应用级非模态布局面板，宽工作区 ≥1120px 右栏 480px，否则底栏 min(45%,320px)，只放新建表单，小说/插画页签背景继承面板 surface-container。公共 fillDownloadForm(DownloadTarget) 不再导航，所有返填沿用 form/sourceType/sourceId 类型。小说表单在输出格式之下另有「译文格式」勾选组（仅来源类型=单篇时渲染，默认不勾；需已完成整篇翻译），勾选走本地导出命令 `novel_translation_export`（见 §4.3 / §7），与抓取任务无关、默认不要求登录；提交时两组格式各自执行（原文勾选创建任务、译文勾选本地导出，都成功才关面板并分别提示；译文无已完成结果时面板错误区显示后端文案）。关闭 / 跳页留草稿，账号变更清空；覆盖手动来源需确认、格式保留；失败留输入，成功更新任务并关闭面板、不跳页。旧 /、/illustration、/tools/novel、/tools/illustration 进入 /tools/tasks 并打开相应面板，保留其它 query/hash，消费 downloadForm/sourceType/sourceId；旧 /tasks、/history 继续兼容。
+下载改为应用级非模态布局面板，宽工作区 ≥1120px 右栏 480px，否则底栏 min(45%,320px)，只放新建表单，小说/插画页签背景继承面板 surface-container。公共 fillDownloadForm(DownloadTarget) 不再导航，所有返填沿用 form/sourceType/sourceId 类型。小说表单在输出格式之下另有「译文格式」勾选组（单篇与系列来源渲染，默认不勾；需已完成整篇翻译），单篇勾选走本地导出命令 `novel_translation_export`、系列勾选走 `novel_translation_export_series`（见 §4.3 / §7），与抓取任务无关、默认不要求登录；series 来源时表单追加两行提示（系列整包下载说明与「译文导出要求全系列每一话都已完成翻译」）。提交时两组格式各自执行（原文勾选创建任务、译文勾选本地导出，都成功才关面板并分别提示；译文无已完成结果时面板错误区显示后端文案）。关闭 / 跳页留草稿，账号变更清空；覆盖手动来源需确认、格式保留；失败留输入，成功更新任务并关闭面板、不跳页。旧 /、/illustration、/tools/novel、/tools/illustration 进入 /tools/tasks 并打开相应面板，保留其它 query/hash，消费 downloadForm/sourceType/sourceId；旧 /tasks、/history 继续兼容。
 
 底部 32px 状态栏常驻且独立占位，空闲、新建入口、活跃任务数及代表任务进度回显；点击进度进入完整任务页。代表优先 running/pending/paused、同状态创建时间升序；done/total，未知总量不定进度，暂停无动画。应用级共享 task://progress、task://done 订阅与 2s 轮询兜底（有活跃任务或同步失败时）；同步失败保留快照并显示重试提示，任务页不重复订阅。
 
@@ -1617,7 +1674,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `auth_accounts_list` | 已保存账号列表：`{active, accounts:[{user_id,pixiv_id,name,profile_img,avatar_file,avatar_url?,saved_at}]}` |
 | `auth_account_switch(userId)` | 切换当前账号：目标条目写入 default → 索引 active → 会话缓存失效；目标凭据缺失/失效 → Err；存在非终态抓取任务时返回可选 `warning` |
 | `tasks_list(category?)` | 任务列表（按小说/插画过滤） |
-| `task_create(sourceType, sourceId, formats, category, pages?)` | 创建抓取任务，后台 tokio 运行。`pages`（0 起页码数组，可选）仅在 `category=illustration` 且 `sourceType=single` 生效：去重升序后只下选中页，空数组 / 含负数 → `{"error":"页码必须是非负整数"}`；其它组合忽略。与既有 `saved_paths` / `saved_pages` 按页求差集合并，写入 `tasks.pages` 供重试复制 |
+| `task_create(sourceType, sourceId, formats, category, pages?)` | 创建抓取任务，后台 tokio 运行。`formats` 白名单 `txt` / `markdown` / `epub`（大小写不敏感、去重；series 来源整包拼接为每格式一个文件，ADR 0054）。`pages`（0 起页码数组，可选）仅在 `category=illustration` 且 `sourceType=single` 生效：去重升序后只下选中页，空数组 / 含负数 → `{"error":"页码必须是非负整数"}`；其它组合忽略。与既有 `saved_paths` / `saved_pages` 按页求差集合并，写入 `tasks.pages` 供重试复制 |
 | `task_pause` / `task_resume` / `task_cancel(taskId)` | 任务控制 |
 | `task_retry_failed(taskId)` | 失败项重试（新任务，逐 id 串行，计数累计） |
 | `task_delete(taskId)` / `tasks_delete(taskIds)` / `tasks_delete_completed` | 删除任务记录（非终态先取消；有不存在 id 整批不删） |
@@ -1629,7 +1686,8 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
 | `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds,refused_chunks,skipped_chunks}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms,skipped}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；`refused_chunks` 是被模型按内容政策拒绝的块 ID、`skipped_chunks` 是用户显式跳过的块 ID（均升序，serde 默认兼容旧载荷，ADR 0043）；任务不存在或清单损坏返回可读错误 |
 | `novel_translation_result(novelId)` | 阅读器投影：优先已完成且状态为 `complete` 的 v2 Job，否则回退 v1 旧缓存并标记 `partial`；无结果返回 null。返回 `{novel_id,job_id,target_language,pages:{页码:[{line,text}]},status:"complete"|"partial"|"needs_attention",unresolved}` |
-| `novel_translation_export(novelId, formats)` | 译文本地导出（§4.3）：把最新已完成 v2 Job（`Completed` + `complete`）的 `result.json` + `source/source.json` 渲染为 txt / md 写入输出目录 `novel/`，返回写入文件路径列表（同名覆盖）。`formats` 只认 `txt` / `markdown`（大小写不敏感、去重），全无效 → `"未选择有效的导出格式"`；无可导出 Job（含 v1 旧缓存、partial、运行中）→ `"该小说暂无已完成的译文，无法导出"`。命名见 §4.4「译文导出命名」；不联网、不建抓取任务 |
+| `novel_translation_export(novelId, formats)` | 译文本地导出（§4.3）：把最新已完成 v2 Job（`Completed` + `complete`）的 `result.json` + `source/source.json` 渲染为 txt / md / epub 写入输出目录 `novel/`，返回写入文件路径列表（同名覆盖）。`formats` 只认 `txt` / `markdown` / `epub`（大小写不敏感、去重），全无效 → `"未选择有效的导出格式"`；无可导出 Job（含 v1 旧缓存、partial、运行中）→ `"该小说暂无已完成的译文，无法导出"`。命名见 §4.4「译文导出命名」；不联网、不建抓取任务 |
+| `novel_translation_export_series(seriesId, formats)` | 系列译文整包导出（§4.3，ADR 0054）：联网取系列目录校验全系列每话均有同语言已完成译文（任一话缺失或语言不一致 → 结构化错误 `{error:{code,field,message}}`，code = `translation_incomplete`），通过后读本地 Job 产物按格式各拼接为一个整包文件写入 `novel/`，返回写入文件路径列表 `string[]`。`formats` 白名单同 `novel_translation_export` |
 | `novel_translation_confirm(jobId, terms, style)` | 确认术语与风格（等待确认时由浮层提交）。terms 为 `[{source_term,locked_translation,term_type?,aliases?,notes?}]`；确认后约束版本 +1、清除冲突与未解决项并继续。进程内无句柄时（应用重启后）先从磁盘重建任务上下文再确认；任务不存在 / 已结束返回错误 |
 | `novel_translation_pause(jobId)` | 停止派发并停在最近检查点（`queued`/`running` → `pausing` → `paused`）；等待确认时要求先确认或取消；其它状态拒绝 |
 | `novel_translation_resume(jobId)` | 从检查点恢复（`paused`/`needs_attention`/`interrupted`/`queued`）；先校验缓存世代、资源版本与清单，不一致时拒绝静默续跑；内存中无句柄时从磁盘重建；不清空被拒块记忆（`content_refused`，ADR 0043） |
@@ -1663,7 +1721,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_search_history_clear()` | 清空浏览搜索历史（返回 `{status, deleted}` 清除条数） |
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
-| `open_novel_file(novelId)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位（若文件存在则高亮选中；若文件已移走或删除则回退打开用户在设置中配置的下载目录，进入 pic / novel 子目录，未改即默认输出目录，杜绝报错） |
+| `open_novel_file(novelId, kind)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位（`kind` 白名单 `txt` / `md` / `epub` 指定小说文件格式，epub 仅显式指定时使用、不插队 txt / md；若文件存在则高亮选中；若文件已移走或删除则回退打开用户在设置中配置的下载目录，进入 pic / novel 子目录，未改即默认输出目录，杜绝报错） |
 | `illust_saved_pages(artworkId)` | 已保存页查询：返回 `{pages:[0,2], ugoira:false}`（0 起页码升序）；无记录 → `{"pages":[],"ugoira":false}`，ugoira 有记录 → `{"pages":[0],"ugoira":true}`；下载侧栏按页选择器据此标记「已下载」 |
 | `browse_home_feed` | 首页推荐流（street POST + csrf token，进程内 30min 缓存） |
 | `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
@@ -1982,6 +2040,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | R13 | 翻译运行参数（并发、分块、预算、压缩）尚未用真实长篇校准 | 中 | 计划值只作起点；真实付费模型下校准分块、预算与默认并发，费用与请求不进入离线测试；校准结果同批回写设置说明与本文 |
 | R14 | 整篇 Job 的模型调用量显著高于单页两轮 | 中 | 累计调用预算（默认 `64 + 32 × 初始分块数`）、三级并发闸门与暂停 / 取消共同控制成本；界面不承诺固定费用 |
 | R15 | WebDAV 同步的第三方兼容性与凭据可用性（MKCOL 行为差异、自签证书、非标准端口；同步口令丢失即无法解密；未设口令时同步包仅为混淆级保护；wreq 客户端尚未对真实服务端全量实测） | 中 | 固定文件 + 标准 MKCOL/PUT/GET，MKCOL 已存在 / 不支持均继续；地址白名单 http/https、30s 超时、8 MiB 上限、网络错误直连重试一次；口令丢失无后门，文案提示重新上传即可重建快照；默认口令的保护强度已在帮助文案与 ADR 0049 明示；上线前用 Nextcloud / 坚果云等真实服务端补测 |
+| R16 | EPUB 内嵌图 / 封面下载失败导致产物不完整（图片依赖 illust 端点与 pximg CDN，pixiv 封面可能缺失或失效） | 中 | 失败降级：内嵌图回退 XHTML 文字占位块、封面回退后端占位封面 PNG（ADR 0054）；单项失败计入任务失败计数，不中断整包产物 |
 
 ---
 
@@ -2043,6 +2102,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0051 | Pass 1 扫描改并行子 Agent 派发（dispatch_scan） | [adr/0051-dispatch-scan-subagent.md](adr/0051-dispatch-scan-subagent.md) |
 | 0052 | 竖屏最大化布局适配（仅竖屏最大化、推翻侧栏不自动隐藏旧决策） | [adr/0052-portrait-maximized-layout.md](adr/0052-portrait-maximized-layout.md) |
 | 0053 | SauceNAO API Key 纳入 WebDAV 同步（范围 `saucenao`、载荷 v1 追加字段、回执只回布尔） | [adr/0053-saucenao-key-webdav-sync.md](adr/0053-saucenao-key-webdav-sync.md) |
+| 0054 | 小说 EPUB 导出与系列整包下载（EPUB 3.0 内嵌插图与封面、series 来源自动拼接、系列译文整包导出） | [adr/0054-novel-epub-export-and-series-bundle.md](adr/0054-novel-epub-export-and-series-bundle.md) |
 
 ADR 按需追加，不强制一次性写完。
 
@@ -2051,14 +2111,10 @@ ADR 按需追加，不强制一次性写完。
 ## 13. 开放问题（V2 待定）
 
 - Linux Secret Service cookie 实现
-- EPUB exporter 实现
-- ~~自适应限速（基于响应延迟与 429 频率）~~（已落地：并发按限流 / 超时信号 AIMD 收敛，
-  ADR 0050；基于响应延迟的精细调节仍待定）
 - 任务启动弹窗恢复（"上次任务进行到 80/200，是否继续"）
 - 安装器（NSIS / Inno Setup）
 - 带签名的无人值守静默安装（应用内下载与安装引导已落地，见 §7.2）
 - 搜索 / ~~收藏 / 用户主页浏览~~（搜索与用户主页已于 v1.2 随浏览模式落地，ADR 0012；收藏夹浏览与浏览态写操作仍待定）
-- 小说内嵌图片下载
 - 整篇翻译的跨平台验证：macOS / Linux 的 Agent 运行、文件原子提交与安装包尚未实机验收
   （Windows MSVC 已通过离线与集成测试）
 - 翻译运行参数的真实长篇校准：并发、分块、压缩与预算默认值只作起点，尚未用真实付费

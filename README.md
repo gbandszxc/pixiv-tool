@@ -44,7 +44,8 @@ pixiv-tool 是一款跨平台 PC 端第三方 Pixiv 客户端。支持插画、�
 
 | 来源 | 产物 |
 |---|---|
-| 单篇小说 / 系列小说 / 用户全部小说 | TXT 或 Markdown，系列各话独立编号 |
+| 单篇小说 / 用户全部小说 | TXT / Markdown / EPUB（EPUB 内嵌正文插图与封面） |
+| 系列小说 | 整包下载：自动拼接为 TXT / Markdown / EPUB，Markdown 与 EPUB 含目录 |
 | 单幅 / 多页插画、用户全部插画与漫画 | 原图直链下载（`img-original`） |
 | ugoira 动图 | 帧序列原始 zip |
 
@@ -114,18 +115,9 @@ Tauri 2 单进程：Rust 后端 + Vue 3 / TypeScript 前端经 IPC 直连，**�
 | [DESIGN.md](DESIGN.md) | 前端视觉与交互规范（Material 3 token 体系） |
 | [docs/PIXIV-API.md](docs/PIXIV-API.md) | pixiv 接口契约事实源 |
 | [docs/PACKAGING.md](docs/PACKAGING.md) | 打包 / 分发 / 构建环境 / 签名 |
-| [docs/adr/](docs/adr/) | 架构决策记录（ADR 0001 – 0053） |
+| [docs/adr/](docs/adr/) | 架构决策记录（ADR 0001 – 0054） |
 | [docs/research/](docs/research/) | 外部接口调研证据档案 |
 | [AGENTS.md](AGENTS.md) | AI 协作入口（agent 改动前必读） |
-
-## 🗺️ 路线图
-
-以下能力已在规格中预留或规划（详见 [SPEC §13](docs/SPEC.md)）：
-
-- [ ] EPUB 输出（架构已预留格式接口）
-- [ ] 按 tag / 收藏夹批量抓取
-- [ ] 小说内嵌图片落盘下载
-- [ ] 自适应限速
 
 ## ⚠️ 免责声明
 
