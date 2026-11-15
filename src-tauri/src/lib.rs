@@ -366,8 +366,11 @@ pub fn run() {
             commands::maintenance_cmds::maintenance_info,
             commands::maintenance_cmds::read_logs,
             commands::maintenance_cmds::clear_cache,
-            // saucenao（以图识图）
+            // saucenao（以图识图 + 搜索历史）
             commands::saucenao_cmds::saucenao_search,
+            commands::saucenao_cmds::saucenao_history_list,
+            commands::saucenao_cmds::saucenao_history_delete,
+            commands::saucenao_cmds::saucenao_history_clear,
             // history
             commands::history_cmds::history_list,
             // browse_history（浏览访问历史）

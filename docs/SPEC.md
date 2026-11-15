@@ -156,7 +156,7 @@ pixiv-tool/
 │     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
-│     ├─ commands/              # 与 translation/ 共 87 个 #[tauri::command]（translation 20 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 1 / history 1 / browse_history 3 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
+│     ├─ commands/              # 与 translation/ 共 90 个 #[tauri::command]（translation 20 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 3 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
 │     ├─ cookies.rs             # keyring CookieStore
@@ -783,6 +783,19 @@ CREATE TABLE IF NOT EXISTS browse_history (
   PRIMARY KEY (kind, work_id)
 );
 CREATE INDEX IF NOT EXISTS idx_browse_history_visited ON browse_history(visited_at DESC);
+
+-- 以图识图搜索历史（SauceNAO；`saucenao_search` 成功后自动记录，同 source 覆写
+-- 刷新 searched_at / result_count，保留最近 50 条、超出裁剪最旧；缩略图不落库）
+CREATE TABLE IF NOT EXISTS saucenao_search_history (
+  id           INTEGER PRIMARY KEY,
+  source_type  TEXT NOT NULL,             -- 'file' | 'url'
+  source       TEXT NOT NULL UNIQUE,      -- 本地绝对路径或公网图片 URL（去重键）
+  label        TEXT NOT NULL DEFAULT '',  -- 文件名或 URL（列表展示文本）
+  result_count INTEGER NOT NULL DEFAULT 0,
+  searched_at  TEXT NOT NULL              -- RFC3339 UTC，最新在前
+);
+CREATE INDEX IF NOT EXISTS idx_saucenao_search_history_searched
+  ON saucenao_search_history(searched_at DESC);
 ```
 
 **轻量迁移**：`Db::open` 先按 `PRAGMA table_info(<表>)` 探测列是否存在，缺失即
@@ -1601,7 +1614,10 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `maintenance_info` | 返回 translation/images/logs 的 `{path,bytes,files}`，缓存分类/总大小及日志总大小；路径只由 AppPaths 派生 |
 | `read_logs` | 返回 app.log 最近最多 200 行（末尾 64KiB），不存在返回空串 |
 | `clear_cache(kind)` | kind 仅 translation/images，清理 translations 或 cache/img 内文件；拒绝链接目录，翻译运行时拒绝清理译文，不影响数据库与下载作品 |
-| `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key） |
+| `saucenao_search(sourceType, source, numres?)` | 以图识图搜索（SauceNAO；file=本地路径 POST multipart / url=公网图片 GET；pixiv 结果含 pid/作者可直接跳应用内详情；需在设置配置 API Key）。成功后自动记录搜索历史（后端权威，前端不补记；同 source 刷新 `searched_at` / `result_count`，保留最近 50 条、超出裁剪最旧；记录失败只降级打日志不阻断结果） |
+| `saucenao_history_list(limit?)` | 以图识图搜索历史（最新在前；limit 缺省 50，取值 1–50，表内全量即 50 条）。条目 `{id, source_type, source, label, result_count, searched_at}`；缩略图不落库，file 条目用 `pixiv-download` 协议现场取、url 条目用 URL 本身（UI 层职责） |
+| `saucenao_history_delete(id)` | 删除单条搜索历史（返回 `{status, deleted}`；id 不存在幂等，deleted=0） |
+| `saucenao_history_clear()` | 清空以图识图搜索历史（返回 `{status, deleted}` 清除条数） |
 | `history_list(category, page, pageSize, keyword?)` | 历史联合分页查询（UNION，统一行形状）；page ≥ 1，pageSize 为 1–200，拒绝偏移溢出 |
 | `browse_history_record(kind, workId, title, authorId, authorName, cover?, pageCount, xRestrict)` | 记录一次浏览访问（同 kind+workId 覆写并按访问时间置顶；作品详情页加载成功后上报） |
 | `browse_history_list(page, pageSize, kind?)` | 浏览访问历史分页查询（`visited_at` 倒序，最近访问在前）；page ≥ 1，pageSize 为 1–200，拒绝偏移溢出；`kind` 省略=全部，否则 illust/manga/novel 过滤，非法值报错 |

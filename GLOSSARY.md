@@ -103,6 +103,10 @@ _Avoid_: 泛指 gif 动图
 经 SauceNAO 服务以图反搜 pixiv 作品的功能，需单独配置其 API Key。
 _Avoid_: 反搜（口语可，文档用全称）
 
+**以图识图搜索历史 (SauceNAO Search History)**:
+以图识图每次成功搜索的落库记录（`saucenao_search_history` 表）：按来源去重、重复搜索刷新时间与结果数，保留最近 50 条；与浏览历史、下载历史无关。
+_Avoid_: 反搜记录、识图历史
+
 ### 浏览模式
 
 **浏览模式 (Browse)**:

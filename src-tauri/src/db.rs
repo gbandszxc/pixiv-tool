@@ -15,6 +15,9 @@ use serde_json::Value as JsonValue;
 /// 终态任务状态集合（删除任务前判断是否需要先 cancel）。
 pub const TERMINAL_TASK_STATUSES: [&str; 3] = ["done", "failed", "canceled"];
 
+/// 以图识图搜索历史保留条数上限（超出裁剪最旧；list 的 limit 上限同值）。
+pub const SAUCENAO_SEARCH_HISTORY_KEEP: i64 = 50;
+
 /// IPC 分页不能使用 SQLite 的负 LIMIT（全表），也不能溢出 OFFSET。
 fn history_offset(page: i64, page_size: i64) -> Result<i64, String> {
     if page < 1 || !(1..=200).contains(&page_size) {
@@ -88,6 +91,18 @@ CREATE TABLE IF NOT EXISTS browse_history (
     PRIMARY KEY (kind, work_id)
 );
 CREATE INDEX IF NOT EXISTS idx_browse_history_visited ON browse_history(visited_at DESC);
+
+-- 以图识图搜索历史（SauceNAO；同 source 覆写刷新，保留最近 50 条）
+CREATE TABLE IF NOT EXISTS saucenao_search_history (
+    id           INTEGER PRIMARY KEY,
+    source_type  TEXT NOT NULL,             -- 'file' | 'url'
+    source       TEXT NOT NULL UNIQUE,      -- 本地绝对路径或公网图片 URL（去重键）
+    label        TEXT NOT NULL DEFAULT '',  -- 文件名或 URL（列表展示文本）
+    result_count INTEGER NOT NULL DEFAULT 0,
+    searched_at  TEXT NOT NULL              -- RFC3339 UTC
+);
+CREATE INDEX IF NOT EXISTS idx_saucenao_search_history_searched
+    ON saucenao_search_history(searched_at DESC);
 ";
 
 /// 统一 UTC ISO 时间戳（等价 Python `datetime.now(timezone.utc).isoformat()`）。
@@ -195,6 +210,27 @@ pub struct BrowseHistoryRow {
     pub page_count: i64,
     pub x_restrict: i64,
     pub visited_at: String,
+}
+
+/// saucenao_search_history 插入参数（同 source 覆写；searched_at 由调用方给 now_iso()）。
+#[derive(Debug, Clone)]
+pub struct SaucenaoSearchHistoryEntry {
+    pub source_type: String,
+    pub source: String,
+    pub label: String,
+    pub result_count: i64,
+    pub searched_at: String,
+}
+
+/// saucenao_search_history 表整行。
+#[derive(Debug, Clone, Serialize)]
+pub struct SaucenaoSearchHistoryRow {
+    pub id: i64,
+    pub source_type: String,
+    pub source: String,
+    pub label: String,
+    pub result_count: i64,
+    pub searched_at: String,
 }
 
 /// novels 插入参数（INSERT OR REPLACE）。
@@ -1098,6 +1134,93 @@ impl Db {
     }
 
     // ------------------------------------------------------------------
+    // saucenao_search_history（以图识图搜索历史）
+    // ------------------------------------------------------------------
+
+    /// 记录一次以图识图搜索（同 source 覆写并按新 searched_at 置顶），
+    /// 随后裁剪到最近 [`SAUCENAO_SEARCH_HISTORY_KEEP`] 条（超出裁剪最旧）。
+    pub fn record_saucenao_search_history(
+        &self,
+        entry: &SaucenaoSearchHistoryEntry,
+    ) -> Result<(), String> {
+        self.with_conn(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO saucenao_search_history
+                 (source_type, source, label, result_count, searched_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    entry.source_type,
+                    entry.source,
+                    entry.label,
+                    entry.result_count,
+                    entry.searched_at,
+                ],
+            )?;
+            // 保留最近 N 条（本次刚写入的行 searched_at 最新，必然在内）
+            conn.execute(
+                "DELETE FROM saucenao_search_history WHERE id NOT IN
+                 (SELECT id FROM saucenao_search_history
+                  ORDER BY searched_at DESC, id DESC LIMIT ?1)",
+                params![SAUCENAO_SEARCH_HISTORY_KEEP],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// 以图识图搜索历史（最新在前；limit 取值 1–[`SAUCENAO_SEARCH_HISTORY_KEEP`]，
+    /// 表本身也被裁剪到该上限，因此 50 即全量）。
+    pub fn list_saucenao_search_history(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<SaucenaoSearchHistoryRow>, String> {
+        if !(1..=SAUCENAO_SEARCH_HISTORY_KEEP).contains(&limit) {
+            return Err(format!("limit 必须在 1~{SAUCENAO_SEARCH_HISTORY_KEEP} 之间"));
+        }
+        self.with_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, source_type, source, label, result_count, searched_at
+                 FROM saucenao_search_history
+                 ORDER BY searched_at DESC, id DESC LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![limit], |row| {
+                    Ok(SaucenaoSearchHistoryRow {
+                        id: row.get("id")?,
+                        source_type: row.get("source_type")?,
+                        source: row.get("source")?,
+                        label: row.get("label")?,
+                        result_count: row.get("result_count")?,
+                        searched_at: row.get("searched_at")?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// 删除单条以图识图搜索历史，返回删除条数（0 = id 不存在）。
+    pub fn delete_saucenao_search_history(&self, id: i64) -> Result<usize, String> {
+        self.with_conn(|conn| {
+            let deleted =
+                conn.execute("DELETE FROM saucenao_search_history WHERE id = ?1", params![id])?;
+            Ok(deleted)
+        })
+    }
+
+    /// 清空以图识图搜索历史，返回删除条数。
+    pub fn clear_saucenao_search_history(&self) -> Result<usize, String> {
+        self.with_conn(|conn| {
+            let total: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM saucenao_search_history",
+                [],
+                |row| row.get(0),
+            )?;
+            conn.execute("DELETE FROM saucenao_search_history", [])?;
+            Ok(total as usize)
+        })
+    }
+
+    // ------------------------------------------------------------------
     // tasks
     // ------------------------------------------------------------------
 
@@ -1949,6 +2072,145 @@ mod tests {
         assert_eq!(db.delete_all_novels(true).unwrap(), 1);
         assert!(!f.exists());
         assert!(db.get_novel(1).is_none());
+        cleanup(&dir);
+    }
+
+    // ------------------------------------------------------------------
+    // saucenao_search_history
+    // ------------------------------------------------------------------
+
+    /// 构造一条搜索历史（source 同时用作 label，时间戳保证递增可辨）。
+    fn saucenao_entry(source: &str, searched_at: &str, result_count: i64) -> SaucenaoSearchHistoryEntry {
+        SaucenaoSearchHistoryEntry {
+            source_type: "url".into(),
+            source: source.into(),
+            label: source.into(),
+            result_count,
+            searched_at: searched_at.into(),
+        }
+    }
+
+    #[test]
+    fn saucenao_history_dedup_refreshes_and_orders() {
+        let (db, dir) = temp_db("saucenao-dedup");
+        db.record_saucenao_search_history(&saucenao_entry(
+            "https://example.com/a.jpg",
+            "2026-01-01T00:00:00+00:00",
+            3,
+        ))
+        .unwrap();
+        db.record_saucenao_search_history(&saucenao_entry(
+            "https://example.com/b.jpg",
+            "2026-01-02T00:00:00+00:00",
+            5,
+        ))
+        .unwrap();
+        // 同 source 重复搜索：刷新 searched_at / result_count，仍是 2 行且置顶
+        db.record_saucenao_search_history(&saucenao_entry(
+            "https://example.com/a.jpg",
+            "2026-01-03T00:00:00+00:00",
+            7,
+        ))
+        .unwrap();
+        let rows = db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP).unwrap();
+        assert_eq!(rows.len(), 2, "UNIQUE(source) 去重");
+        assert_eq!(rows[0].source, "https://example.com/a.jpg", "刷新后按新时间置顶");
+        assert_eq!(rows[0].result_count, 7, "result_count 刷新");
+        assert_eq!(rows[0].searched_at, "2026-01-03T00:00:00+00:00");
+        assert_eq!(rows[1].source, "https://example.com/b.jpg");
+        // 最新在前（乱序写入同样成立）
+        db.record_saucenao_search_history(&saucenao_entry(
+            "https://example.com/c.jpg",
+            "2026-01-02T12:00:00+00:00",
+            1,
+        ))
+        .unwrap();
+        let rows = db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.source.as_str()).collect::<Vec<_>>(),
+            vec![
+                "https://example.com/a.jpg",
+                "https://example.com/c.jpg",
+                "https://example.com/b.jpg",
+            ]
+        );
+        // file 来源同样去重（source_type 只是标注，不参与去重键）
+        db.record_saucenao_search_history(&SaucenaoSearchHistoryEntry {
+            source_type: "file".into(),
+            ..saucenao_entry("C:/pic/a.jpg", "2026-01-04T00:00:00+00:00", 0)
+        })
+        .unwrap();
+        let rows = db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP).unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0].source_type, "file");
+        assert_eq!(rows[0].label, "C:/pic/a.jpg");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn saucenao_history_trims_to_keep_limit() {
+        let (db, dir) = temp_db("saucenao-trim");
+        // 写入 55 条（时间戳逐小时递增），保留最近 50
+        for i in 0..55i64 {
+            let ts = format!("2026-01-{:02}T{:02}:00:00+00:00", 1 + i / 24, i % 24);
+            db.record_saucenao_search_history(&saucenao_entry(&format!("src-{i}"), &ts, i))
+                .unwrap();
+        }
+        let rows = db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP).unwrap();
+        assert_eq!(rows.len(), SAUCENAO_SEARCH_HISTORY_KEEP as usize);
+        // 最新在前：src-54 ... src-5（最旧 5 条被裁剪）
+        assert_eq!(rows[0].source, "src-54");
+        assert_eq!(rows[0].result_count, 54);
+        assert_eq!(rows[49].source, "src-5");
+        assert!(
+            !rows.iter().any(|r| r.source == "src-4"),
+            "超出上限的最旧条目被裁剪"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn saucenao_history_list_limit_validation() {
+        let (db, dir) = temp_db("saucenao-limit");
+        db.record_saucenao_search_history(&saucenao_entry(
+            "https://example.com/a.jpg",
+            "2026-01-01T00:00:00+00:00",
+            1,
+        ))
+        .unwrap();
+        // limit 生效：只取前 N 条
+        let rows = db.list_saucenao_search_history(1).unwrap();
+        assert_eq!(rows.len(), 1);
+        // 非法 limit 拒绝（0 / 超上限 / 负数）
+        assert_eq!(
+            db.list_saucenao_search_history(0).unwrap_err(),
+            "limit 必须在 1~50 之间"
+        );
+        assert!(db.list_saucenao_search_history(51).is_err());
+        assert!(db.list_saucenao_search_history(-1).is_err());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn saucenao_history_delete_and_clear_counts() {
+        let (db, dir) = temp_db("saucenao-del");
+        for name in ["a", "b", "c"] {
+            db.record_saucenao_search_history(&saucenao_entry(
+                &format!("https://example.com/{name}.jpg"),
+                "2026-01-01T00:00:00+00:00",
+                1,
+            ))
+            .unwrap();
+        }
+        // delete：存在 → 1；不存在 → 0
+        let target = db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP).unwrap()[0].id;
+        assert_eq!(db.delete_saucenao_search_history(target).unwrap(), 1);
+        assert_eq!(db.delete_saucenao_search_history(target).unwrap(), 0, "重复删除幂等返回 0");
+        assert_eq!(db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP).unwrap().len(), 2);
+        // clear：返回清除条数，二次 clear 返回 0
+        assert_eq!(db.clear_saucenao_search_history().unwrap(), 2);
+        assert!(db.list_saucenao_search_history(SAUCENAO_SEARCH_HISTORY_KEEP).unwrap().is_empty());
+        assert_eq!(db.clear_saucenao_search_history().unwrap(), 0);
         cleanup(&dir);
     }
 }

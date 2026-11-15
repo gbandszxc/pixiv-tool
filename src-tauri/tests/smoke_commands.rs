@@ -17,9 +17,14 @@ use pixiv_tool_lib::commands::history_cmds::history_list_impl;
 use pixiv_tool_lib::commands::misc_cmds::{
     illustrations_batch_delete_impl, novels_batch_delete_impl,
 };
-use pixiv_tool_lib::commands::saucenao_cmds::saucenao_search_impl;
+use pixiv_tool_lib::commands::saucenao_cmds::{
+    saucenao_history_clear_impl, saucenao_history_delete_impl, saucenao_history_list_impl,
+    saucenao_search_impl,
+};
 use pixiv_tool_lib::commands::settings_cmds::apply_settings_patch;
-use pixiv_tool_lib::db::{BrowseHistoryEntry, Db, IllustrationInsert, NovelInsert, now_iso};
+use pixiv_tool_lib::db::{
+    BrowseHistoryEntry, Db, IllustrationInsert, NovelInsert, SaucenaoSearchHistoryEntry, now_iso,
+};
 use pixiv_tool_lib::paths::AppPaths;
 use pixiv_tool_lib::settings::Settings;
 use pixiv_tool_lib::state::AppState;
@@ -333,5 +338,57 @@ fn browse_history_record_list_clear_round_trip() {
         browse_history_clear_impl(&state).unwrap()["deleted"],
         json!(0)
     );
+    cleanup(&dir);
+}
+
+/// 以图识图搜索历史命令：列表（缺省 50 / 显式 limit / 非法 limit）→
+/// 单条删除（含幂等 0）→ 清空计数（存储层去重与 50 条裁剪单测在 db.rs 内）。
+#[test]
+fn saucenao_history_list_delete_clear_round_trip() {
+    let (state, dir) = temp_state("saucenao-history");
+
+    // 播种 3 条（显式 searched_at 控制顺序）。
+    for (name, ts, count) in [
+        ("a", "2026-01-01T00:00:01+00:00", 3),
+        ("b", "2026-01-01T00:00:02+00:00", 5),
+        ("c", "2026-01-01T00:00:03+00:00", 1),
+    ] {
+        state
+            .db
+            .record_saucenao_search_history(&SaucenaoSearchHistoryEntry {
+                source_type: "url".into(),
+                source: format!("https://example.com/{name}.jpg"),
+                label: format!("{name}.jpg"),
+                result_count: count,
+                searched_at: ts.into(),
+            })
+            .unwrap();
+    }
+
+    // list 缺省 limit：最新在前。
+    let items = saucenao_history_list_impl(&state, None).unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[0].source, "https://example.com/c.jpg");
+    assert_eq!(items[0].result_count, json!(1));
+    // 显式 limit 生效。
+    let limited = saucenao_history_list_impl(&state, Some(1)).unwrap();
+    assert_eq!(limited.len(), 1);
+    assert_eq!(limited[0].source, "https://example.com/c.jpg");
+    // 非法 limit → Err（同 browse_history 分页校验先例）。
+    let err = saucenao_history_list_impl(&state, Some(0)).unwrap_err();
+    assert_eq!(err, "limit 必须在 1~50 之间");
+
+    // delete：存在 → deleted=1；重复删除幂等 deleted=0。
+    let id = items[0].id;
+    assert_eq!(saucenao_history_delete_impl(&state, id).unwrap()["deleted"], json!(1));
+    assert_eq!(saucenao_history_delete_impl(&state, id).unwrap()["deleted"], json!(0));
+    assert_eq!(saucenao_history_list_impl(&state, None).unwrap().len(), 2);
+
+    // clear：返回清除条数；二次清空 deleted=0。
+    let body = saucenao_history_clear_impl(&state).unwrap();
+    assert_eq!(body["status"], json!("success"));
+    assert_eq!(body["deleted"], json!(2));
+    assert!(saucenao_history_list_impl(&state, None).unwrap().is_empty());
+    assert_eq!(saucenao_history_clear_impl(&state).unwrap()["deleted"], json!(0));
     cleanup(&dir);
 }

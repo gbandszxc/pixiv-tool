@@ -9,7 +9,8 @@
  * mock 层：`!isTauri()`（普通浏览器直接打开 dev 页）时返回确定性样例数据，
  * 仅供浏览器内视觉验收；Tauri 生产环境完全不走 mock。样例刻意按乱序排列，
  * 用于验收视图层的「pixiv 恒最前 + similarity 降序」排序；第 4 条缩略图用失效
- * URL，用于验收加载失败占位块。
+ * URL，用于验收加载失败占位块。搜索历史不造 mock 数据：`!isTauri()` 时
+ * list 返回空数组、delete/clear 返回 0（历史走真实 IPC）。
  */
 import { errorMessage, invoke, isTauri } from "./tauri";
 
@@ -72,6 +73,52 @@ export async function searchSaucenao(
 ): Promise<SaucenaoSearchResponse> {
   if (!isTauri()) return mockSearch();
   return invoke<SaucenaoSearchResponse>("saucenao_search", { sourceType, source });
+}
+
+// ===== 搜索历史（后端在 saucenao_search 成功后权威记录，前端不补记）=====
+
+/** 以图识图搜索历史条目（`saucenao_search_history` 表行形状）。 */
+export interface SaucenaoHistoryItem {
+  id: number;
+  /** 来源类型：file=本地图片路径 / url=公网图片。 */
+  source_type: "file" | "url";
+  /**
+   * 本地绝对路径或公网图片 URL（去重键）。缩略图不落库：
+   * file 条目用 `pixiv-download` 协议现场取、url 条目用 URL 本身（UI 层职责）。
+   */
+  source: string;
+  /** 文件名或 URL（列表展示文本）。 */
+  label: string;
+  /** 该次搜索的命中结果数（重复搜索刷新）。 */
+  result_count: number;
+  /** 最近一次搜索时间（RFC3339 UTC）。 */
+  searched_at: string;
+}
+
+/**
+ * saucenao_history_list：搜索历史，最新在前。
+ * limit 缺省 50（后端保留上限即 50 条，50 = 全量）；非法值后端报错。
+ */
+export async function listSaucenaoHistory(limit?: number): Promise<SaucenaoHistoryItem[]> {
+  if (!isTauri()) return [];
+  return invoke<SaucenaoHistoryItem[]>(
+    "saucenao_history_list",
+    limit === undefined ? {} : { limit }
+  );
+}
+
+/** saucenao_history_delete：删除单条历史，返回实际删除条数（0 = id 不存在，幂等）。 */
+export async function deleteSaucenaoHistory(id: number): Promise<number> {
+  if (!isTauri()) return 0;
+  const res = await invoke<{ status: string; deleted: number }>("saucenao_history_delete", { id });
+  return res.deleted;
+}
+
+/** saucenao_history_clear：清空全部搜索历史，返回清除条数。 */
+export async function clearSaucenaoHistory(): Promise<number> {
+  if (!isTauri()) return 0;
+  const res = await invoke<{ status: string; deleted: number }>("saucenao_history_clear", {});
+  return res.deleted;
 }
 
 // ===== mock 层（仅非 Tauri 环境生效）=====
