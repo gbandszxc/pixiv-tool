@@ -899,6 +899,7 @@ export default {
     refreshShortcut: "一覧を更新（Ctrl+R / Command+R）",
     hooks: {
       openInBrowser: "ブラウザーで開く",
+      downloadAll: "すべてダウンロード",
       fillNovelForm: "小説の取得フォームに入力",
       fillIllustForm: "イラストの取得フォームに入力",
       openFailed: "既定のブラウザーを開けませんでした",

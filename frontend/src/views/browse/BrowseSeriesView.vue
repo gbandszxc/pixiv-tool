@@ -277,11 +277,14 @@ function openInPixiv(): void {
           </p>
           <p class="stats">{{ statsText }}</p>
           <div class="head-actions">
+            <!-- 系列整包下载入口（仅 novel：后端 task_create 只支持小说系列来源）：
+                 与下载面板 series 表单主按钮同文案「下载全部」，点击打开面板并预填本系列，
+                 格式（txt/markdown/epub、译文整包）在面板内确认后发起。 -->
             <md-outlined-button
               v-if="kind === 'novel'"
               @click="fillDownloadForm({ form: 'novel', sourceType: 'series', sourceId: id })"
             >
-              {{ t("browse.hooks.fillNovelForm") }}
+              {{ t("browse.hooks.downloadAll") }}
             </md-outlined-button>
             <md-outlined-button @click="openInPixiv">
               {{ t("browse.hooks.openInBrowser") }}

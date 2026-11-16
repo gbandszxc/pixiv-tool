@@ -939,6 +939,7 @@ export default {
     // 各单元只追加自己的子分组（F1：home / channel / ranking；F2：discover / feed / search），勿动他人分组    // 跨页面共用（频道页卡片与作品级页面）：打开原页 / 返填抓取表单
     hooks: {
       openInBrowser: "在浏览器中打开",
+      downloadAll: "下载全部",
       fillNovelForm: "返填抓取表单",
       fillIllustForm: "返填插画表单",
       openFailed: "无法打开系统浏览器",

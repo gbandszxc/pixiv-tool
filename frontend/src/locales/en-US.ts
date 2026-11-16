@@ -939,6 +939,7 @@ export default {
     // Shared across pages (channel cards and work-level pages): open original page / fill crawl form
     hooks: {
       openInBrowser: "Open in Browser",
+      downloadAll: "Download all",
       fillNovelForm: "Fill Novel Form",
       fillIllustForm: "Fill Illustration Form",
       openFailed: "Failed to open the system browser",
