@@ -481,32 +481,40 @@ pub struct BrowseBookmarkTags {
 }
 
 // ----------------------------------------------------------------------
-// 主站 csrf token（street POST 需要 x-csrf-token）进程级 TTL 缓存
+// 主站会话上下文（csrf token + 关注人机验证配置）进程级 TTL 缓存
 // ----------------------------------------------------------------------
 
-/// token 缓存：进程级单条 + 30 分钟 TTL。token 值绝不写入日志。
-static WEB_CSRF_CACHE: OnceLock<Mutex<Option<(String, Instant)>>> = OnceLock::new();
+/// 会话上下文缓存：进程级单条 + 30 分钟 TTL。csrf token 值绝不写入日志。
+static WEB_CSRF_CACHE: OnceLock<Mutex<Option<(csrf::WebSessionContext, Instant)>>> =
+    OnceLock::new();
 const WEB_CSRF_TTL: Duration = Duration::from_secs(30 * 60);
 
-/// 取主站会话 token：缓存命中直接用；否则 GET 主站首页解析 `__NEXT_DATA__`。
-async fn web_csrf_token(client: &PixivClient) -> Result<String, PixivError> {
-    if let Some(token) = cached_web_csrf() {
-        log::debug!("street csrf token 缓存命中");
-        return Ok(token);
+/// 取主站会话上下文：缓存命中直接用；否则 GET 主站首页解析 `__NEXT_DATA__`。
+async fn web_session_context(
+    client: &PixivClient,
+) -> Result<csrf::WebSessionContext, PixivError> {
+    if let Some(context) = cached_web_session_context() {
+        log::debug!("web 会话上下文缓存命中");
+        return Ok(context);
     }
-    let token = csrf::fetch_web_csrf_token(client).await?;
+    let context = csrf::fetch_web_session_context(client).await?;
     let cache = WEB_CSRF_CACHE.get_or_init(|| Mutex::new(None));
     if let Ok(mut guard) = cache.lock() {
-        *guard = Some((token.clone(), Instant::now()));
+        *guard = Some((context.clone(), Instant::now()));
     }
-    Ok(token)
+    Ok(context)
 }
 
-fn cached_web_csrf() -> Option<String> {
+/// 取主站会话 csrf token（street / 关注 / 收藏写路径共用）。
+async fn web_csrf_token(client: &PixivClient) -> Result<String, PixivError> {
+    Ok(web_session_context(client).await?.csrf_token)
+}
+
+fn cached_web_session_context() -> Option<csrf::WebSessionContext> {
     let cache = WEB_CSRF_CACHE.get()?;
     let guard = cache.lock().ok()?;
-    let (token, at) = guard.as_ref()?;
-    (at.elapsed() < WEB_CSRF_TTL).then(|| token.clone())
+    let (context, at) = guard.as_ref()?;
+    (at.elapsed() < WEB_CSRF_TTL).then(|| context.clone())
 }
 
 /// token 失效自愈：street 认证/业务失败后清缓存，下次调用重新抓取。
@@ -2206,18 +2214,42 @@ fn novel_delete_form(csrf_token: &str, bookmark_id: &str) -> String {
 // PixivApi 方法（browse 命令层逐个对应，全部返回 Value）
 // ----------------------------------------------------------------------
 
-fn user_follow_request(id: i64, followed: bool, restrict: i64) -> (&'static str, String) {
+/// 作者关注 / 取消关注请求。关注 = 旧式表单 `/bookmark_add.php`（§4.10）；
+/// `recaptcha_token` 为 Some 时追加 `recaptcha_enterprise_score_token` 字段
+/// （pixiv 对部分账号关注强制人机验证，缺 token 恒 400，ADR 0055 /
+/// PIXIV-API §4.10）；取消 = `/rpc_group_setting.php`（token 对取消无意义，忽略）。
+fn user_follow_request(
+    id: i64,
+    followed: bool,
+    restrict: i64,
+    recaptcha_token: Option<&str>,
+) -> (&'static str, String) {
     if followed {
-        (
-            "/bookmark_add.php",
-            format!("mode=add&type=user&user_id={id}&tag=&restrict={restrict}&format=json"),
-        )
+        let mut form =
+            format!("mode=add&type=user&user_id={id}&tag=&restrict={restrict}&format=json");
+        if let Some(token) = recaptcha_token {
+            form.push_str(&format!(
+                "&recaptcha_enterprise_score_token={}",
+                percent_encode(token)
+            ));
+        }
+        ("/bookmark_add.php", form)
     } else {
         (
             "/rpc_group_setting.php",
             format!("mode=del&type=bookuser&id={id}"),
         )
     }
+}
+
+/// 关注终态 400（铸 token 重试后仍被拒 / 无法铸 token）的统一回退文案：
+/// pixiv 对部分账号关注强制人机验证，原生侧无法自行生成 reCAPTCHA token，
+/// 引导浏览器手动关注。
+pub fn user_follow_recaptcha_guidance_error() -> PixivError {
+    PixivError::Client(
+        "关注请求被 pixiv 拒绝：该账号关注前需通过人机验证，请点击作者页右上角按钮在浏览器中手动关注"
+            .into(),
+    )
 }
 
 fn validate_user_follow_response(value: Value, followed: bool) -> Result<(), PixivError> {
@@ -2239,21 +2271,34 @@ fn validate_user_follow_response(value: Value, followed: bool) -> Result<(), Pix
 }
 
 impl PixivApi {
+    /// 关注人机验证配置（主页 preloaded state 解析，随 csrf 上下文 30min 缓存）：
+    /// `follow_requires_token == Some(true)` 时命令层把铸 token 前置；
+    /// `site_key` 供 WebView 铸造。页面缺失该配置时字段为 None，
+    /// 由关注 400 回退兜底（ADR 0055）。
+    pub async fn follow_recaptcha_config(&self) -> Result<csrf::RecaptchaPageConfig, PixivError> {
+        let client = self.client();
+        Ok(web_session_context(client).await?.recaptcha)
+    }
+
     /// 旧式关注表单：公开 / 私密关注；取消关注。非成功信标不得回显成功。
+    /// `recaptcha_token`：pixiv 对开启人机验证的账号关注恒 400，命令层捕获后
+    /// 经内置 WebView 铸 token 携带重试（编排见 browse_user_follow，ADR 0055）。
+    /// 两端点 4xx 均为确定性失败，走 `post_form_once` 不退避重试。
     pub async fn set_user_follow(
         &self,
         id: i64,
         followed: bool,
         restrict: i64,
+        recaptcha_token: Option<&str>,
     ) -> Result<Value, PixivError> {
         if id <= 0 || !matches!(restrict, 0 | 1) {
             return Err(PixivError::Client("关注参数无效".into()));
         }
         let client = self.client();
         let token = web_csrf_token(client).await?;
-        let (path, form) = user_follow_request(id, followed, restrict);
+        let (path, form) = user_follow_request(id, followed, restrict, recaptcha_token);
         let result = async {
-            let text = client.post_form(path, Some(&token), &form).await?;
+            let text = client.post_form_once(path, Some(&token), &form).await?;
             let value = serde_json::from_str(&text)
                 .map_err(|_| PixivError::Client("关注操作响应异常，请刷新后重试".into()))?;
             validate_user_follow_response(value, followed)?;
@@ -3018,15 +3063,25 @@ mod tests {
 
     #[test]
     fn user_follow_form_and_success_signals() {
-        let (path, form) = user_follow_request(42, true, 0);
+        let (path, form) = user_follow_request(42, true, 0, None);
         assert_eq!(path, "/bookmark_add.php");
         assert_eq!(
             form,
             "mode=add&type=user&user_id=42&tag=&restrict=0&format=json"
         );
-        assert!(user_follow_request(42, true, 1).1.contains("restrict=1"));
+        assert!(user_follow_request(42, true, 1, None)
+            .1
+            .contains("restrict=1"));
+        // 人机验证 token 作为附加字段拼在 form 尾部（值做 percent-encode）
+        let (token_path, token_form) = user_follow_request(42, true, 0, Some("abc&1="));
+        assert_eq!(token_path, "/bookmark_add.php");
         assert_eq!(
-            user_follow_request(42, false, 0),
+            token_form,
+            "mode=add&type=user&user_id=42&tag=&restrict=0&format=json&recaptcha_enterprise_score_token=abc%261%3D"
+        );
+        // 取消关注不带 recaptcha 字段（token 对取消无意义）
+        assert_eq!(
+            user_follow_request(42, false, 0, Some("t")),
             (
                 "/rpc_group_setting.php",
                 "mode=del&type=bookuser&id=42".into()
@@ -3043,6 +3098,9 @@ mod tests {
             assert!(validate_user_follow_response(value.clone(), true).is_err());
             assert!(validate_user_follow_response(value, false).is_err());
         }
+        // 回退文案：人机验证 guidance 错误为 Client 文案（前端经 errorMessage 透传）
+        let guidance = user_follow_recaptcha_guidance_error();
+        assert!(matches!(guidance, PixivError::Client(ref msg) if msg.contains("人机验证")));
         assert_eq!(
             parse_user_profile(42, &json!({"isFollowed":true})).is_followed,
             Some(true)
@@ -4852,12 +4910,19 @@ mod tests {
         let _gate = CACHE_TEST_GATE.lock().unwrap();
         // 缓存空 → 未命中；写入 → 命中；失效 → 未命中
         invalidate_web_csrf();
-        assert!(cached_web_csrf().is_none());
+        assert!(cached_web_session_context().is_none());
         let cache = WEB_CSRF_CACHE.get_or_init(|| Mutex::new(None));
-        *cache.lock().unwrap() = Some(("tok-for-test".to_string(), Instant::now()));
-        assert_eq!(cached_web_csrf().as_deref(), Some("tok-for-test"));
+        let context = csrf::WebSessionContext {
+            csrf_token: "tok-for-test".to_string(),
+            recaptcha: Default::default(),
+        };
+        *cache.lock().unwrap() = Some((context.clone(), Instant::now()));
+        assert_eq!(
+            cached_web_session_context().unwrap().csrf_token,
+            "tok-for-test"
+        );
         invalidate_web_csrf();
-        assert!(cached_web_csrf().is_none());
+        assert!(cached_web_session_context().is_none());
     }
 
     #[test]
@@ -5123,21 +5188,30 @@ mod tests {
         let _gate = CACHE_TEST_GATE.lock().unwrap();
         // 账号变更命令的统一失效入口：未初始化时无操作，不 panic
         invalidate_session_caches();
-        assert!(cached_web_csrf().is_none());
+        assert!(cached_web_session_context().is_none());
         assert!(cached_self_uid().is_none());
         // 预填两个缓存 → 统一失效 → 双双未命中（切账号后不得残留旧身份）
         *WEB_CSRF_CACHE
             .get_or_init(|| Mutex::new(None))
             .lock()
-            .unwrap() = Some(("stale-token".to_string(), Instant::now()));
+            .unwrap() = Some((
+            csrf::WebSessionContext {
+                csrf_token: "stale-token".to_string(),
+                recaptcha: Default::default(),
+            },
+            Instant::now(),
+        ));
         *SELF_UID_CACHE
             .get_or_init(|| Mutex::new(None))
             .lock()
             .unwrap() = Some((9000098, Instant::now()));
-        assert_eq!(cached_web_csrf().as_deref(), Some("stale-token"));
+        assert_eq!(
+            cached_web_session_context().unwrap().csrf_token,
+            "stale-token"
+        );
         assert_eq!(cached_self_uid().map(|(uid, _)| uid), Some(9000098));
         invalidate_session_caches();
-        assert!(cached_web_csrf().is_none());
+        assert!(cached_web_session_context().is_none());
         assert!(cached_self_uid().is_none());
     }
 

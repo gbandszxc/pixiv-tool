@@ -26,8 +26,10 @@ use tauri::State;
 
 use crate::db::BrowseSearchHistoryEntry;
 use crate::pixiv::api::PixivApi;
-use crate::pixiv::client::PixivClient;
+use crate::pixiv::browse_api::user_follow_recaptcha_guidance_error;
+use crate::pixiv::client::{PixivClient, PixivError};
 use crate::state::AppState;
+use crate::webview_recaptcha::mint_follow_token;
 
 /// 未登录错误文案（前端 browse IPC 层以「登录」关键字识别并弹登录窗）。
 pub const NOT_LOGGED_IN: &str = "未登录或登录态已失效，请先登录";
@@ -543,13 +545,72 @@ pub async fn browse_user_profile(state: State<'_, AppState>, id: i64) -> Result<
 
 #[tauri::command]
 pub async fn browse_user_follow(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     id: i64,
     followed: bool,
 ) -> Result<Value, String> {
-    browse_user_follow_impl(&state, id, followed).await
+    // 取消关注不涉及人机验证：rpc_group_setting.php 无 recaptcha 门槛
+    if !followed {
+        return browse_user_follow_impl(&state, id, followed).await;
+    }
+    // 登录守卫与 ID 校验前置（NOT_LOGGED_IN 文案逐字透传，前端以「登录」关键字识别）
+    validate_id(id, "用户")?;
+    let api = build_browse_api(&state)?;
+
+    // 人机验证配置（随 csrf 上下文 30min 缓存，不额外发请求）：flag 开启 →
+    // 铸 token 前置直发；flag 缺失 / 配置获取失败不阻塞关注，由 400 回退兜底
+    let recaptcha = api.follow_recaptcha_config().await.unwrap_or_default();
+    if force_recaptcha_mint() || recaptcha.follow_requires_token == Some(true) {
+        let token = mint_follow_token(
+            &app,
+            &state.paths.config_dir,
+            id,
+            recaptcha.site_key.as_deref(),
+        )
+        .await
+        .map_err(|_| user_follow_recaptcha_guidance_error().to_string())?;
+        return map_follow_result(api.set_user_follow(id, true, 0, Some(&token)).await);
+    }
+    match api.set_user_follow(id, true, 0, None).await {
+        Ok(value) => Ok(value),
+        // 400 = pixiv 对该账号关注强制人机验证（ADR 0055）：
+        // 经内置 WebView 铸 recaptcha token 后携带重试一次
+        Err(err) if err.is_bad_request() => {
+            let token = mint_follow_token(
+                &app,
+                &state.paths.config_dir,
+                id,
+                recaptcha.site_key.as_deref(),
+            )
+            .await
+            .map_err(|_| user_follow_recaptcha_guidance_error().to_string())?;
+            map_follow_result(api.set_user_follow(id, true, 0, Some(&token)).await)
+        }
+        Err(err) => Err(err.to_string()),
+    }
 }
 
+/// 测试钩子：PIXIV_TOOL_FORCE_RECAPTCHA_MINT=1 时关注跳过首次直发、直接
+/// 铸 recaptcha token 携带发送（验证铸造链路；对齐 PIXIV_TOOL_FORCE_WEBVIEW_LOGIN）。
+fn force_recaptcha_mint() -> bool {
+    std::env::var("PIXIV_TOOL_FORCE_RECAPTCHA_MINT").as_deref() == Ok("1")
+}
+
+/// 关注终态映射（带 / 不带 token 共用）：仍 400 说明带 token 也被拒 →
+/// 回退人机验证引导文案；其他错误原样透传（thiserror 中文 Display）。
+fn map_follow_result(result: Result<Value, PixivError>) -> Result<Value, String> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(err) if err.is_bad_request() => {
+            Err(user_follow_recaptcha_guidance_error().to_string())
+        }
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+/// `*_impl` 契约保持：可离线调用、Err 为中文文案（offline_guard 冒烟对齐，
+/// NOT_LOGGED_IN 逐字透传）。
 pub async fn browse_user_follow_impl(
     state: &AppState,
     id: i64,

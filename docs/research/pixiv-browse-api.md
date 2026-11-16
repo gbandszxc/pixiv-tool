@@ -943,6 +943,16 @@ query 参数语义（均实测）：
 
 资料响应 isFollowed 为布尔状态，现映射至作者页 is_followed。关注/取消为旧式表单 POST，参数与响应成功信标见 PIXIV-API §4.10；证据为 [Pixiv Previewer 的原始实现](https://greasyfork.org/en/scripts/30766-pixiv-previewer/code)，本轮未进行真实账号写实测，保留带显式开关的在线往返用例用于契约复核。作者关注为 ADR 0016 授权的浏览写操作。
 
+## 作者关注人机验证（2026-11-16 勘误补充）
+
+**勘误**：上一节「保留在线往返用例用于契约复核」的参数在部分账号上不成立——pixiv 对部分账号关注强制 reCAPTCHA Enterprise score token，缺 token 时 `bookmark_add.php` 恒返回 400。2026-11-16 实例：mac 端登录的账号关注任何作者都 400（3 次重试后报「客户端错误: HTTP 400」），Windows 端账号同代码正常——差异来自**账号的风控状态**而非操作系统。社区证据（本轮未做真实账号写实测）：
+
+- [ppixiv](https://github.com/ppixiv/ppixiv) `web/vview/util/recaptcha.js` + `sites/pixiv/site-pixiv.js`：页面 `#meta-pixiv-tests` / preloaded state `test.ab.recaptcha_follow_user` 标记该账号是否启用；site key 在 `misc.grecaptcha.recaptchaEnterpriseScoreSiteKey`（登录态 `__NEXT_DATA__` 的 preloaded state，匿名页无 `gaUserData` 故缺失）；铸造 = 加载 `https://www.recaptcha.net/recaptcha/enterprise.js?render={key}` → `grecaptcha.enterprise.ready` → 官方页面加载时会发一次 action `www/pageload` → 关注时 `execute` action **`www/follow_user`**；token 作为 `recaptcha_enterprise_score_token` 附在 form。ppixiv 亦注释「bookmark_add.php 关注不带该 token 会得到错误响应（400）」。
+- [PixivBatchDownloader](https://github.com/xuejianxianzun/PixivBatchDownloader) `notes/recaptcha_enterprise_score_token 添加关注的用户时的验证码.md`：明确「某些账号不需要两步直接关注；一些注册时间较晚的用户无法直接使用 /bookmark_add.php，需要先获取 token」，且该 token 的 ubd protobuf 载荷无法逆向生成（其扩展只能 iframe 模拟点击）。
+- [PixivBatchDownloader API.ts `addFollowingUser`](https://github.com/xuejianxianzun/PixivBatchDownloader/blob/master/src/ts/API.ts)：关注请求同 form 并允许携带 `recaptcha_enterprise_score_token`（不需要的账号传空值）。
+
+本应用落地：Rust 侧从登录态主页解析 site key（`parse_recaptcha_page_config`）→ 内置 WebView 注入脚本铸造 → `pixivtool-recaptcha://` 导航拦截回收 → 带 token 重试；失败回退浏览器手动关注引导。决策与窗口生命周期见 ADR 0055，契约见 PIXIV-API §4.10；在线只读探针 `live_recaptcha_page_config_probe` 验证登录态主页 site key 解析路径。
+
 ## 14. 评论写路径（发评论 / 回复 / 删除，2026-10-04 实测）
 
 ### 14.1 抓包方式

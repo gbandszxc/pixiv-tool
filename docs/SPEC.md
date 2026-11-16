@@ -143,6 +143,7 @@ pixiv-tool/
 │  ├─ tauri.conf.json           # devUrl 9961、frontendDist ../frontend/dist
 │  ├─ capabilities/default.json # IPC 权限（core + dialog + opener）
 │  ├─ resources/agent/          # 内置 Agent 资源：prompts/、agents/（coordinator/translator/reviewer）、skills/smart-translator/
+│  ├─ resources/pixiv/          # 关注人机验证铸造脚本 recaptcha-mint.js（include_str! 嵌入，ADR 0055）
 │  ├─ tests/                    # pixiv_api/（pixiv 接口测试唯一入口）/ agent_protocol_wire.rs / agent_runtime.rs / translation_job_e2e.rs / smoke_commands.rs
 │  └─ src/
 │     ├─ main.rs / lib.rs       # 入口与 Builder 装配（全部命令注册、pixiv-img / pixiv-ugoira / pixiv-download 协议、dialog 插件、关闭确认、翻译恢复）
@@ -152,9 +153,10 @@ pixiv-tool/
 │     ├─ translation_legacy.rs  # v1 单页两轮实现：只读兼容旧译文，命令入口已移除
 │     ├─ translation_diagnostics.rs / translation_summary.rs
 │     ├─ sync/                  # WebDAV 同步：mod（范围白名单 / SyncError）/ archive（载荷与历史合并）/ crypto（PTSYNC01 加解密）/ webdav（MKCOL/PUT/GET）/ keys（同步凭据）/ service（编排）
-│     ├─ pixiv/                 # client（限速/重试/429）、api（/ajax typed）、csrf（会话与 web csrf 探测）、browse_api（浏览端点）
+│     ├─ pixiv/                 # client（限速/重试/429/once 不重试）、api（/ajax typed）、csrf（会话与 web csrf 探测、关注人机验证配置解析）、browse_api（浏览端点）
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / epub / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
+│     ├─ webview_recaptcha.rs   # 关注人机验证 WebView 铸 token 桥（recaptcha-mint 窗口、导航拦截回收，ADR 0055）
 │     ├─ commands/              # 与 translation/ 共 95 个 #[tauri::command]（translation 22 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 6 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
@@ -1733,7 +1735,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_work_detail(kind, id)` | 作品详情：illust+pages+ugoira_meta / novel 全文（含 series 导航 + 正文内嵌图索引 `embedded_images`） |
 | `browse_ugoira_frames(artworkId)` | ugoira 帧序列：`ugoira_meta` → 取 zip（`src` 600×600 优先，回退 `originalSrc`、`zip_urls.original`）→ 白名单解包到 `<data>/cache/img/ugoira/<id>/`（manifest 命中直接复用，目录最多保留 12 个作品）→ 返回 `{frames:[{src,delay}], width:null, height:null}`，`src` 为 `pixiv-ugoira` 协议 URL；登录守卫同浏览命令 |
 | `browse_related(kind, id, limit)` | 相关推荐一次性池（recommend/init，page 参数无效） |
-| `browse_user_follow(id, followed)` | 公开关注/取消关注，返回 `{ is_followed: boolean }`；正整数 ID 校验后走登录守卫、CSRF 和既有限速 |
+| `browse_user_follow(id, followed)` | 公开关注/取消关注，返回 `{ is_followed: boolean }`；正整数 ID 校验后走登录守卫、CSRF 和既有限速。pixiv 对部分账号关注强制人机验证（ADR 0055）：主页 `recaptcha_follow_user` 开启或直发 400 时经内置 WebView 铸 recaptcha token 重试一次，仍失败回退「浏览器手动关注」文案；两端点 4xx 确定性失败不退避重试 |
 | `browse_user_profile(id)` | 作者资料（/ajax/user/{id}?full=1） |
 | `browse_user_works(id, kind, page, order?)` | 作者作品：profile/all 全集 id → 60/批 ids[] 批量；order = `asc`/`desc`（Optional，缺省/非法回落 `desc` = id 降序 = 时间倒序）；**先排序后切片**、批内条目按请求 id 顺序重排（响应为对象形时键迭代序不可依赖）；分页语义不变；仅本地排序，pixiv 请求串不变 |
 | `browse_novel_series(id, last_order)` | 系列元数据 + 目录（last_order 游标） |
@@ -2041,6 +2043,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | R14 | 整篇 Job 的模型调用量显著高于单页两轮 | 中 | 累计调用预算（默认 `64 + 32 × 初始分块数`）、三级并发闸门与暂停 / 取消共同控制成本；界面不承诺固定费用 |
 | R15 | WebDAV 同步的第三方兼容性与凭据可用性（MKCOL 行为差异、自签证书、非标准端口；同步口令丢失即无法解密；未设口令时同步包仅为混淆级保护；wreq 客户端尚未对真实服务端全量实测） | 中 | 固定文件 + 标准 MKCOL/PUT/GET，MKCOL 已存在 / 不支持均继续；地址白名单 http/https、30s 超时、8 MiB 上限、网络错误直连重试一次；口令丢失无后门，文案提示重新上传即可重建快照；默认口令的保护强度已在帮助文案与 ADR 0049 明示；上线前用 Nextcloud / 坚果云等真实服务端补测 |
 | R16 | EPUB 内嵌图 / 封面下载失败导致产物不完整（图片依赖 illust 端点与 pximg CDN，pixiv 封面可能缺失或失效） | 中 | 失败降级：内嵌图回退 XHTML 文字占位块、封面回退后端占位封面 PNG（ADR 0054）；单项失败计入任务失败计数，不中断整包产物 |
+| R17 | 关注人机验证桥的页面侧契约随 pixiv 变化（site key 路径 / action 名 / recaptcha.net 可达性 / 风控策略升级） | 中 | 400 回退兜底恒在：铸造失败只回退「浏览器手动关注」文案，不比无桥时差；在线只读探针 `live_recaptcha_page_config_probe` 契约复核（ADR 0055） |
 
 ---
 
@@ -2103,6 +2106,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0052 | 竖屏最大化布局适配（仅竖屏最大化、推翻侧栏不自动隐藏旧决策） | [adr/0052-portrait-maximized-layout.md](adr/0052-portrait-maximized-layout.md) |
 | 0053 | SauceNAO API Key 纳入 WebDAV 同步（范围 `saucenao`、载荷 v1 追加字段、回执只回布尔） | [adr/0053-saucenao-key-webdav-sync.md](adr/0053-saucenao-key-webdav-sync.md) |
 | 0054 | 小说 EPUB 导出与系列整包下载（EPUB 3.0 内嵌插图与封面、series 来源自动拼接、系列译文整包导出） | [adr/0054-novel-epub-export-and-series-bundle.md](adr/0054-novel-epub-export-and-series-bundle.md) |
+| 0055 | 关注人机验证经内置 WebView 铸 token 桥接（400 → 铸 recaptcha token → 重试一次，失败回退浏览器手动关注） | [adr/0055-recaptcha-webview-bridge-user-follow.md](adr/0055-recaptcha-webview-bridge-user-follow.md) |
 
 ADR 按需追加，不强制一次性写完。
 

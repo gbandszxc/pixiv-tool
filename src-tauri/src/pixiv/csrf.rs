@@ -194,10 +194,10 @@ pub async fn fetch_session_probe(phpsessid: &str) -> Result<SessionProbe, ProbeE
 // 的 SSR 序列化状态里：`<script id="__NEXT_DATA__">` JSON 的
 // props.pageProps.serverSerializedPreloadedState.api.token。
 
-/// 从主站首页 HTML 解析会话 csrf token（纯函数，离线可测）。
-/// 定位 `id="__NEXT_DATA__"` 的 script 块 → 解析 JSON → 取 api.token；
+/// 从主站首页 HTML 解析 `__NEXT_DATA__` 的 serverSerializedPreloadedState
+/// 状态对象（纯函数，离线可测；csrf token 与关注人机验证配置共用此入口）。
 /// 任一环节失败返回 None（调用方转可读错误）。
-pub(crate) fn parse_next_data_token(html: &str) -> Option<String> {
+pub(crate) fn parse_next_data_preloaded_state(html: &str) -> Option<Value> {
     const MARKER: &str = "id=\"__NEXT_DATA__\"";
     let idx = html.find(MARKER)?;
     let after_marker = &html[idx + MARKER.len()..];
@@ -213,15 +213,69 @@ pub(crate) fn parse_next_data_token(html: &str) -> Option<String> {
         Value::String(s) => serde_json::from_str(s).ok()?,
         v => v.clone(),
     };
+    Some(state)
+}
+
+/// 从主站首页 HTML 解析会话 csrf token（纯函数，离线可测）。
+pub(crate) fn parse_next_data_token(html: &str) -> Option<String> {
+    let state = parse_next_data_preloaded_state(html)?;
     let token = state.pointer("/api/token")?;
     token.as_str().filter(|t| !t.is_empty()).map(String::from)
 }
 
-/// GET 主站首页，解析 `__NEXT_DATA__` 取会话 csrf token。
+/// 主页 `__NEXT_DATA__`（preloaded state）里的关注人机验证配置（ADR 0055，
+/// 路径对齐 ppixiv 的读取实现）：
+/// - site_key：`misc.grecaptcha.recaptchaEnterpriseScoreSiteKey`（全局站点配置）；
+/// - follow_requires_token：`test.ab.recaptcha_follow_user`（按账号启用的
+///   实验开关，页面缺失/未下发 → None，由关注 400 回退兜底）。
+/// 仅登录态首页含 gaUserData/preloaded state；匿名页两字段均缺席。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RecaptchaPageConfig {
+    pub site_key: Option<String>,
+    pub follow_requires_token: Option<bool>,
+}
+
+impl RecaptchaPageConfig {
+    /// 是否具备铸造条件（site key 已解析）。flag 只影响「铸 token 是否前置」，
+    /// 不参与此判定。
+    pub fn mintable(&self) -> bool {
+        self.site_key.as_deref().is_some_and(|k| !k.is_empty())
+    }
+}
+
+/// 从主站首页 HTML 解析关注人机验证配置（纯函数，离线可测）。
+pub(crate) fn parse_recaptcha_page_config(html: &str) -> RecaptchaPageConfig {
+    let Some(state) = parse_next_data_preloaded_state(html) else {
+        return RecaptchaPageConfig::default();
+    };
+    let site_key = state
+        .pointer("/misc/grecaptcha/recaptchaEnterpriseScoreSiteKey")
+        .and_then(Value::as_str)
+        .filter(|k| !k.is_empty())
+        .map(String::from);
+    let follow_requires_token = state
+        .pointer("/test/ab/recaptcha_follow_user")
+        .and_then(Value::as_bool);
+    RecaptchaPageConfig {
+        site_key,
+        follow_requires_token,
+    }
+}
+
+/// 主站首页一次抓取得到的会话上下文：csrf token + 关注人机验证配置。
+#[derive(Debug, Clone)]
+pub struct WebSessionContext {
+    pub csrf_token: String,
+    pub recaptcha: RecaptchaPageConfig,
+}
+
+/// GET 主站首页，解析 `__NEXT_DATA__` 取会话 csrf token 与人机验证配置。
 /// 走 PixivClient 的闸门/限速/重试（与 ajax 请求同一套风控语义）。
 /// 路径缺失/非 JSON → `Client("无法获取会话令牌，请重新登录")`。
 /// 注意：token 值不得写入日志。
-pub(crate) async fn fetch_web_csrf_token(client: &PixivClient) -> Result<String, PixivError> {
+pub(crate) async fn fetch_web_session_context(
+    client: &PixivClient,
+) -> Result<WebSessionContext, PixivError> {
     let html = client
         .run_gated(|| async {
             let resp = client.send_ajax(super::client::BASE_URL).await?;
@@ -232,8 +286,13 @@ pub(crate) async fn fetch_web_csrf_token(client: &PixivClient) -> Result<String,
         })
         .await?;
     log::debug!("已抓取主站 __NEXT_DATA__（{} 字节）", html.len());
-    parse_next_data_token(&html)
-        .ok_or_else(|| PixivError::Client("无法获取会话令牌，请重新登录".into()))
+    let csrf_token = parse_next_data_token(&html)
+        .ok_or_else(|| PixivError::Client("无法获取会话令牌，请重新登录".into()))?;
+    let recaptcha = parse_recaptcha_page_config(&html);
+    Ok(WebSessionContext {
+        csrf_token,
+        recaptcha,
+    })
 }
 
 // ----------------------------------------------------------------------
@@ -430,5 +489,58 @@ mod tests {
         // 内层字符串不是合法 JSON
         let html = r#"<script id="__NEXT_DATA__">{"props":{"pageProps":{"serverSerializedPreloadedState":"not json"}}}</script>"#;
         assert_eq!(parse_next_data_token(html), None);
+    }
+
+    /// 合成登录态首页 preloaded state（含 recaptcha 配置）的 __NEXT_DATA__ HTML。
+    fn recaptcha_next_data_html(state: &serde_json::Value) -> String {
+        let wrapped = serde_json::to_string(&serde_json::to_string(state).unwrap()).unwrap();
+        format!(
+            r#"<script id="__NEXT_DATA__">{{"props":{{"pageProps":{{"serverSerializedPreloadedState":{wrapped}}}}}}}</script>"#
+        )
+    }
+
+    #[test]
+    fn parse_recaptcha_page_config_full_and_partial() {
+        // 完整形态：site key + flag（路径对齐 ppixiv 读取实现）
+        let state = serde_json::json!({
+            "api": {"token": "t"},
+            "misc": {"grecaptcha": {"recaptchaEnterpriseScoreSiteKey": "6LcKEY"}},
+            "test": {"ab": {"recaptcha_follow_user": true}}
+        });
+        let config = parse_recaptcha_page_config(&recaptcha_next_data_html(&state));
+        assert_eq!(config.site_key.as_deref(), Some("6LcKEY"));
+        assert_eq!(config.follow_requires_token, Some(true));
+        assert!(config.mintable());
+
+        // flag=false：不可铸造前置，但 site key 仍在（400 回退兜底可用）
+        let state = serde_json::json!({
+            "misc": {"grecaptcha": {"recaptchaEnterpriseScoreSiteKey": "6LcKEY"}},
+            "test": {"ab": {"recaptcha_follow_user": false}}
+        });
+        let config = parse_recaptcha_page_config(&recaptcha_next_data_html(&state));
+        assert_eq!(config.site_key.as_deref(), Some("6LcKEY"));
+        assert_eq!(config.follow_requires_token, Some(false));
+        assert!(config.mintable());
+    }
+
+    #[test]
+    fn parse_recaptcha_page_config_missing_fields_is_none_not_error() {
+        // 匿名页 / 页面变体：缺 preloaded state 或缺 recaptcha 路径 → 字段缺席
+        assert_eq!(
+            parse_recaptcha_page_config("<html><body>login</body></html>"),
+            RecaptchaPageConfig::default()
+        );
+        let state = serde_json::json!({"api": {"token": "t"}});
+        let config = parse_recaptcha_page_config(&recaptcha_next_data_html(&state));
+        assert_eq!(config, RecaptchaPageConfig::default());
+        assert!(!config.mintable());
+
+        // 空 key 视为缺失
+        let state = serde_json::json!({
+            "misc": {"grecaptcha": {"recaptchaEnterpriseScoreSiteKey": ""}}
+        });
+        let config = parse_recaptcha_page_config(&recaptcha_next_data_html(&state));
+        assert_eq!(config.site_key, None);
+        assert!(!config.mintable());
     }
 }

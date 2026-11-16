@@ -30,6 +30,7 @@ pub mod state;
 pub mod sync;
 pub mod translation;
 pub mod ugoira;
+pub mod webview_recaptcha;
 mod translation_legacy;
 mod translation_diagnostics;
 mod translation_summary;

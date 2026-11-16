@@ -1543,3 +1543,25 @@ async fn live_image_download_with_referer() {
         &bytes[..bytes.len().min(4)]
     );
 }
+
+/// 关注人机验证配置探针（ADR 0055）：登录态主页 `__NEXT_DATA__` 应能解析出
+/// reCAPTCHA Enterprise site key（全局站点配置，铸造 token 必需）与
+/// `recaptcha_follow_user` 实验开关（按账号下发，可能缺席——缺席不失败，
+/// 只回显）。只断言存在性，不打印 site key 值。
+#[tokio::test]
+#[ignore]
+async fn live_recaptcha_page_config_probe() {
+    let config = common::live_api()
+        .follow_recaptcha_config()
+        .await
+        .unwrap_or_else(|e| panic!("主页会话上下文抓取失败: {e}"));
+    assert!(
+        config.site_key.as_deref().is_some_and(|k| !k.is_empty()),
+        "登录态主页应含 recaptchaEnterpriseScoreSiteKey（misc.grecaptcha 路径），否则无法铸造 token"
+    );
+    eprintln!(
+        "✓ site key 已解析（长度 {}）；recaptcha_follow_user = {:?}（None = 页面未下发该开关）",
+        config.site_key.as_ref().unwrap().len(),
+        config.follow_requires_token
+    );
+}

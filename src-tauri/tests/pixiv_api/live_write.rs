@@ -53,10 +53,10 @@ async fn live_user_follow_roundtrip() {
         }
     }
     let id = target.expect("需要未关注且非本人的候选作者");
-    let added = api.set_user_follow(id, true, 1).await;
+    let added = api.set_user_follow(id, true, 1, None).await;
     let after_add = api.get_user_profile(id).await;
     // 断言前清理，避免中途失败留下关注关系。
-    let removed = api.set_user_follow(id, false, 0).await;
+    let removed = api.set_user_follow(id, false, 0, None).await;
     let after_remove = api.get_user_profile(id).await;
     assert!(added.is_ok(), "私密关注请求失败");
     assert_eq!(

@@ -141,6 +141,10 @@ _Avoid_: CDN 直链
 缩略图 URL 按设置档位改写尺寸；档位是合法枚举，不是任意尺寸。
 _Avoid_: 清晰度
 
+**人机验证桥 (Recaptcha Bridge)**:
+关注被 pixiv 风控拦截（要求 reCAPTCHA Enterprise score token）时，经内置 WebView 在 pixiv 页面上下文无感铸造 token 并重试关注的桥接通道（ADR 0055）；失败回退浏览器手动关注。
+_Avoid_: 验证码破解、自动过验证
+
 ### 整篇翻译
 
 **整篇翻译 (Whole-novel Translation)**:

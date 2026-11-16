@@ -240,7 +240,23 @@ impl PixivClient {
     ///    → 4. finally：无论成败在 semaphore 持有期间 sleep REQUEST_INTERVAL_MS。
     ///
     /// `pub(crate)`：csrf.rs 的主页 token 抓取复用同一闸门/限速语义。
-    pub(crate) async fn run_gated<T, F, Fut>(&self, mut attempt: F) -> Result<T, PixivError>
+    pub(crate) async fn run_gated<T, F, Fut>(&self, attempt: F) -> Result<T, PixivError>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<T, PixivError>>,
+    {
+        // MAX_RETRIES 是 u32（测试里对 AtomicU32 计数断言），闸门参数为 usize
+        self.run_gated_bounded(MAX_RETRIES as usize, attempt).await
+    }
+
+    /// [`Self::run_gated`] 的受限次数变体：`attempts` 为最大尝试次数
+    /// （1 = 只发一次不重试）。闸门 / 限速 / finally 语义与终止规则完全一致。
+    /// `pub(crate)`：测试与 post_form_once 使用。
+    pub(crate) async fn run_gated_bounded<T, F, Fut>(
+        &self,
+        attempts: usize,
+        mut attempt: F,
+    ) -> Result<T, PixivError>
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<T, PixivError>>,
@@ -254,7 +270,7 @@ impl PixivClient {
         self.wait_not_paused().await;
 
         let mut last_err: Option<PixivError> = None;
-        for idx in 0..MAX_RETRIES {
+        for idx in 0..attempts {
             match attempt().await {
                 Ok(value) => {
                     // finally 语义：成功路径也限速（持锁期间 sleep）
@@ -267,11 +283,11 @@ impl PixivClient {
                         PixivError::Auth | PixivError::NotFound | PixivError::RateLimit
                     );
                     last_err = Some(err);
-                    if abort || idx + 1 == MAX_RETRIES {
+                    if abort || idx + 1 == attempts {
                         break;
                     }
                     let wait = RETRY_BACKOFF_SECS[(idx as usize).min(RETRY_BACKOFF_SECS.len() - 1)];
-                    log::info!("重试 {}/{MAX_RETRIES}，等待 {wait}s", idx + 1);
+                    log::info!("重试 {}/{attempts}，等待 {wait}s", idx + 1);
                     tokio::time::sleep(Duration::from_secs(wait)).await;
                 }
             }
@@ -396,6 +412,42 @@ impl PixivClient {
         extract_ajax_body(body)
     }
 
+    /// 发送一次 form 请求（post_form / post_form_once 共享的尝试闭包）：
+    /// 构造请求 → 发送 → 非 2xx/3xx 走 classify_status 分类 → 读响应文本。
+    async fn send_form_once(
+        &self,
+        url: &str,
+        csrf_token: Option<&str>,
+        form: &str,
+    ) -> Result<String, PixivError> {
+        let mut req = self
+            .http
+            .post(url)
+            .header("content-type", "application/x-www-form-urlencoded");
+        if let Some(token) = csrf_token {
+            req = req.header("x-csrf-token", token);
+        }
+        if let Some(cookie) = self.cookie_header.as_deref() {
+            req = req.header("cookie", cookie);
+        }
+        let resp = req
+            .body(form.to_string())
+            .send()
+            .await
+            .map_err(|e| network_err(e, url))?;
+        let status = resp.status().as_u16();
+        log::info!("POST {} → {status}", mask_url(url));
+        // 2xx/3xx 放行（3xx = 旧式表单端点的成功跳转，wreq 会跟随到最终页）
+        if !(200..400).contains(&status) {
+            if status == 429 {
+                self.trigger_global_pause();
+            }
+            return Err(classify_status(status)
+                .unwrap_or_else(|| PixivError::Client(format!("HTTP {status}"))));
+        }
+        resp.text().await.map_err(|e| network_err(e, url))
+    }
+
     /// POST `{BASE_URL}{path}` form 体（`application/x-www-form-urlencoded`），
     /// 镜像 post_json 的 cookie/闸门/重试/限速语义。收藏删除接口专用：
     /// - 插画 `/ajax/illusts/bookmarks/delete`：ajax 端点，`csrf_token` 传 Some
@@ -412,35 +464,24 @@ impl PixivClient {
     ) -> Result<String, PixivError> {
         let url = format!("{BASE_URL}{path}");
         let text = self
-            .run_gated(|| async {
-                let mut req = self
-                    .http
-                    .post(&url)
-                    .header("content-type", "application/x-www-form-urlencoded");
-                if let Some(token) = csrf_token {
-                    req = req.header("x-csrf-token", token);
-                }
-                if let Some(cookie) = self.cookie_header.as_deref() {
-                    req = req.header("cookie", cookie);
-                }
-                let resp = req
-                    .body(form.to_string())
-                    .send()
-                    .await
-                    .map_err(|e| network_err(e, &url))?;
-                let status = resp.status().as_u16();
-                log::info!("POST {} → {status}", mask_url(&url));
-                // 2xx/3xx 放行（3xx = 旧式表单端点的成功跳转，wreq 会跟随到最终页）
-                if !(200..400).contains(&status) {
-                    if status == 429 {
-                        self.trigger_global_pause();
-                    }
-                    return Err(classify_status(status)
-                        .unwrap_or_else(|| PixivError::Client(format!("HTTP {status}"))));
-                }
-                let text = resp.text().await.map_err(|e| network_err(e, &url))?;
-                Ok::<String, PixivError>(text)
-            })
+            .run_gated(|| self.send_form_once(&url, csrf_token, form))
+            .await?;
+        Ok(text)
+    }
+
+    /// [`Self::post_form`] 的不重试变体：作者关注 / 取消关注（旧式表单写
+    /// 端点）的 4xx 是确定性失败——pixiv 对开启人机验证的账号关注恒 400
+    /// （缺 recaptcha token），退避重试只会白等并徒增风控压力（ADR 0055、
+    /// PIXIV-API §4.10）。闸门 / 限速 / 429 语义与 post_form 完全一致。
+    pub async fn post_form_once(
+        &self,
+        path: &str,
+        csrf_token: Option<&str>,
+        form: &str,
+    ) -> Result<String, PixivError> {
+        let url = format!("{BASE_URL}{path}");
+        let text = self
+            .run_gated_bounded(1, || self.send_form_once(&url, csrf_token, form))
             .await?;
         Ok(text)
     }
@@ -752,6 +793,53 @@ mod tests {
             1,
             "401/403 不应重试"
         );
+    }
+
+    #[tokio::test]
+    async fn run_gated_bounded_single_attempt_does_not_retry() {
+        let c = client();
+        let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let shared = counter.clone();
+        let result: Result<(), PixivError> = c
+            .run_gated_bounded(1, move || {
+                let counter = shared.clone();
+                async move {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Err::<(), _>(PixivError::Client("HTTP 400".into()))
+                }
+            })
+            .await;
+        assert!(
+            matches!(&result, Err(PixivError::Client(msg)) if msg == "HTTP 400"),
+            "应原样透传 Client 错误"
+        );
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "attempts=1 时确定性 400 不应重试"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_gated_bounded_allows_retry_within_attempts() {
+        let c = client();
+        let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let shared = counter.clone();
+        let result: Result<u32, PixivError> = c
+            .run_gated_bounded(2, move || {
+                let counter = shared.clone();
+                async move {
+                    let n = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    if n < 2 {
+                        Err(PixivError::Server)
+                    } else {
+                        Ok(n)
+                    }
+                }
+            })
+            .await;
+        assert_eq!(result.unwrap(), 2, "第二次尝试应成功");
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

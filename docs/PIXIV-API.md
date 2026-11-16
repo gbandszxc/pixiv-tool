@@ -325,14 +325,15 @@
 - 命令层离线冒烟：`tests/pixiv_api/offline_guard.rs`（登录守卫、参数白名单，不发网络）。
 
 
-### 4.10 作者关注 / 取消关注（2026-10-03 接入）
+### 4.10 作者关注 / 取消关注（2026-10-03 接入；2026-11-16 增人机验证桥接）
 
-作者资料 `/ajax/user/{id}?full=1` 消费布尔 `isFollowed` → 可选 `is_followed`；缺失保留未知，前端禁用写操作。新增 IPC `browse_user_follow(id, followed)`，正整数 ID 和登录守卫前置；公开关注，返回 `{is_followed}`。复用 `web_csrf_token` 与 `PixivClient::post_form` 的 Cookie、并发、限速与重试，不增凭据落点。
+作者资料 `/ajax/user/{id}?full=1` 消费布尔 `isFollowed` → 可选 `is_followed`；缺失保留未知，前端禁用写操作。IPC `browse_user_follow(id, followed)`，正整数 ID 和登录守卫前置；公开关注，返回 `{is_followed}`。复用 web 会话上下文（`fetch_web_session_context`：csrf token + 关注人机验证配置，30min 缓存）与 `PixivClient::post_form_once` 的 Cookie、并发、限速，不增凭据落点。
 
-- 关注：POST `/bookmark_add.php`，form `mode=add&type=user&user_id={id}&tag=&restrict=0&format=json`，`x-csrf-token`；成功原始 JSON 为 `[]`。内部 API 的 restrict=1 仅供获准在线往返用例私密关注取样。
+- 关注：POST `/bookmark_add.php`，form `mode=add&type=user&user_id={id}&tag=&restrict=0&format=json`，`x-csrf-token`；成功原始 JSON 为 `[]`。需人机验证时追加 `recaptcha_enterprise_score_token={token}` 字段（见下）。内部 API 的 restrict=1 仅供获准在线往返用例私密关注取样。
 - 取消：POST `/rpc_group_setting.php`，form `mode=del&type=bookuser&id={id}`，同 CSRF 头；成功响应 `type=bookuser`。
-- `error` 信标复用既有解析；非 JSON、意外对象、非空错误数组均失败，不因 HTTP 200 就回显成功。Auth 错误失效 CSRF 缓存。
-- 来源：[Pixiv Previewer 原始客户端实现](https://greasyfork.org/en/scripts/30766-pixiv-previewer/code) 的作者关注回调（bookmark_add.php / rpc_group_setting.php）。本次未执行真实账号写操作；在线契约复核用例为 live_user_follow_roundtrip（ignore + PIXIV_LIVE_WRITE=1，取未关注非本人作者，私密关注后先尝试取消恢复再断言）。离线 user_follow_form_and_success_signals、user_follow_validates_before_login_and_requires_login；前端 /tests/author-follow.html。
+- 两端点 4xx 均为确定性失败 → `post_form_once` 不退避重试（区别于其他写路径的 3 次退避）。`error` 信标复用既有解析；非 JSON、意外对象、非空错误数组均失败，不因 HTTP 200 就回显成功。Auth 错误失效 CSRF 缓存。
+- **人机验证（2026-11-16，ADR 0055）**：pixiv 对部分账号（`test.ab.recaptcha_follow_user` 实验开关 / 风控命中）关注强制要求 reCAPTCHA Enterprise score token，**缺 token 恒 400**。外在症状：日志连续 3 次 `POST /bookmark_add.php → 400` 后报「客户端错误: HTTP 400」；两台设备账号状态不同时表现为「一台复现、另一台不能」（2026-11-16 实例：mac 关注报 400、Windows 正常——非操作系统差异）。原生侧无法自行生成该 token，命令层编排：① 主页配置 `follow_requires_token=Some(true)` 时铸 token 前置直发；② 否则先直发，`is_bad_request` 时开内置 WebView（420×300 不抢焦点、独立数据目录 `config/recaptcha-webview-profile`）加载 www.pixiv.net，注入 `resources/pixiv/recaptcha-mint.js`（`recaptcha.net/recaptcha/enterprise.js?render={site key}` → `enterprise.ready` → 按官方行为发一次 `www/pageload` → `execute` action **`www/follow_user`**），经 `pixivtool-recaptcha://done?t=` 导航拦截回收 token（窗口无 IPC），带 token 重试一次；③ 仍 400 或铸造失败 → 回退文案「关注请求被 pixiv 拒绝：该账号关注前需通过人机验证，请点击作者页右上角按钮在浏览器中手动关注」。site key 来自登录态主页 `misc.grecaptcha.recaptchaEnterpriseScoreSiteKey`（匿名页无 preloaded state，只能 Rust 侧解析后注入）。`PIXIV_TOOL_FORCE_RECAPTCHA_MINT=1` 跳过直发直接铸造（在未触发风控的账号上验证铸造链路的测试钩子）。
+- 来源：[Pixiv Previewer 原始客户端实现](https://greasyfork.org/en/scripts/30766-pixiv-previewer/code) 的作者关注回调（bookmark_add.php / rpc_group_setting.php，参数）；[ppixiv](https://github.com/ppixiv/ppixiv) `web/vview/util/recaptcha.js` / `site-pixiv.js`（site key 路径、action 名、ready+pageload 形态）与 [PixivBatchDownloader](https://github.com/xuejianxianzun/PixivBatchDownloader) 验证码笔记（部分账号无法直接关注）。关注参数 2026-10-03 接入时未做真实账号写实测；在线契约复核用例为 live_user_follow_roundtrip（ignore + PIXIV_LIVE_WRITE=1，取未关注非本人作者，私密关注后先尝试取消恢复再断言）。离线 user_follow_form_and_success_signals、user_follow_validates_before_login_and_requires_login；webview_recaptcha 的 parse_mint_result_url / js_string_literal；在线只读探针 live_recaptcha_page_config_probe（登录态主页 site key 解析）。前端 /tests/author-follow.html。
 
 ## 5. 图片 CDN 与 Referer
 
@@ -443,9 +444,9 @@
 | `/ajax/illusts/bookmarks/delete` | `bookmark_remove` browse_api.rs:2247；`illust_delete_form` :1719 | `live_write.rs::live_bookmark_add_remove_illust_roundtrip` | `bookmark_request_encoding_and_forms` | browse.ts:512 |
 | `/novel/bookmark_setting.php` | `bookmark_remove` browse_api.rs:2247；`novel_delete_form` :1726 | `live_write.rs::live_bookmark_add_remove_novel_roundtrip` | `bookmark_request_encoding_and_forms` | browse.ts:512 |
 | `/ajax/user/self` | `fetch_session_probe` csrf.rs:169；`self_user_id` browse_api.rs:427；`get_user_self` api.rs:312 | `live_read.rs::live_self_and_csrf` | `parse_self_success` / `self_uid_cache_roundtrip` | 登录流程；browse_api.rs:2155,2175 |
-| `https://www.pixiv.net/`（`__NEXT_DATA__`） | `fetch_web_csrf_token` csrf.rs:224；`parse_next_data_token` :200 | `live_read.rs::live_home_street`（+ `live_write.rs` 两用例） | `parse_next_data_token_string_wrapped_state` | street / bookmark 写操作前置 |
+| `https://www.pixiv.net/`（`__NEXT_DATA__`） | `fetch_web_session_context` csrf.rs:276（csrf + 关注人机验证配置）；`parse_next_data_preloaded_state` :200；`parse_recaptcha_page_config` :247 | `live_read.rs::live_home_street`、`live_read.rs::live_recaptcha_page_config_probe`（+ `live_write.rs` 两用例） | `parse_next_data_token_string_wrapped_state` / `parse_recaptcha_page_config_full_and_partial` / `parse_recaptcha_page_config_missing_fields_is_none_not_error` | street / bookmark 写操作前置；ADR 0055 人机验证配置 |
 | `i.pximg.net` 图片 | `handle_image_request`（image_proxy.rs）；`download_bytes` / `download_request`（client.rs） | `live_read.rs::live_image_download_with_referer` | `whitelist_accepts_pximg_subdomains` / `handle_serves_from_cache_without_network` / `download_request_does_not_forward_credentials` / `network_error_does_not_expose_query_or_fragment` / `saturated_cache_queue_returns_image_without_retaining_inflight_bytes` / `offline_guard::image_download_rejects_untrusted_hosts_without_network` | `pixiv-img` 协议（全前端 `<img>`） |
-| `/bookmark_add.php` / `/rpc_group_setting.php` | `set_user_follow` / `user_follow_request` / `validate_user_follow_response` | `live_write.rs::live_user_follow_roundtrip`（双重开关） | `user_follow_form_and_success_signals` / `offline_guard::user_follow_validates_before_login_and_requires_login` | `BrowseAuthorView.vue` / `browseUserFollow` |
+| `/bookmark_add.php` / `/rpc_group_setting.php` | `set_user_follow` browse_api.rs:2427 / `user_follow_request` :2361 / `validate_user_follow_response` :2395（`post_form_once` 不重试；`recaptcha_enterprise_score_token` 字段与 WebView 铸 token 桥见 ADR 0055） | `live_write.rs::live_user_follow_roundtrip`（双重开关） | `user_follow_form_and_success_signals` / `offline_guard::user_follow_validates_before_login_and_requires_login` / `webview_recaptcha::parse_mint_result_url` / `webview_recaptcha::js_string_literal` | `BrowseAuthorView.vue` / `browseUserFollow` |
 
 ### 8.2 pixiv 侧变了怎么定位（5 步）
 
