@@ -5,9 +5,12 @@ import type { NovelTranslationExportFormat } from "../api/translation";
 import type { DownloadTarget } from "../utils/pixivHooks";
 
 export type DownloadFormKind = DownloadTarget["form"];
+/** 小说下载内容：原文走抓取任务，译文走本地导出（两者互斥，不再同时提交）。 */
+export type NovelDownloadContent = "original" | "translation";
 function emptyDraft() {
-  // formats：抓取输出格式（后端 task_create 白名单 txt|markdown|epub）；translationFormats：译文导出格式
-  return { sourceType: "single", sourceId: "", formats: ["txt", "markdown"], translationFormats: [] as NovelTranslationExportFormat[], edited: false };
+  // formats：抓取输出格式（后端 task_create 白名单 txt|markdown|epub）；translationFormats：译文导出格式；
+  // variant：小说下载内容单选，默认原文；预检不可用时由面板回落原文
+  return { sourceType: "single", sourceId: "", formats: ["txt", "markdown"], translationFormats: ["txt", "markdown"] as NovelTranslationExportFormat[], variant: "original" as NovelDownloadContent, edited: false };
 }
 
 /** 单篇插画的分页缓存：同一作品命中缓存不重复请求详情。 */

@@ -577,6 +577,13 @@ Job 身份 = 作品 + 原文版本 + 目标语言；内置资源版本与设置�
   产物、不逐话联网，按所选格式各产出一个整包文件（txt / md / epub，结构与下载整包
   一致、正文为译文），命名 `{系列词干}_{语言后缀}.{ext}`（词干 = 系列模板渲染，
   规则同 §4.4；语言后缀规则同「译文导出命名」）。
+- **下载面板译文可用性预检**：下载面板「下载内容 → 译文」的置灰判定只读现有 IPC，
+  不新增命令。单篇：`novel_translation_jobs` 快照中该小说存在 `state = completed` 的
+  Job 即可用（`verify_complete` 保证进入 Completed 前已满足 `result.status = Complete`）；
+  系列：登录后经 `browse_novel_series` 游标聚合完整目录，以 contentOrder 最小话的最新
+  completed Job 目标语言为基准，要求每话都存在同语言 completed Job，任一话不满足即
+  禁用并提示缺话数；用户来源不支持译文导出。预检只决定入口是否可用，实际导出仍由
+  `novel_translation_export` / `novel_translation_export_series` 按本节严格校验。
 
 | 参数（翻译运行） | 值 |
 |---|---|
@@ -1298,7 +1305,7 @@ SauceNAO API Key 三个 checkbox，默认全选，ADR 0053）。动作行为「�
 
 现行决策见 ADR 0015。侧栏四入口发现（/browse/home）、关注（/browse/feed）、我的（/browse/bookmark）、下载（/tools/tasks）；二级导航组织现有路由，作者 / 系列 / 详情继承实际来源分组，直达归发现。「我的」分区二级入口为收藏 / 浏览历史 / 主页（`/browse/me`，归 library 分组），三页面顶栏恒定保持一致的大标题与二级胶囊导航，消除菜单切换跳跃；主页复用作者页组件并启用 `isMe` 模式，隐藏内嵌冗余吸顶条与卡片内返回键，动作组（编辑资料、投稿、网页跳转）优雅收纳在个人卡片右上角，作品区 Tab 采用自然定宽（严禁均分宽度），无返回历史时兜底回收藏页。56px 圆形放大镜按钮（无文字，保留可访问名称与 tooltip）+ Ctrl+K / Command+K 跳搜索并聚焦；按钮显示时分页行右侧预留 72px 空间以避免遮挡，以图识图入口在搜索页；阅读器改用顶栏搜索，全屏看图隐藏全局搜索与状态栏。
 
-下载改为应用级非模态布局面板，宽工作区 ≥1120px 右栏 480px，否则底栏 min(45%,320px)，只放新建表单，小说/插画页签背景继承面板 surface-container。公共 fillDownloadForm(DownloadTarget) 不再导航，所有返填沿用 form/sourceType/sourceId 类型。小说表单在输出格式之下另有「译文格式」勾选组（单篇与系列来源渲染，默认不勾；需已完成整篇翻译），单篇勾选走本地导出命令 `novel_translation_export`、系列勾选走 `novel_translation_export_series`（见 §4.3 / §7），与抓取任务无关、默认不要求登录；series 来源时表单追加两行提示（系列整包下载说明与「译文导出要求全系列每一话都已完成翻译」）。提交时两组格式各自执行（原文勾选创建任务、译文勾选本地导出，都成功才关面板并分别提示；译文无已完成结果时面板错误区显示后端文案）。关闭 / 跳页留草稿，账号变更清空；覆盖手动来源需确认、格式保留；失败留输入，成功更新任务并关闭面板、不跳页。旧 /、/illustration、/tools/novel、/tools/illustration 进入 /tools/tasks 并打开相应面板，保留其它 query/hash，消费 downloadForm/sourceType/sourceId；旧 /tasks、/history 继续兼容。
+下载改为应用级非模态布局面板，宽工作区 ≥1120px 右栏 480px，否则底栏 min(45%,320px)，只放新建表单，小说/插画页签背景继承面板 surface-container。公共 fillDownloadForm(DownloadTarget) 不再导航，所有返填沿用 form/sourceType/sourceId 类型。小说表单在来源输入下先给「下载内容」单选（原文 / 译文）：译文按实际可用性置灰并说明原因——单篇要求该小说存在已完成 v2 Job，系列要求登录且全目录每话都有与首话同语言的已完成 Job（缺话时提示缺话数），用户来源不支持译文，检查中 / 检查失败 / 未登录分别提示；切换来源或 ID 立即回落原文，避免把旧选择提交到新目标。格式区只保留一行，标题与勾选随「下载内容」切换（原文走抓取格式、译文走译文格式，默认均为 TXT + Markdown）。原文提交创建抓取任务；译文提交走本地导出命令 `novel_translation_export`（单篇）或 `novel_translation_export_series`（系列），与抓取任务无关、不做已下载去重；成功才关面板并提示。ID 有效但未选格式时提示选择格式。series 来源仍显示「系列将整包下载」说明。关闭 / 跳页留草稿，账号变更清空；覆盖手动来源需确认、格式保留；失败留输入，成功更新任务并关闭面板、不跳页。旧 /、/illustration、/tools/novel、/tools/illustration 进入 /tools/tasks 并打开相应面板，保留其它 query/hash，消费 downloadForm/sourceType/sourceId；旧 /tasks、/history 继续兼容。
 
 底部 32px 状态栏常驻且独立占位，空闲、新建入口、活跃任务数及代表任务进度回显；点击进度进入完整任务页。代表优先 running/pending/paused、同状态创建时间升序；done/total，未知总量不定进度，暂停无动画。应用级共享 task://progress、task://done 订阅与 2s 轮询兜底（有活跃任务或同步失败时）；同步失败保留快照并显示重试提示，任务页不重复订阅。
 
@@ -1685,7 +1692,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `sync_upload(scopes, config?)` | 按所选范围导出 → `PTSYNC01` 加密 → `MKCOL` + `PUT` 固定文件 `pixiv-tool-sync.bin`。`scopes` 白名单 `history` / `auth` / `saucenao`（去重，空集或未知值 `sync_no_scope`）。返回 `{exported_at, bytes, history_count, account_count, saucenao_included}`（导出侧只含已登记且 Cookie 有 PHPSESSID 的账号；`saucenao_included` = 包内是否携带本机 SauceNAO Key——scope 含 saucenao 且本机 Key trim 非空，只回布尔不回显值，ADR 0053） |
 | `sync_download(scopes, config?)` | `GET` → 解密 → 解析 → 按所选范围合并：历史 `ON CONFLICT(kind, work_id)` 仅 `visited_at` 更晚才更新；账号同名覆盖、不删本地额外账号，本地 active 优先、无 active 才回落云端 active；包内 SauceNAO Key 非空时覆盖本机设置并持久化（先落盘再更新内存），未携带 / 未选范围时本机不变；写后失效会话缓存。返回 `{exported_at, history_imported, accounts_imported, active_changed, auth_changed, saucenao_restored}`（`saucenao_restored` 只回布尔，ADR 0053）。安全上限：响应体 8 MiB、单请求 30s、重定向不跟随、网络错误直连重试一次 |
 | `novel_translation_start(novel, force)` | 启动或加入整篇翻译 Job；novel=`{novel_id,title,tags,description,content}`（content ≤ 8MB，非法 id / 空内容拒绝）。启动前校验设置、URL、模型与 Key，任何失败不创建 Job；原文已是目标语言且 `force=false` 时返回 `already_target_language:true` 与未落库的空快照。同一作品、原文版本、目标语言重复启动加入既有 Job，`force=true` 新建。返回 `{job: TranslationJobSnapshot, already_target_language}`，命令立即返回、后台 tokio 继续执行。目标语言白名单 `zh-CN`/`zh-TW`/`en`/`ja`/`ko`/`es`/`fr`/`de`/`ru`，空设置跟随界面语言（ADR 0018） |
-| `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号 |
+| `novel_translation_jobs()` | 任务列表 `{seq, jobs:[TranslationJobSnapshot]}`（内存索引 + 磁盘扫描，含重启后的 `interrupted`）；`seq` 为所有 Job 的最大事件序号；下载面板的译文可用性预检读取该快照，只认 `state = completed` |
 | `novel_translation_status(jobId)` | 单个 Job 快照：`{job_id,novel_id,state,phase,counts,current,usage,elapsed_ms,preview,message,error_code,seq,constraint_version,budget,already_target_language,target_language,chunk_ids,pending_rework,rework_by_chunk,rework_rounds,refused_chunks,skipped_chunks}`；counts=`{pages,chunks,translated,reviewed,needs_repair,terms,skipped}`，current=`{page?,chunk_id?,role}`，usage=`{input,output,total}`，budget=`{used,limit,manual_extra,remaining}`，preview=`{summary,reasoning,owner?}`（owner=`{page?,chunk_id?,role}`，见 ADR 0037）；`chunk_ids` 是分块计划的块 ID（顺序即合并顺序，细分后不连续）；`pending_rework` 是因阻塞审查待修的块 ID，`rework_by_chunk` 是每块已用返工轮次（`Record<chunkId, number>`）；旧字段 `rework_rounds` 保留为所有块已用轮次的最大值，仅供旧消费者展示，不参与门禁，缺失新字段的旧清单按空列表 / 0 读取（ADR 0038）；`refused_chunks` 是被模型按内容政策拒绝的块 ID、`skipped_chunks` 是用户显式跳过的块 ID（均升序，serde 默认兼容旧载荷，ADR 0043）；任务不存在或清单损坏返回可读错误 |
 | `novel_translation_result(novelId)` | 阅读器投影：优先已完成且状态为 `complete` 的 v2 Job，否则回退 v1 旧缓存并标记 `partial`；无结果返回 null。返回 `{novel_id,job_id,target_language,pages:{页码:[{line,text}]},status:"complete"|"partial"|"needs_attention",unresolved}` |
 | `novel_translation_export(novelId, formats)` | 译文本地导出（§4.3）：把最新已完成 v2 Job（`Completed` + `complete`）的 `result.json` + `source/source.json` 渲染为 txt / md / epub 写入输出目录 `novel/`，返回写入文件路径列表（同名覆盖）。`formats` 只认 `txt` / `markdown` / `epub`（大小写不敏感、去重），全无效 → `"未选择有效的导出格式"`；无可导出 Job（含 v1 旧缓存、partial、运行中）→ `"该小说暂无已完成的译文，无法导出"`。命名见 §4.4「译文导出命名」；不联网、不建抓取任务 |
