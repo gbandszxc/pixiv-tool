@@ -144,7 +144,7 @@ onBeforeUnmount(() => { if (timer) clearTimeout(timer); if (readinessTimer) clea
 type TranslationStatus = "idle" | "checking" | "ready" | "unavailable" | "failed";
 const translationStatus = ref<TranslationStatus>("idle");
 const translationReadiness = ref<TranslationReadiness | null>(null);
-/** 译文入口是否可选：仅小说单篇 / 系列，且该来源已有可用译文 */
+/** 译文入口是否可选：仅小说单篇 / 系列，且该来源已有可用译文；检测未完成前入口必须禁用 */
 const translationEnabled = computed(() => panel.kind === "novel" && draft.value.sourceType !== "user" && translationStatus.value === "ready");
 /** 译文入口的提示文案（空串 = 不显示）；只解释「为什么不可选」 */
 const translationHint = computed(() => {
@@ -302,9 +302,9 @@ async function submit() {
             <label>{{ t('crawl.downloadContent') }}</label>
             <div class="m3-row">
               <label class="m3-choice"><md-radio name="novel-download-content" :disabled="panel.submitting" :checked="draft.variant === 'original'" @change="draft.variant = 'original'" />{{ t('crawl.original') }}</label>
-              <label class="m3-choice"><md-radio name="novel-download-content" :disabled="panel.submitting || !translationEnabled" :checked="draft.variant === 'translation'" @change="draft.variant = 'translation'" />{{ t('crawl.translation') }}</label>
+              <label class="m3-choice" :class="{ 'is-disabled': !translationEnabled }" :title="!translationEnabled ? translationHint : undefined"><md-radio name="novel-download-content" :disabled="panel.submitting || !translationEnabled" :checked="draft.variant === 'translation'" @change="draft.variant = 'translation'" /><span>{{ t('crawl.translation') }}</span></label>
             </div>
-            <p v-if="translationHint" class="field-hint">{{ translationHint }}</p>
+            <p v-if="translationHint" class="field-hint" role="status">{{ translationHint }}</p>
           </div>
           <!-- 格式区按下载内容切换：原文绑定抓取格式，译文绑定导出格式 -->
           <div v-if="panel.kind === 'novel' && draft.variant === 'translation'" class="m3-field"><label>{{ t('crawl.translationFormats') }}</label><div class="m3-row"><label v-for="format in TRANSLATION_FORMATS" :key="format" class="m3-choice"><md-checkbox :disabled="panel.submitting" :checked="draft.translationFormats.includes(format)" @change="translationFormatChange(format, ($event.target as HTMLInputElement).checked)" />{{ FORMAT_LABELS[format] }}</label></div></div>
@@ -347,7 +347,10 @@ md-filled-button { align-self:flex-start; }
 .m3-alert { margin:0; overflow-wrap:anywhere; }
 /* series 来源提示行：supporting 文字样式（沿用 M3 on-surface-variant token，不新增颜色） */
 .series-hints { display:flex; flex-direction:column; gap:var(--space-xs); }
-.field-hint { margin:0; color:var(--ink-muted); font-size:12px; }
+.field-hint { margin:0 0 var(--space-xxs); color:var(--ink-muted); font-size:12px; line-height:1.6; }
+/* 禁用选项：文字同 disabled 档 token，鼠标提示不可点（不新增颜色字面值） */
+.m3-choice.is-disabled { cursor:not-allowed; }
+.m3-choice.is-disabled > span { color:var(--ink-subtle); }
 /* 单列落位（右侧 480px）时选择器排在表单下方，与表单同距 */
 .panel-body > :deep(.page-picker) { margin-top:var(--space-lg); }
 
