@@ -1272,6 +1272,106 @@ fn merge_saved(
     merged.into_iter().unzip()
 }
 
+/// 单张图片保存结果（右键菜单 `illust_save_page`）。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SavedIllustPage {
+    pub artwork_id: i64,
+    pub page: i64,
+    pub title: String,
+    pub path: String,
+    /// 该页（或动图 zip）此前已保存且文件仍在：本次未重新下载。
+    pub already_saved: bool,
+    /// 动图：保存的是原始 zip（saved_pages 恒 [0]）。
+    pub ugoira: bool,
+}
+
+/// 保存作品中的单张图（或 ugoira 原始 zip）。
+///
+/// 与抓取任务复用同一条落盘 / 历史路径：[`crawl_one_illust`] 负责按文件名模板写文件，
+/// 并把 `saved_paths` / `saved_pages` 与既有记录合并后 upsert 到 `illustrations`
+/// （`captured_at` 刷新），因此右键保存同样会在下载历史留痕。
+/// 已保存且文件仍存在时不重复请求网络，直接返回 `already_saved = true`。
+pub async fn save_illust_page(
+    db: &Db,
+    api: &PixivApi,
+    artwork_id: i64,
+    page: usize,
+    base_dir: &Path,
+    template: &str,
+) -> Result<SavedIllustPage, String> {
+    let existing_row = db.get_illustration(artwork_id);
+    let existing_pairs = existing_row
+        .as_ref()
+        .map(|row| saved_pairs(&row.saved_paths, &row.saved_pages))
+        .unwrap_or_default();
+
+    // 既有记录命中且文件仍在：直接返回，避免重复下载与重写历史时间
+    if let Some((_, path)) = existing_pairs.iter().find(|(saved, _)| *saved == page) {
+        if Path::new(path).exists() {
+            return Ok(SavedIllustPage {
+                artwork_id,
+                page: page as i64,
+                title: existing_row
+                    .as_ref()
+                    .map(|row| row.title.clone())
+                    .unwrap_or_default(),
+                path: path.clone(),
+                already_saved: true,
+                ugoira: existing_row
+                    .as_ref()
+                    .is_some_and(|row| row.illust_type == UGOIRA_TYPE),
+            });
+        }
+    }
+
+    // 先取详情：校验页码与动图语义，并把同一份响应交给下载函数复用（不重复请求）
+    let data = api
+        .get_illust(artwork_id)
+        .await
+        .map_err(|err| err.to_string())?;
+    let ugoira = data.illust_type == UGOIRA_TYPE;
+    if ugoira && page != 0 {
+        return Err("动图只有第 1 页".to_string());
+    }
+    let page_count = data.page_count.max(1);
+    if !ugoira && (page as i64) >= page_count {
+        return Err(format!("页码超出作品范围（共 {page_count} 页）"));
+    }
+    let mut cache = HashMap::new();
+    cache.insert(artwork_id, data);
+    let title = crawl_one_illust(
+        api,
+        db,
+        artwork_id,
+        base_dir,
+        &mut cache,
+        template,
+        Some(&[page]),
+        &existing_pairs,
+        None,
+    )
+    .await
+    .map_err(|err| err.message)?;
+
+    // 重新读取「页 → 路径」：下载函数已把本页与既有页合并回写
+    let row = db
+        .get_illustration(artwork_id)
+        .ok_or_else(|| "保存后未找到插画记录".to_string())?;
+    let path = saved_pairs(&row.saved_paths, &row.saved_pages)
+        .into_iter()
+        .find(|(saved, _)| *saved == page)
+        .map(|(_, path)| path)
+        .ok_or_else(|| "保存后未找到该页文件路径".to_string())?;
+    Ok(SavedIllustPage {
+        artwork_id,
+        page: page as i64,
+        title,
+        path,
+        already_saved: false,
+        ugoira,
+    })
+}
+
 /// 抓取单幅插画：get_illust（缓存优先）→ 逐页下载 / ugoira zip（文件名按
 /// `template` 模板渲染，渲染为空回落现行命名）→ 写库。
 /// `pages` 为 Some 时只下载其中页码（0 起）；None = 全部页。
@@ -1467,6 +1567,36 @@ mod tests {
         assert_eq!(pairs, vec![(0, "/a".to_string()), (2, "/b".to_string())]);
         // 坏 JSON → 空
         assert!(saved_pairs("bad", "bad").is_empty());
+    }
+
+    /// 右键单张保存已存在且文件仍在：不触网、不重写历史，直接返回既有路径。
+    #[tokio::test]
+    async fn save_illust_page_reuses_existing_file_without_network() {
+        let (db, dir) = temp_db("save-existing");
+        let file = dir.join("page1.png");
+        std::fs::write(&file, b"png").unwrap();
+        db.insert_illustration(&crate::db::IllustrationInsert {
+            artwork_id: 42,
+            title: "样例作品".into(),
+            saved_paths: serde_json::to_string(&[file.to_string_lossy().to_string()]).unwrap(),
+            saved_pages: "[1]".into(),
+            captured_at: now_iso(),
+            ..Default::default()
+        })
+        .unwrap();
+        let api = PixivApi::new(Arc::new(
+            crate::pixiv::client::PixivClient::new(&HashMap::new()).unwrap(),
+        ));
+        let saved = save_illust_page(&db, &api, 42, 1, &dir.join("pic"), "")
+            .await
+            .unwrap();
+        assert!(saved.already_saved);
+        assert!(!saved.ugoira);
+        assert_eq!(saved.artwork_id, 42);
+        assert_eq!(saved.page, 1);
+        assert_eq!(saved.title, "样例作品");
+        assert_eq!(saved.path, file.to_string_lossy());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

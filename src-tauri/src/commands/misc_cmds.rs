@@ -11,14 +11,19 @@
 //! - illustration_*：同构（{"error":"插画记录不存在"}、{"error":"没有已保存的文件"}、
 //!   {"error":"illustration_ids 不能为空"}）
 //! - illust_saved_pages → {"pages":[0,2],"ugoira":false}（0 起升序；无记录 → 空数组）
+//! - illust_save_page → {"status":"success","artwork_id":..,"page":..,"title":"..",
+//!   "path":"..","already_saved":false,"ugoira":false}（单张保存；已存在且文件仍在 →
+//!   already_saved:true 且不重复下载）
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use tauri::State;
 
-use crate::paths::anchor_output_dir;
+use crate::commands::browse_api_cmds::build_browse_api;
+use crate::core::crawler::save_illust_page;
 use crate::core::illust_crawler::UGOIRA_TYPE;
+use crate::paths::anchor_output_dir;
 use crate::platform::{open_dir_in_file_manager, reveal_in_file_manager};
 use crate::settings::Settings;
 use crate::state::AppState;
@@ -112,6 +117,19 @@ pub async fn illust_saved_pages(
     artwork_id: i64,
 ) -> Result<Value, String> {
     illust_saved_pages_impl(&state, artwork_id)
+}
+
+/// 保存作品中的单张图片（右键菜单）：原图直链 → `<output>/pic/`，文件名沿用
+/// `illust_filename_template`；与抓取任务共用 `illustrations` 历史 upsert 路径
+/// （`saved_paths` / `saved_pages` 合并，`captured_at` 刷新）。
+/// 已保存且文件仍在 → `already_saved:true`，不重复下载。
+#[tauri::command]
+pub async fn illust_save_page(
+    state: State<'_, AppState>,
+    artwork_id: i64,
+    page: i64,
+) -> Result<Value, String> {
+    illust_save_page_impl(&state, artwork_id, page).await
 }
 
 // 以下 _impl 函数不依赖 tauri::State，可离线单测/集成测试。
@@ -256,6 +274,39 @@ pub fn illust_saved_pages_impl(state: &AppState, artwork_id: i64) -> Result<Valu
     Ok(json!({ "pages": pages, "ugoira": ugoira }))
 }
 
+/// 单张保存的离线可调实现：参数校验 → 登录守卫 / 客户端构造 → 共享下载与历史 upsert。
+pub async fn illust_save_page_impl(
+    state: &AppState,
+    artwork_id: i64,
+    page: i64,
+) -> Result<Value, String> {
+    if artwork_id <= 0 {
+        return Err("插画 ID 必须为正整数".to_string());
+    }
+    let page = usize::try_from(page).map_err(|_| "页码必须是非负整数".to_string())?;
+    let api = build_browse_api(state)?;
+    let settings = state.settings_snapshot();
+    let base_dir = anchor_output_dir(&settings.output_dir, &state.paths.data_dir).join("pic");
+    let saved = save_illust_page(
+        &state.db,
+        &api,
+        artwork_id,
+        page,
+        &base_dir,
+        &settings.illust_filename_template,
+    )
+    .await?;
+    Ok(json!({
+        "status": "success",
+        "artwork_id": saved.artwork_id,
+        "page": saved.page,
+        "title": saved.title,
+        "path": saved.path,
+        "already_saved": saved.already_saved,
+        "ugoira": saved.ugoira,
+    }))
+}
+
 pub fn open_illustration_folder_impl(state: &AppState, artwork_id: i64) -> Result<Value, String> {
     let Some(illustration) = state.db.get_illustration(artwork_id) else {
         return Ok(json!({ "error": "插画记录不存在" }));
@@ -337,6 +388,19 @@ mod tests {
 
     fn cleanup(dir: &std::path::Path) {
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn illust_save_page_validates_before_login_guard() {
+        let (state, dir) = temp_state("save-page-validation");
+        let err = illust_save_page_impl(&state, 0, 0).await.unwrap_err();
+        assert_eq!(err, "插画 ID 必须为正整数");
+        let err = illust_save_page_impl(&state, 1, -1).await.unwrap_err();
+        assert_eq!(err, "页码必须是非负整数");
+        // 参数合法后才进入凭据读取 / 客户端构造；测试环境无 keyring 后端，错误文案随平台
+        // 而异（生产无登录态为「未登录或登录态已失效，请先登录」），此处只断言已越过参数校验。
+        assert!(illust_save_page_impl(&state, 1, 0).await.is_err());
+        cleanup(&dir);
     }
 
     #[tokio::test]

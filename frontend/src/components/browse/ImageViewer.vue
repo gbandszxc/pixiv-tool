@@ -38,12 +38,19 @@ const viewerPrefs = { spread: false, rtl: true, vertical: false, verticalScale: 
  *   prefers-reduced-motion 时初始暂停（舞台右下角胶囊控件可手动播放/暂停 + 帧计数）；
  *   KeepAlive 停用与卸载清计时器、激活时恢复此前播放态；无帧 / 加载中 / 失败退回封面帧
  *   + 说明行（加载中旋转图标、失败给「重试」、无帧保留「去 Pixiv 查看动画」旧文案）。
+ * - 图片右键菜单（舞台页框 / 全屏主图 / 胶卷缩略图）：自定义 M3 菜单（common/ContextMenu）
+ *   提供「全屏查看」（仅舞台）、「保存这张图片」（动图为「保存动图（ZIP）」）与
+ *   「复制图片地址」。保存走 illust_save_page：原图落盘到输出目录 `pic/`，并与抓取任务
+ *   共用 illustrations 历史 upsert（saved_pages / saved_paths 合并），因此下载历史可见。
  */
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { pxSrc, thumbSrc, type ThumbTier } from "../../api/browse";
+import { errorMessage, pxSrc, saveIllustPage, thumbSrc, type ThumbTier } from "../../api/browse";
 import { useThumbTier } from "../../composables/useThumbTier";
 import { pageScrollTarget } from "../../composables/usePageScroll";
+import ContextMenu from "../common/ContextMenu.vue";
+import type { ContextMenuEntry } from "../common/contextMenu";
+import { notify } from "../../ui/notify";
 
 /** 页加载态；未进入加载窗口的页不渲染 <img>，保持占位块。 */
 type PageState = "loading" | "ok" | "error";
@@ -68,6 +75,8 @@ const props = withDefaults(
     ugoiraError?: string;
     /** 详情舞台页框宽度占比（0.5~1，1 = 撑满 = 既有观感；父视图读设置键 detail_image_scale） */
     stageScale?: number;
+    /** 作品 id（右键保存经 illust_save_page 落盘 / 写下载历史）；0 = 不可保存 */
+    artworkId?: number;
   }>(),
   {
     alt: "",
@@ -78,6 +87,7 @@ const props = withDefaults(
     ugoiraLoading: false,
     ugoiraError: "",
     stageScale: 1,
+    artworkId: 0,
   }
 );
 
@@ -730,6 +740,123 @@ function openFullscreen(index: number): void {
   fullscreen.value = true;
 }
 
+// ===== 图片右键菜单 =====
+
+/** 菜单锚点（视口坐标）与目标页。 */
+const menuOpen = ref(false);
+const menuPos = ref({ x: 0, y: 0 });
+const menuIndex = ref(0);
+/** 保存中：菜单关闭后仍防重复提交（一次右键只保存一页）。 */
+const saving = ref(false);
+
+/** 右键目标页的原始地址（复制图片地址用；ugoira 为封面原图）。 */
+function originalUrlOf(index: number): string {
+  return props.pages[index]?.original ?? "";
+}
+
+const menuItems = computed<ContextMenuEntry[]>(() => {
+  const page = menuIndex.value;
+  const items: ContextMenuEntry[] = [];
+  if (!fullscreen.value) {
+    items.push({
+      id: "fullscreen",
+      label: t("browse.work.fullscreen"),
+      icon: "fullscreen",
+      disabled: !stageReady(page),
+    });
+  }
+  items.push({
+    id: "save",
+    label: saving.value
+      ? t("browse.work.imageSaving")
+      : props.ugoira
+        ? t("browse.work.saveUgoira")
+        : t("browse.work.saveImage"),
+    icon: "save",
+    disabled: saving.value || props.artworkId <= 0,
+  });
+  items.push({
+    id: "copy-url",
+    label: t("browse.work.copyImageUrl"),
+    icon: "copy",
+    disabled: !originalUrlOf(page),
+  });
+  return items;
+});
+
+/**
+ * 打开右键菜单。键盘 Menu 键触发的 contextmenu 事件 clientX/Y 可能为 0：
+ * 此时落在事件目标（页框 / 缩略图）中心，避免菜单跑到视口左上角。
+ */
+function openContextMenu(index: number, event: MouseEvent): void {
+  if (props.restricted) return;
+  let x = event.clientX;
+  let y = event.clientY;
+  if (!x && !y) {
+    const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect();
+    if (rect) {
+      x = rect.left + rect.width / 2;
+      y = rect.top + rect.height / 2;
+    }
+  }
+  menuIndex.value = index;
+  menuPos.value = { x, y };
+  menuOpen.value = true;
+}
+
+function closeContextMenu(): void {
+  menuOpen.value = false;
+}
+
+async function copyImageUrl(index: number): Promise<void> {
+  const url = originalUrlOf(index);
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    notify(t("browse.work.imageUrlCopied"));
+  } catch {
+    notify(t("browse.work.copyFailed"));
+  }
+}
+
+/** 保存单张原图：后端落盘后已 upsert 下载历史（同作品多次保存按页合并）。 */
+async function saveImage(index: number): Promise<void> {
+  if (saving.value || props.artworkId <= 0) return;
+  saving.value = true;
+  notify(t("browse.work.imageSaving"));
+  try {
+    const result = await saveIllustPage(props.artworkId, index);
+    if (result.ugoira) {
+      notify(
+        result.already_saved
+          ? t("browse.work.ugoiraAlreadySaved", { path: result.path })
+          : t("browse.work.ugoiraSaved", { path: result.path })
+      );
+    } else {
+      notify(
+        result.already_saved
+          ? t("browse.work.imageAlreadySaved", { page: index + 1, path: result.path })
+          : t("browse.work.imageSaved", { page: index + 1, path: result.path })
+      );
+    }
+  } catch (err) {
+    notify(errorMessage(err) || t("browse.work.saveImageFailed"));
+  } finally {
+    saving.value = false;
+  }
+}
+
+function onMenuSelect(id: string): void {
+  const index = menuIndex.value;
+  closeContextMenu();
+  if (id === "fullscreen") openFullscreen(index);
+  else if (id === "copy-url") void copyImageUrl(index);
+  else if (id === "save") void saveImage(index);
+}
+
+/** 换作品 / 进出全屏 / 遮罩状态变化时收起菜单，避免旧页码或旧层级残留。 */
+watch([fullscreen, () => props.pages, () => props.restricted], closeContextMenu);
+
 /**
  * 页框键盘激活：失败态的重试按钮是页框（role="button" 全屏入口）的后代，按钮上的
  * Enter/Space 会冒泡到页框——若照常截走会误开全屏、按钮自身的激活也被取消（键盘用户
@@ -896,6 +1023,16 @@ function isTypingEvent(e: KeyboardEvent): boolean {
  */
 function onKeydown(e: KeyboardEvent): void {
   if (isTypingEvent(e) || document.querySelector("dialog[open]")) return;
+  // 右键菜单打开时：Esc 先关菜单（不退出全屏）；其余按键交给菜单自身处理
+  // （↑↓ / Home / End / Enter），window capture 不拦截。
+  if (menuOpen.value) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      closeContextMenu();
+    }
+    return;
+  }
   if (fullscreen.value) {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -986,6 +1123,7 @@ onActivated(() => {
 
 onDeactivated(() => {
   viewerActive = false;
+  closeContextMenu();
   detachWindowListeners();
   stopFrameTimer();
 });
@@ -1033,7 +1171,7 @@ watch(
 </script>
 
 <template>
-  <div class="viewer">
+  <div class="viewer" @contextmenu.prevent>
     <div class="stage">
       <!-- 纵向舞台：滚动渐进加载；遮罩期间仅保留首页（其余 v-show 收起）；
            --viewer-scale = 页框宽度占比（1 = 撑满 = 既有观感，见 .shot 宽度计算） -->
@@ -1071,6 +1209,7 @@ watch(
             :aria-label="`${altOf(i)} · ${t('browse.work.fullscreen')}`"
             :title="stageReady(i) && !restricted ? t('browse.work.fullscreen') : undefined"
             @click="openFullscreen(i)"
+            @contextmenu.prevent.stop="openContextMenu(i, $event)"
             @keydown.enter="onShotKeydown(i, $event)"
             @keydown.space="onShotKeydown(i, $event)"
           >
@@ -1208,7 +1347,13 @@ watch(
         <!-- paged：一屏一页或并排两页（页框按可用高度与页面纵横比定尺寸，图片撑满该框）。
              此分支结构与样式是既有行为基线，竖屏走 v-else 独立行模型，互不影响 -->
         <template v-if="!verticalOn">
-          <div v-for="slot in fsSlots" :key="slot.index" class="fs-slot" :style="shotStyle(slot.index)">
+          <div
+            v-for="slot in fsSlots"
+            :key="slot.index"
+            class="fs-slot"
+            :style="shotStyle(slot.index)"
+            @contextmenu.prevent.stop="openContextMenu(slot.index, $event)"
+          >
             <img
               v-if="slot.low && slot.state !== 'ok'"
               class="fs-img low"
@@ -1252,6 +1397,7 @@ watch(
               :ref="(el) => setFsSlotRef(slot.index, el)"
               class="fs-slot"
               :style="shotStyle(slot.index)"
+              @contextmenu.prevent.stop="openContextMenu(slot.index, $event)"
             >
               <!-- 未进入加载窗口的页只留纵横比占位盒（高度预留，滚动不跳动） -->
               <template v-if="slot.live">
@@ -1402,11 +1548,22 @@ watch(
           :aria-label="t('browse.work.gotoPage', { page: i + 1 })"
           :aria-current="i === fsPage ? 'true' : undefined"
           @click="stepTo(i)"
+          @contextmenu.prevent.stop="openContextMenu(i, $event)"
         >
           <img :src="thumbSrc(page.medium ?? page.original, gridTier)" alt="" loading="lazy" decoding="async" />
         </button>
       </nav>
     </div>
+
+    <ContextMenu
+      :open="menuOpen"
+      :x="menuPos.x"
+      :y="menuPos.y"
+      :items="menuItems"
+      :label="t('browse.work.imageMenuLabel')"
+      @select="onMenuSelect"
+      @close="closeContextMenu"
+    />
   </div>
 </template>
 

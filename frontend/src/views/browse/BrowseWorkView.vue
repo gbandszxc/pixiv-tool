@@ -483,6 +483,7 @@ onBeforeUnmount(detachKeydown);
         <ImageViewer
           v-if="detail"
           :pages="pages"
+          :artwork-id="props.id"
           :alt="item?.title ?? ''"
           :restricted="restricted"
           :restrict-label="restrictLabel"

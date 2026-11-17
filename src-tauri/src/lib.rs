@@ -393,6 +393,7 @@ pub fn run() {
             commands::misc_cmds::open_novel_file,
             commands::misc_cmds::open_illustration_folder,
             commands::misc_cmds::illust_saved_pages,
+            commands::misc_cmds::illust_save_page,
             // app
             commands::app_cmds::app_exit,
             // update

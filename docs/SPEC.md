@@ -157,7 +157,7 @@ pixiv-tool/
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / epub / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
 │     ├─ webview_recaptcha.rs   # 关注人机验证 WebView 铸 token 桥（recaptcha-mint 窗口、导航拦截回收，ADR 0055）
-│     ├─ commands/              # 与 translation/ 共 96 个 #[tauri::command]（translation 22 / auth 6 / browse_api 23 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 6 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
+│     ├─ commands/              # 与 translation/ 共 97 个 #[tauri::command]（translation 22 / auth 6 / browse_api 23 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 6 / misc 10 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
 │     ├─ cookies.rs             # keyring CookieStore
@@ -1218,7 +1218,7 @@ token 的写路径自愈覆盖全部 POST 写方法（Auth/Client 失败或 200+
 | 浏览-收藏 | `/browse/bookmark`（插画·漫画/小说 × 公开/私密 + 标签筛选） | ✅ |
 | 浏览-历史 | `/browse/history`（浏览访问历史：作品级访问记录网格回显 + 类别筛选 + 分页 + 一键清空） | ✅ |
 | 浏览-主页 | `/browse/me`（当前账号作者页复用：资料 + 插画/漫画/小说/收藏 tab；动作组「编辑资料 / 投稿插画作品」经作者页工具行 `lead` 插槽与刷新同行（组在左、刷新贴右）跳官方网页；未登录给登录引导；收藏 tab 为作者页的「公开收藏」语义，含私密的完整收藏仍见 /browse/bookmark） | ✅ |
-| 作品查看器 | `/browse/work/illust|:kind=illust|manga>/:id`（多页纵向渐进加载、点击放大进入全屏翻页 + 胶卷缩略图、R-18 遮罩（仅关闭 show_r18 时）、相关推荐 / 评论面板（顶栏评论按钮切换）） | ✅ |
+| 作品查看器 | `/browse/work/illust|:kind=illust|manga>/:id`（多页纵向渐进加载、点击放大进入全屏翻页 + 胶卷缩略图、图片右键菜单（保存单张 / 复制图片地址，下载历史留痕）、R-18 遮罩（仅关闭 show_r18 时）、相关推荐 / 评论面板（顶栏评论按钮切换）） | ✅ |
 | 小说阅读器 | `/browse/work/novel/:id`（标记渲染、分页、系列导航、相关推荐 / 评论面板；整篇翻译 Job、术语确认、块预览与问题列表、原文/译文/双语切换） | ✅ |
 | 系列目录 | `/browse/series/:id`（游标加载） | ✅ |
 | 作者页 | `/browse/user/:id`（资料 + 插画/漫画/小说/收藏 tab；工具行首部预留可选 `lead` 插槽，供 `/browse/me` 的动作组与刷新同行；「主页」复用本页组件，见上） | ✅ |
@@ -1474,6 +1474,22 @@ SauceNAO API Key 三个 checkbox，默认全选，ADR 0053）。动作行为「�
   32px 胶囊（播放/暂停 + 「第 N / M 帧」）；`prefers-reduced-motion` 初始暂停、
   KeepAlive 停用清计时器、R-18 遮罩期间停播。无帧 / 加载中 / 失败退回封面帧 + 说明行
   （加载中旋转图标、失败给重试并保留「去 Pixiv 查看动画」兜底文案）。
+- **图片右键菜单（查看器舞台 / 全屏浮层）**：在插画/漫画详情页舞台页框、全屏浮层主图
+  与胶卷缩略图上右键打开自定义菜单（`components/common/ContextMenu.vue`）。舞台含
+  「全屏查看」（该页就绪才可用）、「保存这张图片」（动图为「保存动图（ZIP）」）与
+  「复制图片地址」；全屏浮层与胶卷只含后两项，胶卷右键即该缩略图对应页。菜单沿用项目
+  菜单 recipe：surface-container 底、`--radius-control` 圆角、唯一合法轻阴影
+  `0 4px 12px rgb(0 0 0 / 18%)`、40px 菜单行、18px lucide 线性图标（stroke 2）、
+  hover / 聚焦 8% primary 状态层、无深色 scrim；固定在指针处，右 / 下越界时翻到指针
+  左 / 上方并在视口四周保留 8px，层级 900（全屏浮层 800 之上、snackbar 1000 之下），
+  0.15s ease 出现（reduced-motion 由全局兜底）。`role="menu"` + `role="menuitem"`：
+  打开焦点进首个可用项，↑↓ 循环、Home / End 跳首末、Enter / Space 原生激活，Esc / Tab /
+  点击外部 / 任意滚动 / 窗口 resize 关闭并回焦触发前元素；R-18 遮罩期间不打开。
+  **保存**经 `illust_save_page`（§7）把该页原图下载到 `<output_dir>/pic/`（文件名沿用
+  `illust_filename_template`），并与既有 `illustrations` 记录按页合并 upsert
+  （`saved_paths` / `saved_pages`，`captured_at` 刷新）——下载历史留痕，同作品多次保存
+  按页累积；该页已保存且文件仍在时直接回执「已下载」、不重复请求。复制地址取该页
+  `original` 直链（ugoira 为封面原图）。
 - **小说阅读器**：整页固定 100vh 三行 flex——顶栏（非 sticky，天然贴窗口上边）/ 中间唯一
   滚动层（`flex:1; min-height:0; overflow-y:auto`，6px 细滚动条）/ 底栏 AppPagination
   （`variant="reader"`）；顶底栏贴窗口上下边、只有中间层滚动。正文列默认不限宽，仅
@@ -1735,6 +1751,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
 | `open_novel_file(novelId, kind)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位（`kind` 白名单 `txt` / `md` / `epub` 指定小说文件格式，epub 仅显式指定时使用、不插队 txt / md；若文件存在则高亮选中；若文件已移走或删除则回退打开用户在设置中配置的下载目录，进入 pic / novel 子目录，未改即默认输出目录，杜绝报错） |
 | `illust_saved_pages(artworkId)` | 已保存页查询：返回 `{pages:[0,2], ugoira:false}`（0 起页码升序）；无记录 → `{"pages":[],"ugoira":false}`，ugoira 有记录 → `{"pages":[0],"ugoira":true}`；下载侧栏按页选择器据此标记「已下载」 |
+| `illust_save_page(artworkId, page)` | 图片右键菜单的单张保存：取详情 → 原图直链下载到 `<output_dir>/pic/`（文件名沿用 `illust_filename_template`）→ 与既有 `illustrations` 记录按页合并 upsert（`saved_paths` / `saved_pages`，`captured_at` 刷新），下载历史留痕。`page` 为 0 起页码；ugoira 只接受 `page=0` 并保存原始 zip。返回值 `{status, artwork_id, page, title, path, already_saved, ugoira}`；该页已保存且文件仍在 → `already_saved:true` 且不重复下载。未登录错误与浏览命令同款登录守卫 |
 | `browse_home_feed` | 首页推荐流（street POST + csrf token，进程内 30min 缓存） |
 | `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
 | `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |

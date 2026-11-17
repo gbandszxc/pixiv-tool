@@ -946,6 +946,39 @@ export async function illustSavedPages(id: number): Promise<{ pages: number[]; u
   return invoke<{ pages: number[]; ugoira: boolean }>("illust_saved_pages", { artworkId: id });
 }
 
+/** illust_save_page 返回体：单张保存结果（ugoira 保存的是原始 zip）。 */
+export interface SavedIllustPage {
+  status: string;
+  artwork_id: number;
+  page: number;
+  title: string;
+  path: string;
+  /** 该页此前已保存且文件仍在：本次未重复下载。 */
+  already_saved: boolean;
+  ugoira: boolean;
+}
+
+/**
+ * illust_save_page：把作品中的单张原图保存到输出目录 `pic/`，并 upsert
+ * `illustrations` 下载历史（saved_paths / saved_pages 合并、captured_at 刷新）。
+ * 未登录错误经 invokeBrowse 派发登录弹窗；`!isTauri()` 返回 mock 结果供浏览器验收。
+ */
+export async function saveIllustPage(artworkId: number, page: number): Promise<SavedIllustPage> {
+  if (!isTauri()) {
+    await mockDelay();
+    return {
+      status: "success",
+      artwork_id: artworkId,
+      page,
+      title: `Mock ${artworkId}`,
+      path: `C:/mock/pixiv-tool/pic/mock_${artworkId}_p${page}.jpg`,
+      already_saved: false,
+      ugoira: false,
+    };
+  }
+  return invokeBrowse<SavedIllustPage>("illust_save_page", { artworkId, page });
+}
+
 function channelKindToWork(kind: ChannelKind): WorkKind {
   return kind === "illustration" ? "illust" : kind;
 }
