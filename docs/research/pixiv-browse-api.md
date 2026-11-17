@@ -241,6 +241,49 @@
 | 插画系列（漫画 series） | `https://www.pixiv.net/user/{userId}/series/{seriesId}` |
 | 标签页 | `https://www.pixiv.net/tags/{word}/artworks`、`/novels` |
 
+### 用户搜索（2026-11-17 实测；实现 `browse_api.rs::get_user_search`）
+
+**旧形态整体失效（实机矩阵验证）**：`GET /ajax/search/users/{word}`（词在路径段，
+社区文档流传的旧端点）所有参数组合均 **404**；用户搜索页 `/search/user?word=...`
+（不带语言前缀）**404**，带尾斜杠 `/search/user/` 被 302 打回无斜杠后仍 404；
+`/en|/zh-cn|/ja/search/user?...` 302 到带尾斜杠形态后同样 404。旧页面
+`search_user.php?s_mode=s_usr&word=...` 仍可访问但 **302** 到
+`/search/users?s_mode=s_usr&nick=&i=1&comment=&p=1`（词参数被丢弃）。
+
+**现行端点（pixiv web bundle 反查 + 实机验证）**：搜索页 chunk
+`pages/search/users-*.js` 内的调用为
+
+```js
+e.get("/ajax/search/users", {}, { nick, s_mode, p, i })
+```
+
+即**查询参数式** `GET /ajax/search/users?nick={词}&s_mode={s_usr|s_usr_full}&p={页}&i={0|1}&lang=zh`。
+页面 URL 为 `https://www.pixiv.net/search/users?nick=...`（复数 users，词在
+query 的 `nick`）；`i` 枚举取自 bundle（`T.All="0"` / `T.CreatorOnly="1"`），
+SSR 侧 `i` 缺省按 `"1"` 处理（官方页默认仅创作者）。`s_mode` 枚举同反查自
+bundle（`MODE_USER="s_usr"` / `MODE_USER_FULL="s_usr_full"`），实测语义：
+`s_usr` = 部分一致（nick=twitter 命中 727 人，i=1）、`s_usr_full` = 昵称完全
+一致（nick=twitter 命中 0 人；nick=lycoris 72 → 7 人）。
+
+**响应关键字段**（复合信封，与 top/discovery 同族；`data` 为空数组可忽略）：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `page.userIds` | Array[10] | 本页用户 id 序（与 `users` 数组同序） |
+| `page.workIds` | Object（键为字符串 uid） | 每用户最近作品 `[{id, type: "illust"\|"novel", created_at}]`（≤8 条；无投稿为 `[]`） |
+| `page.total` | number | 结果总数（随 `i` 档位变化：lycoris s_usr 下 i=0 → 1612、i=1/缺省 → 72）；**无 `lastPage`**，页数 = total÷10 推导 |
+| `users[]` | Array[10] | 用户条目：`userId`（字符串）、`name`、`pixivId`（**@handle，该端点有此键**，与 `/ajax/user/{id}` 的 `account` 缺失不同）、`image`/`imageBig`（头像）、`comment`（自我介绍）、`isFollowed`、`isMypixiv`、`isBlocking`、`premium` 等 |
+| `thumbnails.illust` / `thumbnails.novel` | Array | 作品缩略索引表（形状与 §2 `thumbnails.illust|novel` 一致；illust 条目带 `illustType`，novel 条目 `type: "novel"`），按 `page.workIds` 的 id 关联组装「最近作品」卡片 |
+| `tagTranslation` / `zoneConfig` / `illustSeries` / `requests` | - | 翻译 / 广告位 / 系列 / 约稿（本项目不消费） |
+
+**分页与边界**：每页固定 **10 人**（p=1/p=2 实测均 10 条）；空结果 `total=0`
+且各数组为空、无错误信封；`nick` 为空或超长的服务端行为未探测（客户端按
+artworks 搜索同规则先行校验拒绝）。
+
+**应用侧对应**：IPC `browse_user_search`（§7），解析
+`parse_user_search` / `parse_user_item`（browse_api.rs），在线用例
+`live_read.rs::live_search_users`。
+
 ## 6. 排行榜
 
 ### 接口清单

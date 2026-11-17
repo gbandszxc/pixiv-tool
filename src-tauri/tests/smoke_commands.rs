@@ -417,6 +417,7 @@ fn browse_search_history_list_delete_clear_round_trip() {
                 mode: String::new(),
                 s_mode: String::new(),
                 users_iri: String::new(),
+                creator_only: true,
                 searched_at: ts.into(),
             })
             .unwrap();

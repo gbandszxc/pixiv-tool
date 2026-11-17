@@ -6,29 +6,37 @@ import ListRefreshButton from "../../components/browse/ListRefreshButton.vue";
 /**
  * 浏览·搜索页（F2）。
  *
- * - URL 查询参数 `?word=&kind=&order=&mode=&s_mode=&users_iri=` 回显：挂载/前进后退时恢复
- *   状态并自动搜索；执行搜索或切换过滤时 `router.replace` 写回（单一真相源是
- *   路由查询参数，本地 ref 仅作受控回显）。
+ * - URL 查询参数 `?word=&kind=&order=&mode=&s_mode=&users_iri=&creator_only=` 回显：
+ *   挂载/前进后退时恢复状态并自动搜索；执行搜索或切换过滤时 `router.replace` 写回
+ *   （单一真相源是路由查询参数，本地 ref 仅作受控回显）。
  * - ID 直达：输入先经 `parseBrowseInput` 解析，命中链接/纯数字直接跳站内路由，
- *   不发起搜索；纯数字按当前类型 tab（插画/漫画/小说）落到对应详情，链接形态
- *   自带类型不受 tab 影响；未命中按关键词搜索。
+ *   不发起搜索；纯数字按当前类型 tab（插画/漫画/小说/用户）落到对应详情或画师页，
+ *   链接形态自带类型不受 tab 影响；未命中按关键词搜索。
  * - 端点映射：kind=illust|manga → artworks 检索（type=illust|manga）；
- *   kind=novel → novels 检索（不传 type）。
- * - 结果 WorkGrid + 「约 N 件」total；页码分页（AppPagination）：每页条数按端点
- *   对齐（实测见 docs/PIXIV-API.md §搜索）——插画/漫画 artworks 60 条切 3 个显示页
- *   （20/页），小说 novels 30 条即 1 个显示页（30/页，一页恰一次请求）；
- *   接口页缓存在内存供跨页复用。
+ *   kind=novel → novels 检索（不传 type）；kind=user → 用户检索
+ *   （browse_user_search，昵称/画师名搜人，10 人/页，页数由 total 推导）。
+ * - 用户 tab（kind=user）：过滤行切换为「匹配方式」（s_usr 部分一致 /
+ *   s_usr_full 昵称完全一致）+「仅创作者」开关（官方页默认开启，i=1）；
+ *   作品检索的排序 / 对象 / 匹配 / users入り / 本页排序全部隐藏（语义不适用）。
+ *   结果为 UserGrid 行卡（头像 / 昵称 / @handle · ID / 简介 / 最近作品缩略），
+ *   整卡点击直达作者页。
+ * - 结果 WorkGrid + 「约 N 件」total（用户 tab 为 UserGrid + 「约 N 人」）；
+ *   页码分页（AppPagination）：每页条数按端点对齐（实测见 docs/PIXIV-API.md
+ *   §搜索 / §用户搜索）——插画/漫画 artworks 60 条切 3 个显示页（20/页），
+ *   小说 novels 30 条即 1 个显示页（30/页，一页恰一次请求），用户 10 人 1 个
+ *   显示页；接口页缓存在内存供跨页复用（仅作品检索）。
  * - users入り 档位过滤：收藏数下限档位（100/500/1000/5000/10000）经 IPC `users_iri`
  *   透传，后端按档位把 `{N}users入り` 拼进搜索词（搜索词过滤而非排序）；不过滤时
  *   不传参。与 s_tag_full（标签完全一致）互斥——组合词在该匹配下必然失效，双向收口
  *   回落 s_tag（见 normalizeSMode）。
  * - 搜索历史下拉：输入框聚焦/输入时展开（Google 风格，空历史不渲染）。后端在
- *   browse_search 成功且第 1 页时权威记录（重复搜索刷新时间，最新在前 ≤200 条），
- *   本页只读 + 单条删除（不确认，失败 notify），每次展开时重拉。条目 = 关键词 +
- *   类型徽标 + 相对时间（utils/relativeTime 共用实现）；点击条目 = 按六元组直接
- *   回写 URL 查询参数（复用下方 replace 写参与自动搜索机制，空缺过滤器按本页
- *   默认值回落，不经 parseBrowseInput 的 ID 直达解析）；Esc / 外部点击 / 选中后
- *   关闭，↑↓ 移动高亮 + Enter 选中，loading 期禁点。
+ *   browse_search / browse_user_search 成功且第 1 页时权威记录（重复搜索刷新时间，
+ *   最新在前 ≤200 条），本页只读 + 单条删除（不确认，失败 notify），每次展开时重拉。
+ *   条目 = 关键词 + 类型徽标 + 相对时间（utils/relativeTime 共用实现）；点击条目 =
+ *   按六元组（用户搜索为词 + 匹配方式 + 仅创作者）直接回写 URL 查询参数（复用下方
+ *   replace 写参与自动搜索机制，空缺过滤器按本页默认值回落，不经 parseBrowseInput
+ *   的 ID 直达解析）；Esc / 外部点击 / 选中后关闭，↑↓ 移动高亮 + Enter 选中，
+ *   loading 期禁点。
  * - 本页排序：维度（点赞/收藏/浏览）下拉 + 升降方向切换（SortDirectionToggle），
  *   仅对当前显示页本地排序；
  *   优先复用列表已有计数（小说自带收藏数），仅所选维度缺失时经 browse_work_counts
@@ -39,17 +47,20 @@ import { useRoute, useRouter, type LocationQuery } from "vue-router";
 import { useI18n } from "vue-i18n";
 import {
   browseSearch,
+  browseUserSearch,
   browseWorkCounts,
   deleteBrowseSearchHistory,
   errorMessage,
   listBrowseSearchHistory,
   type BrowseSearchHistoryItem,
+  type BrowseUserItem,
   type BrowseWorkItem,
   type WorkCounts,
 } from "../../api/browse";
 import AppPagination from "../../components/common/AppPagination.vue";
 import SortDirectionToggle from "../../components/common/SortDirectionToggle.vue";
 import SectionTabs from "../../components/browse/SectionTabs.vue";
+import UserGrid from "../../components/browse/UserGrid.vue";
 import WorkGrid from "../../components/browse/WorkGrid.vue";
 import { notify } from "../../ui/notify";
 import { parseBrowseInput, type ParsedBrowseInput } from "../../utils/parseInput";
@@ -62,10 +73,13 @@ const router = useRouter();
 
 // ===== 参数取值域 =====
 
-type SearchKind = "illust" | "manga" | "novel";
+type SearchKind = "illust" | "manga" | "novel" | "user";
 const ORDERS = ["date_d", "date", "popular_d"] as const;
 const MODES = ["all", "safe", "r18"] as const;
 const S_MODES = ["s_tag", "s_tag_full", "s_tc"] as const;
+/** 用户搜索匹配方式（s_mode 在 kind=user 下语义切换；值域与后端白名单一致）。 */
+const USER_S_MODES = ["s_usr", "s_usr_full"] as const;
+type UserSMode = (typeof USER_S_MODES)[number];
 /** users入り 收藏数档位（搜索词过滤，非排序）；空串 = 不过滤（不向后端传参）。 */
 const USERS_IRI_LEVELS = ["100", "500", "1000", "5000", "10000"] as const;
 type Order = (typeof ORDERS)[number];
@@ -102,21 +116,31 @@ interface SearchParams {
   kind: SearchKind;
   order: Order;
   mode: Mode;
-  sMode: SMode;
+  /** s_mode 按 kind 切换值域：作品检索为 s_tag 系，用户检索为 s_usr 系。 */
+  sMode: SMode | UserSMode;
   usersIri?: UsersIri;
+  /** 仅创作者账号（kind=user 有效；缺省 true 与官方页一致）。 */
+  creatorOnly?: boolean;
 }
 
 function paramsFromQuery(q: LocationQuery): SearchParams {
+  const kind = oneOf(["illust", "manga", "novel", "user"] as const, queryStr(q, "kind"), "illust");
   const usersIri = usersIriOf(queryStr(q, "users_iri"));
-  const sMode = oneOf(S_MODES, queryStr(q, "s_mode"), "s_tag");
+  // s_mode 值域按 kind 切换（URL 键复用，语义随 tab；非法值回落各自默认）
+  const sMode =
+    kind === "user"
+      ? oneOf(USER_S_MODES, queryStr(q, "s_mode"), "s_usr")
+      : normalizeSMode(usersIri, oneOf(S_MODES, queryStr(q, "s_mode"), "s_tag"));
   return {
     word: queryStr(q, "word").trim(),
-    kind: oneOf(["illust", "manga", "novel"] as const, queryStr(q, "kind"), "illust"),
+    kind,
     order: oneOf(ORDERS, queryStr(q, "order"), "date_d"),
     mode: oneOf(MODES, queryStr(q, "mode"), "all"),
     // 手工改 URL 带入冲突组合（s_tag_full + users_iri）时同批规范化
-    sMode: normalizeSMode(usersIri, sMode),
+    sMode,
     usersIri,
+    // 缺参 / 非法值 → 默认仅创作者（true，与官方页一致）；仅显式 "0" 为 false
+    creatorOnly: queryStr(q, "creator_only") !== "0",
   };
 }
 
@@ -126,8 +150,10 @@ const word = ref("");
 const kind = ref<SearchKind>("illust");
 const order = ref<Order>("date_d");
 const mode = ref<Mode>("all");
-const sMode = ref<SMode>("s_tag");
+const sMode = ref<SMode | UserSMode>("s_tag");
 const usersIri = ref<UsersIri>("");
+/** 仅创作者账号（kind=user 有效）。 */
+const creatorOnly = ref(true);
 
 function currentParams(): SearchParams {
   return {
@@ -137,18 +163,20 @@ function currentParams(): SearchParams {
     mode: mode.value,
     sMode: sMode.value,
     usersIri: usersIri.value,
+    creatorOnly: creatorOnly.value,
   };
 }
 
 function sigOf(p: SearchParams): string {
-  return [p.word, p.kind, p.order, p.mode, p.sMode, p.usersIri].join("\u0000");
+  return [p.word, p.kind, p.order, p.mode, p.sMode, p.usersIri, p.creatorOnly].join("\u0000");
 }
 
 // ===== 结果列表（页码分页：接口每页条数按端点对齐，前端切显示页）=====
 
 /** 显示页条数（AppPagination 每页容量）：artworks 接口页 60 条切 3 页（20/页）；
- * novels 接口页 30 条整页显示（30/页，一接口页 = 一显示页，一页恰一次请求）。 */
-const PAGE_SIZE = computed(() => (kind.value === "novel" ? 30 : 20));
+ * novels 接口页 30 条整页显示（30/页，一接口页 = 一显示页，一页恰一次请求）；
+ * 用户检索 10 人/页整页显示（一页恰一次请求）。 */
+const PAGE_SIZE = computed(() => (kind.value === "novel" ? 30 : kind.value === "user" ? 10 : 20));
 /** 一个接口页切成几个显示页。 */
 const SEGMENTS_PER_API_PAGE = computed(() => (kind.value === "novel" ? 1 : 3));
 /** 接口页缓存上限（超出淘汰最旧；被淘汰页再访问时重新请求）。 */
@@ -158,6 +186,8 @@ const page = ref(1);
 const total = ref<number | null>(null);
 const lastPage = ref<number | null>(null);
 const items = shallowRef<BrowseWorkItem[]>([]);
+/** 用户检索结果（与作品检索互斥使用；kind 切换时由 runSearch 清空）。 */
+const userItems = shallowRef<BrowseUserItem[]>([]);
 const loading = ref(false);
 const error = ref("");
 
@@ -166,22 +196,47 @@ const apiPages = new Map<number, BrowseWorkItem[]>();
 /** 请求序号守卫：快速翻页 / 切条件时丢弃过期响应。 */
 let seq = 0;
 
-/** 显示页数：total÷显示页条数 与 lastPage×切分数 取小（lastPage 是 pixiv 端硬上限）。 */
+/** 显示页数：作品检索取 total÷显示页条数 与 lastPage×切分数 的较小值（pixiv 端硬上限）；
+ * 用户检索无 lastPage，页数由 total 推导（后端同口径）。 */
 const pageCount = computed<number | null>(() => {
   const byTotal = total.value != null ? Math.ceil(total.value / PAGE_SIZE.value) : null;
+  if (kind.value === "user") return byTotal;
   const byLast = lastPage.value != null ? lastPage.value * SEGMENTS_PER_API_PAGE.value : null;
   if (byTotal == null) return byLast;
   if (byLast == null) return byTotal;
   return Math.min(byTotal, byLast);
 });
 
-/** 加载当前显示页：命中接口页缓存直接切片，否则请求该接口页并缓存。 */
+/** 加载当前显示页：作品检索命中接口页缓存直接切片，否则请求该接口页并缓存；
+ * 用户检索一页一请求，不设缓存。 */
 async function load(): Promise<void> {
   const keyword = word.value.trim();
   if (!keyword) return;
   const token = ++seq;
   loading.value = true;
   error.value = "";
+  if (kind.value === "user") {
+    try {
+      const data = await browseUserSearch(keyword, {
+        s_mode: userSModeOf(sMode.value),
+        creator_only: creatorOnly.value,
+        page: page.value,
+      });
+      if (token !== seq) return;
+      total.value = data.total ?? null;
+      lastPage.value = null;
+      userItems.value = data.items;
+    } catch (err) {
+      if (token !== seq) return;
+      userItems.value = [];
+      total.value = null;
+      error.value = errorMessage(err);
+    } finally {
+      if (token === seq) loading.value = false;
+    }
+    if (token === seq) afterLoad();
+    return;
+  }
   const apiPage = Math.ceil(page.value / SEGMENTS_PER_API_PAGE.value);
   const offset = ((page.value - 1) % SEGMENTS_PER_API_PAGE.value) * PAGE_SIZE.value;
   const cached = apiPages.get(apiPage);
@@ -192,10 +247,10 @@ async function load(): Promise<void> {
     return;
   }
   try {
-    const data = await browseSearch(kind.value, keyword, {
+    const data = await browseSearch(kind.value as "illust" | "manga" | "novel", keyword, {
       order: order.value,
       mode: mode.value,
-      s_mode: sMode.value,
+      s_mode: workSModeOf(sMode.value),
       // users入り 档位过滤：空串 = 不过滤，不向后端传参
       users_iri: usersIri.value || undefined,
       // novel 走 novels 端点不带 type；illust/manga 走 artworks 端点并带 type
@@ -222,10 +277,19 @@ async function load(): Promise<void> {
   if (token === seq) afterLoad();
 }
 
-/** 整页替换后的收尾：回页首；处于计数排序时为新页补取计数。 */
+/** 受控 sMode ref 的值域收窄：按当前 kind 断言到对应端点取值（sigOf/URL 已保证）。 */
+function workSModeOf(value: SMode | UserSMode): SMode {
+  return (S_MODES as readonly string[]).includes(value) ? (value as SMode) : "s_tag";
+}
+
+function userSModeOf(value: SMode | UserSMode): UserSMode {
+  return (USER_S_MODES as readonly string[]).includes(value) ? (value as UserSMode) : "s_usr";
+}
+
+/** 整页替换后的收尾：回页首；处于计数排序时为新页补取计数（用户检索无排序）。 */
 function afterLoad(): void {
   scrollContentToTop();
-  if (sortKey.value) void ensureCounts();
+  if (kind.value !== "user" && sortKey.value) void ensureCounts();
 }
 
 // ===== 本页排序（点赞 / 收藏 / 浏览 × 升/降；仅当前显示页本地排序）=====
@@ -270,7 +334,8 @@ async function ensureCounts(): Promise<void> {
   }
   const missing = missingCountItems();
   if (!missing.length) return;
-  const requestKind = kind.value;
+  // 仅作品检索会走到这里（用户检索无本页排序），收窄掉 "user"
+  const requestKind = kind.value as "illust" | "manga" | "novel";
   const requestSeq = seq;
   countsLoading.value = true;
   countsTotal.value = missing.length;
@@ -355,6 +420,7 @@ function runSearch(sig: string): void {
   lastPage.value = null;
   apiPages.clear();
   items.value = [];
+  userItems.value = [];
   void load();
 }
 
@@ -365,11 +431,11 @@ function runSearch(sig: string): void {
  */
 function refreshCurrent(): void {
   if (!word.value.trim()) return;
-  // 接口页缓存整体失效：本次重拉之外，后续翻页也重新请求
+  // 接口页缓存整体失效：本次重拉之外，后续翻页也重新请求（用户检索无缓存）
   apiPages.clear();
   // 本页排序的计数缓存一并失效：刷新应重新拉取，防止旧计数遮蔽新数据；
-  // 版本号自增驱动 sortedItems 立即按新数据重算
-  if (sortKey.value) {
+  // 版本号自增驱动 sortedItems 立即按新数据重算（用户检索无排序，不涉及）
+  if (kind.value !== "user" && sortKey.value) {
     for (const it of items.value) countsCache.delete(countKey(it));
     countsVersion.value += 1;
   }
@@ -388,15 +454,17 @@ function applyQuery(): void {
   mode.value = params.mode;
   sMode.value = params.sMode;
   usersIri.value = params.usersIri ?? "";
+  creatorOnly.value = params.creatorOnly ?? true;
   if (!params.word) {
     // 无关键词（如从侧栏重新进入）：回到初始空态
     lastFetchedSig = "";
     total.value = null;
     lastPage.value = null;
     apiPages.clear();
-    if (items.value.length || loading.value || error.value) {
+    if (items.value.length || userItems.value.length || loading.value || error.value) {
       seq += 1; // 丢弃在途响应
       items.value = [];
+      userItems.value = [];
       loading.value = false;
       error.value = "";
     }
@@ -419,6 +487,8 @@ function buildQuery(): Record<string, string> {
   if (p.word) query.word = p.word;
   // 不过滤时不写入，分享链接保持干净（回显侧空/缺参/非法值都回落不过滤）
   if (p.usersIri) query.users_iri = p.usersIri;
+  // 仅创作者为用户检索默认值（true 不写回，显式 "0" 才落 URL，链接保持干净）
+  if (p.kind === "user" && !p.creatorOnly) query.creator_only = "0";
   return query;
 }
 
@@ -450,7 +520,10 @@ function doSearch(): void {
 }
 
 function onKindChange(value: string): void {
-  kind.value = oneOf(["illust", "manga", "novel"] as const, value, "illust");
+  kind.value = oneOf(["illust", "manga", "novel", "user"] as const, value, "illust");
+  // s_mode 值域随 kind 切换：跨域残留的旧值回填为该域默认（本页排序同理不可用）
+  sMode.value = kind.value === "user" ? "s_usr" : "s_tag";
+  sortKey.value = "";
   commit();
 }
 
@@ -485,6 +558,18 @@ function onUsersIriChange(event: Event): void {
   commit();
 }
 
+/** 用户检索匹配方式（s_mode 值域随 kind 切换，见 onKindChange / paramsFromQuery）。 */
+function onUserSModeChange(event: Event): void {
+  sMode.value = oneOf(USER_S_MODES, (event.target as HTMLSelectElement).value, "s_usr");
+  commit();
+}
+
+/** 仅创作者账号开关（官方页默认开启；切换后按既有机制重搜）。 */
+function onCreatorOnlyChange(event: Event): void {
+  creatorOnly.value = (event.target as HTMLInputElement).checked;
+  commit();
+}
+
 // ===== ID 直达与卡片跳转 =====
 
 /** 链接识别结果 → 应用自绘页面；支持类型与扩展步骤见 utils/parseInput.ts 文件头。 */
@@ -499,12 +584,18 @@ function goWork(item: BrowseWorkItem): void {
   else void router.push(`/browse/work/illust/${item.id}`);
 }
 
+/** 用户卡片跳转：站内作者页。 */
+function goUser(item: BrowseUserItem): void {
+  void router.push(`/browse/user/${item.id}`);
+}
+
 // ===== 选项文案（computed：语言切换即时生效） =====
 
 const typeTabs = computed(() => [
   { value: "illust", label: t("browse.search.typeIllust") },
   { value: "manga", label: t("browse.search.typeManga") },
   { value: "novel", label: t("browse.search.typeNovel") },
+  { value: "user", label: t("browse.search.typeUser") },
 ]);
 
 // ===== 搜索历史下拉（后端在 browse_search 成功且第 1 页时权威记录，本页只读 + 删）=====
@@ -525,6 +616,7 @@ const HISTORY_KIND_LABEL_KEYS: Record<string, string> = {
   illust: "browse.search.typeIllust",
   manga: "browse.search.typeManga",
   novel: "browse.search.typeNovel",
+  user: "browse.search.typeUser",
 };
 
 async function refreshHistory(): Promise<void> {
@@ -627,7 +719,7 @@ function onSearchKeydown(event: KeyboardEvent): void {
 }
 
 /**
- * 点击历史条目：按六元组直接构造查询参数经 router.replace 回写本页 URL，
+ * 点击历史条目：按记录直接构造查询参数经 router.replace 回写本页 URL，
  * 复用既有的 query → applyQuery → runSearch 自动搜索机制；空缺 / 非法过滤器
  * 按本页默认值回落（s_mode 与 users_iri 冲突同批规范化，与 paramsFromQuery 同口径）。
  * 历史词都是关键词，不经 parseBrowseInput 的 ID 直达解析。
@@ -635,6 +727,17 @@ function onSearchKeydown(event: KeyboardEvent): void {
 function selectHistory(item: BrowseSearchHistoryItem): void {
   if (loading.value) return;
   closeHistory();
+  if (item.kind === "user") {
+    // 用户搜索：词 + 匹配方式 + 仅创作者（s_mode 值域随 kind 切换）
+    const query: Record<string, string> = {
+      word: item.word,
+      kind: "user",
+      s_mode: oneOf(USER_S_MODES, item.s_mode, "s_usr"),
+    };
+    if (!item.creator_only) query.creator_only = "0";
+    void router.replace({ query });
+    return;
+  }
   const usersIri = usersIriOf(item.users_iri);
   const query: Record<string, string> = {
     word: item.word,
@@ -746,73 +849,95 @@ onActivated(() => {
         <HelpTooltip :label="t('common.search')" :text="t('browse.search.help')" />
       </div>
 
-      <!-- 过滤行：类型 tabs + 排序 / 对象 / 匹配 / users入り 档位下拉 -->
+      <!-- 过滤行：类型 tabs + 作品检索（排序/对象/匹配/users入り/本页排序）
+           或 用户检索（匹配方式/仅创作者），随 tab 整组切换 -->
       <div class="filter-row">
         <div class="type-tabs-wrap" role="group" :aria-label="t('browse.search.typeLabel')">
           <SectionTabs class="type-tabs" :tabs="typeTabs" :value="kind" @change="onKindChange" />
         </div>
-        <label class="select-item">
-          <span>{{ t("browse.search.orderLabel") }}</span>
-          <md-outlined-select :value="order" :aria-label="t('browse.search.orderLabel')" @change="onOrderChange">
-            <md-select-option value="date_d">{{ t("browse.search.orderDateDesc") }}</md-select-option>
-            <md-select-option value="date">{{ t("browse.search.orderDateAsc") }}</md-select-option>
-            <md-select-option value="popular_d">{{ t("browse.search.orderPopular") }}</md-select-option>
-          </md-outlined-select>
-        </label>
-        <label class="select-item">
-          <span>{{ t("browse.search.modeLabel") }}</span>
-          <md-outlined-select :value="mode" :aria-label="t('browse.search.modeLabel')" @change="onModeChange">
-            <md-select-option value="all">{{ t("browse.search.modeAll") }}</md-select-option>
-            <md-select-option value="safe">{{ t("browse.search.modeSafe") }}</md-select-option>
-            <md-select-option value="r18">{{ t("browse.search.modeR18") }}</md-select-option>
-          </md-outlined-select>
-        </label>
-        <label class="select-item">
-          <span>{{ t("browse.search.sModeLabel") }}</span>
-          <md-outlined-select :value="sMode" :aria-label="t('browse.search.sModeLabel')" @change="onSModeChange">
-            <md-select-option value="s_tag">{{ t("browse.search.sModeTag") }}</md-select-option>
-            <md-select-option value="s_tag_full">{{ t("browse.search.sModeTagFull") }}</md-select-option>
-            <md-select-option value="s_tc">{{ t("browse.search.sModeTc") }}</md-select-option>
-          </md-outlined-select>
-        </label>
-        <!-- users入り 收藏数档位过滤（搜索词过滤非排序，选项「N+」表达下限语义） -->
-        <label class="select-item">
-          <span>{{ t("browse.search.usersIriLabel") }}</span>
-          <md-outlined-select
-            :value="usersIri || 'none'"
-            :aria-label="t('browse.search.usersIriLabel')"
-            @change="onUsersIriChange"
-          >
-            <md-select-option value="none">{{ t("browse.search.usersIriNone") }}</md-select-option>
-            <md-select-option v-for="lv in USERS_IRI_LEVELS" :key="lv" :value="lv">{{ lv }}+</md-select-option>
-          </md-outlined-select>
-        </label>
-        <!-- 本页排序：维度下拉 + 升降方向切换；仅对当前显示页本地排序（计数按需补取） -->
-        <div class="local-sort">
-          <span class="local-sort-label" aria-hidden="true">{{ t("browse.search.localSortLabel") }}</span>
-          <md-outlined-select
-            :value="sortKey || 'default'"
-            :disabled="!items.length"
-            :aria-label="t('browse.search.localSortLabel')"
-            @change="onSortKeyChange"
-          >
-            <md-select-option value="default">{{ t("browse.search.localSortDefault") }}</md-select-option>
-            <md-select-option value="like">{{ t("browse.search.localSortLike") }}</md-select-option>
-            <md-select-option value="bookmark">{{ t("browse.search.localSortBookmark") }}</md-select-option>
-            <md-select-option value="view">{{ t("browse.search.localSortView") }}</md-select-option>
-          </md-outlined-select>
-          <SortDirectionToggle
-            :value="sortDir"
-            :disabled="!sortKey || !items.length"
-            @change="onSortDirChange"
-          />
-        </div>
+        <template v-if="kind !== 'user'">
+          <label class="select-item">
+            <span>{{ t("browse.search.orderLabel") }}</span>
+            <md-outlined-select :value="order" :aria-label="t('browse.search.orderLabel')" @change="onOrderChange">
+              <md-select-option value="date_d">{{ t("browse.search.orderDateDesc") }}</md-select-option>
+              <md-select-option value="date">{{ t("browse.search.orderDateAsc") }}</md-select-option>
+              <md-select-option value="popular_d">{{ t("browse.search.orderPopular") }}</md-select-option>
+            </md-outlined-select>
+          </label>
+          <label class="select-item">
+            <span>{{ t("browse.search.modeLabel") }}</span>
+            <md-outlined-select :value="mode" :aria-label="t('browse.search.modeLabel')" @change="onModeChange">
+              <md-select-option value="all">{{ t("browse.search.modeAll") }}</md-select-option>
+              <md-select-option value="safe">{{ t("browse.search.modeSafe") }}</md-select-option>
+              <md-select-option value="r18">{{ t("browse.search.modeR18") }}</md-select-option>
+            </md-outlined-select>
+          </label>
+          <label class="select-item">
+            <span>{{ t("browse.search.sModeLabel") }}</span>
+            <md-outlined-select :value="sMode" :aria-label="t('browse.search.sModeLabel')" @change="onSModeChange">
+              <md-select-option value="s_tag">{{ t("browse.search.sModeTag") }}</md-select-option>
+              <md-select-option value="s_tag_full">{{ t("browse.search.sModeTagFull") }}</md-select-option>
+              <md-select-option value="s_tc">{{ t("browse.search.sModeTc") }}</md-select-option>
+            </md-outlined-select>
+          </label>
+          <!-- users入り 收藏数档位过滤（搜索词过滤非排序，选项「N+」表达下限语义） -->
+          <label class="select-item">
+            <span>{{ t("browse.search.usersIriLabel") }}</span>
+            <md-outlined-select
+              :value="usersIri || 'none'"
+              :aria-label="t('browse.search.usersIriLabel')"
+              @change="onUsersIriChange"
+            >
+              <md-select-option value="none">{{ t("browse.search.usersIriNone") }}</md-select-option>
+              <md-select-option v-for="lv in USERS_IRI_LEVELS" :key="lv" :value="lv">{{ lv }}+</md-select-option>
+            </md-outlined-select>
+          </label>
+          <!-- 本页排序：维度下拉 + 升降方向切换；仅对当前显示页本地排序（计数按需补取） -->
+          <div class="local-sort">
+            <span class="local-sort-label" aria-hidden="true">{{ t("browse.search.localSortLabel") }}</span>
+            <md-outlined-select
+              :value="sortKey || 'default'"
+              :disabled="!items.length"
+              :aria-label="t('browse.search.localSortLabel')"
+              @change="onSortKeyChange"
+            >
+              <md-select-option value="default">{{ t("browse.search.localSortDefault") }}</md-select-option>
+              <md-select-option value="like">{{ t("browse.search.localSortLike") }}</md-select-option>
+              <md-select-option value="bookmark">{{ t("browse.search.localSortBookmark") }}</md-select-option>
+              <md-select-option value="view">{{ t("browse.search.localSortView") }}</md-select-option>
+            </md-outlined-select>
+            <SortDirectionToggle
+              :value="sortDir"
+              :disabled="!sortKey || !items.length"
+              @change="onSortDirChange"
+            />
+          </div>
+        </template>
+        <template v-else>
+          <!-- 用户检索匹配方式：s_usr 部分一致（昵称+介绍）/ s_usr_full 昵称完全一致 -->
+          <label class="select-item">
+            <span>{{ t("browse.search.userSModeLabel") }}</span>
+            <md-outlined-select
+              :value="sMode"
+              :aria-label="t('browse.search.userSModeLabel')"
+              @change="onUserSModeChange"
+            >
+              <md-select-option value="s_usr">{{ t("browse.search.userSModePartial") }}</md-select-option>
+              <md-select-option value="s_usr_full">{{ t("browse.search.userSModeExact") }}</md-select-option>
+            </md-outlined-select>
+          </label>
+          <label class="check-item">
+            <md-checkbox :checked="creatorOnly" @change="onCreatorOnlyChange" />
+            <span>{{ t("browse.search.creatorOnly") }}</span>
+          </label>
+          <HelpTooltip :label="t('browse.search.creatorOnly')" :text="t('browse.search.creatorOnlyHelp')" />
+        </template>
       </div>
     </div>
 
     <div class="result-bar">
       <p v-if="total !== null" class="total-line" role="status">
-        {{ t("browse.search.total", { count: total }) }}
+        {{ kind === "user" ? t("browse.search.totalUsers", { count: total }) : t("browse.search.total", { count: total }) }}
       </p>
       <span v-if="countsLoading" class="counts-progress" role="status">
         {{ t("browse.search.countsLoading", { total: countsTotal }) }}
@@ -820,7 +945,7 @@ onActivated(() => {
     </div>
 
     <!-- 查询容器：供 WorkGrid 的分页列数档位（2/4/5/10 列）按实际内容宽度查询 -->
-    <div class="grid-host">
+    <div v-if="kind !== 'user'" class="grid-host">
       <WorkGrid
         :items="sortedItems"
         :loading="loading"
@@ -831,8 +956,19 @@ onActivated(() => {
         @select="goWork"
       />
     </div>
+    <!-- 用户检索结果：行卡列表（头像 / 昵称 / @handle · ID / 简介 / 最近作品缩略） -->
+    <UserGrid
+      v-else
+      :items="userItems"
+      :loading="loading"
+      :error="error"
+      :skeleton-count="PAGE_SIZE"
+      @retry="load()"
+      @select="goUser"
+    />
 
-    <!-- 页码分页（插画/漫画 20 条/页 = 接口页 60 条切 3 页；小说 30 条/页 = 接口页整页） -->
+    <!-- 页码分页（插画/漫画 20 条/页 = 接口页 60 条切 3 页；小说 30 条/页 = 接口页整页；
+         用户 10 人/页 = 一接口页，页数由 total 推导） -->
     <AppPagination
       v-if="pageCount !== null && pageCount > 1"
       class="pager"
@@ -1052,6 +1188,20 @@ onActivated(() => {
 .select-item > span,
 .local-sort-label {
   flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
+/* 用户检索的仅创作者开关：checkbox + 12px 文本（与下拉标签同层级） */
+.check-item {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.check-item > span {
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-muted);

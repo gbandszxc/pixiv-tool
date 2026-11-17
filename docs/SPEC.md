@@ -157,7 +157,7 @@ pixiv-tool/
 │     ├─ core/                  # sources / crawler / illust_crawler / task_manager / exporter / epub / filename_template
 │     ├─ auth/                  # browser_login（CDP）/ cdp（WebSocket 客户端）/ webview_login（内嵌登录窗回退）
 │     ├─ webview_recaptcha.rs   # 关注人机验证 WebView 铸 token 桥（recaptcha-mint 窗口、导航拦截回收，ADR 0055）
-│     ├─ commands/              # 与 translation/ 共 95 个 #[tauri::command]（translation 22 / auth 6 / browse_api 22 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 6 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
+│     ├─ commands/              # 与 translation/ 共 96 个 #[tauri::command]（translation 22 / auth 6 / browse_api 23 / ugoira 1 / tasks 9 / settings 3 / sync 3 / maintenance 3 / saucenao 4 / history 1 / browse_history 6 / misc 9 / app 1 / update 5；计数以 lib.rs generate_handler! 实际条目为准）
 │     ├─ db.rs                  # rusqlite：schema 与查询（含 history UNION）
 │     ├─ settings.rs            # settings.json 兼容加载/校验/迁移（含翻译运行参数唯一区间表）
 │     ├─ cookies.rs             # keyring CookieStore
@@ -861,19 +861,21 @@ CREATE TABLE IF NOT EXISTS saucenao_search_history (
 CREATE INDEX IF NOT EXISTS idx_saucenao_search_history_searched
   ON saucenao_search_history(searched_at DESC);
 
--- 浏览搜索历史（浏览关键词搜索：插画/漫画/小说；`browse_search` 第一页成功后
--- 自动记录；word+kind+order+mode+s_mode+users_iri 六元组全等去重，重复搜索
--- 刷新 searched_at，保留最近 200 条、超出裁剪最旧；过滤器列 NOT NULL DEFAULT ''
--- 避开 SQLite NULL 参与唯一约束的不等价坑）
+-- 浏览搜索历史（浏览关键词搜索：插画/漫画/小说/用户；`browse_search` /
+-- `browse_user_search` 第一页成功后自动记录；word+kind+order+mode+s_mode+users_iri
+-- 六元组全等去重，重复搜索刷新 searched_at（INSERT OR REPLACE 整行覆写，
+-- 同六元组换 creator_only 档重搜以最新值覆盖），保留最近 200 条、超出裁剪最旧；
+-- 过滤器列 NOT NULL DEFAULT '' 避开 SQLite NULL 参与唯一约束的不等价坑）
 CREATE TABLE IF NOT EXISTS browse_search_history (
-  id          INTEGER PRIMARY KEY,
-  word        TEXT NOT NULL,             -- 搜索词（trim 后入库）
-  kind        TEXT NOT NULL,             -- 'illust' | 'manga' | 'novel'
-  "order"     TEXT NOT NULL DEFAULT '',  -- 排序（SQL 关键字列名加引号）
-  mode        TEXT NOT NULL DEFAULT '',  -- 过滤模式
-  s_mode      TEXT NOT NULL DEFAULT '',  -- 搜索方式
-  users_iri   TEXT NOT NULL DEFAULT '',  -- 收藏数档位过滤（空 = 未用）
-  searched_at TEXT NOT NULL,             -- RFC3339 UTC，最新在前
+  id           INTEGER PRIMARY KEY,
+  word         TEXT NOT NULL,             -- 搜索词（trim 后入库）
+  kind         TEXT NOT NULL,             -- 'illust' | 'manga' | 'novel' | 'user'
+  "order"      TEXT NOT NULL DEFAULT '',  -- 排序（SQL 关键字列名加引号）
+  mode         TEXT NOT NULL DEFAULT '',  -- 过滤模式
+  s_mode       TEXT NOT NULL DEFAULT '',  -- 搜索方式（kind=user 时为用户匹配方式）
+  users_iri    TEXT NOT NULL DEFAULT '',  -- 收藏数档位过滤（空 = 未用）
+  creator_only INTEGER NOT NULL DEFAULT 1, -- 仅创作者账号（kind=user 有效，作品搜索恒默认不读）
+  searched_at  TEXT NOT NULL,             -- RFC3339 UTC，最新在前
   UNIQUE(word, kind, "order", mode, s_mode, users_iri)
 );
 CREATE INDEX IF NOT EXISTS idx_browse_search_history_searched
@@ -1211,7 +1213,7 @@ token 的写路径自愈覆盖全部 POST 写方法（Auth/Client 失败或 200+
 | 浏览-频道 | `/browse/illustration` `/browse/manga` `/browse/novel`（关注新作/推荐/排行/热门标签板块 + 顶部 R-18 快捷筛选（全部/一般向/R18）） | ✅ |
 | 浏览-发现 | `/browse/discover`（已并入 `/browse/home`；保留重定向至 `/browse/home` 兼容深链） | ✅ |
 | 浏览-动态 | `/browse/feed`（关注的新作品：插画/小说 × 全部/全年龄/R-18） | ✅ |
-| 浏览-搜索 | `/browse/search`（类型 tab + 排序/对象/匹配 + ID/链接直达；纯数字 ID 按类型 tab 跳插画/漫画/小说详情，链接形态自带类型不受 tab 影响；链接支持作品、用户主页、小说系列与插画/漫画系列，自绘页面增加时通过 `parseInput.ts` 的识别类型/规则及 `pixivLinks.ts` 的 `browseTargetPath` 统一路由映射扩展（搜索框直达与正文内链共用，见 §6.4「正文内联链接」），跳转分支由 TypeScript 穷尽检查约束；页码分页按类型对齐接口页——插画/漫画 20/页（接口页 60 条切 3 页）、小说 30/页（一接口页 = 一显示页）+ 本页排序（点赞/收藏/浏览维度下拉 + 独立升/降切换，优先复用列表已有计数与详情缓存，仅所选维度缺失时经 `browse_work_counts` 整页一次性补取，计数齐备后只重排一次；零值有效、未知项垫底）；搜索输入聚焦 / 输入时出搜索历史下拉（Google 风格，空历史不渲染，每次展开重拉；条目 = 关键词 + 类型徽标 + 相对时间，hover 单条删除不确认，点击条目按六元组直接回写查询参数并走既有自动搜索机制——空缺 / 非法过滤器按本页默认值回落，不经 ID 直达解析；Esc / 外部点击 / 选中后关闭，↑↓ 移动高亮 + Enter 选中，loading 期禁点；后端在 `browse_search` 成功且第 1 页时权威记录，最新在前 ≤200 条，下拉面板限高（`min(60vh, 320px)`）内部滚动）） | ✅ |
+| 浏览-搜索 | `/browse/search`（类型 tab（插画/漫画/小说/用户）+ 排序/对象/匹配 + ID/链接直达；纯数字 ID 按类型 tab 跳插画/漫画/小说详情或画师页（用户 tab），链接形态自带类型不受 tab 影响；链接支持作品、用户主页、小说系列与插画/漫画系列，自绘页面增加时通过 `parseInput.ts` 的识别类型/规则及 `pixivLinks.ts` 的 `browseTargetPath` 统一路由映射扩展（搜索框直达与正文内链共用，见 §6.4「正文内联链接」），跳转分支由 TypeScript 穷尽检查约束；页码分页按类型对齐接口页——插画/漫画 20/页（接口页 60 条切 3 页）、小说 30/页（一接口页 = 一显示页）、用户 10 人/页（一接口页，页数由 total 推导）+ 本页排序（点赞/收藏/浏览维度下拉 + 独立升/降切换，优先复用列表已有计数与详情缓存，仅所选维度缺失时经 `browse_work_counts` 整页一次性补取，计数齐备后只重排一次；零值有效、未知项垫底；用户 tab 无本页排序）；用户 tab 过滤行切换为匹配方式（部分一致/昵称完全一致）+「仅创作者」开关（官方默认开启）并隐藏作品过滤器，结果为用户行卡（头像 / 昵称 / @handle · ID / 简介 / 最近作品缩略），整卡直达作者页；搜索输入聚焦 / 输入时出搜索历史下拉（Google 风格，空历史不渲染，每次展开重拉；条目 = 关键词 + 类型徽标 + 相对时间，hover 单条删除不确认，点击条目按记录直接回写查询参数并走既有自动搜索机制——空缺 / 非法过滤器按本页默认值回落，不经 ID 直达解析；Esc / 外部点击 / 选中后关闭，↑↓ 移动高亮 + Enter 选中，loading 期禁点；后端在 `browse_search` / `browse_user_search` 成功且第 1 页时权威记录，最新在前 ≤200 条，下拉面板限高（`min(60vh, 320px)`）内部滚动）） | ✅ |
 | 浏览-排行榜 | `/browse/ranking`（插画/漫画/动图/小说 × 周期 + 日期导航） | ✅ |
 | 浏览-收藏 | `/browse/bookmark`（插画·漫画/小说 × 公开/私密 + 标签筛选） | ✅ |
 | 浏览-历史 | `/browse/history`（浏览访问历史：作品级访问记录网格回显 + 类别筛选 + 分页 + 一键清空） | ✅ |
@@ -1367,8 +1369,9 @@ SauceNAO API Key 三个 checkbox，默认全选，ADR 0053）。动作行为「�
   端点与响应结构的契约事实源为 `docs/PIXIV-API.md`（`docs/research/pixiv-browse-api.md`
   为 2026-10-01 调研证据档案，保留当日字段细节与失效端点勘误）。
   唯一例外是首页 street 流（POST，需 csrf token，见 ADR 0012 §3）。
-- **IPC 契约**：浏览相关 26 个命令（浏览端点 23 = browse_api 22 + ugoira 1，加浏览访问历史 3，§7）。浏览端点返回体统一
-  `BrowseWorkItem` 卡片结构（id/kind/title/author/cover/page_count/x_restrict/tags/series…），
+- **IPC 契约**：浏览相关 27 个命令（浏览端点 24 = browse_api 23 + ugoira 1，加浏览访问历史 3，§7）。浏览端点返回体统一
+  `BrowseWorkItem` 卡片结构（id/kind/title/author/cover/page_count/x_restrict/tags/series…；
+  例外：用户搜索 `browse_user_search` 返回 `BrowseUserItem` 行卡），
   浏览访问历史返回 `browse_history_list` 的分页行（§7）；前端契约类型与
   mock 层在 `frontend/src/api/browse.ts`（非 Tauri 环境返回确定性样例数据，供浏览器
   视觉验收；生产不受影响）。
@@ -1725,7 +1728,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_history_record(kind, workId, title, authorId, authorName, cover?, pageCount, xRestrict)` | 记录一次浏览访问（同 kind+workId 覆写并按访问时间置顶；作品详情页加载成功后上报） |
 | `browse_history_list(page, pageSize, kind?)` | 浏览访问历史分页查询（`visited_at` 倒序，最近访问在前）；page ≥ 1，pageSize 为 1–200，拒绝偏移溢出；`kind` 省略=全部，否则 illust/manga/novel 过滤，非法值报错 |
 | `browse_history_clear()` | 清空浏览访问历史（返回 `{status, deleted}`） |
-| `browse_search_history_list(limit?)` | 浏览搜索历史（插画/漫画/小说关键词搜索；最新在前；limit 缺省 200，取值 1–200，表内全量即 200 条）。条目 `{id, word, kind, order, mode, s_mode, users_iri, searched_at}` |
+| `browse_search_history_list(limit?)` | 浏览搜索历史（插画/漫画/小说/用户关键词搜索；最新在前；limit 缺省 200，取值 1–200，表内全量即 200 条）。条目 `{id, word, kind, order, mode, s_mode, users_iri, creator_only, searched_at}`（kind=user 时 s_mode 为用户匹配方式、creator_only 有语义） |
 | `browse_search_history_delete(id)` | 删除单条浏览搜索历史（返回 `{status, deleted}`；id 不存在幂等，deleted=0） |
 | `browse_search_history_clear()` | 清空浏览搜索历史（返回 `{status, deleted}` 清除条数） |
 | `novel_delete` / `novels_batch_delete` / `novels_delete_all` | 小说记录删除（可选删文件） |
@@ -1737,6 +1740,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |
 | `browse_follow_latest(kind, mode, page)` | 关注的新作品（p + isLastPage）；mode = all|safe|r18，动态页范围 tab 三档直传 |
 | `browse_search(kind, word, order, mode, s_mode, type, page, users_iri?)` | 插画/漫画/小说搜索（total + lastPage；透传已有可选 like_count/bookmark_count/view_count，小说自带收藏数）；users_iri = `100`/`500`/`1000`/`5000`/`10000` 可选收藏数档位过滤（后端拼词 `{word} {N}users入り` 借社区标签实现收藏数下限过滤，非排序；缺省不拼词行为不变；白名单外含空串报错；与 s_mode=s_tag_full 组合报错）；第一页搜索成功后自动记录浏览搜索历史（后端权威，前端不补记；word trim 后入库，word+kind+order+mode+s_mode+users_iri 六元组全等去重、重复搜索刷新 `searched_at`，保留最近 200 条、超出裁剪最旧；翻页、计数补取不记录；记录失败只降级打日志不阻断结果） |
+| `browse_user_search(word, s_mode?, creator_only?, page)` | 用户 / 画师搜索（GET `/ajax/search/users?nick=`，10 人/页，无 lastPage、页数由 total 推导；返回 `{items: BrowseUserItem[], total, next_page, is_last_page}`，条目 `{id, name, pixiv_id, avatar, comment?, is_followed?, works: BrowseWorkItem[]}`，works 为 `page.workIds` × thumbnails 组装的最近作品缩略 ≤8 条）；s_mode = `s_usr`（部分一致，昵称+自我介绍，缺省）/ `s_usr_full`（昵称完全一致），白名单外报错；creator_only 缺省 true（仅创作者，官方页默认 i=1）；词经 artworks 搜索同规则清理 + percent-encode；第一页搜索成功后自动记录浏览搜索历史（kind=user，s_mode 落 s_mode 列、creator_only 落同名列，其余过滤器列空；同六元组换档重搜以最新值覆盖） |
 | `browse_work_counts(kind, ids)` | 作品三项计数批量（搜索页本页排序用；逐项请求详情端点，ids ≤ 60；单项失败跳过，全局限速排队） |
 | `browse_ranking(kind, mode, page, date)` | 排行榜：illust/manga/ugoira 走 ranking.php?format=json，novel 走 /ajax/ranking/novel（每页 50，含 prev/next_date） |
 | `browse_work_detail(kind, id)` | 作品详情：illust+pages+ugoira_meta / novel 全文（含 series 导航 + 正文内嵌图索引 `embedded_images`） |

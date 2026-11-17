@@ -108,18 +108,19 @@ CREATE TABLE IF NOT EXISTS saucenao_search_history (
 CREATE INDEX IF NOT EXISTS idx_saucenao_search_history_searched
     ON saucenao_search_history(searched_at DESC);
 
--- 浏览搜索历史（浏览关键词搜索：插画/漫画/小说；六元组全等去重，
+-- 浏览搜索历史（浏览关键词搜索：插画/漫画/小说/用户；六元组全等去重，
 -- 重复搜索刷新 searched_at，保留最近 50 条；过滤器列 NOT NULL DEFAULT ''
 -- 避开 SQLite NULL 参与唯一约束的不等价坑）
 CREATE TABLE IF NOT EXISTS browse_search_history (
-    id          INTEGER PRIMARY KEY,
-    word        TEXT NOT NULL,             -- 搜索词（trim 后入库）
-    kind        TEXT NOT NULL,             -- 'illust' | 'manga' | 'novel'
-    \"order\"     TEXT NOT NULL DEFAULT '',  -- 排序（SQL 关键字列名加引号）
-    mode        TEXT NOT NULL DEFAULT '',  -- 过滤模式
-    s_mode      TEXT NOT NULL DEFAULT '',  -- 搜索方式
-    users_iri   TEXT NOT NULL DEFAULT '',  -- 收藏数档位过滤（空 = 未用）
-    searched_at TEXT NOT NULL,             -- RFC3339 UTC，最新在前
+    id           INTEGER PRIMARY KEY,
+    word         TEXT NOT NULL,             -- 搜索词（trim 后入库）
+    kind         TEXT NOT NULL,             -- 'illust' | 'manga' | 'novel' | 'user'
+    \"order\"      TEXT NOT NULL DEFAULT '',  -- 排序（SQL 关键字列名加引号）
+    mode         TEXT NOT NULL DEFAULT '',  -- 过滤模式
+    s_mode       TEXT NOT NULL DEFAULT '',  -- 搜索方式
+    users_iri    TEXT NOT NULL DEFAULT '',  -- 收藏数档位过滤（空 = 未用）
+    creator_only INTEGER NOT NULL DEFAULT 1, -- 仅创作者账号（kind=user 有效，工作搜索恒默认 1 不读）
+    searched_at  TEXT NOT NULL,             -- RFC3339 UTC，最新在前
     UNIQUE(word, kind, \"order\", mode, s_mode, users_iri)
 );
 CREATE INDEX IF NOT EXISTS idx_browse_search_history_searched
@@ -257,6 +258,8 @@ pub struct SaucenaoSearchHistoryRow {
 
 /// browse_search_history 插入参数（word+kind+order+mode+s_mode+users_iri 六元组
 /// 全等去重、重复搜索覆写刷新；searched_at 由调用方给 now_iso()）。
+/// creator_only 仅 kind=user（用户搜索）有语义；INSERT OR REPLACE 整行覆写，
+/// 同六元组换档重搜会以最新值覆盖旧档。
 #[derive(Debug, Clone)]
 pub struct BrowseSearchHistoryEntry {
     pub word: String,
@@ -265,6 +268,8 @@ pub struct BrowseSearchHistoryEntry {
     pub mode: String,
     pub s_mode: String,
     pub users_iri: String,
+    /// 仅创作者账号（kind=user 有效；作品搜索恒填默认 true 不参与展示）。
+    pub creator_only: bool,
     pub searched_at: String,
 }
 
@@ -278,6 +283,7 @@ pub struct BrowseSearchHistoryRow {
     pub mode: String,
     pub s_mode: String,
     pub users_iri: String,
+    pub creator_only: bool,
     pub searched_at: String,
 }
 
@@ -559,6 +565,13 @@ impl Db {
             // EPUB 导出路径（旧库无列，CREATE TABLE IF NOT EXISTS 不会补列）
             if !has_column(conn, "novels", "epub_path")? {
                 conn.execute("ALTER TABLE novels ADD COLUMN epub_path TEXT", [])?;
+            }
+            // 浏览搜索历史 creator_only 列（kind=user 的仅创作者档；旧库无列）
+            if !has_column(conn, "browse_search_history", "creator_only")? {
+                conn.execute(
+                    "ALTER TABLE browse_search_history ADD COLUMN creator_only INTEGER NOT NULL DEFAULT 1",
+                    [],
+                )?;
             }
             Ok(())
         })
@@ -1303,8 +1316,8 @@ impl Db {
         self.with_conn(|conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO browse_search_history
-                 (word, kind, \"order\", mode, s_mode, users_iri, searched_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 (word, kind, \"order\", mode, s_mode, users_iri, creator_only, searched_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     entry.word,
                     entry.kind,
@@ -1312,6 +1325,7 @@ impl Db {
                     entry.mode,
                     entry.s_mode,
                     entry.users_iri,
+                    entry.creator_only,
                     entry.searched_at,
                 ],
             )?;
@@ -1337,7 +1351,7 @@ impl Db {
         }
         self.with_conn(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, word, kind, \"order\", mode, s_mode, users_iri, searched_at
+                "SELECT id, word, kind, \"order\", mode, s_mode, users_iri, creator_only, searched_at
                  FROM browse_search_history
                  ORDER BY searched_at DESC, id DESC LIMIT ?1",
             )?;
@@ -1351,6 +1365,7 @@ impl Db {
                         mode: row.get("mode")?,
                         s_mode: row.get("s_mode")?,
                         users_iri: row.get("users_iri")?,
+                        creator_only: row.get::<_, i64>("creator_only")? != 0,
                         searched_at: row.get("searched_at")?,
                     })
                 })?
@@ -2450,6 +2465,7 @@ mod tests {
             mode: String::new(),
             s_mode: String::new(),
             users_iri: String::new(),
+            creator_only: true,
             searched_at: searched_at.into(),
         }
     }

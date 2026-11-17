@@ -547,6 +547,71 @@ export async function browseSearch(
   });
 }
 
+/** browse_user_search 返回的用户条目（画师 / 用户名搜索卡片）。
+ * 头像与 works 封面为 pximg URL，经 pixiv-img 代理显示。 */
+export interface BrowseUserItem {
+  id: number;
+  name: string;
+  /** @handle（pixivId；空串 = 未提供）。 */
+  pixiv_id: string;
+  /** 头像（空串 = 无，展示占位）。 */
+  avatar: string;
+  /** 自我介绍（缺失/空 = 不展示）。 */
+  comment?: string | null;
+  is_followed?: boolean | null;
+  /** 最近作品缩略（≤8 条；索引表缺项跳过）。 */
+  works: BrowseWorkItem[];
+}
+
+/** browse_user_search 返回体：每页 10 人，无 lastPage，页数由 total 推导。 */
+export interface BrowseUserSearch {
+  items: BrowseUserItem[];
+  total?: number | null;
+  next_page?: number | null;
+  is_last_page?: boolean | null;
+}
+
+/** browse_user_search：用户 / 画师搜索（s_mode：s_usr 部分一致 | s_usr_full 昵称完全一致；
+ * creator_only 缺省 true 与官方页一致；每页 10 人）。 */
+export async function browseUserSearch(
+  word: string,
+  options?: { s_mode?: string; creator_only?: boolean; page?: number }
+): Promise<BrowseUserSearch> {
+  const page = options?.page ?? 1;
+  if (!isTauri()) return mockUserSearch(word, page);
+  return invokeBrowse<BrowseUserSearch>("browse_user_search", {
+    word,
+    sMode: options?.s_mode,
+    creatorOnly: options?.creator_only,
+    page,
+  });
+}
+
+/** 用户搜索 mock（浏览器视觉验收）：每页 10 人、10 页，头像留空展示占位。 */
+async function mockUserSearch(word: string, page: number): Promise<BrowseUserSearch> {
+  await mockDelay();
+  const rand = mulberry32(seedFrom(`user-search:${word}#${page}`));
+  const total = 96;
+  const start = (page - 1) * 10;
+  const count = Math.max(0, Math.min(10, total - start));
+  const items: BrowseUserItem[] = Array.from({ length: count }, (_, i) => {
+    const uid = 10000 + start + i;
+    return {
+      id: uid,
+      name: `${word}_${uid}`,
+      pixiv_id: `user_${uid}`,
+      avatar: "",
+      comment: i % 3 === 0 ? `自我介绍：常画 ${word} 相关题材，接稿中。` : null,
+      is_followed: rand() < 0.3,
+      works: mockItems(`user-search:${word}:${uid}`, 1, {
+        kinds: ["illust", "manga", "novel"],
+        count: 3 + Math.floor(rand() * 3),
+      }),
+    };
+  });
+  return { items, total, next_page: page < 10 ? page + 1 : null, is_last_page: page >= 10 };
+}
+
 /** browse_work_counts：作品三项计数批量（搜索页本页排序用；ids 上限 60）。 */
 export async function browseWorkCounts(
   kind: ListWorkKind,
@@ -814,16 +879,18 @@ export interface BrowseSearchHistoryItem {
   id: number;
   /** 搜索词（trim 后入库）。 */
   word: string;
-  /** 类型：illust | manga | novel。 */
-  kind: ListWorkKind;
+  /** 类型：illust | manga | novel | user（用户搜索）。 */
+  kind: ListWorkKind | "user";
   /** 排序（空串 = 未指定）。 */
   order: string;
   /** 对象档位（空串 = 未指定）。 */
   mode: string;
-  /** 匹配方式（空串 = 未指定）。 */
+  /** 匹配方式（空串 = 未指定；kind=user 时为用户搜索匹配方式 s_usr/s_usr_full）。 */
   s_mode: string;
   /** users入り 收藏数档位（空串 = 不过滤）。 */
   users_iri: string;
+  /** 仅创作者账号（kind=user 有语义；作品搜索恒为默认值不读）。 */
+  creator_only: boolean;
   /** 最近一次搜索时间（RFC3339 UTC）。 */
   searched_at: string;
 }

@@ -25,9 +25,9 @@ use pixiv_tool_lib::commands::browse_api_cmds::{
     browse_comment_add_impl, browse_comment_replies_impl, browse_discover_impl,
     browse_follow_latest_impl, browse_home_feed_impl, browse_illust_series_impl,
     browse_novel_series_impl, browse_ranking_impl, browse_related_impl, browse_search_impl,
-    browse_user_follow_impl, browse_user_profile_impl, browse_user_works_impl,
-    browse_watchlist_impl, browse_work_comments_impl, browse_work_counts_impl,
-    browse_work_detail_impl, build_browse_api,
+    browse_user_follow_impl, browse_user_profile_impl, browse_user_search_impl,
+    browse_user_works_impl, browse_watchlist_impl, browse_work_comments_impl,
+    browse_work_counts_impl, browse_work_detail_impl, build_browse_api,
 };
 use pixiv_tool_lib::cookies::CookieStore;
 use pixiv_tool_lib::db::Db;
@@ -265,6 +265,12 @@ async fn not_logged_in_blocks_all_commands_with_login_error() {
         )
         .await
         .unwrap_err(),
+        NOT_LOGGED_IN
+    );
+    assert_eq!(
+        browse_user_search_impl(&state, "オリジナル", Some("s_usr"), Some(true), 1)
+            .await
+            .unwrap_err(),
         NOT_LOGGED_IN
     );
     assert_eq!(

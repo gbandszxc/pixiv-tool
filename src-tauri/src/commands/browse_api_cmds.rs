@@ -426,6 +426,58 @@ pub async fn browse_search_impl(
             mode: mode.unwrap_or_default().to_string(),
             s_mode: s_mode.unwrap_or_default().to_string(),
             users_iri: users_iri.unwrap_or_default().to_string(),
+            creator_only: true,
+            searched_at: crate::db::now_iso(),
+        };
+        if let Err(err) = state.db.record_browse_search_history(&entry) {
+            log::warn!("记录浏览搜索历史失败: {err}");
+        }
+    }
+    result.map_err(|err| err.to_string())
+}
+
+/// 用户搜索（画师 / 用户名；GET /ajax/search/users，每页 10 人，页数由 total
+/// 推导，无 lastPage）。`s_mode`：`s_usr` = 部分一致（昵称+自我介绍，缺省）、
+/// `s_usr_full` = 昵称完全一致；`creator_only`：true = 仅创作者账号
+/// （官方页默认 i=1），缺省 true。第一页搜索成功后自动记录浏览搜索历史
+/// （kind=user，s_mode 落 s_mode 列、creator_only 落同名列，其余过滤器列为空）。
+#[tauri::command]
+pub async fn browse_user_search(
+    state: State<'_, AppState>,
+    word: String,
+    s_mode: Option<String>,
+    creator_only: Option<bool>,
+    page: i64,
+) -> Result<Value, String> {
+    browse_user_search_impl(&state, &word, s_mode.as_deref(), creator_only, page).await
+}
+
+pub async fn browse_user_search_impl(
+    state: &AppState,
+    word: &str,
+    s_mode: Option<&str>,
+    creator_only: Option<bool>,
+    page: i64,
+) -> Result<Value, String> {
+    if word.trim().is_empty() {
+        return Err("搜索词不能为空".to_string());
+    }
+    validate_page(page)?;
+    let creator_only = creator_only.unwrap_or(true);
+    let result = build_browse_api(state)?
+        .get_user_search(word, s_mode, creator_only, page)
+        .await;
+    // 成功路径且仅第一页时记录历史（与 browse_search 同策略：后端权威，
+    // 翻页不记录，失败只降级打日志）
+    if page == 1 && result.is_ok() {
+        let entry = BrowseSearchHistoryEntry {
+            word: word.trim().to_string(),
+            kind: "user".to_string(),
+            order: String::new(),
+            mode: String::new(),
+            s_mode: s_mode.unwrap_or("s_usr").to_string(),
+            users_iri: String::new(),
+            creator_only,
             searched_at: crate::db::now_iso(),
         };
         if let Err(err) = state.db.record_browse_search_history(&entry) {
@@ -618,7 +670,7 @@ pub async fn browse_user_follow_impl(
 ) -> Result<Value, String> {
     validate_id(id, "用户")?;
     build_browse_api(state)?
-        .set_user_follow(id, followed, 0)
+        .set_user_follow(id, followed, 0, None)
         .await
         .map_err(|err| err.to_string())
 }

@@ -15,7 +15,8 @@
  *
  * ① 纯数字自身不带类型信息，按调用方传入的 numericKind（搜索页的类型 tab）归属：
  * illust → /browse/work/illust/{id}，manga → /browse/work/manga/{id}，
- * novel → /browse/work/novel/{id}；缺省 illust（保持 V1 约定）。
+ * novel → /browse/work/novel/{id}，user → /browse/user/{id}（画师 ID 直达）；
+ * 缺省 illust（保持 V1 约定）。
  *
  * 扩展方式（随应用自绘页面增加）：
  * 1. 先在 router/index.ts 注册可访问的自绘页面，再给 ParsedBrowseInput 增加对应 type；
@@ -45,8 +46,8 @@ export type ParsedBrowseInput =
   | { type: "novel-series"; id: number }
   | { type: "illust-series"; id: number };
 
-/** 纯数字输入的归属类型（搜索页的类型 tab；决定纯数字落到哪类作品详情）。 */
-export type NumericKind = "illust" | "manga" | "novel";
+/** 纯数字输入的归属类型（搜索页的类型 tab；决定纯数字落到哪类作品/用户页）。 */
+export type NumericKind = "illust" | "manga" | "novel" | "user";
 
 /** 可选的 pixiv 语言前缀：`en/`、`ja/`、`zh-cn/` 等（1-2 段小写字母 + 斜杠）。 */
 const LOCALE_PREFIX = "(?:[a-z]{2}(?:-[a-z]{2})?/)?";
@@ -83,6 +84,7 @@ function toId(raw: string): number | null {
  * parseBrowseInput("  123456 ")            // { type: "illust-work", id: 123456 }
  * parseBrowseInput("  123456 ", "novel")   // { type: "novel-work", id: 123456 }
  * parseBrowseInput("  123456 ", "manga")   // { type: "manga-work", id: 123456 }
+ * parseBrowseInput("  123456 ", "user")    // { type: "user", id: 123456 }
  * parseBrowseInput("https://www.pixiv.net/en/artworks/123456/") // { type: "illust-work", id: 123456 }
  * parseBrowseInput("pixiv.net/users/11")   // { type: "user", id: 11 }
  * parseBrowseInput("www.pixiv.net/novel/show.php?id=22&w=1#c") // { type: "novel-work", id: 22 }
@@ -95,12 +97,13 @@ export function parseBrowseInput(input: string, numericKind: NumericKind = "illu
   const text = input.trim();
   if (!text) return null;
 
-  // ① 纯数字 → 按调用方选中的类型归属（搜索页类型 tab）；小说/用户链接请粘贴对应 URL
+  // ① 纯数字 → 按调用方选中的类型归属（搜索页类型 tab）；作品/用户链接请粘贴对应 URL
   if (/^\d+$/.test(text)) {
     const id = toId(text);
     if (!id) return null;
     if (numericKind === "novel") return { type: "novel-work", id };
     if (numericKind === "manga") return { type: "manga-work", id };
+    if (numericKind === "user") return { type: "user", id };
     return { type: "illust-work", id };
   }
 

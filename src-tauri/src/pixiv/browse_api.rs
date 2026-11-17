@@ -319,6 +319,38 @@ pub struct BrowseSeriesContent {
     pub x_restrict: Option<i64>,
 }
 
+/// 用户搜索条目（GET /ajax/search/users，画师 / 用户名检索）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseUserItem {
+    pub id: i64,
+    pub name: String,
+    /// @handle（pixivId）。该端点实测带此键——与 `/ajax/user/{id}` 的 `account`
+    /// 缺失不同（见 docs/PIXIV-API.md §作者），搜索卡片可直接展示。
+    pub pixiv_id: String,
+    /// 头像（imageBig 优先、image 兜底；pximg URL 原样返回，前端经 pixiv-img 代理）。
+    pub avatar: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_followed: Option<bool>,
+    /// 最近作品缩略（page.workIds[uid] × thumbnails.illust|novel 组装，≤8 条；
+    /// 索引表缺项跳过）。**恒序列化**（空数组 = 无投稿）：前端类型声明为必有，
+    /// 省略键会让卡片模板读到 undefined 抛错、整卡渲染失败。
+    pub works: Vec<BrowseWorkItem>,
+}
+
+/// 用户搜索返回（每页固定 10 人；无 lastPage，页数由 page.total 推导）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BrowseUserSearch {
+    pub items: Vec<BrowseUserItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_last_page: Option<bool>,
+}
+
 /// 单条评论（roots 根评论 / replies 回复通用）。
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct BrowseComment {
@@ -2138,6 +2170,114 @@ fn search_path(
     ))
 }
 
+/// 用户搜索匹配方式白名单：s_usr = 部分一致（昵称 + 自我介绍）；
+/// s_usr_full = 昵称完全一致。取值即 pixiv web bundle 枚举
+/// （`MODE_USER="s_usr"` / `MODE_USER_FULL="s_usr_full"`，2026-11 反查）。
+const USER_SEARCH_S_MODES: [&str; 2] = ["s_usr", "s_usr_full"];
+/// 用户搜索每页条数（实测 p=1/p=2 均返回 10 人；无 lastPage，页数由 page.total 推导）。
+const USER_SEARCH_PER_PAGE: i64 = 10;
+
+/// 用户搜索请求路径。
+///
+/// 2026-11 实测：旧 `/ajax/search/users/{word}`（词在路径段）已整体 404，
+/// 现行为**查询参数式** `GET /ajax/search/users?nick=&s_mode=&p=&i=&lang=zh`
+/// （pixiv web bundle `pages/search/users` chunk 反查 + 实机验证）；
+/// `i=1` 仅创作者账号（官方页默认）、`i=0` 全部用户。词在 query 里，
+/// 同样必须 percent-encode（query 值含保留字符会破坏参数结构）。
+fn user_search_path(
+    word: &str,
+    s_mode: Option<&str>,
+    creator_only: bool,
+    page: i64,
+) -> Result<String, PixivError> {
+    let word = sanitize_search_word(word)?;
+    let s_mode = s_mode.unwrap_or("s_usr");
+    if !USER_SEARCH_S_MODES.contains(&s_mode) {
+        return Err(PixivError::Client(format!("不支持的用户匹配方式: {s_mode}")));
+    }
+    let creator = if creator_only { "1" } else { "0" };
+    Ok(format!(
+        "/ajax/search/users?nick={}&s_mode={s_mode}&p={}&i={creator}&lang=zh",
+        percent_encode(&word),
+        page.max(1)
+    ))
+}
+
+/// /ajax/search/users 响应 → BrowseUserSearch。
+///
+/// 响应为复合信封（2026-11 实测）：`page = { userIds, workIds, total }`、
+/// `users`（与 userIds 同序）、`thumbnails.illust|novel`（作品缩略索引表，
+/// 与 top/discovery 同形状）。分页：无 lastPage，按 total ÷ 每页 10 推导。
+fn parse_user_search(body: &Value, page: i64) -> BrowseUserSearch {
+    let thumbs_illust = parse_index(body, "illust");
+    let thumbs_novel = parse_index(body, "novel");
+    let items: Vec<BrowseUserItem> = body
+        .get("users")
+        .and_then(Value::as_array)
+        .map(|users| {
+            users
+                .iter()
+                .filter_map(|u| parse_user_item(u, body, &thumbs_illust, &thumbs_novel))
+                .collect()
+        })
+        .unwrap_or_default();
+    let total = body.pointer("/page/total").and_then(as_i64_loose);
+    // 总页数向上取整；total=0 / 缺失 → 无下一页（fail-closed）
+    let page_count = total.map(|t| (t + USER_SEARCH_PER_PAGE - 1) / USER_SEARCH_PER_PAGE);
+    let (next_page, is_last_page) = match page_count {
+        Some(count) if count > 0 => ((page < count).then(|| page + 1), Some(page >= count)),
+        _ => (None, Some(true)),
+    };
+    BrowseUserSearch {
+        items,
+        total,
+        next_page,
+        is_last_page,
+    }
+}
+
+/// 单个用户条目 → BrowseUserItem；缺 userId 跳过整条（对齐 parse_work_thumb 容错）。
+/// 最近作品：`page.workIds["<uid>"]` 的 `{id, type}` 逐项查 thumbnails 索引表
+/// （type="novel" 查 novel 表、其余查 illust 表），缺项跳过、不补请求。
+fn parse_user_item(
+    u: &Value,
+    body: &Value,
+    thumbs_illust: &HashMap<i64, &Value>,
+    thumbs_novel: &HashMap<i64, &Value>,
+) -> Option<BrowseUserItem> {
+    let id = u.get("userId").and_then(as_i64_loose)?;
+    let works = body
+        .pointer(&format!("/page/workIds/{id}"))
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let kind = entry.get("type").and_then(Value::as_str)?;
+                    let work_id = entry.get("id").and_then(as_i64_loose)?;
+                    let thumb = if kind == "novel" {
+                        thumbs_novel.get(&work_id)?
+                    } else {
+                        thumbs_illust.get(&work_id)?
+                    };
+                    parse_work_thumb(thumb, if kind == "novel" { "novel" } else { "illust" })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(BrowseUserItem {
+        id,
+        name: str_field(u, "name").unwrap_or_else(|| id.to_string()),
+        pixiv_id: str_field(u, "pixivId").unwrap_or_default(),
+        avatar: str_field(u, "imageBig")
+            .or_else(|| str_field(u, "image"))
+            .unwrap_or_default(),
+        comment: str_field(u, "comment"),
+        is_followed: u.get("isFollowed").and_then(Value::as_bool),
+        works,
+    })
+}
+
 /// 排行榜 kind/mode 合法性校验。
 fn validate_ranking(kind: &str, mode: &str) -> Result<(), PixivError> {
     let modes: &[&str] = match kind {
@@ -2436,6 +2576,21 @@ impl PixivApi {
         let path = search_path(kind, word, order, mode, s_mode, type_, page, users_iri)?;
         let body = self.client().get_json(&path).await?;
         Ok(to_value(&parse_search(&body, kind, page)))
+    }
+
+    /// GET /ajax/search/users?nick=&s_mode=&p=&i= → BrowseUserSearch
+    /// （用户 / 画师搜索；每页 10 人，页数由 total 推导，见 parse_user_search）。
+    pub async fn get_user_search(
+        &self,
+        word: &str,
+        s_mode: Option<&str>,
+        creator_only: bool,
+        page: i64,
+    ) -> Result<Value, PixivError> {
+        let page = page.max(1);
+        let path = user_search_path(word, s_mode, creator_only, page)?;
+        let body = self.client().get_json(&path).await?;
+        Ok(to_value(&parse_user_search(&body, page)))
     }
 
     /// 作品三项计数批量（搜索页本页排序用）：逐项请求详情端点提取。
@@ -3686,6 +3841,132 @@ mod tests {
         assert_eq!(items[1]["like_count"], 3);
         assert_eq!(items[1]["view_count"], 100);
         assert!(items[2].get("bookmark_count").is_none(), "缺失值不能冒充零");
+    }
+
+    // ---- 用户搜索（browse_user_search，2026-11 实测形状）----
+
+    /// /ajax/search/users 响应夹具：2 个用户 + workIds + thumbnails 索引表。
+    /// 形状对齐实机响应（users 与 page.userIds 同序、workIds 键为字符串 uid、
+    /// thumbnails.illust 条目带 illustType、thumbnails.novel 条目 type=novel）。
+    fn user_search_fixture() -> Value {
+        json!({
+            "page": {
+                "userIds": [11, 22],
+                "workIds": {
+                    "11": [
+                        {"id": "101", "type": "illust", "created_at": "2026-01-01"},
+                        {"id": "102", "type": "illust", "created_at": "2026-01-02"},
+                        {"id": "999", "type": "illust", "created_at": "2026-01-03"},
+                        {"id": "103", "type": "novel", "created_at": "2026-01-04"},
+                        {"id": "104", "type": "novel", "created_at": "2026-01-05"}
+                    ],
+                    "22": []
+                },
+                "total": 25
+            },
+            "users": [
+                {
+                    "userId": "11", "name": "Lycoris", "pixivId": "lyc0riss",
+                    "image": "https://i.pximg.net/u/img11_s",
+                    "imageBig": "https://i.pximg.net/u/img11",
+                    "comment": "self intro",
+                    "isFollowed": true
+                },
+                {"userId": "22", "name": "", "pixivId": "", "image": "", "comment": ""}
+            ],
+            "thumbnails": {
+                "illust": [
+                    {"id": "101", "illustType": 0, "title": "I1", "url": "https://i.pximg.net/t101",
+                     "userId": "11", "userName": "Lycoris", "pageCount": 1, "xRestrict": 0},
+                    {"id": "102", "illustType": 1, "title": "M1", "url": "https://i.pximg.net/t102",
+                     "userId": "11", "userName": "Lycoris", "pageCount": 3, "xRestrict": 1}
+                ],
+                "novel": [
+                    {"id": "103", "type": "novel", "title": "N1", "url": "https://i.pximg.net/t103",
+                     "userId": "11", "userName": "Lycoris", "textCount": 800, "bookmarkCount": 7}
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn parse_user_search_maps_users_works_and_pages() {
+        let list = parse_user_search(&user_search_fixture(), 1);
+        assert_eq!(list.items.len(), 2);
+        let first = &list.items[0];
+        assert_eq!(first.id, 11);
+        assert_eq!(first.name, "Lycoris");
+        assert_eq!(first.pixiv_id, "lyc0riss", "pixivId（@handle）应透传");
+        assert_eq!(first.avatar, "https://i.pximg.net/u/img11", "imageBig 优先");
+        assert_eq!(first.comment.as_deref(), Some("self intro"));
+        assert_eq!(first.is_followed, Some(true));
+        // 最近作品：索引表命中 3 条（999 缺项跳过）；kind 按 type/illustType 细分
+        assert_eq!(first.works.len(), 3, "索引表缺项应跳过");
+        assert_eq!(first.works[0].id, 101);
+        assert_eq!(first.works[0].kind, "illust");
+        assert_eq!(first.works[1].kind, "manga", "illustType=1 应细分为 manga");
+        assert_eq!(first.works[2].kind, "novel");
+        assert_eq!(first.works[2].text_length, Some(800));
+        // 第二个用户：workIds 为空数组 → works 恒序列化为空数组（前端类型必有）；
+        // 空名回落 id 串
+        let wire = to_value(&parse_user_search(&user_search_fixture(), 1));
+        let second = &wire["items"][1];
+        assert_eq!(second["name"], "22", "空名回落 id 字符串");
+        assert_eq!(
+            second["works"].as_array().map(|a| a.len()),
+            Some(0),
+            "空 works 恒序列化为 []（省略键会让前端模板读 undefined 抛错）"
+        );
+        assert!(second.get("comment").is_none(), "空 comment 视为缺失");
+        // 分页：total=25、每页 10 → 3 页；p=1 → next=2
+        assert_eq!(list.total, Some(25));
+        assert_eq!(list.next_page, Some(2));
+        assert_eq!(list.is_last_page, Some(false));
+        // p=3 → 末页；total=0 → 无下一页
+        let last = parse_user_search(&user_search_fixture(), 3);
+        assert_eq!(last.next_page, None);
+        assert_eq!(last.is_last_page, Some(true));
+        let empty = parse_user_search(&json!({"page": {"total": 0}, "users": []}), 1);
+        assert!(empty.items.is_empty());
+        assert_eq!(empty.total, Some(0));
+        assert_eq!(empty.next_page, None);
+        assert_eq!(empty.is_last_page, Some(true));
+    }
+
+    #[test]
+    fn parse_user_search_missing_body_is_empty() {
+        let list = parse_user_search(&json!({}), 1);
+        assert!(list.items.is_empty());
+        assert!(list.total.is_none());
+        assert_eq!(list.next_page, None, "total 缺失 fail-closed 为末页");
+        assert_eq!(list.is_last_page, Some(true));
+    }
+
+    #[test]
+    fn user_search_path_builds_and_validates() {
+        // 词进 query（percent-encode）；i 按 creator_only 落 1/0；缺省 s_usr
+        assert_eq!(
+            user_search_path("Lycoris arts", Some("s_usr"), true, 2).unwrap(),
+            "/ajax/search/users?nick=Lycoris%20arts&s_mode=s_usr&p=2&i=1&lang=zh"
+        );
+        assert_eq!(
+            user_search_path("lily", None, false, 1).unwrap(),
+            "/ajax/search/users?nick=lily&s_mode=s_usr&p=1&i=0&lang=zh"
+        );
+        // 非 ASCII 与保留字符必须编码（query 值直拼会破坏参数结构）
+        assert_eq!(
+            user_search_path("莉可丽丝", Some("s_usr_full"), true, 1).unwrap(),
+            "/ajax/search/users?nick=%E8%8E%89%E5%8F%AF%E4%B8%BD%E4%B8%9D&s_mode=s_usr_full&p=1&i=1&lang=zh"
+        );
+        // 白名单外 s_mode 报错；空词 / 超长词复用 sanitize_search_word 规则
+        assert!(user_search_path("w", Some("s_tc"), true, 1).is_err());
+        assert!(user_search_path("  ", None, true, 1).is_err());
+        let long = "a".repeat(201);
+        assert!(user_search_path(&long, None, true, 1).is_err());
+        // page ≤ 0 收敛为 1（与 get_search 同口径）
+        assert!(user_search_path("w", None, true, 0)
+            .unwrap()
+            .contains("p=1"));
     }
 
     // ---- 作品计数批量（browse_work_counts）----

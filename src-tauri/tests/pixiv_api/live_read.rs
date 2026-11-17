@@ -1544,6 +1544,100 @@ async fn live_image_download_with_referer() {
     );
 }
 
+/// GET /ajax/search/users?nick=&s_mode=&p=&i=（用户 / 画师搜索，2026-11-17 实测）：
+/// 每页 ≤10 人、pixivId/avatar 关键字段齐备、users 与 page.userIds 同序、
+/// s_usr_full（昵称完全一致）可用、空结果返回空数组不报错、分页互斥语义成立。
+#[tokio::test]
+#[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
+async fn live_search_users() {
+    let api = common::live_api();
+
+    // ① 部分一致（默认档）：total ≥ 本页条数、字段齐备
+    let users = api
+        .get_user_search("lycoris", Some("s_usr"), true, 1)
+        .await
+        .expect("用户搜索应成功");
+    let items = users["items"].as_array().expect("items 应为数组");
+    assert!(!items.is_empty(), "lycoris 用户搜索（部分一致）不应为空");
+    assert!(items.len() <= 10, "每页至多 10 人，实际 {}", items.len());
+    let total = users["total"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("total 应为整数，实际: {}", users["total"]));
+    assert!(total >= items.len() as i64, "total 应 ≥ 本页条数");
+    let first = &items[0];
+    assert!(common::as_i64_loose(&first["id"]).unwrap_or(0) > 0, "id 应为正整数");
+    assert!(
+        first["name"].as_str().is_some_and(|s| !s.is_empty()),
+        "name 不应为空"
+    );
+    let avatar = first["avatar"].as_str().unwrap_or("");
+    common::assert_pixiv_url(avatar, "user.avatar");
+    if !users["next_page"].is_null() {
+        assert_eq!(
+            users["next_page"].as_i64(),
+            Some(2),
+            "p=1 的 next_page 应为 2"
+        );
+    } else {
+        assert_eq!(
+            users["is_last_page"].as_bool(),
+            Some(true),
+            "无 next_page 时应为末页"
+        );
+    }
+
+    // ② 原始响应契约核对：pixivId（@handle）存在；users 与 page.userIds 同序；
+    //    最近作品缩略由 thumbnails 关联（部分一致档下至少一个用户带作品）
+    let raw = api
+        .client()
+        .get_json("/ajax/search/users?nick=lycoris&s_mode=s_usr&p=1&i=1&lang=zh")
+        .await
+        .expect("原始用户搜索响应应成功");
+    let raw_users = raw["users"].as_array().expect("users 应为数组");
+    let raw_ids = raw
+        .pointer("/page/userIds")
+        .and_then(|v| v.as_array())
+        .expect("page.userIds 应存在");
+    assert_eq!(raw_users.len(), raw_ids.len(), "users 与 userIds 应同长");
+    if let (Some(u0), Some(i0)) = (raw_users.first(), raw_ids.first()) {
+        assert_eq!(
+            common::as_i64_loose(&u0["userId"]),
+            i0.as_i64(),
+            "users 与 page.userIds 同序"
+        );
+    }
+    assert!(
+        raw_users.iter().any(|u| u
+            .get("pixivId")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty())),
+        "pixivId（@handle）应至少一个用户非空（/ajax/user/{{id}} 无此键而本端点有）"
+    );
+    assert!(
+        items
+            .iter()
+            .any(|u| u["works"].as_array().is_some_and(|w| !w.is_empty())),
+        "部分一致档下至少一个用户应带最近作品缩略"
+    );
+
+    // ③ 昵称完全一致：形状成立且非空（计数随索引漂移，不锁具体值）
+    let exact = api
+        .get_user_search("lycoris", Some("s_usr_full"), true, 1)
+        .await
+        .expect("昵称完全一致搜索应成功");
+    let exact_items = exact["items"].as_array().expect("items 应为数组");
+    assert!(!exact_items.is_empty(), "昵称完全一致（lycoris）不应为空");
+
+    // ④ 无结果词：空数组 + total=0 + 无 next（不报错）
+    let empty = api
+        .get_user_search("__no_such_user_zzz__", Some("s_usr"), true, 1)
+        .await
+        .expect("无结果搜索应成功");
+    assert_eq!(empty["items"].as_array().map(|a| a.len()), Some(0));
+    assert_eq!(common::as_i64_loose(&empty["total"]), Some(0));
+    assert!(empty["next_page"].is_null(), "无结果时无下一页");
+}
+
 /// 关注人机验证配置探针（ADR 0055）：登录态主页 `__NEXT_DATA__` 应能解析出
 /// reCAPTCHA Enterprise site key（全局站点配置，铸造 token 必需）与
 /// `recaptcha_follow_user` 实验开关（按账号下发，可能缺席——缺席不失败，
