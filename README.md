@@ -4,11 +4,13 @@
 
 # pixiv-tool
 
-![Version](https://img.shields.io/badge/version-1.3.7-2f6fd0)
+[![Version](https://img.shields.io/github/v/release/gbandszxc/pixiv-tool?label=version)](../../releases)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-42B883?logo=vuedotjs&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-1.99.1-DEA584?logo=rust&logoColor=white)
+
+**简体中文** | [English](README.en.md) | [日本語](README.ja.md)
 
 </div>
 
@@ -115,7 +117,7 @@ Tauri 2 单进程：Rust 后端 + Vue 3 / TypeScript 前端经 IPC 直连，**�
 | [DESIGN.md](DESIGN.md) | 前端视觉与交互规范（Material 3 token 体系） |
 | [docs/PIXIV-API.md](docs/PIXIV-API.md) | pixiv 接口契约事实源 |
 | [docs/PACKAGING.md](docs/PACKAGING.md) | 打包 / 分发 / 构建环境 / 签名 |
-| [docs/adr/](docs/adr/) | 架构决策记录（ADR 0001 – 0054） |
+| [docs/adr/](docs/adr/) | 架构决策记录（ADR 0001 – 0055） |
 | [docs/research/](docs/research/) | 外部接口调研证据档案 |
 | [AGENTS.md](AGENTS.md) | AI 协作入口（agent 改动前必读） |
 
