@@ -991,7 +991,7 @@ export default {
       copyFailed: "コピーできませんでした。手動で選択してコピーしてください",
       imageMenuLabel: "画像の操作",
       saveImage: "この画像を保存",
-      saveUgoira: "動画を保存（ZIP）",
+      saveUgoira: "うごイラを保存（GIF）",
       imageSaving: "画像を保存中…",
       imageSaved: "ページ {page} を保存しました：{path}",
       imageAlreadySaved: "ページ {page} はダウンロード済みです：{path}",

@@ -88,6 +88,10 @@ rand = "0.9"
 # `deflate-flate2` 只开 `_deflate-any` 标记，必须同时显式打开 `flate2`
 # 这个可选依赖 feature，否则 zip 内部 `use flate2::…` 无法解析（实测编译失败）。
 zip = { version = "2.4.2", default-features = false, features = ["deflate-flate2", "flate2"] }
+# ugoira 导出只解码 JPEG / PNG 帧、编码 GIF，并通过同目录临时文件提交。
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+gif = "0.14"
+tempfile = "3"
 # EPUB 导出（src/core/epub.rs）：
 # png —— 占位封面绘制（RGBA 1000x1414 编码）；flate2 已在依赖树，无新增压缩栈。
 png = "0.17"

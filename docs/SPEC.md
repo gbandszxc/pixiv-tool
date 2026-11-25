@@ -19,8 +19,8 @@
 | 单篇小说 | 含多页小说（`pageCount > 1`） |
 | 系列小说 | 整包下载：txt / md / epub 每种格式自动拼接为一个文件（md / epub 含目录），不再逐话独立编号（ADR 0054） |
 | 指定用户的全部小说 | 用户名下所有作品（系列内按序号编号 + 散篇），统一存 `novel/` 平铺 |
-| 单幅插画 | 单张/多页作品，**一律按原图**（`img-original` 直链）下载 |
-| 指定用户的全部插画 | 用户全部插画+漫画作品（`profile/all` 的 illusts+manga），ugoira 动图存原始 zip |
+| 单幅插画 | 单张/多页静态作品按原图（`img-original` 直链）下载，ugoira 动图保存为循环 GIF |
+| 指定用户的全部插画 | 用户全部插画+漫画作品（`profile/all` 的 illusts+manga），ugoira 动图保存为循环 GIF |
 
 ### 1.2 V1 明确不做（延后 V2+）
 
@@ -629,7 +629,7 @@ Pixiv 抓取限速与重试参数与翻译互不影响，仍为下表：
 （Python 真值语义：null/false/0/""/[]/{} 为假）→ Client 错误，否则取 `body`
 字段（缺失返回整个对象）。以上参数**写死为常量**，V1 不暴露给用户配置。
 
-二进制下载保留 wreq 的 `bytes::Bytes` 共享缓冲：原图、ugoira zip 与头像写盘直接
+二进制下载保留 wreq 的 `bytes::Bytes` 共享缓冲：原图与头像写盘、ugoira 源 ZIP 的解包和转码直接
 借用字节，图片代理的单飞等待者只复制共享句柄，不再先转换为 `Vec<u8>`。
 仅 `pixiv-img` 的 Tauri `Cow<[u8]>` 响应边界转换为独占 `Vec<u8>`；磁盘命中仍
 直接返回读盘缓冲。仍是整包接收，不承诺降低单次下载的分配峰值；画质、请求
@@ -700,7 +700,12 @@ x-csrf-token。网络错误只回传类别及去 query/fragment 的地址，不�
 | 单篇 | `<title>_<novelId>.txt/.md/.epub` |
 | 系列内（user 来源逐篇） | `{zfill(order)}_<title>.txt/.md/.epub`，宽度 = page_count ≤ 99 ? 2 位 : 3 位（series 来源整包命名见下「系列来源整包」） |
 | 插画单页 | `<title>_<artworkId>_p{N}.<ext>`（多页 p0..pN-1；ext 从 URL 末段取，取不到 → bin） |
-| ugoira 动图 | `<title>_<artworkId>_ugoira.zip`（原图 = 帧序列 zip） |
+| ugoira 动图 | `<title>_<artworkId>_ugoira.gif` |
+
+**ugoira 动图导出**（ADR 0056）：单作品、用户全集和右键保存共用同一路径。下载
+原始尺寸 ZIP（`originalSrc` 优先，回退 `zip_urls.original`），按 `frames` 元数据顺序读取
+JPEG / PNG 帧并生成循环 GIF，帧时长四舍五入到 10ms，最短 10ms。编码完成后从同目录
+临时文件提交 GIF，再更新下载历史。旧 ZIP 文件保留，重新下载成功后历史指向 GIF。
 
 标题净化后为空：小说文件名只剩 id 后缀（`_12345.md`），插画以 artwork id
 兜底（`safe_title_or_id`）。
@@ -733,7 +738,7 @@ Windows ADS 注入；正常 jpg/png/gif/zip 等后缀保持不变。
 `_` 收敛）；空值占位符删除该 token 并从紧邻前导字面段末尾吸收 1 个分隔符
 （`_` / `-`），避免悬挂分隔符；ugoira 渲染先删除全部 `{page}` / `{page1}` 及其
 前导字面段末尾的分隔符（`_p` 整体删、`_` / `-` 各删 1 字符），净化后固定追加
-`_ugoira` 词干（`.zip` 扩展名不变）；渲染结果净化后为空 → 回落现行默认命名。
+`_ugoira` 词干与 `.gif` 扩展名；渲染结果净化后为空 → 回落现行默认命名。
 **有意分歧**：模板路径下小说空标题以 nid 兜底（默认模板产 `12345_12345.md`），
 现行 `make_filename` 无兜底产 `_12345.md`——默认模板仅在空标题场景与现行命名不同。
 
@@ -1476,7 +1481,7 @@ SauceNAO API Key 三个 checkbox，默认全选，ADR 0053）。动作行为「�
   （加载中旋转图标、失败给重试并保留「去 Pixiv 查看动画」兜底文案）。
 - **图片右键菜单（查看器舞台 / 全屏浮层）**：在插画/漫画详情页舞台页框、全屏浮层主图
   与胶卷缩略图上右键打开自定义菜单（`components/common/ContextMenu.vue`）。舞台含
-  「全屏查看」（该页就绪才可用）、「保存这张图片」（动图为「保存动图（ZIP）」）与
+  「全屏查看」（该页就绪才可用）、「保存这张图片」（动图为「保存动图（GIF）」）与
   「复制图片地址」；全屏浮层与胶卷只含后两项，胶卷右键即该缩略图对应页。菜单沿用项目
   菜单 recipe：surface-container 底、`--radius-control` 圆角、唯一合法轻阴影
   `0 4px 12px rgb(0 0 0 / 18%)`、40px 菜单行、18px lucide 线性图标（stroke 2）、
@@ -1751,7 +1756,7 @@ reject string，前端 `errorMessage()` 归一。参数从 JS 侧以 camelCase �
 | `illustration_delete` / `illustrations_batch_delete` / `illustrations_delete_all` | 插画记录删除（可选删文件） |
 | `open_novel_file(novelId, kind)` / `open_illustration_folder(artworkId)` | 在系统文件管理器中定位（`kind` 白名单 `txt` / `md` / `epub` 指定小说文件格式，epub 仅显式指定时使用、不插队 txt / md；若文件存在则高亮选中；若文件已移走或删除则回退打开用户在设置中配置的下载目录，进入 pic / novel 子目录，未改即默认输出目录，杜绝报错） |
 | `illust_saved_pages(artworkId)` | 已保存页查询：返回 `{pages:[0,2], ugoira:false}`（0 起页码升序）；无记录 → `{"pages":[],"ugoira":false}`，ugoira 有记录 → `{"pages":[0],"ugoira":true}`；下载侧栏按页选择器据此标记「已下载」 |
-| `illust_save_page(artworkId, page)` | 图片右键菜单的单张保存：取详情 → 原图直链下载到 `<output_dir>/pic/`（文件名沿用 `illust_filename_template`）→ 与既有 `illustrations` 记录按页合并 upsert（`saved_paths` / `saved_pages`，`captured_at` 刷新），下载历史留痕。`page` 为 0 起页码；ugoira 只接受 `page=0` 并保存原始 zip。返回值 `{status, artwork_id, page, title, path, already_saved, ugoira}`；该页已保存且文件仍在 → `already_saved:true` 且不重复下载。未登录错误与浏览命令同款登录守卫 |
+| `illust_save_page(artworkId, page)` | 图片右键菜单的单张保存：取详情 → 原图或 GIF 保存到 `<output_dir>/pic/`（文件名沿用 `illust_filename_template`）→ 与既有 `illustrations` 记录按页合并 upsert（`saved_paths` / `saved_pages`，`captured_at` 刷新），下载历史留痕。`page` 为 0 起页码；ugoira 只接受 `page=0`，以原始尺寸帧生成循环 GIF。返回值 `{status, artwork_id, page, title, path, already_saved, ugoira}`；该页已保存且文件仍在 → `already_saved:true` 且不重复下载（ugoira 只复用现存 GIF）。未登录错误与浏览命令同款登录守卫 |
 | `browse_home_feed` | 首页推荐流（street POST + csrf token，进程内 30min 缓存） |
 | `browse_channel(kind, mode?)` | 频道仪表盘：关注新作/推荐/排行/标签推荐/最新投稿/热门标签（/ajax/top/*）；mode 省略或 all 为普通快照，r18 为受限频道，其余拒绝 |
 | `browse_discover` | 发现推荐 60 条（无服务端翻页，前端去重复调） |
@@ -1970,6 +1975,7 @@ bash ./dev.sh dev start  # 默认动作也是 start；后台 Vite + Rust 热重�
   6.0.0-rc.31 / 3.0.0-rc.14，**不可降到 Apache 化之前的版本**；rig-core / rig-agent /
   rig-memory 均锁 `=0.45.0` 且关闭默认 feature，升级需重新验证三协议、工具调用、流式
   事件与取消，见 ADR 0034）
+- 动图导出：`image` 仅启用 JPEG / PNG，`gif` 编码，`tempfile` 提交文件（ADR 0056）。
 - 工具链：**Rust 1.99.1**（`rust-toolchain.toml`、`Cargo.toml` 的 `rust-version`、`dev.ps1`
   / `dev.sh` 与发版 CI 四处一致；不使用 nightly / beta，也不静默漂移）
 - 前端：**pnpm**（`pnpm-lock.yaml` 入库）
@@ -2135,6 +2141,7 @@ SauceNAO Key 的本机 settings.json 落点沿用现有契约。Git 忽略整个
 | 0053 | SauceNAO API Key 纳入 WebDAV 同步（范围 `saucenao`、载荷 v1 追加字段、回执只回布尔） | [adr/0053-saucenao-key-webdav-sync.md](adr/0053-saucenao-key-webdav-sync.md) |
 | 0054 | 小说 EPUB 导出与系列整包下载（EPUB 3.0 内嵌插图与封面、series 来源自动拼接、系列译文整包导出） | [adr/0054-novel-epub-export-and-series-bundle.md](adr/0054-novel-epub-export-and-series-bundle.md) |
 | 0055 | 关注人机验证经内置 WebView 铸 token 桥接（400 → 铸 recaptcha token → 重试一次，失败回退浏览器手动关注） | [adr/0055-recaptcha-webview-bridge-user-follow.md](adr/0055-recaptcha-webview-bridge-user-follow.md) |
+| 0056 | ugoira 下载导出为循环 GIF | [adr/0056-ugoira-gif-download.md](adr/0056-ugoira-gif-download.md) |
 
 ADR 按需追加，不强制一次性写完。
 

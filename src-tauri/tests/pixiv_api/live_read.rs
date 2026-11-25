@@ -765,6 +765,61 @@ async fn live_illust_detail_pages_ugoira() {
     );
 }
 
+/// 从真实作品导出 GIF，覆盖旧 ZIP 记录升级以及再次保存时复用 GIF。
+#[tokio::test]
+#[ignore = "需要真实登录态与网络：./dev.ps1 test-live"]
+async fn live_download_ugoira_gif() {
+    use pixiv_tool_lib::core::crawler::save_illust_page;
+    use pixiv_tool_lib::db::{Db, IllustrationInsert};
+
+    let artwork_id = 149549262;
+    let api = common::live_api();
+    let meta = api.get_ugoira_meta(artwork_id).await.unwrap();
+    assert!(meta.frames.len() > 1);
+    let directory = tempfile::tempdir().unwrap();
+    let db = Db::open(&directory.path().join("test.db")).unwrap();
+    let output_dir = directory.path().join("pic");
+    std::fs::create_dir(&output_dir).unwrap();
+    let legacy = output_dir.join("legacy_ugoira.zip");
+    std::fs::write(&legacy, b"legacy ZIP").unwrap();
+    db.insert_illustration(&IllustrationInsert {
+        artwork_id,
+        title: "旧记录".into(),
+        illust_type: 2,
+        saved_paths: serde_json::json!([legacy]).to_string(),
+        saved_pages: "[0]".into(),
+        ..Default::default()
+    })
+    .unwrap();
+
+    let saved = save_illust_page(&db, api, artwork_id, 0, &output_dir, "")
+        .await
+        .unwrap();
+    assert!(saved.ugoira && !saved.already_saved);
+    assert!(saved.path.ends_with("_ugoira.gif"));
+    assert_eq!(std::fs::read(&legacy).unwrap(), b"legacy ZIP");
+    assert_eq!(output_dir.read_dir().unwrap().count(), 2);
+    let bytes = std::fs::read(&saved.path).unwrap();
+    assert!(bytes.starts_with(b"GIF89a"));
+    let mut decoded = gif::DecodeOptions::new()
+        .read_info(std::io::Cursor::new(bytes))
+        .unwrap();
+    for expected in &meta.frames {
+        let frame = decoded.read_next_frame().unwrap().expect("GIF 缺少帧");
+        let expected_ms = ((u64::from(expected.delay) + 5) / 10).clamp(1, u64::from(u16::MAX)) * 10;
+        assert_eq!(u64::from(frame.delay) * 10, expected_ms);
+    }
+    assert!(decoded.read_next_frame().unwrap().is_none());
+    assert_eq!(decoded.repeat(), gif::Repeat::Infinite);
+    eprintln!("{artwork_id}: {}×{}，{} 帧", decoded.width(), decoded.height(), meta.frames.len());
+
+    let reused = save_illust_page(&db, api, artwork_id, 0, &output_dir, "")
+        .await
+        .unwrap();
+    assert!(reused.already_saved);
+    assert_eq!(reused.path, saved.path);
+}
+
 // ----------------------------------------------------------------------
 // 10. 小说详情
 // ----------------------------------------------------------------------

@@ -1034,7 +1034,7 @@ export default {
       copyFailed: "Copy failed; select the text and copy manually",
       imageMenuLabel: "Image actions",
       saveImage: "Save this image",
-      saveUgoira: "Save animation (ZIP)",
+      saveUgoira: "Save animation (GIF)",
       imageSaving: "Saving image…",
       imageSaved: "Page {page} saved to {path}",
       imageAlreadySaved: "Page {page} already downloaded: {path}",

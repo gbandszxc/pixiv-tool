@@ -8,7 +8,7 @@
 //! 1. 模板解析为字面段 / 占位符 token 序列；
 //! 2. 动图渲染（[`render_illust`] 的 `ugoira=true`）：删除所有 `{page}` /
 //!    `{page1}`，并从紧邻前导字面段末尾删除分隔符（`_p` / `_` / `-`），
-//!    拼接结果净化后追加 `_ugoira` 后缀（`.zip` 扩展名由调用方拼接）；
+//!    拼接结果净化后追加 `_ugoira` 后缀（`.gif` 扩展名由调用方拼接）；
 //! 3. 值为空的占位符（非系列的 `{order}` / `{sid}`）删除该 token，并从
 //!    紧邻前导字面段末尾吸收 1 个分隔字符（`_` / `-`），避免悬挂分隔符；
 //! 4. 拼接结果整体过 [`sanitize_filename`] 净化；
@@ -37,8 +37,8 @@ pub const NOVEL_FILENAME_TEMPLATE_DEFAULT: &str = "{title}_{nid}";
 /// `exporter::make_filename` 系列输出 byte 级一致。
 pub const NOVEL_SERIES_FILENAME_TEMPLATE_DEFAULT: &str = "{order}_{title}";
 
-/// 动图词干后缀：对齐现行 `ugoira_filename` 的 `{safe}_{id}_ugoira.zip`，
-/// 本模块产出不含 `.zip` 扩展名的完整词干，`.zip` 由调用方拼接。
+/// 动图词干后缀：对齐现行 `ugoira_filename` 的 `{safe}_{id}_ugoira.gif`，
+/// 本模块产出不含 `.gif` 扩展名的完整词干，`.gif` 由调用方拼接。
 const UGOIRA_SUFFIX: &str = "_ugoira";
 
 /// 模板用途：决定占位符白名单与必含项。
@@ -294,7 +294,7 @@ pub struct NovelNameInfo {
 /// 渲染插画文件名词干（不含扩展名）。
 ///
 /// `ugoira=true` 时先删除所有 `{page}` / `{page1}` 及其前导分隔符，结果
-/// 净化后追加 `_ugoira` 后缀（调用方拼接 `.zip` 即得与现行
+/// 净化后追加 `_ugoira` 后缀（调用方拼接 `.gif` 即得与现行
 /// `ugoira_filename` 一致的完整文件名）。返回 `None` 表示渲染结果为空，
 /// 调用方应回落现行默认命名。
 pub fn render_illust(
@@ -523,13 +523,13 @@ mod tests {
             let rendered = render_illust(&info, ILLUST_FILENAME_TEMPLATE_DEFAULT, 0, true)
                 .expect("默认模板 + 兜底 id 不应为空");
             let current = ugoira_filename(&safe_title_or_id(title, 2001), 2001);
-            assert_eq!(format!("{rendered}.zip"), current, "title={title:?}");
+            assert_eq!(format!("{rendered}.gif"), current, "title={title:?}");
         }
         // `{page1}` 同样被删（含前导 `_p` 分隔符）
         let rendered = render_illust(&illust_info("t"), "{title}_{pid}_p{page1}", 5, true)
             .expect("不应为空");
         assert_eq!(
-            format!("{rendered}.zip"),
+            format!("{rendered}.gif"),
             ugoira_filename(&safe_title_or_id("t", 2001), 2001)
         );
         // 模板中段的 page：`_p` 分隔符整体删除、`-` 删 1 字符

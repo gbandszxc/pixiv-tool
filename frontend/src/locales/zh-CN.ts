@@ -1034,7 +1034,7 @@ export default {
       copyFailed: "复制失败，请手动选择复制",
       imageMenuLabel: "图片操作",
       saveImage: "保存这张图片",
-      saveUgoira: "保存动图（ZIP）",
+      saveUgoira: "保存动图（GIF）",
       imageSaving: "正在保存图片…",
       imageSaved: "第 {page} 页已保存到 {path}",
       imageAlreadySaved: "第 {page} 页已下载：{path}",

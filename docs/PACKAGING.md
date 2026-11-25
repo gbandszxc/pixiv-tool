@@ -147,6 +147,8 @@ Git Bash 里 tauri CLI 用 frontend 的本地依赖：`./frontend/node_modules/.
   理由继续有效；1.99.1 基线及 Rig 集成边界见 ADR 0034。
   wreq 指纹锁定保持不变；GTK/WebKit 等不能兼容升级的传递依赖须记录
   上游限制与真实可达性，不能用添加另一版本依赖来掩盖旧版本告警。
+- **ugoira 导出**（ADR 0056）：`image` 仅启用 JPEG / PNG 解码，`gif` 负责编码，
+  `tempfile` 用于同目录提交，三者由 cargo 构建，无需安装独立转码程序。
 - **Tauri CSP** 已启用：生产脚本仅允许应用自身资源，Tauri 负责 IPC 初始化
   脚本的 hash/nonce；样式保留 `unsafe-inline` 兼容 Material Web 与动态样式。
   图片允许 HTTPS 缩略图、data/blob 与 `pixiv-img` / `pixiv-avatar` 自定义协议

@@ -1013,11 +1013,11 @@ async fn crawl_one_novel(
 /// - 开始先 resolve_total 预置分母（失败退回增量计数）；user 源目录布局
 ///   `pic/users/{sanitize(作者名)}_{uid}/`（拿不到作者名退回 `user_{uid}`）
 /// - 单作品：每保存一页 done+1（1 页作品即 1/1）；用户全集：每完成一个作品 done+1
-/// - ugoira（illust_type=2）下载原图 zip（originalSrc 优先，zip_urls.original 兜底）
+/// - ugoira（illust_type=2）下载原始尺寸帧 ZIP，按帧表编码为 GIF
 /// - 文件名按模板渲染（`IllustCrawlArgs.illust_filename_template`，占位符见
 ///   `filename_template`）：普通页渲染词干 + `.{url_ext}`，ugoira 渲染词干
-///   （内部追加 `_ugoira`）+ `.zip`；渲染为空回落现行
-///   `{safe_title}_{artwork_id}_p{N}.{ext}` / `{safe_title}_{artwork_id}_ugoira.zip`；
+///   （内部追加 `_ugoira`）+ `.gif`；渲染为空回落现行
+///   `{safe_title}_{artwork_id}_p{N}.{ext}` / `{safe_title}_{artwork_id}_ugoira.gif`；
 ///   多页 meta 缺失时从 p0 直链 `_p0.{ext} → _p{N}.{ext}` 推导
 /// - 已下载判定按页（`pages` 为 None 且已有记录 → skip；Some → 只下差集并与
 ///   既有 saved_paths/saved_pages 合并，按页码升序保持一一对应）
@@ -1128,7 +1128,13 @@ pub(crate) async fn run_illust_items(args: IllustCrawlArgs, preset_ids: Option<V
             // 已下载判定按页：
             // - pages 为 None 且已有记录 → 保持旧语义 skip（向后兼容）；
             // - pages 为 Some → 与既有 saved_pages 求差集，空则 skip，否则只下差集。
-            let existing = db.get_illustration(artwork_id);
+            // ugoira 只有现存 GIF 计为已下载，旧 ZIP 记录可重新下载。
+            let existing = db.get_illustration(artwork_id).filter(|row| {
+                row.illust_type != UGOIRA_TYPE
+                    || saved_pairs(&row.saved_paths, &row.saved_pages)
+                        .iter()
+                        .any(|(page, path)| *page == 0 && is_saved_ugoira_gif(Path::new(path)))
+            });
             let (selected, existing_saved) = match (&pages, &existing) {
                 (None, Some(_)) => {
                     counters.skipped += 1;
@@ -1272,6 +1278,10 @@ fn merge_saved(
     merged.into_iter().unzip()
 }
 
+fn is_saved_ugoira_gif(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("gif")) && path.is_file()
+}
+
 /// 单张图片保存结果（右键菜单 `illust_save_page`）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SavedIllustPage {
@@ -1279,13 +1289,13 @@ pub struct SavedIllustPage {
     pub page: i64,
     pub title: String,
     pub path: String,
-    /// 该页（或动图 zip）此前已保存且文件仍在：本次未重新下载。
+    /// 该页（或动图 GIF）此前已保存且文件仍在：本次未重新下载。
     pub already_saved: bool,
-    /// 动图：保存的是原始 zip（saved_pages 恒 [0]）。
+    /// 动图：保存为 GIF（saved_pages 恒 [0]）。
     pub ugoira: bool,
 }
 
-/// 保存作品中的单张图（或 ugoira 原始 zip）。
+/// 保存作品中的单张图（或 ugoira GIF）。
 ///
 /// 与抓取任务复用同一条落盘 / 历史路径：[`crawl_one_illust`] 负责按文件名模板写文件，
 /// 并把 `saved_paths` / `saved_pages` 与既有记录合并后 upsert 到 `illustrations`
@@ -1305,9 +1315,17 @@ pub async fn save_illust_page(
         .map(|row| saved_pairs(&row.saved_paths, &row.saved_pages))
         .unwrap_or_default();
 
-    // 既有记录命中且文件仍在：直接返回，避免重复下载与重写历史时间
+    let was_ugoira = existing_row
+        .as_ref()
+        .is_some_and(|row| row.illust_type == UGOIRA_TYPE);
+    // 旧 ZIP 记录在 GIF 成功保存前仍保留，重新下载时只复用现存的 GIF。
     if let Some((_, path)) = existing_pairs.iter().find(|(saved, _)| *saved == page) {
-        if Path::new(path).exists() {
+        let reusable = if was_ugoira {
+            is_saved_ugoira_gif(Path::new(path))
+        } else {
+            Path::new(path).exists()
+        };
+        if reusable {
             return Ok(SavedIllustPage {
                 artwork_id,
                 page: page as i64,
@@ -1317,9 +1335,7 @@ pub async fn save_illust_page(
                     .unwrap_or_default(),
                 path: path.clone(),
                 already_saved: true,
-                ugoira: existing_row
-                    .as_ref()
-                    .is_some_and(|row| row.illust_type == UGOIRA_TYPE),
+                ugoira: was_ugoira,
             });
         }
     }
@@ -1372,11 +1388,11 @@ pub async fn save_illust_page(
     })
 }
 
-/// 抓取单幅插画：get_illust（缓存优先）→ 逐页下载 / ugoira zip（文件名按
+/// 抓取单幅插画：get_illust（缓存优先）→ 逐页下载 / ugoira GIF（文件名按
 /// `template` 模板渲染，渲染为空回落现行命名）→ 写库。
 /// `pages` 为 Some 时只下载其中页码（0 起）；None = 全部页。
 /// `existing` 为既有记录的 `(页码, 路径)`，结果与之合并后整体回写。
-/// `on_page_saved` 每保存一页（或 ugoira zip）回调一次（None 时不回调）。
+/// `on_page_saved` 每保存一页（或 ugoira GIF）回调一次（None 时不回调）。
 #[allow(clippy::too_many_arguments)]
 async fn crawl_one_illust(
     api: &PixivApi,
@@ -1414,7 +1430,7 @@ async fn crawl_one_illust(
     let mut added: Vec<(usize, String)> = Vec::new();
 
     if data.illust_type == UGOIRA_TYPE {
-        // ugoira 原图 = zip 帧序列（originalSrc 优先，zip_urls.original 兜底）
+        // 取原始尺寸帧 ZIP（originalSrc 优先，zip_urls.original 兜底）
         let meta = api
             .get_ugoira_meta(artwork_id)
             .await
@@ -1425,7 +1441,13 @@ async fn crawl_one_illust(
             .await
             .map_err(|err| fail(&err))?;
         let path = base_dir.join(ugoira_filename_with_template(&name_info, template));
-        std::fs::write(&path, &bytes).map_err(|err| fail(&err))?;
+        let path = tokio::task::spawn_blocking(move || {
+            super::ugoira_gif::write_gif(&bytes, &meta.frames, &path)?;
+            Ok::<_, anyhow::Error>(path)
+        })
+        .await
+        .map_err(|err| fail(&err))?
+        .map_err(|err| fail(&err))?;
         // ugoira 恒为单页 [0]
         added.push((0, path.to_string_lossy().into_owned()));
         notify_progress(&mut on_page_saved);

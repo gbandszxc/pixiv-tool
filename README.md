@@ -49,7 +49,7 @@ pixiv-tool 是一款跨平台 PC 端第三方 Pixiv 客户端。支持插画、�
 | 单篇小说 / 用户全部小说 | TXT / Markdown / EPUB（EPUB 内嵌正文插图与封面） |
 | 系列小说 | 整包下载：自动拼接为 TXT / Markdown / EPUB，Markdown 与 EPUB 含目录 |
 | 单幅 / 多页插画、用户全部插画与漫画 | 原图直链下载（`img-original`） |
-| ugoira 动图 | 帧序列原始 zip |
+| ugoira 动图 | 原始尺寸循环 GIF |
 
 ### 📖 整篇小说翻译
 

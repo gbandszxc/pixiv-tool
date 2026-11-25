@@ -47,7 +47,7 @@ A native interface over Pixiv's read-only content, covering the everyday browsin
 | Single novel / all novels by a user | TXT / Markdown / EPUB (EPUB embeds in-text images and the cover) |
 | Novel series | Bundled download: stitched into TXT / Markdown / EPUB, with a table of contents in Markdown and EPUB |
 | Single & multi-page illustrations, all illustrations and manga by a user | Original-quality downloads straight from Pixiv's image servers |
-| Ugoira animations | The raw frame-sequence zip |
+| Ugoira animations | Animated GIF at the original frame resolution |
 
 ### 📖 Whole-novel AI translation
 

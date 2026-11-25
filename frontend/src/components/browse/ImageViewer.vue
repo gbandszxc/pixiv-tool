@@ -39,7 +39,7 @@ const viewerPrefs = { spread: false, rtl: true, vertical: false, verticalScale: 
  *   KeepAlive 停用与卸载清计时器、激活时恢复此前播放态；无帧 / 加载中 / 失败退回封面帧
  *   + 说明行（加载中旋转图标、失败给「重试」、无帧保留「去 Pixiv 查看动画」旧文案）。
  * - 图片右键菜单（舞台页框 / 全屏主图 / 胶卷缩略图）：自定义 M3 菜单（common/ContextMenu）
- *   提供「全屏查看」（仅舞台）、「保存这张图片」（动图为「保存动图（ZIP）」）与
+ *   提供「全屏查看」（仅舞台）、「保存这张图片」（动图为「保存动图（GIF）」）与
  *   「复制图片地址」。保存走 illust_save_page：原图落盘到输出目录 `pic/`，并与抓取任务
  *   共用 illustrations 历史 upsert（saved_pages / saved_paths 合并），因此下载历史可见。
  */

@@ -100,7 +100,7 @@ _Avoid_: 错误日志
 _Avoid_: 与「浏览历史」混用
 
 **ugoira**:
-pixiv 动图格式；应用保存原始帧序列 zip，不转码。
+pixiv 动图格式，由 ZIP 帧序列与逐帧时长组成。应用下载时将其导出为循环 GIF。
 _Avoid_: 泛指 gif 动图
 
 **EPUB 导出 (EPUB Export)**:

@@ -946,7 +946,7 @@ export async function illustSavedPages(id: number): Promise<{ pages: number[]; u
   return invoke<{ pages: number[]; ugoira: boolean }>("illust_saved_pages", { artworkId: id });
 }
 
-/** illust_save_page 返回体：单张保存结果（ugoira 保存的是原始 zip）。 */
+/** illust_save_page 返回体：单张保存结果（ugoira 保存为 GIF）。 */
 export interface SavedIllustPage {
   status: string;
   artwork_id: number;

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::client::{PixivClient, PixivError};
@@ -87,6 +87,15 @@ pub struct IllustData {
 pub struct UgoiraMeta {
     /// 原始尺寸 zip 直链：body.originalSrc 优先，body.zip_urls.original 兜底。
     pub zip_url: String,
+    /// 按播放顺序排列的帧。
+    pub frames: Vec<UgoiraDownloadFrame>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UgoiraDownloadFrame {
+    pub file: String,
+    /// 帧停留时间，单位为毫秒。
+    pub delay: u32,
 }
 
 /// `{id: null}` 对象形映射 → id 列表（非法键跳过，对齐 Python try/int() 跳过）。
@@ -295,7 +304,7 @@ pub(crate) fn parse_illust_data(body: &Value) -> IllustData {
 }
 
 /// `/ajax/illust/{id}/ugoira_meta` body → UgoiraMeta（纯函数）。
-/// originalSrc 优先，zip_urls.original 兜底；两者皆空 → Client 错误。
+/// originalSrc 优先，zip_urls.original 兜底；原始尺寸 URL 和有序帧表必需。
 pub(crate) fn parse_ugoira_meta(id: i64, body: &Value) -> Result<UgoiraMeta, PixivError> {
     let original = body
         .get("originalSrc")
@@ -305,11 +314,18 @@ pub(crate) fn parse_ugoira_meta(id: i64, body: &Value) -> Result<UgoiraMeta, Pix
         .pointer("/zip_urls/original")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty());
-    let zip_url = original.or(fallback).map(String::from);
-    match zip_url {
-        Some(zip_url) => Ok(UgoiraMeta { zip_url }),
-        None => Err(PixivError::Client(format!("ugoira 作品 {id} 无 zip 原图"))),
+    let zip_url = original
+        .or(fallback)
+        .ok_or_else(|| PixivError::Client(format!("ugoira 作品 {id} 无 zip 原图")))?;
+    let frames = Vec::<UgoiraDownloadFrame>::deserialize(&body["frames"])
+        .map_err(|err| PixivError::Client(format!("ugoira 作品 {id} 帧序列无效: {err}")))?;
+    if frames.is_empty() {
+        return Err(PixivError::Client(format!("ugoira 作品 {id} 缺少动图帧")));
     }
+    Ok(UgoiraMeta {
+        zip_url: zip_url.to_owned(),
+        frames,
+    })
 }
 
 /// typed API 封装（内部共享同一个 PixivClient 的限速/重试语义）。
@@ -691,17 +707,27 @@ mod tests {
         // originalSrc 优先
         let m = parse_ugoira_meta(
             1,
-            &serde_json::json!({"originalSrc": "https://x/a.zip", "zip_urls": {"original": "https://x/b.zip"}}),
+            &serde_json::json!({
+                "originalSrc": "https://x/a.zip",
+                "zip_urls": {"original": "https://x/b.zip"},
+                "frames": [{"file": "b.jpg", "delay": 40}, {"file": "a.jpg", "delay": 90}]
+            }),
         )
         .unwrap();
         assert_eq!(m.zip_url, "https://x/a.zip");
+        assert_eq!(m.frames.len(), 2);
+        assert_eq!((&*m.frames[0].file, m.frames[0].delay), ("b.jpg", 40));
+        assert_eq!((&*m.frames[1].file, m.frames[1].delay), ("a.jpg", 90));
         // 兜底 zip_urls.original
-        let m = parse_ugoira_meta(
-            1,
-            &serde_json::json!({"zip_urls": {"original": "https://x/b.zip"}}),
-        )
-        .unwrap();
-        assert_eq!(m.zip_url, "https://x/b.zip");
+        let mut body = serde_json::json!({
+            "zip_urls": {"original": "https://x/b.zip"},
+            "frames": [{"file": "a.jpg", "delay": 40}]
+        });
+        assert_eq!(parse_ugoira_meta(1, &body).unwrap().zip_url, "https://x/b.zip");
+        body["frames"] = serde_json::json!([]);
+        assert!(parse_ugoira_meta(1, &body).is_err());
+        body["frames"] = serde_json::json!([{"file": "a.jpg", "delay": -1}]);
+        assert!(parse_ugoira_meta(1, &body).is_err());
         // 皆空 → Client 错误
         match parse_ugoira_meta(1, &serde_json::json!({})) {
             Err(PixivError::Client(msg)) => assert!(msg.contains("ugoira 作品 1 无 zip 原图")),

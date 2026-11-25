@@ -1,4 +1,4 @@
-//! 插画爬虫内部工具函数（页 URL 收集、`_p0 → _pN` 推导、ugoira zip、
+//! 插画爬虫内部工具函数（页 URL 收集、`_p0 → _pN` 推导、ugoira GIF、
 //! 文件名/扩展名/目录命名），供 `core::crawler::run_illust_crawler` 调用。
 //!
 //! 语义对齐 Python `core/illust_crawler.py` 的同名下划线函数。
@@ -75,9 +75,9 @@ pub(crate) fn page_filename(safe_title: &str, artwork_id: i64, idx: usize, url: 
     format!("{safe_title}_{artwork_id}_p{idx}.{}", url_ext(url))
 }
 
-/// ugoira zip 文件名：`{safe}_{artwork_id}_ugoira.zip`。
+/// ugoira GIF 文件名：`{safe}_{artwork_id}_ugoira.gif`。
 pub(crate) fn ugoira_filename(safe_title: &str, artwork_id: i64) -> String {
-    format!("{safe_title}_{artwork_id}_ugoira.zip")
+    format!("{safe_title}_{artwork_id}_ugoira.gif")
 }
 
 /// 模板渲染普通页文件名（含 `.{url_ext}` 扩展名）；渲染结果为空 →
@@ -94,11 +94,11 @@ pub(crate) fn page_filename_with_template(
     }
 }
 
-/// 模板渲染 ugoira zip 文件名（含 `.zip` 扩展名）；渲染结果为空 →
+/// 模板渲染 ugoira GIF 文件名（含 `.gif` 扩展名）；渲染结果为空 →
 /// 回落现行 [`ugoira_filename`]。
 pub(crate) fn ugoira_filename_with_template(info: &IllustNameInfo, template: &str) -> String {
     match render_illust(info, template, 0, true) {
-        Some(stem) => format!("{stem}.zip"),
+        Some(stem) => format!("{stem}.gif"),
         None => ugoira_filename(&safe_title_or_id(&info.title, info.id), info.id),
     }
 }
@@ -220,7 +220,7 @@ mod tests {
             page_filename("safe", 1001, 0, "https://x/a_p0.jpg?x=1"),
             "safe_1001_p0.jpg"
         );
-        assert_eq!(ugoira_filename("safe", 1001), "safe_1001_ugoira.zip");
+        assert_eq!(ugoira_filename("safe", 1001), "safe_1001_ugoira.gif");
     }
 
     // ------------------------------------------------------------------
@@ -260,10 +260,10 @@ mod tests {
     #[test]
     fn template_ugoira_filename_custom_and_fallback() {
         let info = name_info("作品");
-        // 自定义模板：page token 删除后追加 _ugoira 词干 + .zip
+        // 自定义模板：page token 删除后追加 _ugoira 词干 + .gif
         assert_eq!(
             ugoira_filename_with_template(&info, "{user}_{pid}_p{page}"),
-            "作者名_2001_ugoira.zip"
+            "作者名_2001_ugoira.gif"
         );
         // 默认模板与现行命名一致；渲染为空 → 回落现行命名
         assert_eq!(

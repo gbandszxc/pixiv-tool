@@ -9,6 +9,7 @@ pub mod filename_template;
 pub mod illust_crawler;
 pub mod sources;
 pub mod task_manager;
+mod ugoira_gif;
 
 pub use crawler::{EventSink, IllustCrawlArgs, NovelCrawlArgs};
 pub use task_manager::{TaskControls, TaskManager};
